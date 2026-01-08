@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "taurscribe",
+        "title": "Taurscribe",
         "width": 600,
         "height": 600
       }
