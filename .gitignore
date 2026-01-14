@@ -22,3 +22,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+taurscribe-runtime/models/
+taurscribe-runtime/bin/
