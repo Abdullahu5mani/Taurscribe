@@ -26,4 +26,19 @@ cpal = "0.15"
 crossbeam-channel = "0.5"
 hound = "3.5"
 chrono = "0.4"
+# whisper-rs with CUDA + Vulkan (includes 12x iGPU performance boost from whisper.cpp v1.8.3)
+# Update periodically: cargo update -p whisper-rs
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda", "vulkan"] }
+rubato = "0.14"
+
+# Speed up dev builds by optimizing dependencies but not your code
+[profile.dev]
+opt-level = 0          # Don't optimize your code (fast builds)
+
+[profile.dev.package."*"]
+opt-level = 1          # Lightly optimize dependencies (faster runtime)
+
+# If you want even faster dev builds, uncomment this (but slower runtime):
+# [profile.dev.package."*"]
+# opt-level = 0
 
