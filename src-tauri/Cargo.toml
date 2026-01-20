@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-fs = "2"  # For accessing AppData directories
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 cpal = "0.15"
@@ -30,6 +31,7 @@ chrono = "0.4"
 # Update periodically: cargo update -p whisper-rs
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda", "vulkan"] }
 rubato = "0.14"
+dirs = "6.0.0"
 
 # Speed up dev builds by optimizing dependencies but not your code
 [profile.dev]

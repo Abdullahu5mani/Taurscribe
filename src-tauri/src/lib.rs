@@ -55,7 +55,8 @@ fn benchmark_test(state: State<AudioState>, file_path: String) -> Result<String,
         .map_err(|e| format!("Failed to open WAV file: {}", e))?;
     let spec = reader.spec();
     let sample_count = reader.len();
-    let audio_duration_secs = sample_count as f32 / spec.sample_rate as f32;
+    // Fix: For stereo, sample_count includes both channels, so divide by channels
+    let audio_duration_secs = sample_count as f32 / spec.sample_rate as f32 / spec.channels as f32;
 
     println!("[BENCHMARK] Audio duration: {:.2}s", audio_duration_secs);
 
@@ -93,6 +94,22 @@ fn benchmark_test(state: State<AudioState>, file_path: String) -> Result<String,
     ))
 }
 
+/// Helper function to get the AppData directory for recordings
+/// Creates the directory structure if it doesn't exist
+fn get_recordings_dir() -> Result<std::path::PathBuf, String> {
+    // Get AppData\Local directory (cross-platform way)
+    let app_data = dirs::data_local_dir().ok_or("Could not find AppData directory")?;
+
+    // Create our app folder: AppData\Local\Taurscribe\temp
+    let recordings_dir = app_data.join("Taurscribe").join("temp");
+
+    // Create the directory if it doesn't exist
+    std::fs::create_dir_all(&recordings_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+
+    Ok(recordings_dir)
+}
+
 #[tauri::command]
 fn start_recording(state: State<AudioState>) -> Result<String, String> {
     let host = cpal::default_host();
@@ -102,8 +119,13 @@ fn start_recording(state: State<AudioState>) -> Result<String, String> {
         .map_err(|e| e.to_string())?
         .into();
 
+    // Get the AppData directory for storing recordings
+    let recordings_dir = get_recordings_dir()?;
+
     let filename = format!("recording_{}.wav", chrono::Utc::now().timestamp());
-    let path = std::path::Path::new(".").join(&filename);
+    let path = recordings_dir.join(&filename);
+
+    println!("[INFO] Saving recording to: {}", path.display());
 
     // Save path for final high-quality transcription
     *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());

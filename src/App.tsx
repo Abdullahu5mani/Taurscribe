@@ -73,7 +73,7 @@ function App() {
             try {
               setGreetMsg("Running benchmark...");
               const res = await invoke("benchmark_test", {
-                filePath: "taurscribe-runtime/samples/jfk.wav"
+                filePath: "taurscribe-runtime/samples/otherjack.wav"
               });
               setGreetMsg(res as string);
             } catch (e) {

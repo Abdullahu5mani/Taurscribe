@@ -64,7 +64,7 @@ impl WhisperManager {
 
         // Path to the large model
         // Line 66 in whisper.rs - change to:
-        let model_path = "taurscribe-runtime/models/ggml-base.en-q5_0.bin";
+        let model_path = "taurscribe-runtime/models/ggml-tiny.en-q5_1.bin";
         let absolute_path = std::fs::canonicalize(model_path)
             .or_else(|_| std::fs::canonicalize(format!("../{}", model_path)))
             .or_else(|_| std::fs::canonicalize(format!("../../{}", model_path)))
@@ -274,11 +274,15 @@ impl WhisperManager {
     /// Transcribe a full WAV file
     pub fn transcribe_file(&mut self, file_path: &str) -> Result<String, String> {
         println!("[PROCESSING] Transcribing full file: {}", file_path);
+        let total_start = std::time::Instant::now();
 
         let ctx = self
             .context
             .as_mut()
             .ok_or("Whisper context not initialized")?;
+
+        // ===== STEP 1: Read WAV file =====
+        let step1_start = std::time::Instant::now();
 
         // Read the WAV file
         let mut reader = hound::WavReader::open(file_path)
@@ -290,15 +294,25 @@ impl WhisperManager {
             spec.sample_rate, spec.channels
         );
 
-        // Read all samples and convert to f32
-        let samples: Vec<f32> = if spec.sample_format == hound::SampleFormat::Float {
-            reader.samples::<f32>().map(|s| s.unwrap_or(0.0)).collect()
+        // Read all samples and convert to f32 (optimized with pre-allocation)
+        let sample_count = reader.len() as usize;
+        let mut samples: Vec<f32> = Vec::with_capacity(sample_count);
+
+        if spec.sample_format == hound::SampleFormat::Float {
+            samples.extend(reader.samples::<f32>().map(|s| s.unwrap_or(0.0)));
         } else {
-            reader
-                .samples::<i16>()
-                .map(|s| s.unwrap_or(0) as f32 / 32768.0)
-                .collect()
-        };
+            samples.extend(
+                reader
+                    .samples::<i16>()
+                    .map(|s| s.unwrap_or(0) as f32 / 32768.0),
+            );
+        }
+
+        let step1_ms = step1_start.elapsed().as_secs_f32() * 1000.0;
+        println!("[TIMING] Step 1 (File I/O): {:.0}ms", step1_ms);
+
+        // ===== STEP 2: Convert stereo to mono =====
+        let step2_start = std::time::Instant::now();
 
         // Convert stereo to mono if needed
         let mono_samples = if spec.channels == 2 {
@@ -309,6 +323,12 @@ impl WhisperManager {
         } else {
             samples
         };
+
+        let step2_ms = step2_start.elapsed().as_secs_f32() * 1000.0;
+        println!("[TIMING] Step 2 (Stereo→Mono): {:.0}ms", step2_ms);
+
+        // ===== STEP 3: Resample to 16kHz =====
+        let step3_start = std::time::Instant::now();
 
         // Downsample to 16kHz if needed (using rubato)
         let audio_data = if spec.sample_rate != 16000 {
@@ -354,30 +374,56 @@ impl WhisperManager {
             mono_samples
         };
 
+        let step3_ms = step3_start.elapsed().as_secs_f32() * 1000.0;
+        println!(
+            "[TIMING] Step 3 (Resampling {}kHz→16kHz): {:.0}ms",
+            spec.sample_rate / 1000,
+            step3_ms
+        );
+
         println!("[INFO] Processing {} samples at 16kHz", audio_data.len());
+
+        // ===== STEP 4: Create Whisper state =====
+        let step4_start = std::time::Instant::now();
 
         // Create state
         let mut state = ctx
             .create_state()
             .map_err(|e| format!("Failed to create state: {:?}", e))?;
 
-        // Set up parameters
+        // Set up parameters (optimized for speed)
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_n_threads(4);
+        params.set_n_threads(8); // Increased from 4 (use more CPU for encoding)
         params.set_translate(false);
         params.set_language(Some("en"));
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        params.set_max_len(1); // Speed: Don't generate extra tokens
+        params.set_token_timestamps(false); // Speed: Skip token-level timing
 
-        // Start timing
-        let start = std::time::Instant::now();
+        let step4_ms = step4_start.elapsed().as_secs_f32() * 1000.0;
+        println!("[TIMING] Step 4 (State Setup): {:.0}ms", step4_ms);
+
+        // ===== STEP 5: Whisper inference =====
+        let step5_start = std::time::Instant::now();
 
         // Run transcription
         state
             .full(params, &audio_data)
             .map_err(|e| format!("Transcription failed: {:?}", e))?;
+
+        let step5_ms = step5_start.elapsed().as_secs_f32() * 1000.0;
+        let audio_duration_sec = audio_data.len() as f32 / 16000.0;
+        let inference_speedup = audio_duration_sec / (step5_ms / 1000.0);
+        println!(
+            "[TIMING] Step 5 (Whisper AI): {:.0}ms | {:.1}x realtime",
+            step5_ms, inference_speedup
+        );
+
+        // ===== STEP 6: Extract segments =====
+        let step6_start = std::time::Instant::now();
 
         // Get full transcript
         let num_segments = state.full_n_segments();
@@ -390,17 +436,21 @@ impl WhisperManager {
             }
         }
 
-        // Calculate performance metrics
-        let duration = start.elapsed();
-        let audio_duration_sec = audio_data.len() as f32 / 16000.0;
-        let speedup = audio_duration_sec / duration.as_secs_f32();
+        let step6_ms = step6_start.elapsed().as_secs_f32() * 1000.0;
+        println!("[TIMING] Step 6 (Extract Text): {:.0}ms", step6_ms);
 
+        // ===== TOTAL TIME SUMMARY =====
+        let total_ms = total_start.elapsed().as_secs_f32() * 1000.0;
+        let total_speedup = audio_duration_sec / (total_ms / 1000.0);
+
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!(
-            "[PERF] Processed {:.2}s full file in {:.0}ms | Speed: {:.1}x",
-            audio_duration_sec,
-            duration.as_millis(),
-            speedup
+            "[PERF] Processed {:.2}s audio in {:.0}ms total | Speed: {:.1}x",
+            audio_duration_sec, total_ms, total_speedup
         );
+        println!("[BREAKDOWN] I/O:{:.0}ms + Stereo:{:.0}ms + Resample:{:.0}ms + Setup:{:.0}ms + AI:{:.0}ms + Extract:{:.0}ms",
+            step1_ms, step2_ms, step3_ms, step4_ms, step5_ms, step6_ms);
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         Ok(transcript.trim().to_string())
     }

@@ -47,6 +47,12 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      # Remove the Windows-specific .cargo/config.toml on non-Windows platforms
+      # to prevent path conflicts (C:/bld breaking Unix builds)
+      - name: Remove Windows cargo config on Unix
+        if: matrix.platform != 'windows-latest'
+        run: rm -f src-tauri/.cargo/config.toml
+
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -61,10 +67,23 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      # Temporarily use CPU-only whisper-rs in CI to avoid GPU build complexity
+      - name: Patch Cargo.toml for CI builds
+        run: |
+          if [[ "$RUNNER_OS" != "Windows" ]]; then
+            sed -i.bak 's/features = \["cuda", "vulkan"\]/features = []/g' src-tauri/Cargo.toml
+          else
+            # Windows - use PowerShell
+            (Get-Content src-tauri/Cargo.toml) -replace 'features = \["cuda", "vulkan"\]', 'features = []' | Set-Content src-tauri/Cargo.toml
+          fi
+        shell: bash
+
       - name: Build Tauri application
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Disable CUDA/Vulkan in CI builds
+          WHISPER_NO_GPU: "1"
         with:
           args: ${{ matrix.args }}
 
