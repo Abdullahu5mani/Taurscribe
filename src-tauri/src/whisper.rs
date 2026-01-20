@@ -36,7 +36,7 @@ pub struct WhisperManager {
 }
 
 // C-compatible callback to suppress logs
-unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
+unsafe extern "C" fn null_log_callback(_level: u32, _text: *const c_char, _user_data: *mut c_void) {
     // Do nothing - silences logging
 }
 
