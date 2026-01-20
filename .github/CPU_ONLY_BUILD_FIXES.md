@@ -11,11 +11,13 @@ This document summarizes the fixes applied to enable successful CPU-only builds 
 error: 'path' is unavailable: introduced in macOS 10.15
 ```
 
-**Root Cause:** whisper.cpp uses C++17 filesystem APIs that require macOS 10.15+, but the build was targeting macOS 10.13 (`-mmacosx-version-min=10.13`)
+**Root Cause:** whisper.cpp uses C++17 filesystem APIs that require macOS 10.15+, but CMake was hardcoding the deployment target to macOS 10.13 (`-mmacosx-version-min=10.13`)
 
-**Fix:** Set `MACOSX_DEPLOYMENT_TARGET=10.15` environment variable before building
-- Added step in workflow to set this for all macOS builds
-- This allows the C++ compiler to use the required filesystem APIs
+**Fix:** Set `MACOSX_DEPLOYMENT_TARGET=10.15` environment variable in the build action's env section
+- Added to the `tauri-apps/tauri-action@v0` step's `env` section
+- This ensures CMake picks up the correct deployment target when building whisper-rs-sys
+- Uses conditional: `${{ matrix.platform == 'macos-latest' && '10.15' || '' }}`
+
 
 ### 2. **Linux (Ubuntu 22.04)**
 **Problem:** Build failed with missing ALSA library
@@ -49,9 +51,9 @@ echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
 ### `.github/workflows/build.yml`
 
-1. **Line 60**: Added `libasound2-dev` to Linux dependencies
-2. **Lines 62-67**: Added LLVM installation for Windows with LIBCLANG_PATH
-3. **Lines 92-96**: Added macOS deployment target step
+1. **Line 60**: Added `libasound2-dev` to Linux dependencies for ALSA audio support
+2. **Lines 62-67**: Added LLVM installation step for Windows to provide libclang
+3. **Lines 101-102**: Added `MACOSX_DEPLOYMENT_TARGET: 10.15` to build action's env section for macOS compatibility
 
 ## Build Strategy
 
