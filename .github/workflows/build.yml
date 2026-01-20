@@ -57,7 +57,14 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev
+
+      # Install LLVM for Windows (needed for libclang by bindgen)
+      - name: Install LLVM (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          choco install llvm -y
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -81,6 +88,12 @@ jobs:
           (Get-Content src-tauri/Cargo.toml) -replace 'features = \["cuda", "vulkan"\]', 'features = []' | Set-Content src-tauri/Cargo.toml
           Write-Host "✅ Windows: CPU-only build"
         shell: pwsh
+
+      # Set macOS deployment target to 10.15 for C++ filesystem API support
+      - name: Set macOS deployment target
+        if: matrix.platform == 'macos-latest'
+        run: |
+          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
 
       - name: Build Tauri application
         uses: tauri-apps/tauri-action@v0
