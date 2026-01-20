@@ -67,24 +67,17 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
-      # Platform-specific whisper-rs features for CI builds
-      - name: Patch Cargo.toml for platform-specific builds
+      # Use CPU-only whisper-rs for all platforms in CI (simplicity & reliability)
+      - name: Patch Cargo.toml for CPU-only builds
+        if: runner.os != 'Windows'
         run: |
-          if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
-            # macOS: Use CoreML for Metal acceleration
-            sed -i.bak 's/features = \["cuda", "vulkan"\]/features = ["coreml"]/g' src-tauri/Cargo.toml
-            echo "✅ macOS: Enabled CoreML (Metal) acceleration"
-          elif [[ "${{ matrix.platform }}" == "ubuntu-22.04" ]]; then
-            # Linux: CPU-only build
-            sed -i.bak 's/features = \["cuda", "vulkan"\]/features = []/g' src-tauri/Cargo.toml
-            echo "✅ Linux: CPU-only build"
-          fi
+          sed -i.bak 's/features = \["cuda", "vulkan"\]/features = []/g' src-tauri/Cargo.toml
+          echo "✅ ${{ matrix.platform }}: CPU-only build"
         shell: bash
 
       - name: Patch Cargo.toml for Windows
-        if: matrix.platform == 'windows-latest'
+        if: runner.os == 'Windows'
         run: |
-          # Windows: CPU-only build (CUDA/Vulkan not available in GitHub Actions)
           (Get-Content src-tauri/Cargo.toml) -replace 'features = \["cuda", "vulkan"\]', 'features = []' | Set-Content src-tauri/Cargo.toml
           Write-Host "✅ Windows: CPU-only build"
         shell: pwsh
