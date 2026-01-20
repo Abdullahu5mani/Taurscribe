@@ -89,16 +89,12 @@ jobs:
           Write-Host "✅ Windows: CPU-only build"
         shell: pwsh
 
-      # Set macOS deployment target to 10.15 for C++ filesystem API support
-      - name: Set macOS deployment target
-        if: matrix.platform == 'macos-latest'
-        run: |
-          echo "MACOSX_DEPLOYMENT_TARGET=10.15" >> $GITHUB_ENV
-
       - name: Build Tauri application
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Set macOS deployment target to 10.15 for C++ filesystem API support in whisper.cpp
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.platform == 'macos-latest' && '10.15' || '' }}
         with:
           args: ${{ matrix.args }}
 
