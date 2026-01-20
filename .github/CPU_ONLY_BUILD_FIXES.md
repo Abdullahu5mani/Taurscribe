@@ -49,6 +49,30 @@ choco install llvm -y
 echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 ```
 
+### 4. **Rust Type Signature (Application Code)**
+**Problem:** Build failed with type mismatch in `src/whisper.rs`
+```
+error[E0308]: mismatched types
+  --> src/whisper.rs:62:35
+   |
+62 |  set_log_callback(Some(null_log_callback), std::ptr::null_mut());
+   |                        ^^^^^^^^^^^^^^^^^ expected fn pointer, found fn item
+   |
+   = note: expected fn pointer `unsafe extern "C" fn(u32, _, _)`
+                 found fn item `unsafe extern "C" fn(i32, _, _) {null_log_callback}`
+```
+
+**Root Cause:** The `null_log_callback` function signature used `i32` for the log level parameter, but the whisper-rs library expects `u32`
+
+**Fix:** Updated the function signature in `src-tauri/src/whisper.rs`
+```rust
+// Changed from:
+unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void)
+
+// To:
+unsafe extern "C" fn null_log_callback(_level: u32, _text: *const c_char, _user_data: *mut c_void)
+```
+
 ## Summary of Changes
 
 ### `.github/workflows/build.yml`
@@ -56,6 +80,10 @@ echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 1. **Line 60**: Added `libasound2-dev` to Linux dependencies for ALSA audio support
 2. **Lines 62-67**: Added LLVM installation step for Windows to provide libclang
 3. **Lines 96-97**: Added both `MACOSX_DEPLOYMENT_TARGET` and `CMAKE_OSX_DEPLOYMENT_TARGET` (set to 10.15) to build action's env for macOS
+
+### `src-tauri/src/whisper.rs`
+
+4. **Line 39**: Changed `null_log_callback` parameter type from `i32` to `u32` to match whisper-rs API expectations
 
 ## Build Strategy
 
