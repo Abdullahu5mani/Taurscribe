@@ -13,11 +13,13 @@ error: 'path' is unavailable: introduced in macOS 10.15
 
 **Root Cause:** whisper.cpp uses C++17 filesystem APIs that require macOS 10.15+, but CMake was hardcoding the deployment target to macOS 10.13 (`-mmacosx-version-min=10.13`)
 
-**Fix:** Set `MACOSX_DEPLOYMENT_TARGET=10.15` environment variable in the build action's env section
+**Fix:** Set **both** `MACOSX_DEPLOYMENT_TARGET` and `CMAKE_OSX_DEPLOYMENT_TARGET` to 10.15
 - Added to the `tauri-apps/tauri-action@v0` step's `env` section
-- This ensures CMake picks up the correct deployment target when building whisper-rs-sys
+- **Critical:** CMake specifically looks for `CMAKE_OSX_DEPLOYMENT_TARGET` - setting only `MACOSX_DEPLOYMENT_TARGET` is insufficient
+- This ensures CMake passes `-mmacosx-version-min=10.15` to the C++ compiler when building whisper-rs-sys
 - Uses conditional: `${{ matrix.platform == 'macos-latest' && '10.15' || '' }}`
 
+> **See [`MACOS_DEPLOYMENT_TARGET_FIX.md`](./MACOS_DEPLOYMENT_TARGET_FIX.md) for detailed technical explanation**
 
 ### 2. **Linux (Ubuntu 22.04)**
 **Problem:** Build failed with missing ALSA library
@@ -53,7 +55,7 @@ echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
 1. **Line 60**: Added `libasound2-dev` to Linux dependencies for ALSA audio support
 2. **Lines 62-67**: Added LLVM installation step for Windows to provide libclang
-3. **Lines 101-102**: Added `MACOSX_DEPLOYMENT_TARGET: 10.15` to build action's env section for macOS compatibility
+3. **Lines 96-97**: Added both `MACOSX_DEPLOYMENT_TARGET` and `CMAKE_OSX_DEPLOYMENT_TARGET` (set to 10.15) to build action's env for macOS
 
 ## Build Strategy
 
