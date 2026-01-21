@@ -36,7 +36,7 @@ pub struct WhisperManager {
 }
 
 // C-compatible callback to suppress logs
-unsafe extern "C" fn null_log_callback(_level: u32, _text: *const c_char, _user_data: *mut c_void) {
+unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
     // Do nothing - silences logging
 }
 
@@ -53,6 +53,12 @@ impl WhisperManager {
     /// Get the current GPU backend being used
     pub fn get_backend(&self) -> &GpuBackend {
         &self.backend
+    }
+
+    /// Clear the transcript history (call when starting a new recording)
+    pub fn clear_context(&mut self) {
+        self.last_transcript.clear();
+        println!("[INFO] Context cleared - starting fresh");
     }
 
     /// Initialize the Whisper context (loads the model from DISK with GPU support)
@@ -251,9 +257,13 @@ impl WhisperManager {
 
         let final_text = transcript.trim().to_string();
 
-        // Update history for next time (keep only the last chunk to avoid infinite growth)
+        // Update history for next time (CUMULATIVE: append all chunks)
         if !final_text.is_empty() {
-            self.last_transcript = final_text.clone();
+            // Append new chunk to existing transcript
+            if !self.last_transcript.is_empty() {
+                self.last_transcript.push(' ');  // Add space between chunks
+            }
+            self.last_transcript.push_str(&final_text);
         }
 
         // Calculate performance metrics

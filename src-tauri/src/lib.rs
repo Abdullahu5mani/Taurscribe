@@ -127,6 +127,9 @@ fn start_recording(state: State<AudioState>) -> Result<String, String> {
 
     println!("[INFO] Saving recording to: {}", path.display());
 
+    // Clear previous transcript context (start fresh for new recording)
+    state.whisper.lock().unwrap().clear_context();
+
     // Save path for final high-quality transcription
     *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
 
