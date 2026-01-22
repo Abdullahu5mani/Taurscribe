@@ -28,11 +28,21 @@ impl std::fmt::Display for GpuBackend {
     }
 }
 
+/// Available Whisper models with their display names and file paths
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelInfo {
+    pub id: String,           // e.g., "tiny.en-q5_1"
+    pub display_name: String, // e.g., "Tiny English (Q5_1)"
+    pub file_name: String,    // e.g., "ggml-tiny.en-q5_1.bin"
+    pub size_mb: f32,         // Approximate size in MB
+}
+
 /// Whisper transcription manager
 pub struct WhisperManager {
     context: Option<WhisperContext>,
     last_transcript: String,
     backend: GpuBackend,
+    current_model: Option<String>, // Currently loaded model ID
 }
 
 // C-compatible callback to suppress logs
@@ -47,7 +57,125 @@ impl WhisperManager {
             context: None,
             last_transcript: String::new(),
             backend: GpuBackend::Cpu, // Default to CPU until initialized
+            current_model: None,
         }
+    }
+
+    /// Get the models directory path
+    fn get_models_dir() -> Result<std::path::PathBuf, String> {
+        // Try multiple possible locations
+        let possible_paths = [
+            "taurscribe-runtime/models",
+            "../taurscribe-runtime/models",
+            "../../taurscribe-runtime/models",
+        ];
+
+        for path in possible_paths {
+            if let Ok(canonical) = std::fs::canonicalize(path) {
+                if canonical.is_dir() {
+                    return Ok(canonical);
+                }
+            }
+        }
+
+        Err("Could not find models directory".to_string())
+    }
+
+    /// List all available Whisper models
+    pub fn list_available_models() -> Result<Vec<ModelInfo>, String> {
+        let models_dir = Self::get_models_dir()?;
+        let mut models = Vec::new();
+
+        let entries = std::fs::read_dir(&models_dir)
+            .map_err(|e| format!("Failed to read models directory: {}", e))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+
+            if path.is_file() {
+                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                    // Skip non-whisper models (like silero VAD)
+                    if file_name.starts_with("ggml-")
+                        && file_name.ends_with(".bin")
+                        && !file_name.contains("silero")
+                    {
+                        let size_bytes = path.metadata().map(|m| m.len()).unwrap_or(0);
+                        let size_mb = size_bytes as f32 / (1024.0 * 1024.0);
+
+                        // Parse model info from filename
+                        // e.g., "ggml-tiny.en-q5_1.bin" -> id="tiny.en-q5_1", name="Tiny English (Q5_1)"
+                        let id = file_name
+                            .trim_start_matches("ggml-")
+                            .trim_end_matches(".bin")
+                            .to_string();
+
+                        let display_name = Self::format_model_name(&id);
+
+                        models.push(ModelInfo {
+                            id,
+                            display_name,
+                            file_name: file_name.to_string(),
+                            size_mb,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort by size (smallest first)
+        models.sort_by(|a, b| a.size_mb.partial_cmp(&b.size_mb).unwrap());
+
+        Ok(models)
+    }
+
+    /// Format a model ID into a human-readable name
+    fn format_model_name(id: &str) -> String {
+        let mut name = String::new();
+
+        // Parse size (tiny, base, small, medium, large)
+        if id.contains("tiny") {
+            name.push_str("Tiny");
+        } else if id.contains("base") {
+            name.push_str("Base");
+        } else if id.contains("small") {
+            name.push_str("Small");
+        } else if id.contains("medium") {
+            name.push_str("Medium");
+        } else if id.contains("large-v3-turbo") {
+            name.push_str("Large V3 Turbo");
+        } else if id.contains("large-v3") {
+            name.push_str("Large V3");
+        } else if id.contains("large") {
+            name.push_str("Large");
+        }
+
+        // Add language indicator
+        if id.contains(".en") {
+            name.push_str(" English");
+        } else {
+            name.push_str(" Multilingual");
+        }
+
+        // Add quantization info
+        if id.contains("q5_0") {
+            name.push_str(" (Q5_0)");
+        } else if id.contains("q5_1") {
+            name.push_str(" (Q5_1)");
+        } else if id.contains("q8_0") {
+            name.push_str(" (Q8_0)");
+        }
+
+        if name.is_empty() {
+            return id.to_string(); // Fallback to raw ID
+        }
+
+        name
+    }
+
+    /// Get the currently loaded model name
+    pub fn get_current_model(&self) -> Option<&String> {
+        self.current_model.as_ref()
     }
 
     /// Get the current GPU backend being used
@@ -62,19 +190,24 @@ impl WhisperManager {
     }
 
     /// Initialize the Whisper context (loads the model from DISK with GPU support)
-    pub fn initialize(&mut self) -> Result<String, String> {
+    /// If model_id is None, uses the default model (tiny.en-q5_1)
+    pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
         // Suppress verbose C++ logs from whisper.cpp
         unsafe {
             set_log_callback(Some(null_log_callback), std::ptr::null_mut());
         }
 
-        // Path to the large model
-        // Line 66 in whisper.rs - change to:
-        let model_path = "taurscribe-runtime/models/ggml-tiny.en-q5_1.bin";
-        let absolute_path = std::fs::canonicalize(model_path)
-            .or_else(|_| std::fs::canonicalize(format!("../{}", model_path)))
-            .or_else(|_| std::fs::canonicalize(format!("../../{}", model_path)))
-            .map_err(|e| format!("Could not find model at '{}'. Error: {}", model_path, e))?;
+        // Get models directory
+        let models_dir = Self::get_models_dir()?;
+
+        // Determine which model to load
+        let target_model = model_id.unwrap_or("tiny.en-q5_1");
+        let file_name = format!("ggml-{}.bin", target_model);
+        let absolute_path = models_dir.join(&file_name);
+
+        if !absolute_path.exists() {
+            return Err(format!("Model file not found: {}", absolute_path.display()));
+        }
 
         println!(
             "[INFO] Loading Whisper model from disk: '{}'",
@@ -88,9 +221,11 @@ impl WhisperManager {
 
         self.context = Some(ctx);
         self.backend = backend.clone();
+        self.current_model = Some(target_model.to_string());
 
         let backend_msg = format!("Backend: {}", backend);
         println!("[INFO] {}", backend_msg);
+        println!("[INFO] Model loaded: {}", target_model);
 
         // Warm-up pass: Run a dummy transcription to compile GPU kernels
         // This eliminates the "cold start" on the first real chunk
@@ -261,7 +396,7 @@ impl WhisperManager {
         if !final_text.is_empty() {
             // Append new chunk to existing transcript
             if !self.last_transcript.is_empty() {
-                self.last_transcript.push(' ');  // Add space between chunks
+                self.last_transcript.push(' '); // Add space between chunks
             }
             self.last_transcript.push_str(&final_text);
         }

@@ -17,6 +17,7 @@
 8. [Common Beginner Questions](#common-beginner-questions)
 9. [Cumulative Context Feature](#cumulative-context-feature)
 10. [Annotated Rust Code Examples](#annotated-rust-code-examples)
+11. [Model Selection Feature](#model-selection-feature)
 
 ---
 
@@ -34,6 +35,7 @@ Taurscribe is a **desktop application** that records your voice and transcribes 
 - ✅ High-quality final transcript when you stop
 - ✅ GPU acceleration for speed (CUDA/Vulkan)
 - ✅ Thread-safe concurrent processing
+- ✅ **Model Selection** - Choose from multiple Whisper models
 
 ---
 
@@ -2766,6 +2768,364 @@ tauri::Builder::default()
 | Question mark | `x?` | Propagate error |
 | Clone | `x.clone()` | Deep copy |
 | Move | `move \|\| { }` | Take ownership in closure |
+
+---
+
+## Model Selection Feature
+
+Taurscribe allows you to choose which Whisper AI model to use for transcription. Different models offer trade-offs between **speed** and **accuracy**.
+
+### 🎯 Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    MODEL SELECTION ARCHITECTURE                      │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   📂 taurscribe-runtime/models/                                     │
+│      │                                                               │
+│      ├── ggml-tiny.en-q5_1.bin    (30 MB)   ⚡ Fastest              │
+│      ├── ggml-base.en-q5_0.bin    (53 MB)                           │
+│      ├── ggml-tiny.en.bin         (74 MB)                           │
+│      ├── ggml-base.en.bin         (141 MB)                          │
+│      ├── ggml-small.en.bin        (465 MB)                          │
+│      ├── ggml-large-v3-turbo.bin  (547 MB)                          │
+│      └── ggml-large-v3.bin        (2.9 GB)  🎯 Most Accurate        │
+│                                                                      │
+│   🔄 Frontend (App.tsx)                                             │
+│      │                                                               │
+│      └──► invoke("list_models")  ──► Returns ModelInfo[]            │
+│      └──► invoke("switch_model") ──► Reloads Whisper context        │
+│                                                                      │
+│   🦀 Backend (lib.rs + whisper.rs)                                  │
+│      │                                                               │
+│      └──► WhisperManager.initialize(model_id)                       │
+│      └──► WhisperManager.list_available_models()                    │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 📊 Available Models
+
+| Model | Size | Speed | Accuracy | Best For |
+|-------|------|-------|----------|----------|
+| **Tiny (Q5_1)** | ~30 MB | ⚡⚡⚡⚡⚡ | ⭐⭐ | Quick notes, testing |
+| **Base (Q5_0)** | ~53 MB | ⚡⚡⚡⚡ | ⭐⭐⭐ | **Default - Good balance** |
+| **Small** | ~465 MB | ⚡⚡⚡ | ⭐⭐⭐⭐ | Meetings, lectures |
+| **Large V3 Turbo** | ~547 MB | ⚡⚡ | ⭐⭐⭐⭐⭐ | Professional use |
+| **Large V3** | ~2.9 GB | ⚡ | ⭐⭐⭐⭐⭐ | Maximum accuracy |
+
+**Note**: Quantized models (Q5_0, Q5_1) are smaller and faster with minimal accuracy loss.
+
+### 🦀 Backend Implementation
+
+#### The ModelInfo Struct
+
+**File**: `src-tauri/src/whisper.rs`
+
+```rust
+/// Available Whisper models with their display names and file paths
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelInfo {
+    pub id: String,           // e.g., "tiny.en-q5_1"
+    pub display_name: String, // e.g., "Tiny English (Q5_1)"
+    pub file_name: String,    // e.g., "ggml-tiny.en-q5_1.bin"
+    pub size_mb: f32,         // Size in megabytes
+}
+```
+
+**Why `serde::Serialize`?**
+- Tauri needs to send this data from Rust → JavaScript
+- `Serialize` allows automatic conversion to JSON
+- Without it, Tauri commands would fail with "IpcResponse not satisfied"
+
+#### Listing Available Models
+
+```rust
+/// List all available Whisper models
+pub fn list_available_models() -> Result<Vec<ModelInfo>, String> {
+    let models_dir = Self::get_models_dir()?;
+    let mut models = Vec::new();
+
+    // Read directory entries
+    let entries = std::fs::read_dir(&models_dir)
+        .map_err(|e| format!("Failed to read models directory: {}", e))?;
+
+    for entry in entries {
+        let path = entry?.path();
+        
+        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+            // Filter: Only Whisper models (not Silero VAD, etc.)
+            if file_name.starts_with("ggml-") 
+                && file_name.ends_with(".bin") 
+                && !file_name.contains("silero") 
+            {
+                // Parse model info from filename
+                let id = file_name
+                    .trim_start_matches("ggml-")
+                    .trim_end_matches(".bin")
+                    .to_string();
+                
+                let size_mb = path.metadata()
+                    .map(|m| m.len() as f32 / (1024.0 * 1024.0))
+                    .unwrap_or(0.0);
+                
+                models.push(ModelInfo {
+                    id: id.clone(),
+                    display_name: Self::format_model_name(&id),
+                    file_name: file_name.to_string(),
+                    size_mb,
+                });
+            }
+        }
+    }
+
+    // Sort by size (smallest first for UI)
+    models.sort_by(|a, b| a.size_mb.partial_cmp(&b.size_mb).unwrap());
+
+    Ok(models)
+}
+```
+
+**Key Points**:
+- Scans the `taurscribe-runtime/models/` directory
+- Filters out non-Whisper files (like Silero VAD)
+- Extracts file size for display
+- Sorts by size so fastest models appear first
+
+#### Switching Models
+
+**File**: `src-tauri/src/lib.rs`
+
+```rust
+/// Switch to a different Whisper model
+#[tauri::command]
+fn switch_model(state: State<AudioState>, model_id: String) -> Result<String, String> {
+    // Safety check: Can't switch while recording!
+    let handle = state.recording_handle.lock().unwrap();
+    if handle.is_some() {
+        return Err("Cannot switch models while recording".to_string());
+    }
+    drop(handle); // Release lock early (important!)
+    
+    println!("[INFO] Switching to model: {}", model_id);
+    
+    // Re-initialize Whisper with new model
+    let mut whisper = state.whisper.lock().unwrap();
+    whisper.initialize(Some(&model_id))
+}
+```
+
+**Why `drop(handle)` early?**
+- We locked `recording_handle` to check if recording
+- We need to release it BEFORE locking `whisper`
+- Holding multiple locks increases deadlock risk
+- `drop()` explicitly releases the lock
+
+#### Modified Initialize Function
+
+```rust
+/// Initialize the Whisper context with a specific model
+/// If model_id is None, uses the default model (tiny.en-q5_1)
+pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
+    // Get models directory
+    let models_dir = Self::get_models_dir()?;
+    
+    // Determine which model to load (default: tiny.en-q5_1)
+    let target_model = model_id.unwrap_or("tiny.en-q5_1");
+    let file_name = format!("ggml-{}.bin", target_model);
+    let absolute_path = models_dir.join(&file_name);
+    
+    if !absolute_path.exists() {
+        return Err(format!("Model file not found: {}", absolute_path.display()));
+    }
+
+    // ... GPU initialization code ...
+    
+    // Store which model is loaded
+    self.current_model = Some(target_model.to_string());
+    
+    Ok(format!("Backend: {}", backend))
+}
+```
+
+### ⚛️ Frontend Implementation
+
+#### TypeScript Interface
+
+**File**: `src/App.tsx`
+
+```typescript
+// TypeScript interface matches Rust's ModelInfo struct
+interface ModelInfo {
+  id: string;           // e.g., "tiny.en-q5_1"
+  display_name: string; // e.g., "Tiny English (Q5_1)"
+  file_name: string;    // e.g., "ggml-tiny.en-q5_1.bin"
+  size_mb: number;      // Size in megabytes
+}
+```
+
+**Why define this interface?**
+- TypeScript provides type safety
+- Autocomplete when accessing properties
+- Catches typos at compile time, not runtime
+
+#### Loading Models on Mount
+
+```typescript
+useEffect(() => {
+  async function loadInitialData() {
+    try {
+      // Load available models from Rust backend
+      const modelList = await invoke("list_models");
+      setModels(modelList as ModelInfo[]);
+
+      // Load currently active model
+      const current = await invoke("get_current_model");
+      setCurrentModel(current as string | null);
+    } catch (e) {
+      console.error("Failed to load models:", e);
+    }
+  }
+  loadInitialData();
+}, []); // Empty dependency array = run once on mount
+```
+
+**What's `useEffect`?**
+- React Hook for side effects (API calls, subscriptions)
+- Runs after component renders
+- Empty `[]` means "run only once when component mounts"
+
+#### Model Change Handler
+
+```typescript
+const handleModelChange = async (modelId: string) => {
+  if (modelId === currentModel) return; // No-op if same model
+  
+  setIsLoading(true);  // Show loading spinner
+  setLoadingMessage(`Loading ${models.find(m => m.id === modelId)?.display_name}...`);
+
+  try {
+    // Call Rust backend to switch models
+    const result = await invoke("switch_model", { modelId });
+    setCurrentModel(modelId);
+    setGreetMsg(`✅ ${result}`);
+  } catch (e) {
+    setGreetMsg(`❌ Error switching model: ${e}`);
+  } finally {
+    setIsLoading(false);  // Always hide spinner
+  }
+};
+```
+
+**What's `finally`?**
+- Runs whether `try` succeeds or `catch` handles error
+- Perfect for cleanup (hiding spinners, resetting state)
+
+#### The Dropdown UI
+
+```tsx
+<select
+  id="model-select"
+  className="model-select"
+  value={currentModel || ""}           // Controlled component
+  onChange={(e) => handleModelChange(e.target.value)}
+  disabled={isRecording || isLoading}  // Prevent switching during recording
+>
+  {models.map((model) => (
+    <option key={model.id} value={model.id}>
+      {model.display_name} ({formatSize(model.size_mb)})
+    </option>
+  ))}
+</select>
+```
+
+**Key Concepts**:
+- **Controlled Component**: React controls the value (not the DOM)
+- **`key` prop**: React needs unique keys to track list items
+- **Disabled states**: Prevents bugs from switching mid-recording
+
+### 🔄 Data Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                       USER CHANGES MODEL                             │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  1️⃣ User selects "Large V3" from dropdown                          │
+│         │                                                            │
+│         ▼                                                            │
+│  2️⃣ onChange fires → handleModelChange("large-v3")                 │
+│         │                                                            │
+│         ▼                                                            │
+│  3️⃣ invoke("switch_model", { modelId: "large-v3" })                │
+│         │                                                            │
+│         ▼ ─────────── Tauri IPC Bridge ───────────                  │
+│                                                                      │
+│  4️⃣ Rust: switch_model() checks if recording                       │
+│         │                                                            │
+│         ├── If recording → Return Err("Cannot switch...")
+│         │                                                            │
+│         └── If not → Continue                                        │
+│                 │                                                    │
+│                 ▼                                                    │
+│  5️⃣ whisper.initialize(Some("large-v3"))                           │
+│         │                                                            │
+│         ├── Load ggml-large-v3.bin from disk                        │
+│         ├── Initialize GPU context (CUDA/Vulkan)                    │
+│         ├── Warm-up pass (compile GPU kernels)                      │
+│         └── Return Ok("Backend: CUDA")                              │
+│                 │                                                    │
+│                 ▼ ─────────── Tauri IPC Bridge ───────────          │
+│                                                                      │
+│  6️⃣ Frontend receives result                                       │
+│         │                                                            │
+│         ├── setCurrentModel("large-v3")                             │
+│         ├── setGreetMsg("✅ Backend: CUDA")                         │
+│         └── setIsLoading(false)                                     │
+│                                                                      │
+│  7️⃣ UI updates with new model info                                 │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### ⚠️ Safety Considerations
+
+**Why can't we switch models while recording?**
+
+1. **Active threads**: Recording spawns threads using the current WhisperManager
+2. **Shared state**: `Arc<Mutex<WhisperManager>>` is shared between main thread and Whisper thread
+3. **Context invalidation**: Switching models replaces `self.context` - threads would crash
+
+```rust
+// This check prevents crashes:
+if handle.is_some() {
+    return Err("Cannot switch models while recording".to_string());
+}
+```
+
+**Alternative approach** (more complex):
+- Use atomic flags to signal threads
+- Wait for threads to acknowledge
+- Then switch model safely
+
+### 💡 Tips for Beginners
+
+1. **Start with smaller models**: Tiny and Base are great for development
+2. **Use quantized versions**: `-q5_0` and `-q5_1` are smaller with minimal quality loss
+3. **Monitor GPU usage**: Task Manager → Performance → GPU
+4. **Check console logs**: Rust prints model loading status
+
+### 🔧 Adding New Models
+
+To add a new Whisper model:
+
+1. Download the `.bin` file from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp/tree/main)
+2. Place it in `taurscribe-runtime/models/`
+3. Restart the app (or refresh model list)
+4. The model will appear in the dropdown!
+
+**Naming convention**: `ggml-{model_name}.bin`
 
 ---
 

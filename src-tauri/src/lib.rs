@@ -1,10 +1,36 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{unbounded, Sender};
 use std::sync::{Arc, Mutex};
-use tauri::State;
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 mod whisper;
 use whisper::WhisperManager;
+
+/// App states for tray icon colors
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AppState {
+    Ready,      // Green - ready to record
+    Recording,  // Red - currently recording
+    Processing, // Yellow - processing/transcribing
+}
+
+// Embed tray icons at compile time using Tauri's include_image macro
+macro_rules! tray_icon_green {
+    () => {
+        tauri::include_image!("icons/emoji-green_circle.ico")
+    };
+}
+macro_rules! tray_icon_red {
+    () => {
+        tauri::include_image!("icons/emoji-red_circle.ico")
+    };
+}
+macro_rules! tray_icon_yellow {
+    () => {
+        tauri::include_image!("icons/emoji-yellow_circle.ico")
+    };
+}
 
 // Wrapper to make cpal::Stream Send/Sync.
 // Safety: We only use this to keep the stream alive and drop it.
@@ -17,6 +43,7 @@ struct AudioState {
     recording_handle: Mutex<Option<RecordingHandle>>,
     whisper: Arc<Mutex<WhisperManager>>,
     last_recording_path: Mutex<Option<String>>,
+    current_app_state: Mutex<AppState>,
 }
 
 struct RecordingHandle {
@@ -34,6 +61,85 @@ fn greet(name: &str) -> String {
 fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
     let whisper = state.whisper.lock().unwrap();
     Ok(format!("{}", whisper.get_backend()))
+}
+
+/// List all available Whisper models
+#[tauri::command]
+fn list_models() -> Result<Vec<whisper::ModelInfo>, String> {
+    whisper::WhisperManager::list_available_models()
+}
+
+/// Get the currently loaded model
+#[tauri::command]
+fn get_current_model(state: State<AudioState>) -> Result<Option<String>, String> {
+    let whisper = state.whisper.lock().unwrap();
+    Ok(whisper.get_current_model().cloned())
+}
+
+/// Switch to a different Whisper model
+#[tauri::command]
+fn switch_model(state: State<AudioState>, model_id: String) -> Result<String, String> {
+    // Check if recording
+    let handle = state.recording_handle.lock().unwrap();
+    if handle.is_some() {
+        return Err("Cannot switch models while recording".to_string());
+    }
+    drop(handle); // Release lock early
+
+    println!("[INFO] Switching to model: {}", model_id);
+
+    let mut whisper = state.whisper.lock().unwrap();
+    whisper.initialize(Some(&model_id))
+}
+
+/// Update the tray icon based on app state
+#[tauri::command]
+fn set_tray_state(
+    app: AppHandle,
+    state: State<AudioState>,
+    new_state: String,
+) -> Result<(), String> {
+    let app_state = match new_state.as_str() {
+        "ready" => AppState::Ready,
+        "recording" => AppState::Recording,
+        "processing" => AppState::Processing,
+        _ => return Err(format!("Unknown state: {}", new_state)),
+    };
+
+    // Update stored state
+    *state.current_app_state.lock().unwrap() = app_state;
+
+    // Update tray icon
+    update_tray_icon(&app, app_state)?;
+
+    Ok(())
+}
+
+/// Update the tray icon to match the current app state
+fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> {
+    let icon = match state {
+        AppState::Ready => tray_icon_green!(),
+        AppState::Recording => tray_icon_red!(),
+        AppState::Processing => tray_icon_yellow!(),
+    };
+
+    let tooltip = match state {
+        AppState::Ready => "Taurscribe - Ready",
+        AppState::Recording => "Taurscribe - Recording...",
+        AppState::Processing => "Taurscribe - Processing...",
+    };
+
+    // Get the tray icon
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        tray.set_icon(Some(icon))
+            .map_err(|e| format!("Failed to set tray icon: {}", e))?;
+        tray.set_tooltip(Some(tooltip))
+            .map_err(|e| format!("Failed to set tooltip: {}", e))?;
+
+        println!("[TRAY] State changed to: {:?}", state);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -371,12 +477,88 @@ fn stop_recording(state: State<AudioState>) -> Result<String, String> {
     }
 }
 
+/// Global hotkey listener for push-to-talk recording
+/// Listens for Ctrl+Win key combination
+fn start_hotkey_listener(app_handle: AppHandle) {
+    use rdev::{listen, Event, EventType, Key};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // Track which keys are currently held
+    let ctrl_held = Arc::new(AtomicBool::new(false));
+    let meta_held = Arc::new(AtomicBool::new(false)); // Meta = Windows key
+    let recording_active = Arc::new(AtomicBool::new(false));
+
+    let ctrl_held_clone = ctrl_held.clone();
+    let meta_held_clone = meta_held.clone();
+    let recording_active_clone = recording_active.clone();
+    let app_handle_clone = app_handle.clone();
+
+    // This callback is called for every keyboard event
+    let callback = move |event: Event| {
+        match event.event_type {
+            EventType::KeyPress(key) => {
+                match key {
+                    Key::ControlLeft | Key::ControlRight => {
+                        ctrl_held_clone.store(true, Ordering::SeqCst);
+                    }
+                    Key::MetaLeft | Key::MetaRight => {
+                        meta_held_clone.store(true, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+
+                // Check if both Ctrl and Win are held
+                if ctrl_held_clone.load(Ordering::SeqCst)
+                    && meta_held_clone.load(Ordering::SeqCst)
+                    && !recording_active_clone.load(Ordering::SeqCst)
+                {
+                    recording_active_clone.store(true, Ordering::SeqCst);
+                    println!("[HOTKEY] Ctrl+Win pressed - Starting recording");
+
+                    // Emit event to frontend to start recording
+                    let _ = app_handle_clone.emit("hotkey-start-recording", ());
+                }
+            }
+            EventType::KeyRelease(key) => {
+                match key {
+                    Key::ControlLeft | Key::ControlRight => {
+                        ctrl_held_clone.store(false, Ordering::SeqCst);
+                    }
+                    Key::MetaLeft | Key::MetaRight => {
+                        meta_held_clone.store(false, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+
+                // If either key is released and we were recording, stop
+                if recording_active_clone.load(Ordering::SeqCst)
+                    && (!ctrl_held_clone.load(Ordering::SeqCst)
+                        || !meta_held_clone.load(Ordering::SeqCst))
+                {
+                    recording_active_clone.store(false, Ordering::SeqCst);
+                    println!("[HOTKEY] Ctrl+Win released - Stopping recording");
+
+                    // Emit event to frontend to stop recording
+                    let _ = app_handle_clone.emit("hotkey-stop-recording", ());
+                }
+            }
+            _ => {}
+        }
+    };
+
+    // Start listening (this blocks, which is why we run it in a separate thread)
+    if let Err(error) = listen(callback) {
+        eprintln!("[ERROR] Hotkey listener error: {:?}", error);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize Whisper manager
     let mut whisper = WhisperManager::new();
     println!("[INFO] Initializing Whisper transcription engine...");
-    match whisper.initialize() {
+    match whisper.initialize(None) {
+        // Use default model
         Ok(backend_msg) => {
             println!("[SUCCESS] {}", backend_msg);
         }
@@ -392,13 +574,83 @@ pub fn run() {
             recording_handle: Mutex::new(None),
             whisper: Arc::new(Mutex::new(whisper)),
             last_recording_path: Mutex::new(None),
+            current_app_state: Mutex::new(AppState::Ready),
+        })
+        .setup(|app| {
+            use tauri::menu::{Menu, MenuItem};
+
+            // Create tray context menu
+            let show_item = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            // Create the system tray icon with embedded green icon
+            let icon = tray_icon_green!();
+
+            let _tray = TrayIconBuilder::with_id("main-tray")
+                .icon(icon)
+                .tooltip("Taurscribe - Ready")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        println!("[INFO] Quitting application from tray");
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    use tauri::tray::TrayIconEvent;
+                    match event {
+                        TrayIconEvent::Click { .. } => {
+                            // Show the main window when tray icon is clicked
+                            if let Some(window) = tray.app_handle().get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app)?;
+
+            println!("[INFO] System tray icon created");
+
+            // Start the global hotkey listener in a background thread
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                start_hotkey_listener(app_handle);
+            });
+
+            println!("[INFO] Global hotkey listener started (Ctrl+Win to record)");
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Intercept close event - hide to tray instead of quitting
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Hide the window instead of closing
+                let _ = window.hide();
+                // Prevent the default close behavior
+                api.prevent_close();
+                println!("[INFO] Window minimized to tray");
+            }
         })
         .invoke_handler(tauri::generate_handler![
             greet,
             start_recording,
             stop_recording,
             get_backend_info,
-            benchmark_test
+            benchmark_test,
+            list_models,
+            get_current_model,
+            switch_model,
+            set_tray_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
