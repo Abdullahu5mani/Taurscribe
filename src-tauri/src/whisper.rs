@@ -73,12 +73,22 @@ impl WhisperManager {
         for path in possible_paths {
             if let Ok(canonical) = std::fs::canonicalize(path) {
                 if canonical.is_dir() {
-                    return Ok(canonical);
+                    // Check if this directory actually contains any ggml models
+                    // This prevents finding empty/dummy directories
+                    if let Ok(entries) = std::fs::read_dir(&canonical) {
+                        for entry in entries.flatten() {
+                            if let Some(name) = entry.file_name().to_str() {
+                                if name.starts_with("ggml-") && name.ends_with(".bin") {
+                                    return Ok(canonical);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        Err("Could not find models directory".to_string())
+        Err("Could not find models directory containing ggml models".to_string())
     }
 
     /// List all available Whisper models
@@ -598,5 +608,137 @@ impl WhisperManager {
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         Ok(transcript.trim().to_string())
+    }
+    /// Transcribe raw 16kHz mono audio data directly
+    pub fn transcribe_audio_data(&mut self, audio_data: &[f32]) -> Result<String, String> {
+        let ctx = self
+            .context
+            .as_mut()
+            .ok_or("Whisper context not initialized")?;
+
+        println!(
+            "[PROCESSING] Transcribing {} samples ({}s)...",
+            audio_data.len(),
+            audio_data.len() as f32 / 16000.0
+        );
+        let start = std::time::Instant::now();
+
+        // Create state
+        let mut state = ctx
+            .create_state()
+            .map_err(|e| format!("Failed to create state: {:?}", e))?;
+
+        // Set up params (same as transcribe_file)
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_n_threads(8);
+        params.set_translate(false);
+        params.set_language(Some("en"));
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        params.set_max_len(1);
+        params.set_token_timestamps(false);
+
+        // Run transcription
+        state
+            .full(params, audio_data)
+            .map_err(|e| format!("Transcription failed: {:?}", e))?;
+
+        // Extract text
+        let num_segments = state.full_n_segments();
+        let mut transcript = String::new();
+        for i in 0..num_segments {
+            if let Some(segment) = state.get_segment(i) {
+                transcript.push_str(&segment.to_string());
+                transcript.push(' ');
+            }
+        }
+
+        let duration = start.elapsed();
+        let audio_duration = audio_data.len() as f32 / 16000.0;
+        let speedup = audio_duration / duration.as_secs_f32();
+
+        println!(
+            "[PERF] Transcribed sequence in {:.0}ms | Speed: {:.1}x",
+            duration.as_millis(),
+            speedup
+        );
+
+        Ok(transcript.trim().to_string())
+    }
+    /// Load a WAV file, convert to mono, and resample to 16kHz
+    pub fn load_audio(&self, file_path: &str) -> Result<Vec<f32>, String> {
+        println!("[I/O] Loading audio file: {}", file_path);
+
+        // Open file
+        let mut reader = hound::WavReader::open(file_path)
+            .map_err(|e| format!("Failed to open WAV file: {}", e))?;
+        let spec = reader.spec();
+
+        // Read samples
+        let sample_count = reader.len() as usize;
+        let mut samples: Vec<f32> = Vec::with_capacity(sample_count);
+
+        if spec.sample_format == hound::SampleFormat::Float {
+            samples.extend(reader.samples::<f32>().map(|s| s.unwrap_or(0.0)));
+        } else {
+            samples.extend(
+                reader
+                    .samples::<i16>()
+                    .map(|s| s.unwrap_or(0) as f32 / 32768.0),
+            );
+        }
+
+        // Convert to mono
+        let mono_samples = if spec.channels == 2 {
+            samples
+                .chunks(2)
+                .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
+                .collect::<Vec<f32>>()
+        } else {
+            samples
+        };
+
+        // Resample to 16kHz
+        if spec.sample_rate != 16000 {
+            let params = SincInterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                window: WindowFunction::BlackmanHarris2,
+                oversampling_factor: 128,
+            };
+
+            let chunk_size = 1024 * 10;
+            let mut resampler = SincFixedIn::<f32>::new(
+                16000_f64 / spec.sample_rate as f64,
+                2.0,
+                params,
+                chunk_size,
+                1,
+            )
+            .map_err(|e| format!("Failed to create resampler: {:?}", e))?;
+
+            let mut resampled_audio = Vec::new();
+
+            // Padding logic
+            let mut padding = mono_samples.len() % chunk_size;
+            if padding > 0 {
+                padding = chunk_size - padding;
+            }
+            let mut padded_samples = mono_samples.clone();
+            padded_samples.extend(std::iter::repeat(0.0).take(padding));
+
+            for chunk in padded_samples.chunks(chunk_size) {
+                let waves_in = vec![chunk.to_vec()];
+                if let Ok(waves_out) = resampler.process(&waves_in, None) {
+                    resampled_audio.extend(&waves_out[0]);
+                }
+            }
+            Ok(resampled_audio)
+        } else {
+            Ok(mono_samples)
+        }
     }
 }

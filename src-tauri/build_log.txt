@@ -1,0 +1,27 @@
+    Checking taurscribe v0.1.0 (C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri)
+error[E0425]: cannot find value `chunk_size` in this scope
+   --> src\lib.rs:208:43
+    |
+208 |     for (i, chunk) in mono_samples.chunks(chunk_size).enumerate() {
+    |                                           ^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `sample_rate` in this scope
+   --> src\lib.rs:214:38
+    |
+214 |             .transcribe_chunk(chunk, sample_rate)
+    |                                      ^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `chunk_size` in this scope
+   --> src\lib.rs:239:43
+    |
+239 |     for (i, chunk) in mono_samples.chunks(chunk_size).enumerate() {
+    |                                           ^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `sample_rate` in this scope
+   --> src\lib.rs:246:42
+    |
+246 |                 .transcribe_chunk(chunk, sample_rate)
+    |                                          ^^^^^^^^^^^ not found in this scope
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `taurscribe` (lib) due to 4 previous errors

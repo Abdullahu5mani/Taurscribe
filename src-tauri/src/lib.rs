@@ -7,6 +7,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod whisper;
 use whisper::WhisperManager;
 
+mod vad;
+use vad::VADManager;
+
 /// App states for tray icon colors
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppState {
@@ -42,6 +45,7 @@ unsafe impl Sync for SendStream {}
 struct AudioState {
     recording_handle: Mutex<Option<RecordingHandle>>,
     whisper: Arc<Mutex<WhisperManager>>,
+    vad: Arc<Mutex<VADManager>>, // Voice Activity Detection
     last_recording_path: Mutex<Option<String>>,
     current_app_state: Mutex<AppState>,
 }
@@ -142,61 +146,258 @@ fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct SampleFile {
+    name: String,
+    path: String,
+}
+
+#[tauri::command]
+fn list_sample_files() -> Result<Vec<SampleFile>, String> {
+    let mut files = Vec::new();
+
+    // Check usual locations for samples directory
+    let possible_paths = [
+        "taurscribe-runtime/samples",
+        "../taurscribe-runtime/samples",
+        "../../taurscribe-runtime/samples",
+    ];
+
+    let mut target_dir = std::path::PathBuf::new();
+    let mut found = false;
+
+    for path in possible_paths {
+        if let Ok(p) = std::fs::canonicalize(path) {
+            if p.is_dir() {
+                // Check if this directory actually contains any .wav files
+                if let Ok(entries) = std::fs::read_dir(&p) {
+                    for entry in entries.flatten() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if name.to_lowercase().ends_with(".wav") {
+                                target_dir = p;
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+        }
+    }
+
+    if !found {
+        return Ok(vec![]); // Return empty if not found, don't error
+    }
+
+    let entries = std::fs::read_dir(target_dir)
+        .map_err(|e| format!("Failed to read samples directory: {}", e))?;
+
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    // Only include .wav files
+                    if ext.to_string_lossy().to_lowercase() == "wav" {
+                        if let Some(name) = path.file_name() {
+                            files.push(SampleFile {
+                                name: name.to_string_lossy().to_string(),
+                                path: path.to_string_lossy().to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by name
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(files)
+}
+
 #[tauri::command]
 fn benchmark_test(state: State<AudioState>, file_path: String) -> Result<String, String> {
     use std::time::Instant;
 
-    println!("[BENCHMARK] Starting test on: {}", file_path);
+    println!("[BENCHMARK] Starting REALISTIC benchmark on: {}", file_path);
+    println!("[BENCHMARK] Simulating actual recording workflow...");
 
-    // Resolve the file path (same logic as model loading)
+    // Resolve the file path
     let absolute_path = std::fs::canonicalize(&file_path)
         .or_else(|_| std::fs::canonicalize(format!("../{}", file_path)))
         .or_else(|_| std::fs::canonicalize(format!("../../{}", file_path)))
         .map_err(|e| format!("Could not find file at '{}'. Error: {}", file_path, e))?;
 
-    println!("[BENCHMARK] Reading file: {}", absolute_path.display());
-
-    // Read WAV file to get audio duration
-    let reader = hound::WavReader::open(&absolute_path)
+    // ===== STEP 1: Load and prepare audio =====
+    println!("[BENCHMARK] Step 1: Loading WAV file...");
+    let mut reader = hound::WavReader::open(&absolute_path)
         .map_err(|e| format!("Failed to open WAV file: {}", e))?;
     let spec = reader.spec();
     let sample_count = reader.len();
-    // Fix: For stereo, sample_count includes both channels, so divide by channels
     let audio_duration_secs = sample_count as f32 / spec.sample_rate as f32 / spec.channels as f32;
 
-    println!("[BENCHMARK] Audio duration: {:.2}s", audio_duration_secs);
+    println!(
+        "[BENCHMARK] Audio: {:.2}s, {}Hz, {} channels",
+        audio_duration_secs, spec.sample_rate, spec.channels
+    );
 
-    let start = Instant::now();
-    let transcript = state
+    // Read all samples
+    let mut samples: Vec<f32> = Vec::with_capacity(sample_count as usize);
+    if spec.sample_format == hound::SampleFormat::Float {
+        samples.extend(reader.samples::<f32>().map(|s| s.unwrap_or(0.0)));
+    } else {
+        samples.extend(
+            reader
+                .samples::<i16>()
+                .map(|s| s.unwrap_or(0) as f32 / 32768.0),
+        );
+    }
+
+    // Convert stereo to mono if needed
+    let mono_samples = if spec.channels == 2 {
+        samples
+            .chunks(2)
+            .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
+            .collect::<Vec<f32>>()
+    } else {
+        samples
+    };
+
+    // ===== BENCHMARK CONFIGURATION =====
+    let sample_rate = spec.sample_rate;
+    let chunk_duration_secs = 6;
+    let chunk_size = (sample_rate * chunk_duration_secs) as usize;
+    let num_chunks = (mono_samples.len() + chunk_size - 1) / chunk_size;
+
+    println!(
+        "[BENCHMARK] Processing {} chunks of {}s each...",
+        num_chunks, chunk_duration_secs
+    );
+
+    // ===== RUN A vs B BENCHMARK =====
+
+    // --- RUN 1: WITHOUT VAD (Baseline) ---
+    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🏃 RUN 1: Baseline (NO VAD)");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    state.whisper.lock().unwrap().clear_context();
+    let start_novad = Instant::now();
+
+    // Real-time phase (No VAD)
+    for chunk in mono_samples.chunks(chunk_size) {
+        // Always transcribe (wasteful)
+        state
+            .whisper
+            .lock()
+            .unwrap()
+            .transcribe_chunk(chunk, sample_rate)
+            .ok();
+    }
+
+    // Final transcription (Full File - No filtering)
+    state
         .whisper
         .lock()
         .unwrap()
         .transcribe_file(absolute_path.to_str().unwrap())?;
-    let duration = start.elapsed();
 
-    let duration_ms = duration.as_millis();
-    let duration_secs = duration.as_secs_f32();
-    let realtime_factor = audio_duration_secs / duration_secs;
+    let time_novad = start_novad.elapsed();
 
+    // --- RUN 2: WITH VAD (Optimized) ---
+    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🚀 RUN 2: Optimized (WITH VAD)");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    state.whisper.lock().unwrap().clear_context();
+    let start_withvad = Instant::now();
+
+    // Real-time phase (With VAD)
+    let mut chunks_processed = 0;
+    let mut chunks_skipped = 0;
+
+    for chunk in mono_samples.chunks(chunk_size) {
+        let is_speech = state.vad.lock().unwrap().is_speech(chunk).unwrap_or(0.6);
+        if is_speech > 0.5 {
+            state
+                .whisper
+                .lock()
+                .unwrap()
+                .transcribe_chunk(chunk, sample_rate)
+                .ok();
+            chunks_processed += 1;
+        } else {
+            chunks_skipped += 1; // Skip
+        }
+    }
+
+    // Final transcription (With VAD Filtering)
+    {
+        let mut whisper = state.whisper.lock().unwrap();
+        let audio_data = whisper.load_audio(absolute_path.to_str().unwrap()).unwrap();
+        let mut vad = state.vad.lock().unwrap();
+        let timestamps = vad.get_speech_timestamps(&audio_data, 500).unwrap();
+
+        // Construct Clean Audio
+        let mut clean_audio = Vec::with_capacity(audio_data.len());
+        for (start, end) in timestamps {
+            let start_idx = (start * 16000.0) as usize;
+            let end_idx = (end * 16000.0) as usize;
+            let start_idx = start_idx.min(audio_data.len());
+            let end_idx = end_idx.min(audio_data.len());
+            if start_idx < end_idx {
+                clean_audio.extend_from_slice(&audio_data[start_idx..end_idx]);
+            }
+        }
+
+        if !clean_audio.is_empty() {
+            whisper.transcribe_audio_data(&clean_audio).ok();
+        }
+    }
+
+    let time_withvad = start_withvad.elapsed();
+
+    // --- RESULTS SUMMARY ---
+    let speedup_pct = ((time_novad.as_secs_f32() - time_withvad.as_secs_f32())
+        / time_novad.as_secs_f32())
+        * 100.0;
+    let factor_gain = time_novad.as_secs_f32() / time_withvad.as_secs_f32();
+
+    println!("\n📊 BENCHMARK COMPARISON RESULTS");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("⏱️  Baseline (No VAD):  {:.2}s", time_novad.as_secs_f32());
     println!(
-        "[BENCHMARK] Completed in {:.2}s ({}ms) | Speed: {:.1}× realtime",
-        duration_secs, duration_ms, realtime_factor
+        "🚀 Optimized (With VAD): {:.2}s",
+        time_withvad.as_secs_f32()
     );
-    println!("[BENCHMARK] Transcript length: {} chars", transcript.len());
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!(
+        "⚡ IMPROVEMENT: {:.0}% Faster ({:.1}x Speedup)",
+        speedup_pct, factor_gain
+    );
+    println!(
+        "📉 Resource Usage: Skipped {}/{} realtime chunks",
+        chunks_skipped,
+        chunks_processed + chunks_skipped
+    );
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
     Ok(format!(
-        "🚀 Benchmark Complete!\n\n\
-        ⏱️  Processing Time: {:.2}s ({}ms)\n\
-        🎵 Audio Duration: {:.2}s\n\
-        ⚡ Speed: {:.1}× realtime\n\
-        📝 Transcript: {} characters\n\n\
-        Transcript:\n{}",
-        duration_secs,
-        duration_ms,
-        audio_duration_secs,
-        realtime_factor,
-        transcript.len(),
-        transcript
+        "📊 VAD PERFORMANCE BENCHMARK\n\n\
+        ⏱️  Baseline (No VAD):  {:.2}s\n\
+        🚀 Optimized (With VAD): {:.2}s\n\n\
+        ⚡ IMPROVEMENT: {:.0}% Faster ({:.1}x Speedup)\n\
+        📉 Skipped: {} chunks (silence)",
+        time_novad.as_secs_f32(),
+        time_withvad.as_secs_f32(),
+        speedup_pct,
+        factor_gain,
+        chunks_skipped
     ))
 }
 
@@ -280,8 +481,9 @@ fn start_recording(state: State<AudioState>) -> Result<String, String> {
         println!("WAV file saved.");
     });
 
-    // Clone whisper manager for the thread (Arc allows shared ownership)
+    // Clone whisper manager and VAD for the thread (Arc allows shared ownership)
     let whisper = state.whisper.clone();
+    let vad = state.vad.clone();
 
     // ============================================
     // THREAD 2: Whisper Processor (REAL TRANSCRIPTION)
@@ -307,31 +509,46 @@ fn start_recording(state: State<AudioState>) -> Result<String, String> {
                     buffer.drain(..chunk_size);
                 }
 
-                // Extract one 3-second chunk
+                // Extract one 6-second chunk
                 let chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
 
-                println!(
-                    "[PROCESSING] Transcribing {:.2}s chunk ({} samples)...",
-                    chunk.len() as f32 / sample_rate as f32,
-                    chunk.len()
-                );
+                // ===== VAD CHECK: Is this chunk speech or silence? =====
+                let is_speech = vad.lock().unwrap().is_speech(&chunk).unwrap_or(0.5); // Default to 0.5 if VAD fails
 
-                // REAL TRANSCRIPTION!
-                match whisper
-                    .lock()
-                    .unwrap()
-                    .transcribe_chunk(&chunk, sample_rate)
-                {
-                    Ok(transcript) => {
-                        if transcript.is_empty() {
-                            println!("[TRANSCRIPT] [silence]");
-                        } else {
-                            println!("[TRANSCRIPT] \"{}\"", transcript);
+                let chunk_duration = chunk.len() as f32 / sample_rate as f32;
+
+                if is_speech > 0.5 {
+                    // Speech detected - transcribe it
+                    println!(
+                        "[PROCESSING] 🎤 Speech ({:.0}%) - Transcribing {:.2}s chunk...",
+                        is_speech * 100.0,
+                        chunk_duration
+                    );
+
+                    // REAL TRANSCRIPTION!
+                    match whisper
+                        .lock()
+                        .unwrap()
+                        .transcribe_chunk(&chunk, sample_rate)
+                    {
+                        Ok(transcript) => {
+                            if transcript.is_empty() {
+                                println!("[TRANSCRIPT] [silence]");
+                            } else {
+                                println!("[TRANSCRIPT] \"{}\"", transcript);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[ERROR] Transcription error: {}", e);
                         }
                     }
-                    Err(e) => {
-                        eprintln!("[ERROR] Transcription error: {}", e);
-                    }
+                } else {
+                    // Silence - skip transcription (save GPU/CPU)
+                    println!(
+                        "[VAD] 🔇 Silence ({:.0}%) - Skipping {:.2}s chunk",
+                        (1.0 - is_speech) * 100.0,
+                        chunk_duration
+                    );
                 }
             }
         }
@@ -456,13 +673,52 @@ fn stop_recording(state: State<AudioState>) -> Result<String, String> {
         let path_opt = state.last_recording_path.lock().unwrap().clone();
         if let Some(path) = path_opt {
             println!(
-                "[PROCESSING] Running final high-quality transcription on: {}",
+                "[PROCESSING] Running final high-quality transcription with VAD on: {}",
                 path
             );
-            match state.whisper.lock().unwrap().transcribe_file(&path) {
+
+            // 1. Lock Whisper to load audio (Step 1-3)
+            let mut whisper = state.whisper.lock().unwrap();
+            let audio_data = whisper.load_audio(&path)?;
+
+            // 2. VAD: Find speech segments with 500ms padding
+            // We release whisper lock temporarily if needed, but here we hold it, which is fine as recording stopped
+            let mut vad = state.vad.lock().unwrap();
+            let timestamps = vad.get_speech_timestamps(&audio_data, 500)?; // 500ms padding
+            drop(vad); // Done with VAD
+
+            if timestamps.is_empty() {
+                println!("[FINAL_TRANSCRIPT] [silence]");
+                return Ok("[silence]".to_string());
+            }
+
+            // 3. Construct Clean Audio (remove "dead air")
+            let mut clean_audio = Vec::with_capacity(audio_data.len());
+            for (start, end) in timestamps {
+                let start_idx = (start * 16000.0) as usize;
+                let end_idx = (end * 16000.0) as usize;
+
+                // Bounds check
+                let start_idx = start_idx.min(audio_data.len());
+                let end_idx = end_idx.min(audio_data.len());
+
+                if start_idx < end_idx {
+                    clean_audio.extend_from_slice(&audio_data[start_idx..end_idx]);
+                }
+            }
+
+            println!(
+                "[VAD] Filtered audio from {:.2}s to {:.2}s ({:.0}% reduction)",
+                audio_data.len() as f32 / 16000.0,
+                clean_audio.len() as f32 / 16000.0,
+                (1.0 - clean_audio.len() as f32 / audio_data.len().max(1) as f32) * 100.0
+            );
+
+            // 4. Transcribe filtered audio
+            match whisper.transcribe_audio_data(&clean_audio) {
                 Ok(text) => {
                     println!("[FINAL_TRANSCRIPT]\n{}", text);
-                    Ok(text) // Return the accurate text to the frontend!
+                    Ok(text)
                 }
                 Err(e) => {
                     eprintln!("[ERROR] Final transcription failed: {}", e);
@@ -568,11 +824,21 @@ pub fn run() {
         }
     }
 
+    // Initialize VAD (Voice Activity Detection)
+    println!("[INFO] Initializing Voice Activity Detection...");
+    let vad = VADManager::new().unwrap_or_else(|e| {
+        eprintln!("[ERROR] Failed to initialize VAD: {}", e);
+        eprintln!("   VAD features will be disabled.");
+        panic!("VAD initialization failed");
+    });
+    println!("[SUCCESS] VAD initialized successfully");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AudioState {
             recording_handle: Mutex::new(None),
             whisper: Arc::new(Mutex::new(whisper)),
+            vad: Arc::new(Mutex::new(vad)),
             last_recording_path: Mutex::new(None),
             current_app_state: Mutex::new(AppState::Ready),
         })
@@ -647,6 +913,7 @@ pub fn run() {
             stop_recording,
             get_backend_info,
             benchmark_test,
+            list_sample_files,
             list_models,
             get_current_model,
             switch_model,
