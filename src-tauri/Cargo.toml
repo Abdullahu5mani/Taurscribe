@@ -29,10 +29,16 @@ hound = "3.5"
 chrono = "0.4"
 # whisper-rs with CUDA + Vulkan (includes 12x iGPU performance boost from whisper.cpp v1.8.3)
 # Update periodically: cargo update -p whisper-rs
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda", "vulkan"] }
+# NOTE: Disabled CUDA/Vulkan for now - enable if you have CUDA Toolkit and Vulkan SDK installed
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda"] }
+# parakeet-rs - NVIDIA Parakeet ASR models via ONNX Runtime (alternative to Whisper)
+# Supports CTC (English), TDT (25 languages), EOU (streaming), and Nemotron (streaming)
+# NOTE: Disabled CUDA for now - enable if you have CUDA Toolkit installed
+parakeet-rs = { version = "=0.3.0", features = ["cuda"] }
 rubato = "0.14"
 dirs = "6.0.0"
 rdev = "0.5"  # Global keyboard/mouse event detection for hotkeys
+ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 # VAD (Voice Activity Detection) - currently using energy-based detection
 # TODO: Integrate Silero VAD with ONNX Runtime when dependency issues are resolved
 

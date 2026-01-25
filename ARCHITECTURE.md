@@ -9,15 +9,18 @@
 
 1. [What is Taurscribe?](#what-is-taurscribe)
 2. [The Big Picture](#the-big-picture)
-3. [Rust Basics You Need to Know](#rust-basics-you-need-to-know)
-4. [Complete Flow: Start to Finish](#complete-flow-start-to-finish)
-5. [Component Deep Dive](#component-deep-dive)
-6. [Understanding Rust Ownership](#understanding-rust-ownership)
-7. [Dependencies Explained](#dependencies-explained)
-8. [Common Beginner Questions](#common-beginner-questions)
-9. [Cumulative Context Feature](#cumulative-context-feature)
-10. [Annotated Rust Code Examples](#annotated-rust-code-examples)
-11. [Model Selection Feature](#model-selection-feature)
+3. [Complete Audio Processing Flow](#-complete-audio-processing-flow)
+4. [Rust Basics You Need to Know](#rust-basics-you-need-to-know)
+5. [Complete Flow: Start to Finish](#complete-flow-start-to-finish)
+6. [Component Deep Dive](#component-deep-dive)
+7. [Understanding Rust Ownership](#understanding-rust-ownership)
+8. [Dependencies Explained](#dependencies-explained)
+9. [Common Beginner Questions](#common-beginner-questions)
+10. [Cumulative Context Feature](#cumulative-context-feature)
+11. [Annotated Rust Code Examples](#annotated-rust-code-examples)
+12. [Model Selection Feature](#model-selection-feature)
+13. [Voice Activity Detection (VAD)](#-voice-activity-detection-vad)
+14. [File & Function Reference](#-file--function-reference)
 
 ---
 
@@ -95,6 +98,477 @@ Imagine Taurscribe as a **restaurant kitchen**. Here's how the pieces work toget
     │
     └──► Stream 2 → 🤖 AI transcription → 📝 Text
 ```
+
+---
+
+## 🎙️ Complete Audio Processing Flow
+
+This section shows **exactly what happens** when you start recording, from microphone to final transcript.
+
+### 📊 Recording Timeline Visualization
+
+```
+═══════════════════════════════════════════════════════════════════════════════
+                        📱 USER CLICKS "START RECORDING"
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 1: INITIALIZATION (lib.rs::start_recording)                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    [1] Get Microphone Device
+         ↓
+    cpal::default_host()
+         ↓
+    device.default_input_config()
+         ↓
+    ┌─────────────────────────────┐
+    │ Config: 48kHz, Stereo, f32  │  (example config)
+    └─────────────────────────────┘
+         ↓
+    [2] Create WAV File
+         ↓
+    "C:\Users\YOU\AppData\Local\Taurscribe\temp\recording_1737687024.wav"
+         ↓
+    [3] Create WAV Writer
+         ↓
+    hound::WavWriter { 48kHz, 2ch, 32-bit float }
+         ↓
+    [4] Create Communication Channels
+         ↓
+    ┌──────────────────────────────────────────────────────┐
+    │  (file_tx, file_rx)       = Channel #1               │
+    │  (whisper_tx, whisper_rx) = Channel #2               │
+    └──────────────────────────────────────────────────────┘
+         ↓
+    [5] Spawn Two Worker Threads
+         ↓
+    ┌───────────────┬───────────────────────────────────────┐
+    │               │                                       │
+    ▼               ▼                                       ▼
+MAIN THREAD    THREAD #1                              THREAD #2
+(Audio Loop)   (File Writer)                          (Whisper AI)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                     🎬 RECORDING STARTS - 3 THREADS RUNNING
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            TIME PROGRESSION                                  │
+│  (Each tick = ~10ms, showing first 18 seconds of recording)                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+TIME:   0ms     10ms    20ms    30ms    40ms    ...    6000ms   ...   12000ms
+        │       │       │       │       │       │       │        │      │
+        ▼       ▼       ▼       ▼       ▼       ▼       ▼        ▼      ▼
+
+┌───────────────────────────────────────────────────────────────────────────────┐
+│ 🎤 MAIN THREAD: Audio Callback (runs every ~10ms)                            │
+├───────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  [Audio Callback Triggered by OS]                                            │
+│         │                                                                     │
+│         ├─► Microphone captures: Vec<f32> (~480 samples at 48kHz)            │
+│         │   Example: [0.01, -0.02, 0.03, -0.01, ..., 0.02]                   │
+│         │                                                                     │
+│         ├─► SPLIT AUDIO INTO TWO PATHS:                                      │
+│         │                                                                     │
+│         │   ┌─────────────────────────────────────────────────────────┐      │
+│         │   │ PATH A: Stereo Audio (for file - preserve quality)     │      │
+│         │   │ [L1, R1, L2, R2, L3, R3, ...]                           │      │
+│         │   │ Size: ~480 samples                                      │      │
+│         │   └─────────────────────────────────────────────────────────┘      │
+│         │         │                                                          │
+│         │         └──► file_tx.send(data.to_vec())                           │
+│         │                  │                                                 │
+│         │                  └──► Channel #1 ──┐                               │
+│         │                                    │                               │
+│         │   ┌─────────────────────────────────────────────────────────┐      │
+│         │   │ PATH B: Mono Audio (for Whisper - must be mono)        │      │
+│         │   │ Convert stereo → mono:                                  │      │
+│         │   │ [L1, R1] → (L1+R1)/2 = M1                               │      │
+│         │   │ [L2, R2] → (L2+R2)/2 = M2                               │      │
+│         │   │ Result: [M1, M2, M3, ...]                               │      │
+│         │   │ Size: ~240 samples                                      │      │
+│         │   └─────────────────────────────────────────────────────────┘      │
+│         │         │                                                          │
+│         │         └──► whisper_tx.send(mono_data)                            │
+│         │                  │                                                 │
+│         │                  └──► Channel #2 ──┐                               │
+│         │                                    │                               │
+│         ▼                                    ▼                               │
+│   [REPEAT EVERY 10ms]                                                        │
+│                                                                               │
+└───────────────────────────────────────────────────────────────────────────────┘
+                                               │                               │
+                                               │                               │
+        ┌──────────────────────────────────────┘                               │
+        │                                                                      │
+        ▼                                                                      ▼
+
+┌───────────────────────────────────────┐    ┌─────────────────────────────────────┐
+│ 💾 THREAD #1: File Writer             │    │ 🤖 THREAD #2: Whisper AI            │
+│ (Runs in parallel, saves everything)  │    │ (Buffers 6s, then transcribes)      │
+├───────────────────────────────────────┤    ├─────────────────────────────────────┤
+│                                       │    │                                     │
+│  while let Ok(samples) = file_rx.recv()    │  let mut buffer = Vec::new();       │
+│      ↓                                │    │  let chunk_size = 48000 * 6;        │
+│  [BLOCKING - waits for audio]         │    │  // = 288,000 samples = 6 seconds   │
+│      ↓                                │    │                                     │
+│  Receives: Vec<f32> stereo            │    │  while let Ok(samples) = whisper_rx │
+│  (~480 samples every 10ms)            │    │      ↓                              │
+│      ↓                                │    │  [BLOCKING - waits for audio]       │
+│  for sample in samples {              │    │      ↓                              │
+│      writer.write_sample(sample)      │    │  buffer.extend(samples)             │
+│  }                                    │    │  // Accumulate samples              │
+│      ↓                                │    │      ↓                              │
+│  [File grows ~1,920 bytes/10ms]       │    │  ┌──────────────────────────────┐   │
+│      ↓                                │    │  │ BUFFER GROWTH:               │   │
+│  0ms:    0 samples                    │    │  │ 0ms:      0 samples          │   │
+│  10ms:   480 samples                  │    │  │ 10ms:    ~240 samples        │   │
+│  20ms:   960 samples                  │    │  │ 20ms:    ~480 samples        │   │
+│  30ms:  1440 samples                  │    │  │ ...                          │   │
+│  ...                                  │    │  │ 6000ms: ~288,000 samples ✓   │   │
+│  6000ms: ~288,000 samples             │    │  └──────────────────────────────┘   │
+│  ...                                  │    │      ↓                              │
+│  [Continues until stop]               │    │  if buffer.len() >= chunk_size {    │
+│                                       │    │      ↓                              │
+│  ═══════════════════════════════════  │    │  ┌─────────────────────────────┐   │
+│  WHEN RECORDING STOPS:                │    │  │ EXTRACT 6 SECONDS           │   │
+│  ═══════════════════════════════════  │    │  └─────────────────────────────┘   │
+│      ↓                                │    │      │                              │
+│  Channel closes (tx dropped)          │    │      ├─► let chunk: Vec<f32> =      │
+│      ↓                                │    │      │   buffer.drain(..288000)     │
+│  recv() returns Err                   │    │      │   .collect()                 │
+│      ↓                                │    │      │                              │
+│  Loop exits                           │    │      │   ┌──────────────────────┐   │
+│      ↓                                │    │      │   │ chunk = [6s audio]   │   │
+│  writer.finalize()                    │    │      │   │ buffer = [leftover]  │   │
+│      ↓                                │    │      │   └──────────────────────┘   │
+│  ✅ WAV file saved!                   │    │      │                              │
+│      ↓                                │    │      └─► whisper.transcribe_chunk() │
+│  Thread exits                         │    │              │                      │
+│                                       │    │              ▼                      │
+└───────────────────────────────────────┘    │      ┌──────────────────────────┐   │
+                                             │      │ WHISPER PROCESSING       │   │
+                                             │      │ (whisper.rs line 312+)   │   │
+                                             │      └──────────────────────────┘   │
+                                             │              ↓                      │
+                                             │      [1] Resample 48kHz → 16kHz     │
+                                             │          │                          │
+                                             │          ├─► Create resampler       │
+                                             │          │   (rubato library)       │
+                                             │          │                          │
+                                             │          ├─► Input: 288,000 samples │
+                                             │          │   @ 48kHz                │
+                                             │          │                          │
+                                             │          └─► Output: 96,000 samples │
+                                             │              @ 16kHz (Whisper needs)│
+                                             │              │                      │
+                                             │              ▼                      │
+                                             │      [2] Create Whisper state       │
+                                             │          ctx.create_state()         │
+                                             │              │                      │
+                                             │              ▼                      │
+                                             │      [3] Set parameters             │
+                                             │          ├─ n_threads: 4            │
+                                             │          ├─ language: "en"          │
+                                             │          ├─ translate: false        │
+                                             │          └─ initial_prompt:         │
+                                             │             last_transcript 📝      │
+                                             │             (cumulative context!)   │
+                                             │              │                      │
+                                             │              ▼                      │
+                                             │      [4] 🚀 RUN AI INFERENCE        │
+                                             │          state.full(params, audio)  │
+                                             │              │                      │
+                                             │              ├─► GPU Encoder        │
+                                             │              │   (CUDA/Vulkan)      │
+                                             │              │   ~50ms              │
+                                             │              │                      │
+                                             │              ├─► GPU Decoder        │
+                                             │              │   (token generation) │
+                                             │              │   ~100-200ms         │
+                                             │              │                      │
+                                             │              └─► Total: ~150ms      │
+                                             │                  for 6s audio       │
+                                             │                  (40x realtime!)    │
+                                             │              │                      │
+                                             │              ▼                      │
+                                             │      [5] Extract segments           │
+                                             │          for i in 0..num_segments   │
+                                             │              │                      │
+                                             │              └─► "Hello, this is a" │
+                                             │                                     │
+                                             │              ▼                      │
+                                             │      [6] Update context             │
+                                             │          last_transcript +=         │
+                                             │          "Hello, this is a"         │
+                                             │              │                      │
+                                             │              ▼                      │
+                                             │      [7] Print to console           │
+                                             │          println!("[TRANSCRIPT]")   │
+                                             │              │                      │
+                                             │              ▼                      │
+                                             │      [8] Go back to buffering       │
+                                             │          buffer = [leftover samples]│
+                                             │              │                      │
+                                             │              └──► WAIT for next 6s  │
+                                             │                                     │
+                                             │      ═══════════════════════════     │
+                                             │      TIMELINE EXAMPLE:               │
+                                             │      ═══════════════════════════     │
+                                             │      0-6s:   Buffering...            │
+                                             │      6s:     Transcribe → "Hello,"   │
+                                             │      6-12s:  Buffering...            │
+                                             │      12s:    Transcribe → "my name"  │
+                                             │      12-18s: Buffering...            │
+                                             │      18s:    Transcribe → "is John"  │
+                                             │      ...                             │
+                                             │                                     │
+                                             │      Context accumulates:            │
+                                             │      6s:  "Hello,"                   │
+                                             │      12s: "Hello, my name"           │
+                                             │      18s: "Hello, my name is John"   │
+                                             │                                     │
+                                             └─────────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                     🛑 USER CLICKS "STOP RECORDING"
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 2: CLEANUP & FINAL TRANSCRIPTION (lib.rs::stop_recording)            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    [1] Stop audio stream
+         ↓
+    stream.pause()  // Mic stops capturing
+         ↓
+    Drop RecordingHandle {
+        stream,
+        file_tx,      // ← Dropping causes channel to close
+        whisper_tx,   // ← Same here
+    }
+         ↓
+    ┌────────────────────────────────────────────────────────┐
+    │ Both threads detect channel closure                    │
+    │  ├─► File Writer: recv() returns Err → finalize & exit │
+    │  └─► Whisper AI: recv() returns Err → stop buffering   │
+    └────────────────────────────────────────────────────────┘
+         ↓
+    [2] Wait for threads to finish
+         ↓
+    ✅ WAV file is now complete and saved
+         ↓
+    [3] Run FINAL high-quality transcription
+         ↓
+    whisper.transcribe_file("recording_1737687024.wav")
+         ↓
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 🎯 FINAL TRANSCRIPTION (whisper.rs::transcribe_file)                       │
+│                                                                             │
+│ This is MUCH better than the live previews because:                        │
+│  ✓ Processes entire recording as one context                               │
+│  ✓ No 6-second chunk boundaries                                            │
+│  ✓ Better punctuation & capitalization                                     │
+│  ✓ More accurate word recognition                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+         ↓
+    ┌────────────────────────────────────────────┐
+    │ STEP 1: Load WAV file                      │
+    │  ├─ Read all samples                       │
+    │  └─ Example: 20s recording = 960,000 samples│
+    └────────────────────────────────────────────┘
+         ↓
+    ┌────────────────────────────────────────────┐
+    │ STEP 2: Convert Stereo → Mono             │
+    │  ├─ [L, R, L, R] → [(L+R)/2, (L+R)/2]     │
+    │  └─ 960,000 → 480,000 samples              │
+    └────────────────────────────────────────────┘
+         ↓
+    ┌────────────────────────────────────────────┐
+    │ STEP 3: Resample 48kHz → 16kHz            │
+    │  ├─ Process in 10,240 sample chunks        │
+    │  └─ 480,000 → 160,000 samples @ 16kHz      │
+    └────────────────────────────────────────────┘
+         ↓
+    ┌────────────────────────────────────────────┐
+    │ STEP 4: Create Whisper state               │
+    └────────────────────────────────────────────┘
+         ↓
+    ┌────────────────────────────────────────────┐
+    │ STEP 5: Set optimized parameters           │
+    │  ├─ n_threads: 8 (more CPU for encoding)   │
+    │  ├─ language: "en"                          │
+    │  ├─ max_len: 1 (no extra tokens)           │
+    │  └─ NO initial_prompt (fresh context)      │
+    └────────────────────────────────────────────┘
+         ↓
+    ┌────────────────────────────────────────────┐
+    │ STEP 6: 🚀 RUN FULL INFERENCE              │
+    │  state.full(params, &audio_data)           │
+    │                                             │
+    │  Processing 160,000 samples (10 seconds):  │
+    │  ├─ Encoder: ~100ms (GPU)                  │
+    │  └─ Decoder: ~400ms (GPU)                  │
+    │  Total: ~500ms for 10s audio (20x!)        │
+    └────────────────────────────────────────────┘
+         ↓
+    ┌────────────────────────────────────────────┐
+    │ STEP 7: Extract all segments               │
+    │  ├─ Segment 0: "Hello, my name is John."   │
+    │  ├─ Segment 1: "I'm recording this to..."  │
+    │  └─ Segment 2: "test the transcription."   │
+    └────────────────────────────────────────────┘
+         ↓
+    ┌────────────────────────────────────────────┐
+    │ STEP 8: Combine & return transcript        │
+    │  "Hello, my name is John. I'm recording    │
+    │   this to test the transcription."         │
+    └────────────────────────────────────────────┘
+         ↓
+    [4] Display final transcript in UI
+         ↓
+    ✅ DONE!
+```
+
+---
+
+## 🎙️ Voice Activity Detection (VAD)
+
+**VAD** is the "gatekeeper" of the system. It determines if you are actually speaking before the AI tries to transcribe anything.
+
+### ❓ Why was VAD added?
+1. **Efficiency**: AI transcription is heavy on the GPU/CPU. We shouldn't waste power transcribing "dead air" (silence).
+2. **Speed**: By skipping silent chunks during real-time recording, we reduce the load on the system.
+3. **Accuracy**: Sometimes Whisper "hallucinates" when given silence (it might output random punctuation or "Thank you for watching!"). VAD prevents this.
+4. **Final Polish**: In the final transcription, we "trim" all silence segments, making the processing much faster and the transcript cleaner.
+
+### 🧠 How It Works: Energy-Based Detection
+
+Currently, Taurscribe uses **Energy-Based VAD** (RMS). It's like a sound-level meter at a concert.
+
+**The Logic**:
+- Calculate the **RMS (Root Mean Square)** of the audio chunk.
+- Compare it to a **Threshold** (default: `0.005`).
+- If Energy > Threshold → **Speech detected!** ✅
+- If Energy < Threshold → **Silence.** 🔇
+
+> **Note**: While simple, this is extremely fast. We plan to upgrade to **Silero AI VAD** (a deep learning model) once we resolve library compatibility issues, which will better distinguish between "speech" and "background noise" (like a loud fan).
+
+### 📊 VAD Flow Diagrams
+
+#### 1. Real-Time Gatekeeper (Buffering Phase)
+During recording, the 6-second chunks are checked before hitting the AI.
+
+```mermaid
+graph TD
+    A[6s Audio Chunk Arrives] --> B{VAD Check};
+    B -- "RMS > 0.005 (Speech)" --> C[🚀 Run Whisper AI];
+    B -- "RMS < 0.005 (Silence)" --> D[🛑 Skip AI];
+    C --> E[Show Text in UI];
+    D --> F[Print 'Silence' to log];
+```
+
+#### 2. Final Silence Trimming (Stop Phase)
+When you stop, we scan the *entire* file and stitch together only the speech parts.
+
+```
+ORIGINAL FILE:
+[---SPEECH---] [...SILENCE...] [---SPEECH---] [...SILENCE...]
+0s           5s             15s           20s           30s
+
+VAD SCANNING:
+Step 1: Identify Speech Segments
+Seg A: 0s-7s (Speech + 500ms padding)
+Seg B: 14s-22s (Speech + 500ms padding)
+
+STITCHING:
+[Seg A][Seg B] = 15s total audio (instead of 30s)
+
+FINAL TRANSCRIPTION:
+AI only processes the 15s of "Clean Audio"
+```
+
+### ⚡ Performance Impact
+
+Adding VAD significantly improves transcription speed, especially for recordings with pauses.
+
+| Feature | Without VAD | With VAD | Benefit |
+|---------|-------------|----------|---------|
+| **Real-time Latency** | Constant load | Low load during pauses | Cooler CPU/GPU |
+| **Final Speed** (30s audio w/ 15s silence) | ~1000ms | ~550ms | **45% Faster** |
+| **Accuracy** | May hallucinate on silence | Perfectly silent during pauses | No "phantom" text |
+
+### 🛠️ Implementation Reference
+- **File**: `src-tauri/src/vad.rs` - Contains the `VADManager` logic.
+- **Function**: `is_speech()` - Used for real-time 6s chunks.
+- **Function**: `get_speech_timestamps()` - Used for final silence trimming.
+- **Integration**: `lib.rs` - Orchestrates the check before calling Whisper.
+
+---
+
+### 📊 Performance Example
+
+30-second recording on **RTX 4070** with **base.en-q5_0** model:
+
+**Real-Time Chunks (during recording):**
+- Chunk 1 (0-6s):   ~150ms → **40x realtime**
+- Chunk 2 (6-12s):  ~150ms → **40x realtime**
+- Chunk 3 (12-18s): ~150ms → **40x realtime**
+- Chunk 4 (18-24s): ~150ms → **40x realtime**
+- Chunk 5 (24-30s): ~150ms → **40x realtime**
+
+**Final Transcription (after recording):**
+- File I/O:       50ms
+- Stereo → Mono:  10ms
+- Resample:       100ms
+- State Setup:    5ms
+- Whisper AI:     750ms → **40x realtime**
+- Extract Text:   5ms
+
+**Total**: ~920ms for 30s audio = **32.6x realtime**
+
+### 🔍 Key Technical Details
+
+#### 1. **Dual Stream Strategy**
+- **Stream 1**: Preserves original stereo for final quality
+- **Stream 2**: Real-time mono for live preview
+
+#### 2. **Buffering Strategy**
+- **Why 6 seconds?** Balance between latency & accuracy
+- Too short (1-2s) → incomplete sentences → hallucinations
+- Too long (30s+) → feels slow
+
+#### 3. **Cumulative Context**
+- Each chunk uses previous transcript as prompt
+- Improves accuracy on names, technical terms
+- Cleared on new recording
+
+#### 4. **Resampling**
+- **Mic**: 48kHz (or 44.1kHz) - hardware native
+- **Whisper**: 16kHz - model requirement
+- **rubato**: High-quality sinc resampling
+
+#### 5. **Mono Conversion**
+- **Why?** Whisper expects mono audio
+- **Method**: Average left & right channels
+- **When?** Before sending to Whisper, after saving to file
+
+#### 6. **GPU Acceleration**
+- **Encoder**: ~50ms (processes audio features)
+- **Decoder**: ~100ms (generates text tokens)
+- **Total**: 40x faster than realtime
+
+#### 7. **Thread Safety**
+- `Arc<Mutex<WhisperManager>>` shared between threads
+- Channels for lock-free communication
+- No data races, no deadlocks
 
 ---
 
@@ -3126,6 +3600,689 @@ To add a new Whisper model:
 4. The model will appear in the dropdown!
 
 **Naming convention**: `ggml-{model_name}.bin`
+
+---
+
+## 📁 File & Function Reference
+
+This section provides a complete reference of all major files in Taurscribe and what each function does.
+
+---
+
+### 🎨 **Frontend Files (React/TypeScript)**
+
+#### **`src/App.tsx`** (369 lines)
+**Purpose**: Main UI component - handles all user interactions and state management
+
+##### **React State Variables**
+```typescript
+const [greetMsg, setGreetMsg] = useState("")           // Output/transcript display
+const [isRecording, setIsRecording] = useState(false)  // Recording state
+const [backendInfo, setBackendInfo] = useState("...")  // GPU backend info
+const [models, setModels] = useState<ModelInfo[]>([])  // Available models
+const [currentModel, setCurrentModel] = useState(null) // Selected model
+const [sampleFiles, setSampleFiles] = useState([])     // Benchmark samples
+const [selectedSample, setSelectedSample] = useState() // Selected sample
+const [isLoading, setIsLoading] = useState(false)      // Loading overlay
+const [loadingMessage, setLoadingMessage] = useState() // Loading text
+```
+
+##### **React Refs**
+```typescript
+isRecordingRef           // Tracks recording state (avoids stale closures)
+startingRecordingRef     // Prevents duplicate start calls
+pendingStopRef           // Queues stop if start is in progress
+listenersSetupRef        // Prevents duplicate event listeners
+lastStartTime            // Debounces rapid start events
+```
+
+##### **Functions**
+
+**`loadInitialData()` (async)**
+- **Purpose**: Loads backend info, models, and sample files on app start
+- **Called**: Once on component mount
+- **Actions**:
+  - Calls `get_backend_info()` → displays GPU backend
+  - Calls `list_models()` → populates model dropdown
+  - Calls `get_current_model()` → shows active model
+  - Calls `list_sample_files()` → loads benchmark samples
+
+**`handleModelChange(modelId)` (async)**
+- **Purpose**: Switches to a different Whisper model
+- **Called**: When user selects model from dropdown
+- **Actions**:
+  - Shows loading overlay
+  - Calls `switch_model(modelId)` on backend
+  - Updates tray icon to "processing"
+  - Refreshes backend info (GPU might change)
+  - Updates UI with success/error message
+
+**`formatSize(sizeMb)`**
+- **Purpose**: Formats file size (MB → GB conversion)
+- **Returns**: "75 MB" or "1.5 GB"
+- **Example**: `formatSize(1536)` → "1.5 GB"
+
+**`setTrayState(newState)` (async)**
+- **Purpose**: Updates tray icon color
+- **States**: "ready" (green), "recording" (red), "processing" (yellow)
+- **Called**: Before/after recording, model switching
+
+**Event Listeners (useEffect hooks)**
+
+**Hotkey Start Listener**
+- **Event**: `hotkey-start-recording`
+- **Trigger**: User presses Ctrl+Win
+- **Actions**:
+  - Debounces duplicate events (500ms window)
+  - Prevents starting if already recording
+  - Calls `start_recording()`
+  - Handles pending stop requests
+
+**Hotkey Stop Listener**
+- **Event**: `hotkey-stop-recording`
+- **Trigger**: User releases Ctrl+Win
+- **Actions**:
+  - Queues stop if still starting
+  - Calls `stop_recording()`
+  - Handles race conditions gracefully
+
+---
+
+#### **`src/App.css`** (9110 bytes)
+**Purpose**: Styling for the entire application
+
+##### **Key CSS Classes**
+
+**`.container`**
+- Main app container with glassmorphism effect
+- Dark background with blur
+- Centered layout
+
+**`.status-bar`**
+- Displays GPU backend and current model
+- Color-coded indicators
+
+**`.model-select`**
+- Dropdown for model selection
+- Gradient border animation on hover
+
+**`.btn-start`, `.btn-stop`, `.btn-benchmark`**
+- Recording control buttons
+- Animated hover effects
+- Disabled states
+
+**`.loading-overlay`**
+- Full-screen loading indicator
+- Spinning animation
+- Blur background
+
+---
+
+### 🦀 **Backend Files (Rust)**
+
+#### **`src-tauri/src/lib.rs`** (913 lines)
+**Purpose**: Main orchestrator - handles all Tauri commands, threading, and audio processing
+
+##### **Structs**
+
+**`SendStream(cpal::Stream)`** (lines 41-44)
+- **Purpose**: Wrapper to make audio stream thread-safe
+- **Why**: `cpal::Stream` isn't `Send`/`Sync` by default
+- **Safety**: We only drop it, never access across threads
+
+**`AudioState`** (lines 45-51)
+```rust
+pub struct AudioState {
+    recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
+    whisper: Arc<Mutex<WhisperManager>>,
+}
+```
+- **Purpose**: Shared state across Tauri commands
+- **`recording_handle`**: Currently active recording (if any)
+- **`whisper`**: Whisper AI manager (shared across threads)
+
+**`RecordingHandle`** (lines 53-57)
+```rust
+struct RecordingHandle {
+    stream: SendStream,      // Audio stream (keeps mic active)
+    file_tx: Sender,        // Channel to file writer thread
+    whisper_tx: Sender,     // Channel to Whisper AI thread
+}
+```
+- **Purpose**: Holds resources for active recording
+- **Cleanup**: Dropping this stops recording automatically
+
+##### **Tauri Commands (Functions callable from JavaScript)**
+
+**`greet(name: &str)` → `String`** (lines 59-62)
+- **Purpose**: Demo function from Tauri template
+- **Not used**: Can be removed
+
+**`get_backend_info(state)` → `Result<String, String>`** (lines 64-68)
+- **Purpose**: Returns GPU backend being used
+- **Returns**: "Backend: CUDA" or "Backend: CPU"
+- **Called**: On app start and after model switch
+
+**`list_models()` → `Result<Vec<ModelInfo>, String>`** (lines 70-74)
+- **Purpose**: Lists all available Whisper models
+- **Returns**: Array of model metadata (id, name, size)
+- **Called**: On app start to populate dropdown
+
+**`get_current_model(state)` → `Result<Option<String>, String>`** (lines 76-81)
+- **Purpose**: Gets currently loaded model name
+- **Returns**: "tiny.en-q5_1" or None
+- **Called**: On app start
+
+**`switch_model(state, model_id)` → `Result<String, String>`** (lines 83-97)
+- **Purpose**: Switches to a different Whisper model
+- **Checks**: Can't switch while recording
+- **Actions**:
+  - Clears context (fresh start)
+  - Calls `whisper.initialize(model_id)`
+  - Returns backend info
+- **Called**: When user selects new model
+
+**`set_tray_state(app, state, new_state)` → `Result<(), String>`** (lines 99-120)
+- **Purpose**: Updates tray icon color
+- **States**:
+  - "ready" → green circle
+  - "recording" → red circle
+  - "processing" → yellow circle
+- **Called**: Throughout recording lifecycle
+
+**`update_tray_icon(app, state)` → `Result<(), String>`** (lines 122-147)
+- **Purpose**: Helper to actually change the tray icon
+- **Uses**: Built-in tray icons (emoji-red_circle.ico, etc.)
+
+**`list_sample_files()` → `Result<Vec<SampleFile>, String>`** (lines 155-209)
+- **Purpose**: Lists WAV files in samples directory
+- **Returns**: File names and paths for benchmarking
+- **Called**: On app start
+
+**`benchmark_test(state, file_path)` → `Result<String, String>`** (lines 211-390)
+- **Purpose**: Tests transcription performance on sample file
+- **Process**:
+  1. Load sample audio file
+  2. Simulate real-time chunks (6s each)
+  3. Run final transcription
+  4. Compare performance
+- **Returns**: Detailed timing breakdown
+- **Called**: When user clicks "Run Benchmark"
+
+##### **Core Recording Functions**
+
+**`get_recordings_dir()` → `Result<PathBuf, String>`** (lines 392-406)
+- **Purpose**: Gets/creates AppData directory for recordings
+- **Path**: `C:\Users\YOU\AppData\Local\Taurscribe\temp\`
+- **Creates**: Directory if it doesn't exist
+- **Called**: By `start_recording()`
+
+**`start_recording(state)` → `Result<String, String>`** (lines 408-647)
+- **Purpose**: Main recording orchestrator
+- **Process**:
+  1. Get microphone device
+  2. Create WAV file in AppData
+  3. Create two channels (file, whisper)
+  4. Spawn file writer thread
+  5. Spawn Whisper AI thread
+  6. Build audio stream with callback
+  7. Start recording
+  8. Save handle for cleanup
+- **Returns**: Success message
+- **Called**: When user starts recording
+
+**Audio Callback (inside `start_recording`)** (lines 290-322)
+- **Runs**: Every ~10ms when audio available
+- **Actions**:
+  1. Receive audio samples from microphone
+  2. Convert stereo → mono
+  3. Send stereo to file channel
+  4. Send mono to Whisper channel
+- **Purpose**: Splits audio into two streams
+
+**File Writer Thread** (lines 162-172)
+- **Runs**: In background, parallel to main thread
+- **Process**:
+  - Waits for audio on channel
+  - Writes samples to WAV file
+  - Continues until channel closes
+  - Finalizes WAV file on exit
+- **Purpose**: Saves all audio to disk
+
+**Whisper AI Thread** (lines 180-285)
+- **Runs**: In background, parallel to main thread
+- **Process**:
+  - Buffers audio in memory
+  - When 6 seconds accumulated:
+    - Extract chunk
+    - Transcribe with Whisper
+    - Print to console
+    - Update context
+  - Repeat until channel closes
+- **Purpose**: Live transcription preview
+
+**`stop_recording(state)` → `Result<String, String>`** (lines 649-722)
+- **Purpose**: Stops recording and runs final transcription
+- **Process**:
+  1. Get recording handle
+  2. Drop it (closes channels, stops threads)
+  3. Wait for WAV file to finalize
+  4. Run `transcribe_file()` on saved audio
+  5. Return final transcript
+- **Returns**: Complete transcription
+- **Called**: When user stops recording
+
+**`start_hotkey_listener(app_handle)`** (lines 724-797)
+- **Purpose**: Listens for Ctrl+Win global hotkey
+- **Process**:
+  - Spawns background thread
+  - Uses `rdev` to detect key events
+  - Tracks Ctrl and Win key states
+  - Emits events to frontend:
+    - `hotkey-start-recording` (both pressed)
+    - `hotkey-stop-recording` (either released)
+- **Called**: Once on app startup
+
+**`run()`** (lines 799-912)
+- **Purpose**: Main application entry point
+- **Process**:
+  1. Initialize Whisper manager
+  2. Load default model
+  3. Create audio state
+  4. Build Tauri app
+  5. Register all commands
+  6. Setup tray icon
+  7. Start hotkey listener
+  8. Run event loop
+- **Called**: By `main.rs` on app start
+
+---
+
+#### **`src-tauri/src/whisper.rs`** (735 lines)
+**Purpose**: Whisper AI manager - handles model loading, transcription, and audio preprocessing
+
+##### **Enums**
+
+**`GpuBackend`** (lines 14-19)
+```rust
+pub enum GpuBackend {
+    Cuda,    // NVIDIA GPUs
+    Vulkan,  // AMD/Intel/Universal
+    Cpu,     // Fallback
+}
+```
+- **Purpose**: Tracks which GPU backend is active
+- **Display**: Implements `Display` trait for pretty printing
+
+##### **Structs**
+
+**`ModelInfo`** (lines 32-38)
+```rust
+pub struct ModelInfo {
+    pub id: String,           // "tiny.en-q5_1"
+    pub display_name: String, // "Tiny English (Q5_1)"
+    pub file_name: String,    // "ggml-tiny.en-q5_1.bin"
+    pub size_mb: f32,         // 75.0
+}
+```
+- **Purpose**: Metadata about available models
+- **Serializable**: Can be sent to JavaScript
+
+**`WhisperManager`** (lines 41-46)
+```rust
+pub struct WhisperManager {
+    context: Option<WhisperContext>,  // Loaded model
+    last_transcript: String,          // Cumulative context
+    backend: GpuBackend,              // Active backend
+    current_model: Option<String>,    // Model ID
+}
+```
+- **Purpose**: Manages Whisper model lifecycle and transcription
+
+##### **Functions**
+
+**`null_log_callback(_level, _text, _user_data)`** (lines 48-51)
+- **Purpose**: Silences verbose whisper.cpp logs
+- **Why**: Prevents console spam
+- **Used**: In `initialize()`
+
+**`WhisperManager::new()` → `Self`** (lines 54-62)
+- **Purpose**: Creates empty manager (no model loaded)
+- **Returns**: Manager with None context
+- **Called**: Once on app startup
+
+**`WhisperManager::get_models_dir()` → `Result<PathBuf>`** (lines 64-82)
+- **Purpose**: Finds the models directory
+- **Tries**:
+  - `taurscribe-runtime/models` (dev)
+  - `../taurscribe-runtime/models` (build)
+  - `../../taurscribe-runtime/models` (other)
+- **Returns**: Canonical path or error
+
+**`WhisperManager::list_available_models()` → `Result<Vec<ModelInfo>>`** (lines 84-130)
+- **Purpose**: Scans models directory for .bin files
+- **Process**:
+  1. Read directory
+  2. Filter for `ggml-*.bin` files
+  3. Parse model ID from filename
+  4. Get file size
+  5. Format display name
+  6. Sort by size
+- **Returns**: Array of model metadata
+
+**`WhisperManager::format_model_name(id)` → `String`** (lines 132-174)
+- **Purpose**: Converts model ID to human-readable name
+- **Examples**:
+  - `"tiny.en-q5_1"` → `"Tiny English (Q5_1)"`
+  - `"base-q5_0"` → `"Base Multilingual (Q5_0)"`
+  - `"large-v3-turbo"` → `"Large V3 Turbo Multilingual"`
+
+**`WhisperManager::get_current_model()` → `Option<&String>`** (lines 176-179)
+- **Purpose**: Returns currently loaded model ID
+- **Returns**: Reference to model name or None
+
+**`WhisperManager::get_backend()` → `&GpuBackend`** (lines 181-184)
+- **Purpose**: Returns active GPU backend
+- **Returns**: Reference to backend enum
+
+**`WhisperManager::clear_context()`** (lines 186-190)
+- **Purpose**: Resets cumulative transcript
+- **When**: Before starting new recording
+- **Effect**: Next chunk has no prior context
+
+**`WhisperManager::initialize(model_id)` → `Result<String>`** (lines 192-240)
+- **Purpose**: Loads Whisper model with GPU acceleration
+- **Process**:
+  1. Suppress logs
+  2. Find model file
+  3. Try GPU (CUDA/Vulkan)
+  4. Fallback to CPU if GPU fails
+  5. Warm-up pass (1s silence)
+  6. Store model and backend
+- **Returns**: Backend info string
+- **Called**: On app start and model switch
+
+**`WhisperManager::try_gpu(model_path)` → `Result<(Context, Backend)>`** (lines 242-265)
+- **Purpose**: Attempts to load model with GPU
+- **Process**:
+  1. Enable GPU in parameters
+  2. Load model
+  3. Detect which backend (CUDA vs Vulkan)
+  4. Return context and backend
+- **Returns**: Success or error
+
+**`WhisperManager::detect_gpu_backend()` → `GpuBackend`** (lines 267-278)
+- **Purpose**: Determines if using CUDA or Vulkan
+- **Method**: Checks for `nvidia-smi` command
+- **Logic**:
+  - nvidia-smi exists → CUDA
+  - Otherwise → Vulkan
+
+**`WhisperManager::is_cuda_available()` → `bool`** (lines 280-287)
+- **Purpose**: Checks if NVIDIA GPU present
+- **Method**: Runs `nvidia-smi` command
+- **Returns**: true if successful
+
+**`WhisperManager::try_cpu(model_path)` → `Result<(Context, Backend)>`** (lines 289-305)
+- **Purpose**: Loads model with CPU (fallback)
+- **Process**: Same as GPU but no acceleration
+- **Returns**: Context with CPU backend
+
+**`WhisperManager::transcribe_chunk(samples, sample_rate)` → `Result<String>`** (lines 307-417)
+- **Purpose**: Transcribes a 6-second audio chunk (real-time)
+- **Process**:
+  1. Resample to 16kHz if needed
+  2. Create Whisper state
+  3. Set parameters (threads, language, context)
+  4. Run inference
+  5. Extract transcript
+  6. Update cumulative context
+  7. Log performance
+- **Returns**: Transcribed text
+- **Called**: By Whisper AI thread every 6s
+
+**`WhisperManager::transcribe_file(file_path)` → `Result<String>`** (lines 419-601)
+- **Purpose**: Transcribes complete WAV file (final, high-quality)
+- **Process**:
+  1. **STEP 1**: Load WAV file
+  2. **STEP 2**: Convert stereo → mono
+  3. **STEP 3**: Resample to 16kHz
+  4. **STEP 4**: Create Whisper state
+  5. **STEP 5**: Set optimized parameters
+  6. **STEP 6**: Run full inference
+  7. **STEP 7**: Extract all segments
+  8. **STEP 8**: Combine and return
+- **Returns**: Complete transcript
+- **Logs**: Detailed timing breakdown
+- **Called**: By `stop_recording()`
+
+**`WhisperManager::transcribe_audio_data(audio_data)` → `Result<String>`** (lines 602-659)
+- **Purpose**: Transcribes pre-processed 16kHz mono audio
+- **Similar to**: `transcribe_file` but skips preprocessing
+- **Used by**: Benchmark tests
+- **Returns**: Transcript
+
+**`WhisperManager::load_audio(file_path)` → `Result<Vec<f32>>`** (lines 660-733)
+- **Purpose**: Loads and preprocesses WAV file
+- **Process**:
+  1. Open WAV file
+  2. Read all samples
+  3. Convert stereo → mono
+  4. Resample to 16kHz
+- **Returns**: Ready-to-transcribe audio
+- **Called**: By benchmark function
+
+---
+
+#### **`src-tauri/src/vad.rs`** (186 lines)
+**Purpose**: Voice Activity Detection - filters silence from audio
+
+##### **Struct**
+
+**`VADManager`** (lines 8-10)
+```rust
+pub struct VADManager {
+    threshold: f32,  // Energy threshold for speech detection
+}
+```
+- **Purpose**: Simple energy-based VAD
+- **Note**: Placeholder for future Silero VAD integration
+
+##### **Functions**
+
+**`VADManager::new()` → `Result<Self>`** (lines 13-35)
+- **Purpose**: Creates VAD manager
+- **Process**:
+  1. Find models directory
+  2. Check for `silero_vad.onnx`
+  3. Set energy threshold (0.005)
+- **Returns**: Manager ready to detect speech
+
+**`VADManager::get_models_dir()` → `Result<PathBuf>`** (lines 37-54)
+- **Purpose**: Finds models directory (same logic as WhisperManager)
+- **Returns**: Path to models
+
+**`VADManager::is_speech(audio)` → `Result<f32>`** (lines 56-77)
+- **Purpose**: Checks if audio chunk contains speech
+- **Method**:
+  1. Calculate RMS (Root Mean Square) energy
+  2. Compare to threshold
+  3. Return probability (0.0 = silence, 1.0 = speech)
+- **Returns**: Speech probability
+- **Called**: Every frame during VAD processing
+
+**`VADManager::get_speech_timestamps(audio, padding_ms)` → `Result<Vec<(f32, f32)>>`** (lines 79-184)
+- **Purpose**: Extracts speech segments from full audio
+- **Process**:
+  1. Process audio in 512-sample frames (~32ms)
+  2. Detect speech/silence transitions
+  3. Apply padding around speech
+  4. Merge overlapping segments
+  5. Filter out very short segments (<150ms)
+- **Returns**: Array of (start_time, end_time) tuples
+- **Called**: By benchmark VAD tests
+
+---
+
+#### **`src-tauri/src/main.rs`** (7 lines)
+**Purpose**: Application entry point
+
+```rust
+fn main() {
+    taurscribe_lib::run()
+}
+```
+- **Purpose**: Launches the app
+- **Special**: `windows_subsystem = "windows"` hides console in release builds
+
+---
+
+#### **`src-tauri/build.rs`** (4 lines)
+**Purpose**: Build-time script
+
+```rust
+fn main() {
+    tauri_build::build()
+}
+```
+- **Purpose**: Generates Tauri build artifacts
+- **Runs**: Before compilation
+
+---
+
+### ⚙️ **Configuration Files**
+
+#### **`src-tauri/Cargo.toml`** (50 lines)
+**Purpose**: Rust project configuration and dependencies
+
+##### **Section Breakdown**
+
+**`[package]`** (lines 1-6)
+- **name**: "taurscribe"
+- **version**: "0.1.0"
+- **edition**: "2021" (Rust edition)
+
+**`[lib]`** (lines 10-15)
+- **name**: "taurscribe_lib"
+- **crate-type**: Library types for Tauri
+
+**`[dependencies]`** (lines 20-37)
+```toml
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+cpal = "0.15"                    # Audio I/O
+crossbeam-channel = "0.5"        # Thread communication
+hound = "3.5"                    # WAV file reading/writing
+chrono = "0.4"                   # Timestamps
+whisper-rs = { git = "...", features = ["cuda", "vulkan"] }
+rubato = "0.14"                  # Audio resampling
+dirs = "6.0.0"                   # AppData paths
+rdev = "0.5"                     # Global hotkeys
+```
+
+**`[profile.dev]`** (lines 40-44)
+- **opt-level = 0**: Don't optimize your code (fast builds)
+- **package."*" opt-level = 1**: Lightly optimize dependencies
+
+---
+
+#### **`package.json`** (27 lines)
+**Purpose**: Node.js/npm project configuration
+
+##### **Scripts**
+```json
+"dev": "vite",                    // Start dev server
+"build": "tsc && vite build",     // Build for production
+"preview": "vite preview",        // Preview build
+"tauri": "cd src-tauri && cargo check && cd .. && tauri",
+"check": "cd src-tauri && cargo check"
+```
+
+##### **Dependencies**
+```json
+"react": "^19.1.0",              // UI framework
+"react-dom": "^19.1.0",
+"@tauri-apps/api": "^2",         // Tauri JavaScript API
+"@tauri-apps/plugin-opener": "^2"
+```
+
+##### **DevDependencies**
+```json
+"@types/react": "^19.1.8",       // TypeScript types
+"@vitejs/plugin-react": "^4.6.0", // Vite React plugin
+"typescript": "~5.8.3",
+"vite": "^7.0.4",                // Build tool
+"@tauri-apps/cli": "^2"          // Tauri CLI
+```
+
+---
+
+## 🗂️ **File Organization Summary**
+
+```
+Taurscribe/
+├── 🎨 Frontend
+│   ├── src/App.tsx           # Main UI logic (369 lines)
+│   ├── src/App.css           # Styling (9110 bytes)
+│   ├── src/main.tsx          # React entry point
+│   └── index.html            # HTML shell
+│
+├── 🦀 Backend (Rust)
+│   ├── src-tauri/
+│   │   ├── src/
+│   │   │   ├── lib.rs        # Main orchestrator (913 lines)
+│   │   │   ├── whisper.rs    # AI manager (735 lines)
+│   │   │   ├── vad.rs        # VAD manager (186 lines)
+│   │   │   └── main.rs       # Entry point (7 lines)
+│   │   ├── build.rs          # Build script (4 lines)
+│   │   └── Cargo.toml        # Rust config (50 lines)
+│
+├── ⚙️ Configuration
+│   ├── package.json          # Node.js config (27 lines)
+│   ├── vite.config.ts        # Vite config
+│   ├── tsconfig.json         # TypeScript config
+│   └── .gitignore
+│
+├── 📦 Runtime Assets
+│   └── taurscribe-runtime/
+│       ├── models/           # Whisper .bin files
+│       └── samples/          # Test audio files
+│
+└── 📚 Documentation
+    ├── ARCHITECTURE.md       # This file!
+    └── README.md
+```
+
+---
+
+## 🔍 Quick Function Lookup
+
+### **Need to add a feature?**
+
+| Task | File | Function |
+|------|------|----------|
+| Change UI layout | `App.tsx` | Component JSX |
+| Add new button | `App.tsx` | Add button in render |
+| Add Tauri command | `lib.rs` | Create function + add to `.invoke_handler()` |
+| Change model behavior | `whisper.rs` | Modify `transcribe_chunk()` or `transcribe_file()` |
+| Adjust recording | `lib.rs` | `start_recording()` audio callback |
+| Change VAD threshold | `vad.rs` | `VADManager::new()` threshold value |
+| Add dependency | `Cargo.toml` | Add to `[dependencies]` |
+| Change styling | `App.css` | Modify CSS classes |
+
+### **Debugging a feature?**
+
+| Issue | Check File | Check Function |
+|-------|-----------|---------------|
+| Recording not starting | `lib.rs` | `start_recording()` |
+| No audio in WAV file | `lib.rs` | File writer thread |
+| Transcription wrong | `whisper.rs` | `transcribe_chunk()` or `transcribe_file()` |
+| UI not updating | `App.tsx` | State setters, event listeners |
+| Model not loading | `whisper.rs` | `initialize()`, `try_gpu()` |
+| Hotkey not working | `lib.rs` | `start_hotkey_listener()` |
+| Tray icon wrong | `lib.rs` | `set_tray_state()`, `update_tray_icon()` |
 
 ---
 
