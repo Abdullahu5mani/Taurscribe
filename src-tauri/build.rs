@@ -2,6 +2,24 @@ fn main() {
     // Standard Tauri build process
     tauri_build::build();
 
+    // CUSTOM: Set minimum macOS deployment target for std::filesystem support
+    #[cfg(target_os = "macos")]
+    {
+        // whisper.cpp requires C++17 std::filesystem which needs macOS 10.15+
+        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=10.15");
+        std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "10.15");
+    }
+
+    // CUSTOM: Force Clang for ARM64 Windows (whisper.cpp requirement)
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        // whisper.cpp requires Clang for ARM64 on Windows (MSVC not supported)
+        println!("cargo:warning=Building for Windows ARM64 - Clang/LLVM required");
+        std::env::set_var("CC", "clang-cl");
+        std::env::set_var("CXX", "clang-cl");
+        std::env::set_var("CMAKE_GENERATOR_TOOLSET", "ClangCL");
+    }
+
     // CUSTOM: Add CUDA library search path to fix linker errors (Windows only)
     #[cfg(windows)]
     {

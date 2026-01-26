@@ -38,7 +38,7 @@
 ### 🌟 Start Here (For Beginners)
 1. [What is Taurscribe?](#what-is-taurscribe)
 2. [The Big Picture](#the-big-picture)
-3. [🎵 Journey of a Sound Wave](#-journey-of-a-sound-wave)f
+3. [🎵 Journey of a Sound Wave](#-journey-of-a-sound-wave)
 4. [🎮 Backend Architecture Strategy](#-backend-architecture-strategy)
 5. [📖 Glossary of Terms](#-glossary-of-terms)
 6. [❓ Common Beginner Confusions](#-common-beginner-confusions)
@@ -5204,6 +5204,175 @@ tauri::api::shell::open("file.txt")?;
 **tauri-build** - Build Script
 
 **What it does**: Generates code from `tauri.conf.json` at compile time
+
+---
+
+## Build Requirements & Platform-Specific Notes
+
+### macOS Build Configuration
+
+**⚠️ IMPORTANT**: Taurscribe requires macOS 10.15 (Catalina) or newer to build.
+
+**Why?**
+
+The `whisper.cpp` dependency uses C++17 `std::filesystem`, which was only introduced in macOS 10.15. Building with an older deployment target will fail with errors like:
+
+```
+error: 'path' is unavailable: introduced in macOS 10.15
+```
+
+**Solution:**
+
+This is automatically configured in three places:
+
+1. **`build.rs`** (sets at build time):
+```rust
+#[cfg(target_os = "macos")]
+{
+    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=10.15");
+    std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "10.15");
+}
+```
+
+2. **`.cargo/config.toml`** (compiler flags):
+```toml
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=10.15"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=10.15"]
+
+[env]
+MACOSX_DEPLOYMENT_TARGET = "10.15"
+```
+
+3. **`.github/workflows/build.yml`** (CI environment):
+```yaml
+env:
+  MACOSX_DEPLOYMENT_TARGET: "10.15"
+```
+
+**What this means for users:**
+
+- ✅ App will run on macOS 10.15 (Catalina) and newer
+- ✅ Compatible with all Apple Silicon Macs (M1/M2/M3/M4)
+- ✅ Compatible with Intel Macs running Catalina or newer
+- ❌ Will NOT run on macOS 10.14 (Mojave) or older
+
+### Windows Build Configuration
+
+#### Windows ARM64 (aarch64-pc-windows-msvc)
+
+**⚠️ IMPORTANT**: Windows ARM64 builds require **Clang/LLVM** instead of MSVC.
+
+**Why?**
+
+The `whisper.cpp` dependency's ARM64 optimizations are only compatible with Clang. MSVC lacks the necessary ARM NEON intrinsics support. Attempting to build with MSVC will fail with:
+
+```
+CMake Error: MSVC is not supported for ARM, use clang
+```
+
+**Solution:**
+
+This is automatically configured in three places:
+
+1. **`build.rs`** (sets at build time):
+```rust
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+{
+    std::env::set_var("CC", "clang-cl");
+    std::env::set_var("CXX", "clang-cl");
+    std::env::set_var("CMAKE_GENERATOR_TOOLSET", "ClangCL");
+}
+```
+
+2. **`.github/workflows/build.yml`** (CI environment):
+```yaml
+- name: Configure Clang for ARM64 (Windows)
+  if: matrix.target == 'aarch64-pc-windows-msvc'
+  run: |
+    echo "CC=clang-cl" >> $env:GITHUB_ENV
+    echo "CXX=clang-cl" >> $env:GITHUB_ENV
+    echo "CMAKE_GENERATOR_TOOLSET=ClangCL" >> $env:GITHUB_ENV
+```
+
+3. **Install LLVM** (required on build machine):
+```bash
+# Via Chocolatey (Windows)
+choco install llvm -y
+
+# Or download from: https://releases.llvm.org/
+```
+
+**What this means:**
+
+- ✅ Requires LLVM/Clang to be installed on the build machine
+- ✅ Uses `clang-cl` (Clang with MSVC compatibility layer)
+- ✅ Compatible with Windows 11 ARM and future ARM-based Windows PCs
+- ⚠️ Cannot build with MSVC alone
+
+#### Windows x86_64
+
+Standard MSVC toolchain works perfectly. No special configuration needed beyond CUDA/Vulkan for GPU support.
+
+### Linux Build Configuration
+
+#### Required Packages for Vulkan Support
+
+**⚠️ IMPORTANT**: Linux builds with Vulkan support require the Vulkan shader compiler (`glslc`).
+
+**Why?**
+
+The `whisper.cpp` Vulkan backend compiles GLSL shaders at build time. Without `glslc`, the build will fail with:
+
+```
+Could NOT find Vulkan (missing: glslc)
+```
+
+**Solution:**
+
+Install the required packages:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install -y \
+  libvulkan-dev \
+  vulkan-tools \
+  glslang-tools    # Provides glslc shader compiler
+
+# Fedora/RHEL
+sudo dnf install -y \
+  vulkan-loader-devel \
+  vulkan-tools \
+  glslang
+
+# Arch Linux
+sudo pacman -S \
+  vulkan-icd-loader \
+  vulkan-tools \
+  glslang
+```
+
+**What this provides:**
+
+- ✅ **libvulkan-dev**: Vulkan development headers
+- ✅ **vulkan-tools**: Vulkan validation layers and utilities
+- ✅ **glslang-tools**: GLSL to SPIR-V shader compiler (includes `glslc`)
+
+#### CUDA Support (Optional)
+
+For NVIDIA GPU acceleration, install the CUDA toolkit:
+
+```bash
+# Ubuntu 24.04
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt-get update
+sudo apt-get -y install cuda-toolkit-12-6
+```
+
+**Without CUDA**: The build will automatically fall back to Vulkan or CPU.
 
 ---
 

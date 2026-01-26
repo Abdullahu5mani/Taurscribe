@@ -3,7 +3,14 @@ rustflags = [
     "-L", "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin",
 ]
 
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=10.15"]
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=10.15"]
+
 [env]
+MACOSX_DEPLOYMENT_TARGET = "10.15"
 # Tell whisper-rs to use pre-built libraries instead of building
 # WHISPER_DONT_GENERATE_BINDINGS = "1"
 WHISPER_LIB_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin"
