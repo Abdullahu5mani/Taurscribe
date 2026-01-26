@@ -257,6 +257,9 @@ jobs:
           RUST_BACKTRACE: 1
           CMAKE_BUILD_PARALLEL_LEVEL: 4
           CMAKE_VERBOSE_MAKEFILE: "ON"
+          # Disable AVX to prevent crashes on some CI runners
+          WHISPER_NO_AVX: "1"
+          WHISPER_NO_AVX2: "1"
           # macOS: ONNX Runtime deployment target (both env vars for Rust and CMake)
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
