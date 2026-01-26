@@ -22,7 +22,7 @@ jobs:
             name: 'macOS (Apple Silicon)'
             target: 'aarch64-apple-darwin'
             cuda: false
-          - platform: 'macos-13'     # Intel
+          - platform: 'macos-latest' # Run on standard latest runner (likely ARM)
             name: 'macOS (Intel)'
             target: 'x86_64-apple-darwin'
             cuda: false
@@ -66,6 +66,8 @@ jobs:
         with:
           cuda: '12.2.0'
           method: 'network'
+          use-github-cache: false
+          use-local-cache: false
 
       - name: Show CUDA Info
         if: matrix.cuda == true
