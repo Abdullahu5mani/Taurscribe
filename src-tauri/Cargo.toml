@@ -45,11 +45,18 @@ whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 parakeet-rs = { version = "=0.3.0" }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 
-# 2. macOS (Apple Silicon & Intel) -> Metal & CoreML
+# 2. macOS Configuration
 # -------------------------------------------------------------------------
-[target.'cfg(target_os = "macos")'.dependencies]
+
+# macOS Apple Silicon (ARM64) -> Metal + CoreML
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["metal"] }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "coreml"] }
+
+# macOS Intel (x86_64) -> Metal + CPU ORT (CoreML binaries often missing for Intel)
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["metal"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 
 # 3. Windows & Linux (x86_64) -> CUDA
 # -------------------------------------------------------------------------
