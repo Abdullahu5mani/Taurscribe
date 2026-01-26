@@ -498,7 +498,7 @@ function App() {
             try {
               await setTrayState("processing");
               if (activeEngine === "whisper") toast.loading("Processing transcription...");
-              const res = await invoke("stop_recording");
+              await invoke("stop_recording");
               toast.dismiss();
               // toast.success(res as string);
               setIsRecording(false);
