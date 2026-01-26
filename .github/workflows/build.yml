@@ -126,7 +126,7 @@ jobs:
       - name: Remove Windows cargo config on Unix
         if: runner.os != 'Windows'
         run: rm -f src-tauri/.cargo/config.toml
-
+ 
       # macOS Dependencies
       - name: Install macOS Dependencies
         if: contains(matrix.platform, 'macos')
@@ -146,9 +146,6 @@ jobs:
             echo "ORT_STRATEGY=system" >> $GITHUB_ENV
             echo "ORT_LIB_LOCATION=$EXTRACT_PATH/lib" >> $GITHUB_ENV
             echo "ORT_INCLUDE_LOCATION=$EXTRACT_PATH/include" >> $GITHUB_ENV
-            
-            echo "DEBUG: Listing Intel lib contents"
-            ls -al "$EXTRACT_PATH/lib"
           fi
         shell: bash
 
@@ -168,7 +165,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Fix for whisper.cpp on older macOS targets
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '10.15' || '' }}
-          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '10.15' || '' }}
+          CMAKE_OS_CONTEXT_TARGET: ${{ contains(matrix.platform, 'macos') && '10.15' || '' }}
           # CUDA env vars
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         with:
