@@ -99,13 +99,62 @@ jobs:
       # --- System Dependencies ---
       
       # Linux Dependencies
-      - name: Install Linux SDK
+      - name: Install Linux System Dependencies
         if: contains(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev build-essential curl wget file libssl-dev libgtk-3-dev libvulkan-dev vulkan-tools glslang-tools
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            build-essential \
+            curl wget file \
+            libssl-dev \
+            libgtk-3-dev
           # If Cross-compiling for ARM on x86 runner (if enabled later):
           # sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install Vulkan SDK and Tools (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get install -y \
+            libvulkan-dev \
+            vulkan-tools \
+            vulkan-validationlayers-dev \
+            glslang-tools \
+            spirv-tools \
+            libshaderc-dev \
+            cmake
+          
+      - name: Set Vulkan Environment Variables (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          echo "VULKAN_SDK=/usr" >> $GITHUB_ENV
+          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d" >> $GITHUB_ENV
+          echo "VK_LAYER_PATH=/usr/share/vulkan/explicit_layer.d" >> $GITHUB_ENV
+          echo "/usr/bin" >> $GITHUB_PATH
+          
+      - name: Verify Vulkan Installation (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          echo "=== Vulkan SDK Verification ==="
+          echo "VULKAN_SDK: $VULKAN_SDK"
+          echo "VK_ICD_FILENAMES: $VK_ICD_FILENAMES"
+          echo "VK_LAYER_PATH: $VK_LAYER_PATH"
+          echo ""
+          echo "Checking glslc (REQUIRED)..."
+          which glslc && glslc --version || { echo "ERROR: glslc not found!"; exit 1; }
+          echo ""
+          echo "Checking SPIR-V tools..."
+          which spirv-as && spirv-as --version || echo "INFO: spirv-as not found (optional)"
+          which spirv-opt && spirv-opt --version || echo "INFO: spirv-opt not found (optional)"
+          echo ""
+          echo "Checking Vulkan runtime..."
+          which vulkaninfo && vulkaninfo --summary || echo "INFO: vulkaninfo failed (no GPU in CI, expected)"
+          echo ""
+          echo "=== Verification complete - glslc is available ==="
 
       # Windows Dependencies
       - name: Install Vulkan SDK (Windows)
@@ -157,10 +206,14 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Fix for ONNX Runtime on Apple Silicon (requires macOS 13.4+)
+          # macOS: ONNX Runtime deployment target
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
-          # CUDA env vars
+          # CUDA: NVIDIA GPU toolkit
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          # Vulkan: Linux SDK paths (set by previous step on Linux)
+          VULKAN_SDK: ${{ env.VULKAN_SDK }}
+          VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
+          VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
         with:
           args: --target ${{ matrix.target }}
 

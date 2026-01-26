@@ -5356,11 +5356,11 @@ Standard MSVC toolchain works perfectly. Multiple GPU acceleration options avail
 
 #### Required Packages for Vulkan Support
 
-**⚠️ IMPORTANT**: Linux builds with Vulkan support require the Vulkan shader compiler (`glslc`).
+**⚠️ IMPORTANT**: Linux builds with Vulkan support require the Vulkan SDK and shader compilation tools.
 
 **Why?**
 
-The `whisper.cpp` Vulkan backend compiles GLSL shaders at build time. Without `glslc`, the build will fail with:
+The `whisper.cpp` Vulkan backend compiles GLSL shaders to SPIR-V at build time. Without the proper tools, the build will fail with:
 
 ```
 Could NOT find Vulkan (missing: glslc)
@@ -5368,33 +5368,71 @@ Could NOT find Vulkan (missing: glslc)
 
 **Solution:**
 
-Install the required packages:
+Install the complete Vulkan development stack:
 
 ```bash
-# Ubuntu/Debian
+# Ubuntu/Debian (Complete Installation)
+sudo apt-get update
 sudo apt-get install -y \
-  libvulkan-dev \
-  vulkan-tools \
-  glslang-tools    # Provides glslc shader compiler
+  libvulkan-dev \               # Vulkan headers and libraries
+  vulkan-tools \                # Utilities (vulkaninfo, etc.)
+  vulkan-validationlayers \     # Debugging and validation
+  glslang-tools \               # GLSL→SPIR-V compiler (glslc)
+  spirv-tools                   # SPIR-V utilities and optimizer
 
 # Fedora/RHEL
 sudo dnf install -y \
   vulkan-loader-devel \
   vulkan-tools \
-  glslang
+  vulkan-validation-layers \
+  glslang \
+  spirv-tools
 
 # Arch Linux
 sudo pacman -S \
   vulkan-icd-loader \
   vulkan-tools \
-  glslang
+  vulkan-validation-layers \
+  glslang \
+  spirv-tools
 ```
 
-**What this provides:**
+**Set Environment Variables:**
 
-- ✅ **libvulkan-dev**: Vulkan development headers
-- ✅ **vulkan-tools**: Vulkan validation layers and utilities
-- ✅ **glslang-tools**: GLSL to SPIR-V shader compiler (includes `glslc`)
+After installation, set these environment variables:
+
+```bash
+export VULKAN_SDK=/usr
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d
+export VK_LAYER_PATH=/usr/share/vulkan/explicit_layer.d
+export PATH=$PATH:/usr/bin
+```
+
+**Verify Installation:**
+
+```bash
+# Check if glslc is available (REQUIRED)
+which glslc
+glslc --version
+
+# Expected output:
+# /usr/bin/glslc
+# glslc 1.3.xxx
+# Target: SPIR-V 1.6
+
+# Check Vulkan runtime (optional)
+vulkaninfo --summary
+```
+
+**What each package provides:**
+
+- ✅ **libvulkan-dev**: Vulkan API headers and development libraries
+- ✅ **vulkan-tools**: `vulkaninfo`, `vkcube` (debugging utilities)  
+- ✅ **vulkan-validationlayers-dev**: Debugging and validation layers
+- ✅ **glslang-tools**: `glslc` - **GLSL to SPIR-V shader compiler (REQUIRED)**
+- ✅ **spirv-tools**: `spirv-as`, `spirv-opt` - SPIR-V utilities and optimizer
+- ✅ **libshaderc-dev**: Additional shader compilation library
+- ✅ **cmake**: Build system (required by whisper.cpp)
 
 #### CUDA Support (Optional)
 
