@@ -53,15 +53,21 @@ ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 # CPU performance on Apple Silicon is reported to be very good.
 # -------------------------------------------------------------------------
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["metal"] }
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 
 # 3. Windows & Linux (x86_64) -> CUDA
 # -------------------------------------------------------------------------
 [target.'cfg(all(any(target_os = "windows", target_os = "linux"), target_arch = "x86_64"))'.dependencies]
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda"] }
-parakeet-rs = { version = "=0.3.0", features = ["cuda"] }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda"] }
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda", "vulkan"] }
+parakeet-rs = { version = "=0.3.0", features = ["cuda", "directml"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "directml"] }
+
+# 4. Windows (ARM64) -> DirectML
+# -------------------------------------------------------------------------
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "directml"] }
+parakeet-rs = { version = "=0.3.0", features = ["directml"] }
 
 # Speed up dev builds by optimizing dependencies but not your code
 [profile.dev]

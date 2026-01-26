@@ -7,14 +7,16 @@ use std::path::PathBuf;
 /// GPU Backend Type
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum GpuBackend {
-    Cuda, // NVIDIA GPUs (Very Fast)
-    Cpu,  // Processor (Slow fallback)
+    Cuda,     // NVIDIA GPUs (Very Fast)
+    DirectML, // Windows GPUs/NPUs (ARM64/AMD/Intel)
+    Cpu,      // Processor (Slow fallback)
 }
 
 impl std::fmt::Display for GpuBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GpuBackend::Cuda => write!(f, "CUDA"),
+            GpuBackend::DirectML => write!(f, "DirectML"),
             GpuBackend::Cpu => write!(f, "CPU"),
         }
     }
@@ -259,10 +261,15 @@ impl ParakeetManager {
     }
 
     fn init_nemotron(path: &PathBuf) -> Result<(Nemotron, GpuBackend), String> {
-        // Try GPU
+        // Try CUDA
         if let Ok(m) = Self::try_gpu_nemotron(path.to_str().unwrap()) {
             println!("[PARAKEET] Loaded Nemotron with CUDA");
             return Ok((m, GpuBackend::Cuda));
+        }
+        // Try DirectML
+        if let Ok(m) = Self::try_directml_nemotron(path.to_str().unwrap()) {
+            println!("[PARAKEET] Loaded Nemotron with DirectML");
+            return Ok((m, GpuBackend::DirectML));
         }
         println!("[PARAKEET] Fallback to CPU for Nemotron");
         let m = Self::try_cpu_nemotron(path.to_str().unwrap())?;
@@ -270,10 +277,15 @@ impl ParakeetManager {
     }
 
     fn init_ctc(path: &PathBuf) -> Result<(Parakeet, GpuBackend), String> {
-        // Try GPU
+        // Try CUDA
         if let Ok(m) = Self::try_gpu_ctc(path.to_str().unwrap()) {
             println!("[PARAKEET] Loaded CTC with CUDA");
             return Ok((m, GpuBackend::Cuda));
+        }
+        // Try DirectML
+        if let Ok(m) = Self::try_directml_ctc(path.to_str().unwrap()) {
+            println!("[PARAKEET] Loaded CTC with DirectML");
+            return Ok((m, GpuBackend::DirectML));
         }
         println!("[PARAKEET] Fallback to CPU for CTC");
         let m = Self::try_cpu_ctc(path.to_str().unwrap())?;
@@ -285,14 +297,35 @@ impl ParakeetManager {
     fn try_gpu_nemotron(path: &str) -> Result<Nemotron, String> {
         use parakeet_rs::{ExecutionConfig, ExecutionProvider};
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(
+            target_os = "linux",
+            all(target_os = "windows", target_arch = "x86_64")
+        ))]
         {
             let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
             Nemotron::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
         }
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(not(any(
+            target_os = "linux",
+            all(target_os = "windows", target_arch = "x86_64")
+        )))]
         {
             Err("CUDA feature not enabled".to_string())
+        }
+    }
+
+    fn try_directml_nemotron(path: &str) -> Result<Nemotron, String> {
+        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
+
+        #[cfg(target_os = "windows")]
+        {
+            let config =
+                ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
+            Nemotron::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err("DirectML feature not enabled".to_string())
         }
     }
 
@@ -303,14 +336,35 @@ impl ParakeetManager {
     fn try_gpu_ctc(path: &str) -> Result<Parakeet, String> {
         use parakeet_rs::{ExecutionConfig, ExecutionProvider};
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(
+            target_os = "linux",
+            all(target_os = "windows", target_arch = "x86_64")
+        ))]
         {
             let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
             Parakeet::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
         }
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(not(any(
+            target_os = "linux",
+            all(target_os = "windows", target_arch = "x86_64")
+        )))]
         {
             Err("CUDA feature not enabled".to_string())
+        }
+    }
+
+    fn try_directml_ctc(path: &str) -> Result<Parakeet, String> {
+        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
+
+        #[cfg(target_os = "windows")]
+        {
+            let config =
+                ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
+            Parakeet::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err("DirectML feature not enabled".to_string())
         }
     }
 
@@ -322,6 +376,9 @@ impl ParakeetManager {
         if let Ok(m) = Self::try_gpu_eou(path.to_str().unwrap()) {
             return Ok((m, GpuBackend::Cuda));
         }
+        if let Ok(m) = Self::try_directml_eou(path.to_str().unwrap()) {
+            return Ok((m, GpuBackend::DirectML));
+        }
         let m = Self::try_cpu_eou(path.to_str().unwrap())?;
         Ok((m, GpuBackend::Cpu))
     }
@@ -329,14 +386,35 @@ impl ParakeetManager {
     fn try_gpu_eou(path: &str) -> Result<ParakeetEOU, String> {
         use parakeet_rs::{ExecutionConfig, ExecutionProvider};
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(
+            target_os = "linux",
+            all(target_os = "windows", target_arch = "x86_64")
+        ))]
         {
             let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
             ParakeetEOU::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
         }
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(not(any(
+            target_os = "linux",
+            all(target_os = "windows", target_arch = "x86_64")
+        )))]
         {
             Err("CUDA feature not enabled".to_string())
+        }
+    }
+
+    fn try_directml_eou(path: &str) -> Result<ParakeetEOU, String> {
+        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
+
+        #[cfg(target_os = "windows")]
+        {
+            let config =
+                ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
+            ParakeetEOU::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err("DirectML feature not enabled".to_string())
         }
     }
 
@@ -348,6 +426,9 @@ impl ParakeetManager {
         if let Ok(m) = Self::try_gpu_tdt(path.to_str().unwrap()) {
             return Ok((m, GpuBackend::Cuda));
         }
+        if let Ok(m) = Self::try_directml_tdt(path.to_str().unwrap()) {
+            return Ok((m, GpuBackend::DirectML));
+        }
         let m = Self::try_cpu_tdt(path.to_str().unwrap())?;
         Ok((m, GpuBackend::Cpu))
     }
@@ -355,14 +436,35 @@ impl ParakeetManager {
     fn try_gpu_tdt(path: &str) -> Result<ParakeetTDT, String> {
         use parakeet_rs::{ExecutionConfig, ExecutionProvider};
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(
+            target_os = "linux",
+            all(target_os = "windows", target_arch = "x86_64")
+        ))]
         {
             let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
             ParakeetTDT::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
         }
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(not(any(
+            target_os = "linux",
+            all(target_os = "windows", target_arch = "x86_64")
+        )))]
         {
             Err("CUDA feature not enabled".to_string())
+        }
+    }
+
+    fn try_directml_tdt(path: &str) -> Result<ParakeetTDT, String> {
+        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
+
+        #[cfg(target_os = "windows")]
+        {
+            let config =
+                ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
+            ParakeetTDT::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err("DirectML feature not enabled".to_string())
         }
     }
 
