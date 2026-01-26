@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { Store } from "@tauri-apps/plugin-store";
+import { Toaster, toast } from "sonner";
 import "./App.css";
 
 interface ModelInfo {
@@ -38,6 +40,7 @@ interface LiveTranscriptionPayload {
 type ASREngine = "whisper" | "parakeet";
 
 function App() {
+  const storeRef = useRef<Store | null>(null);
   const [greetMsg, setGreetMsg] = useState("");
   const [liveTranscript, setLiveTranscript] = useState("");
   const [latestLatency, setLatestLatency] = useState<number | null>(null);
@@ -54,7 +57,7 @@ function App() {
   // Parakeet state
   const [parakeetModels, setParakeetModels] = useState<ParakeetModelInfo[]>([]);
   const [currentParakeetModel, setCurrentParakeetModel] = useState<string | null>(null);
-  const [parakeetStatus, setParakeetStatus] = useState<ParakeetStatus | null>(null);
+  const [, setParakeetStatus] = useState<ParakeetStatus | null>(null);
   const [activeEngine, setActiveEngine] = useState<ASREngine>("whisper");
 
   // Ref to track recording state for hotkey handlers (avoids stale closure)
@@ -69,12 +72,12 @@ function App() {
         setBackendInfo(backend as string);
 
         // Load available models
-        const modelList = await invoke("list_models");
-        setModels(modelList as ModelInfo[]);
+        const modelList = await invoke("list_models") as ModelInfo[];
+        setModels(modelList);
 
         // Load current model
-        const current = await invoke("get_current_model");
-        setCurrentModel(current as string | null);
+        const current = await invoke("get_current_model") as string | null;
+        setCurrentModel(current);
 
         // Load sample files
         const samples = await invoke("list_sample_files");
@@ -86,22 +89,44 @@ function App() {
         }
 
         // Load Parakeet data
-        const pModels = await invoke("list_parakeet_models");
-        setParakeetModels(pModels as ParakeetModelInfo[]);
+        const pModels = await invoke("list_parakeet_models") as ParakeetModelInfo[];
+        setParakeetModels(pModels);
 
-        const pStatus = await invoke("get_parakeet_status");
-        const status = pStatus as ParakeetStatus;
-        setParakeetStatus(status);
-        setCurrentParakeetModel(status.model_id);
+        const pStatus = await invoke("get_parakeet_status") as ParakeetStatus;
+        setParakeetStatus(pStatus);
+        setCurrentParakeetModel(pStatus.model_id);
+
+        // Load Settings from Store
+        // Load Settings from Store
+        let savedEngine: ASREngine | null = null;
+        try {
+          const loadedStore = await Store.load("settings.json");
+          storeRef.current = loadedStore;
+
+          savedEngine = (await loadedStore.get<ASREngine>("active_engine")) || null;
+          if (savedEngine) setActiveEngine(savedEngine);
+
+          const savedWhisper = await loadedStore.get<string>("whisper_model");
+          if (savedWhisper && modelList.find(m => m.id === savedWhisper)) {
+            // Optional: Auto-switch logic could go here
+          }
+
+          const savedParakeet = await loadedStore.get<string>("parakeet_model");
+          if (savedParakeet && pModels.find(m => m.id === savedParakeet)) {
+            // Optional: Auto-switch logic
+          }
+        } catch (storeErr) {
+          console.warn("Store load failed:", storeErr);
+        }
 
         // Default to Parakeet if a model is loaded and Whisper isn't (rare but possible)
-        if (status.loaded && !current) {
+        if (pStatus.loaded && !current && !savedEngine) {
           setActiveEngine("parakeet");
         }
       } catch (e) {
         console.error("Failed to load initial data:", e);
         setBackendInfo("Unknown");
-        setGreetMsg(`Error loading models: ${e}`);
+        toast.error(`Error loading models: ${e}`);
       } finally {
         setIsInitialLoading(false);
       }
@@ -109,10 +134,13 @@ function App() {
     loadInitialData();
   }, []);
 
-  // Sync active engine with backend
+  // Sync active engine with backend & Save
   useEffect(() => {
     if (!isInitialLoading) {
       invoke("set_active_engine", { engine: activeEngine }).catch(console.error);
+      if (storeRef.current) {
+        storeRef.current.set("active_engine", activeEngine).then(() => storeRef.current?.save());
+      }
     }
   }, [activeEngine, isInitialLoading]);
 
@@ -154,7 +182,7 @@ function App() {
           try {
             await setTrayState("recording");
             const res = await invoke("start_recording");
-            setGreetMsg(res as string);
+            toast.success(res as string);
             setIsRecording(true);
             isRecordingRef.current = true;
 
@@ -166,18 +194,21 @@ function App() {
               setTimeout(async () => {
                 try {
                   await setTrayState("processing");
-                  setGreetMsg("Processing transcription...");
+                  toast.info("Processing transcription...");
                   const stopRes = await invoke("stop_recording");
-                  setGreetMsg(stopRes as string);
+                  // Check if it's the specific Parakeet response
+                  if ((stopRes as string).startsWith("[FINAL_TRANSCRIPT]")) {
+                    // Already printed? No, invoke returns just the string.
+                  }
+                  toast.success("Recording saved.");
                   setIsRecording(false);
                   isRecordingRef.current = false;
                   await setTrayState("ready");
                 } catch (e) {
                   console.error("Pending stop failed:", e);
-                  // Ignore "Not recording" errors, they're expected in race conditions
                   const errStr = String(e);
                   if (!errStr.includes("Not recording")) {
-                    setGreetMsg("Error: " + e);
+                    toast.error("Error: " + e);
                   }
                   await setTrayState("ready");
                 }
@@ -185,7 +216,7 @@ function App() {
             }
           } catch (e) {
             console.error("Hotkey start recording failed:", e);
-            setGreetMsg("Error: " + e);
+            toast.error("Error: " + e);
             await setTrayState("ready");
           } finally {
             startingRecordingRef.current = false;
@@ -206,9 +237,11 @@ function App() {
           console.log("[HOTKEY] Stopping recording via Ctrl+Win release");
           try {
             await setTrayState("processing");
-            setGreetMsg("Processing transcription...");
-            const res = await invoke("stop_recording");
-            setGreetMsg(res as string);
+            if (activeEngine === "whisper") toast.loading("Processing transcription..."); // Only show loading for Whisper
+            await invoke("stop_recording");
+            toast.dismiss(); // Dismiss loading
+            // toast.success(res as string); // Don't toast the transcript, just "Saved"
+
             setIsRecording(false);
             isRecordingRef.current = false;
             await setTrayState("ready");
@@ -217,7 +250,7 @@ function App() {
             // Ignore "Not recording" errors silently - they happen during race conditions
             const errStr = String(e);
             if (!errStr.includes("Not recording")) {
-              setGreetMsg("Error: " + e);
+              toast.error("Error: " + e);
             }
             setIsRecording(false);
             isRecordingRef.current = false;
@@ -245,27 +278,33 @@ function App() {
       if (unlistenChunk) unlistenChunk();
       listenersSetupRef.current = false;  // Allow re-setup after HMR
     };
-  }, []);
+  }, [activeEngine]); // Re-bind listeners if engine changes? No, unsafe. Listeners are generic.
 
   const handleModelChange = async (modelId: string) => {
     if (modelId === currentModel) return;
 
     setIsLoading(true);
     setLoadingMessage(`Loading ${models.find(m => m.id === modelId)?.display_name || modelId}...`);
-    setGreetMsg("");
+    // toast.dismiss();
 
     try {
       await setTrayState("processing");
       const result = await invoke("switch_model", { modelId });
       setCurrentModel(modelId);
       setActiveEngine("whisper");
-      setGreetMsg(`✅ ${result}`);
+      if (storeRef.current) {
+        await storeRef.current.set("whisper_model", modelId);
+        await storeRef.current.set("active_engine", "whisper");
+        await storeRef.current.save();
+      }
+
+      toast.success(`✅ ${result}`);
 
       // Refresh backend info (in case GPU backend changed)
       const backend = await invoke("get_backend_info");
       setBackendInfo(backend as string);
     } catch (e) {
-      setGreetMsg(`❌ Error switching model: ${e}`);
+      toast.error(`❌ Error switching model: ${e}`);
     } finally {
       setIsLoading(false);
       setLoadingMessage("");
@@ -278,19 +317,24 @@ function App() {
 
     setIsLoading(true);
     setLoadingMessage(`Loading Parakeet ${parakeetModels.find(m => m.id === modelId)?.display_name || modelId}...`);
-    setGreetMsg("");
 
     try {
       await setTrayState("processing");
       const result = await invoke("init_parakeet", { modelId });
       setCurrentParakeetModel(modelId);
       setActiveEngine("parakeet");
-      setGreetMsg(`✅ ${result}`);
+      if (storeRef.current) {
+        await storeRef.current.set("parakeet_model", modelId);
+        await storeRef.current.set("active_engine", "parakeet");
+        await storeRef.current.save();
+      }
+
+      toast.success(`✅ ${result}`);
 
       const pStatus = await invoke("get_parakeet_status");
       setParakeetStatus(pStatus as ParakeetStatus);
     } catch (e) {
-      setGreetMsg(`❌ Error switching Parakeet model: ${e}`);
+      toast.error(`❌ Error switching Parakeet model: ${e}`);
     } finally {
       setIsLoading(false);
       setLoadingMessage("");
@@ -305,6 +349,31 @@ function App() {
     return `${Math.round(sizeMb)} MB`;
   };
 
+  // Helper to beautify model names
+  const beautifyModelName = (rawName: string) => {
+    let name = rawName
+      .replace("ggml-", "")
+      .replace(".bin", "")
+      .replace("distil-", "Distil ")
+      .replace("medium.en", "Medium")
+      .replace("small.en", "Small")
+      .replace("tiny.en", "Tiny")
+      .replace("base.en", "Base")
+      .replace("-q8_0", " (Fast)")
+      .replace("-q5_1", " (Balanced)")
+      .replace("nemotron", "Nemotron")
+      .replace("parakeet", "")
+      .replace("ctc-", "CTC ")
+      .replace("tdt-", "TDT ")
+      .replace("streaming", "Streaming")
+      .replace("-", " ")
+      .replace("_", " ")
+      .trim();
+
+    // Capitalize words
+    return name.replace(/\b\w/g, l => l.toUpperCase());
+  };
+
   // Helper to update tray icon state
   const setTrayState = async (newState: "ready" | "recording" | "processing") => {
     try {
@@ -316,61 +385,43 @@ function App() {
 
   return (
     <main className="container">
+      <Toaster position="top-center" richColors theme="dark" />
       <h1>🎙️ Taurscribe</h1>
 
-      {/* Status Bar */}
+      {/* Status Bar & Engine Selection */}
       <div className="status-bar-container">
-        <div className={`status-card ${activeEngine === "whisper" ? "active" : ""}`} onClick={() => setActiveEngine("whisper")}>
+        <div className={`status-card whisper ${activeEngine === "whisper" ? "active" : ""}`} onClick={() => setActiveEngine("whisper")}>
           <div className="engine-badge whisper">Whisper</div>
           <div className="status-item">
-            <span className="status-label">Backend:</span>
-            <span className="status-value backend">{backendInfo}</span>
-          </div>
-          <div className="status-item">
             <span className="status-label">Model:</span>
             <span className="status-value model">
-              {currentModel ? models.find(m => m.id === currentModel)?.display_name || currentModel : "None"}
+              {currentModel ? beautifyModelName(models.find(m => m.id === currentModel)?.display_name || currentModel) : "None"}
             </span>
           </div>
         </div>
 
-        <div className={`status-card ${activeEngine === "parakeet" ? "active" : ""}`} onClick={() => setActiveEngine("parakeet")}>
+        <div className={`status-card parakeet ${activeEngine === "parakeet" ? "active" : ""}`} onClick={() => setActiveEngine("parakeet")}>
           <div className="engine-badge parakeet">Parakeet</div>
           <div className="status-item">
-            <span className="status-label">Backend:</span>
-            <span className="status-value backend">{parakeetStatus?.backend || "CPU"}</span>
-          </div>
-          <div className="status-item">
             <span className="status-label">Model:</span>
             <span className="status-value model">
-              {currentParakeetModel ? parakeetModels.find(m => m.id === currentParakeetModel)?.display_name || currentParakeetModel : "None"}
+              {currentParakeetModel ? beautifyModelName(parakeetModels.find(m => m.id === currentParakeetModel)?.display_name || currentParakeetModel) : "None"}
             </span>
           </div>
         </div>
       </div>
 
-      {/* Engine Tabs (Mobile/Desktop visibility) */}
-      <div className="engine-tabs">
-        <button
-          className={`tab-btn ${activeEngine === "whisper" ? "active" : ""}`}
-          onClick={() => setActiveEngine("whisper")}
-        >
-          🧠 Whisper AI
-        </button>
-        <button
-          className={`tab-btn ${activeEngine === "parakeet" ? "active" : ""}`}
-          onClick={() => setActiveEngine("parakeet")}
-        >
-          ⚡ Parakeet ASR
-        </button>
+      {/* Backend Info Badge */}
+      <div style={{ textAlign: 'center', fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '-10px' }}>
+        Hardware Acceleration: <span style={{ color: 'var(--accent-secondary)', fontWeight: 600 }}>{backendInfo}</span>
       </div>
 
-      {/* Model Selection */}
+      {/* Model Selection Dropdown */}
       <div className="model-section">
         {activeEngine === "whisper" ? (
           <>
             <label htmlFor="model-select" className="model-label">
-              🧠 Choose Whisper Model
+              🧠 Active Model
             </label>
             <select
               id="model-select"
@@ -383,7 +434,7 @@ function App() {
               {!isInitialLoading && models.length === 0 && <option value="">No models found</option>}
               {models.map((model) => (
                 <option key={model.id} value={model.id}>
-                  {model.display_name} ({formatSize(model.size_mb)})
+                  {beautifyModelName(model.display_name)} ({formatSize(model.size_mb)})
                 </option>
               ))}
             </select>
@@ -391,7 +442,7 @@ function App() {
         ) : (
           <>
             <label htmlFor="parakeet-model-select" className="model-label">
-              ⚡ Choose Parakeet Model
+              ⚡ Active Model
             </label>
             <select
               id="parakeet-model-select"
@@ -404,17 +455,12 @@ function App() {
               {!isInitialLoading && parakeetModels.length === 0 && <option value="">No models found</option>}
               {parakeetModels.map((model) => (
                 <option key={model.id} value={model.id}>
-                  {model.display_name} ({formatSize(model.size_mb)})
+                  {beautifyModelName(model.display_name)} ({formatSize(model.size_mb)})
                 </option>
               ))}
             </select>
           </>
         )}
-        <p className="model-hint">
-          {activeEngine === "whisper"
-            ? "💡 Whisper is highly accurate for various environments."
-            : "💡 Parakeet is optimized for extreme speed and real-time streaming."}
-        </p>
       </div>
 
       {/* Loading overlay */}
@@ -434,11 +480,11 @@ function App() {
               setLiveTranscript("");
               setLatestLatency(null);
               const res = await invoke("start_recording");
-              setGreetMsg(res as string);
+              toast.success(res as string);
               setIsRecording(true);
             } catch (e) {
               await setTrayState("ready");
-              setGreetMsg("Error: " + e);
+              toast.error("Error: " + e);
             }
           }}
           disabled={isRecording || isLoading}
@@ -451,13 +497,14 @@ function App() {
           onClick={async () => {
             try {
               await setTrayState("processing");
-              setGreetMsg("Processing transcription...");
+              if (activeEngine === "whisper") toast.loading("Processing transcription...");
               const res = await invoke("stop_recording");
-              setGreetMsg(res as string);
+              toast.dismiss();
+              // toast.success(res as string);
               setIsRecording(false);
               await setTrayState("ready");
             } catch (e) {
-              setGreetMsg("Error: " + e);
+              toast.error("Error: " + e);
               await setTrayState("ready");
             }
           }}
@@ -487,13 +534,14 @@ function App() {
             onClick={async () => {
               if (!selectedSample) return;
               try {
-                setGreetMsg(`Running benchmark on ${sampleFiles.find(s => s.path === selectedSample)?.name}...`);
+                toast.info(`Running benchmark on ${sampleFiles.find(s => s.path === selectedSample)?.name}...`);
                 const res = await invoke("benchmark_test", {
                   filePath: selectedSample
                 });
-                setGreetMsg(res as string);
+                setGreetMsg(res as string); // Benchmark results still go to text area (too big for toast)
+                toast.success("Benchmark completed!");
               } catch (e) {
-                setGreetMsg("Benchmark Error: " + e);
+                toast.error("Benchmark Error: " + e);
               }
             }}
             disabled={isRecording || isLoading || !selectedSample}
@@ -510,7 +558,12 @@ function App() {
           {isRecording ? (
             <div className="live-transcript">
               <div className="live-header">
-                <span className="live-indicator">LIVE</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span className="live-indicator">LIVE</span>
+                  <span style={{ fontSize: '1.2rem' }}>
+                    {activeEngine === "whisper" ? "🎙️" : "🦜"}
+                  </span>
+                </div>
                 {latestLatency !== null && (
                   <span className="latency-badge">
                     ⚡ {latestLatency}ms

@@ -63,6 +63,38 @@ struct SendStream(cpal::Stream);
 unsafe impl Send for SendStream {} // Can be moved to another thread
 unsafe impl Sync for SendStream {} // Can be accessed from multiple threads
 
+/// Simple Post-Processing to clean up raw ASR artifacts
+fn clean_transcript(text: &str) -> String {
+    let mut cleaned = text.trim().to_string();
+
+    // Fix floating punctuation
+    cleaned = cleaned.replace(" ,", ",");
+    cleaned = cleaned.replace(" .", ".");
+    cleaned = cleaned.replace(" ?", "?");
+    cleaned = cleaned.replace(" !", "!");
+
+    // Fix percent signs
+    cleaned = cleaned.replace(" %", "%");
+
+    // Fix double spaces
+    while cleaned.contains("  ") {
+        cleaned = cleaned.replace("  ", " ");
+    }
+
+    // Capitalize first letter
+    if let Some(first) = cleaned.chars().next() {
+        if first.is_lowercase() {
+            let mut c = cleaned.chars();
+            cleaned = match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            };
+        }
+    }
+
+    cleaned
+}
+
 /// The Global "Brain" of the application.
 /// This struct holds all the data that needs to live as long as the app runs.
 struct AudioState {
@@ -87,6 +119,9 @@ struct AudioState {
 
     // Which ASR engine is currently active?
     active_engine: Mutex<ASREngine>,
+
+    // Accumulates the full transcript during a recording session (for Parakeet streaming reuse)
+    session_transcript: Arc<Mutex<String>>,
 }
 
 /// Keeps track of the tools needed while recording involves.
@@ -380,52 +415,30 @@ fn benchmark_test(state: State<AudioState>, file_path: String) -> Result<String,
         num_chunks, chunk_duration_secs
     );
 
-    // --- TEST 1: The "Naive" Approach (No VAD) ---
-    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("🏃 RUN 1: Baseline (NO VAD)");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-    state.whisper.lock().unwrap().clear_context(); // Reset AI memory
-    let start_novad = Instant::now();
-
-    // Loop through chunks as if they were arriving in real-time
+    // --- TEST 1: WHISPER (Naive & Optimized) ---
+    state.whisper.lock().unwrap().clear_context();
+    let start_whisper_naive = Instant::now();
     for chunk in mono_samples.chunks(chunk_size) {
-        // We force the AI to transcribe EVERY chunk, even silence
         state
             .whisper
             .lock()
             .unwrap()
             .transcribe_chunk(chunk, sample_rate)
-            .ok(); // Ignore result, just testing speed
+            .ok();
     }
-
-    // Then simulate the final pass (Transcribe full file)
     state
         .whisper
         .lock()
         .unwrap()
-        .transcribe_file(absolute_path.to_str().unwrap())?;
+        .transcribe_file(absolute_path.to_str().unwrap())
+        .ok();
+    let time_whisper_naive = start_whisper_naive.elapsed();
 
-    let time_novad = start_novad.elapsed();
-
-    // --- TEST 2: The "Smart" Approach (WITH VAD) ---
-    println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("🚀 RUN 2: Optimized (WITH VAD)");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-    state.whisper.lock().unwrap().clear_context(); // Reset memory again
-    let start_withvad = Instant::now();
-
-    // Logic counters
-    let mut chunks_processed = 0;
+    state.whisper.lock().unwrap().clear_context();
+    let start_whisper_vad = Instant::now();
     let mut chunks_skipped = 0;
-
-    // Loop through chunks again
     for chunk in mono_samples.chunks(chunk_size) {
-        // 1. Check if speech exists
         let is_speech = state.vad.lock().unwrap().is_speech(chunk).unwrap_or(0.6);
-
-        // 2. Only transcribe if speech > 50%
         if is_speech > 0.5 {
             state
                 .whisper
@@ -433,79 +446,78 @@ fn benchmark_test(state: State<AudioState>, file_path: String) -> Result<String,
                 .unwrap()
                 .transcribe_chunk(chunk, sample_rate)
                 .ok();
-            chunks_processed += 1;
         } else {
-            chunks_skipped += 1; // Saved time!
+            chunks_skipped += 1;
         }
     }
-
-    // Final Pass with VAD Filtering
+    // Final Pass with VAD
     {
         let mut whisper = state.whisper.lock().unwrap();
-        // Load clean audio
         let audio_data = whisper.load_audio(absolute_path.to_str().unwrap()).unwrap();
         let mut vad = state.vad.lock().unwrap();
-
-        // Find timestamps of ONLY speech
         let timestamps = vad.get_speech_timestamps(&audio_data, 500).unwrap();
-
-        // Build a new audio buffer with ONLY the speech parts pasted together
-        let mut clean_audio = Vec::with_capacity(audio_data.len());
-        for (start, end) in timestamps {
-            let start_idx = (start * 16000.0) as usize;
-            let end_idx = (end * 16000.0) as usize;
-            let start_idx = start_idx.min(audio_data.len());
-            let end_idx = end_idx.min(audio_data.len());
-            if start_idx < end_idx {
-                clean_audio.extend_from_slice(&audio_data[start_idx..end_idx]);
-            }
+        let mut clean = Vec::new();
+        for (s, e) in timestamps {
+            let start = (s * 16000.0) as usize;
+            let end = (e * 16000.0) as usize;
+            clean.extend_from_slice(
+                &audio_data[start.min(audio_data.len())..end.min(audio_data.len())],
+            );
         }
-
-        // Transcribe the shorter, cleaner audio
-        if !clean_audio.is_empty() {
-            whisper.transcribe_audio_data(&clean_audio).ok();
+        if !clean.is_empty() {
+            whisper.transcribe_audio_data(&clean).ok();
         }
     }
+    let time_whisper_vad = start_whisper_vad.elapsed();
 
-    let time_withvad = start_withvad.elapsed();
+    // --- TEST 2: PARAKEET (Streaming Simulation) ---
+    // Parakeet uses 1.12s chunks for high accuracy (NVIDIA Spec [70, 13])
+    // The benchmark simulates the exact "Streaming" workflow used in production.
+    let parakeet_chunk_size = (sample_rate as f32 * 1.12) as usize;
+    let parakeet_manager = state.parakeet.clone();
+
+    let start_parakeet = Instant::now();
+    for chunk in mono_samples.chunks(parakeet_chunk_size) {
+        parakeet_manager
+            .lock()
+            .unwrap()
+            .transcribe_chunk(chunk, sample_rate)
+            .ok();
+    }
+    // Note: We do NOT run a final pass for Parakeet in production, so we don't benchmark it here.
+    let time_parakeet = start_parakeet.elapsed();
 
     // --- CALCULATE RESULTS ---
-    let speedup_pct = ((time_novad.as_secs_f32() - time_withvad.as_secs_f32())
-        / time_novad.as_secs_f32())
-        * 100.0;
-    let factor_gain = time_novad.as_secs_f32() / time_withvad.as_secs_f32();
+    let factor_whisper = audio_duration_secs / time_whisper_vad.as_secs_f32();
+    let factor_parakeet = audio_duration_secs / time_parakeet.as_secs_f32();
 
-    println!("\n📊 BENCHMARK COMPARISON RESULTS");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("⏱️  Baseline (No VAD):  {:.2}s", time_novad.as_secs_f32());
-    println!(
-        "🚀 Optimized (With VAD): {:.2}s",
-        time_withvad.as_secs_f32()
-    );
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!(
-        "⚡ IMPROVEMENT: {:.0}% Faster ({:.1}x Speedup)",
-        speedup_pct, factor_gain
-    );
-    println!(
-        "📉 Resource Usage: Skipped {}/{} realtime chunks",
-        chunks_skipped,
-        chunks_processed + chunks_skipped
-    );
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    let winner = if time_whisper_vad < time_parakeet {
+        "Whisper AI"
+    } else {
+        "NVIDIA Parakeet"
+    };
 
-    // Return string to UI
     Ok(format!(
-        "📊 VAD PERFORMANCE BENCHMARK\n\n\
-        ⏱️  Baseline (No VAD):  {:.2}s\n\
-        🚀 Optimized (With VAD): {:.2}s\n\n\
-        ⚡ IMPROVEMENT: {:.0}% Faster ({:.1}x Speedup)\n\
-        📉 Skipped: {} chunks (silence)",
-        time_novad.as_secs_f32(),
-        time_withvad.as_secs_f32(),
-        speedup_pct,
-        factor_gain,
-        chunks_skipped
+        "📊 EXTENSIVE CUDA BENCHMARK RESULTS\n\
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+        🎙️ WHISPER AI:\n\
+        - Baseline (No VAD): {:.2}s\n\
+        - Optimized (With VAD): {:.2}s\n\
+        - Speed Factor: {:.1}x Real-time\n\n\
+        🦜 NVIDIA PARAKEET:\n\
+        - Streaming (No VAD): {:.2}s\n\
+        - Speed Factor: {:.1}x Real-time\n\
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+        🏆 WINNER: {} is faster on your system!\n\
+        📉 Resource Usage: Whisper skipped {}/{} chunks",
+        time_whisper_naive.as_secs_f32(),
+        time_whisper_vad.as_secs_f32(),
+        factor_whisper,
+        time_parakeet.as_secs_f32(),
+        factor_parakeet,
+        winner,
+        chunks_skipped,
+        num_chunks
     ))
 }
 
@@ -551,10 +563,16 @@ fn start_recording(
     let active_engine = *state.active_engine.lock().unwrap();
     if active_engine == ASREngine::Whisper {
         state.whisper.lock().unwrap().clear_context();
+    } else {
+        // For Parakeet, we also want to start fresh
+        state.parakeet.lock().unwrap().clear_context();
     }
 
     // Remember this path for when we stop later
     *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
+
+    // Reset session transcript for the new recording
+    state.session_transcript.lock().unwrap().clear();
 
     // 4. Create proper WAV header settings (48kHz, 32-bit float, etc.)
     let spec = hound::WavSpec {
@@ -599,91 +617,50 @@ fn start_recording(
     let parakeet_manager = state.parakeet.clone();
     let vad = state.vad.clone();
     let active_engine = *state.active_engine.lock().unwrap();
+    let session_transcript = state.session_transcript.clone();
 
     // 7. SPAWN THREAD 2: THE REAL-TIME TRANSCRIBER
     // Responsible for doing "Live Preview" transcription.
     let app_clone = app_handle.clone();
     std::thread::spawn(move || {
-        let mut buffer = Vec::new(); // Holds incoming audio
+        let mut buffer = Vec::new(); // Holds incoming audio (mainly for Whisper)
 
-        // ADAPTIVE CHUNKING:
-        // Whisper likes big chunks (6s) for accuracy.
-        // Parakeet/Nemotron likes small chunks (0.8s) for streaming speed.
-        let chunk_duration = if active_engine == ASREngine::Whisper {
-            6.0
-        } else {
-            0.8
-        };
-        let chunk_size = (sample_rate as f32 * chunk_duration) as usize;
+        // Chunk size for Whisper (6s)
+        let chunk_size = (sample_rate * 6) as usize;
         let max_buffer_size = chunk_size * 2;
 
         println!(
             "[INFO] Runtime Transcriber thread started (Engine: {:?})",
             active_engine
         );
+        let engine_icon = if active_engine == ASREngine::Whisper {
+            "🎙️"
+        } else {
+            "🦜"
+        };
 
         // Loop: Receive audio chunks from Mic
         while let Ok(samples) = whisper_rx.recv() {
-            buffer.extend(samples); // Add to buffer
+            if active_engine == ASREngine::Whisper {
+                buffer.extend(samples);
 
-            // If we have enough audio (> 6s), process it
-            while buffer.len() >= chunk_size {
-                // Safety: Don't let buffer get infinitely large if AI is slow
-                if buffer.len() > max_buffer_size {
-                    println!("[WARNING] Buffer full, dropping old audio to catch up");
-                    buffer.drain(..chunk_size); // Throw away oldest audio
-                }
-
-                // Extract EXACTLY 6 seconds
-                let chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
-
-                // 8. TRANSCRIPTION GENERATION
-                match active_engine {
-                    ASREngine::Whisper => {
-                        // Check VAD for Whisper (protects against hallucinations in silence)
-                        let is_speech = vad.lock().unwrap().is_speech(&chunk).unwrap_or(0.5);
-                        if is_speech > 0.5 {
-                            println!(
-                                "[PROCESSING] 🎤 Speech ({:.0}%) - Transcribing {:.2}s chunk...",
-                                is_speech * 100.0,
-                                chunk_duration
-                            );
-                            let start_time = std::time::Instant::now();
-                            match whisper
-                                .lock()
-                                .unwrap()
-                                .transcribe_chunk(&chunk, sample_rate)
-                            {
-                                Ok(transcript) => {
-                                    if !transcript.trim().is_empty() {
-                                        let elapsed = start_time.elapsed().as_millis() as u32;
-                                        println!(
-                                            "[TRANSCRIPT] \"{}\" (took {}ms)",
-                                            transcript, elapsed
-                                        );
-                                        let _ = app_clone.emit(
-                                            "transcription-chunk",
-                                            TranscriptionChunk {
-                                                text: transcript,
-                                                processing_time_ms: elapsed,
-                                                method: "Whisper".to_string(),
-                                            },
-                                        );
-                                    }
-                                }
-                                Err(e) => eprintln!("[ERROR] Whisper error: {}", e),
-                            }
-                        } else {
-                            println!(
-                                "[VAD] 🔇 Silence ({:.0}%) - Skipping Whisper chunk",
-                                (1.0 - is_speech) * 100.0
-                            );
-                        }
+                // Whisper logic: Process in 6s chunks
+                while buffer.len() >= chunk_size {
+                    if buffer.len() > max_buffer_size {
+                        println!("[WARNING] Buffer full, dropping old audio to catch up");
+                        buffer.drain(..chunk_size);
                     }
-                    ASREngine::Parakeet => {
-                        // NO VAD for Parakeet (maintains streaming state continuity)
+                    let chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
+                    let is_speech = vad.lock().unwrap().is_speech(&chunk).unwrap_or(0.5);
+
+                    if is_speech > 0.5 {
+                        println!(
+                            "[PROCESSING] 🎙️ Speech ({:.0}%) - Transcribing {:.2}s chunk...",
+                            is_speech * 100.0,
+                            6.0 // Whisper uses 6s chunks
+                        );
                         let start_time = std::time::Instant::now();
-                        match parakeet_manager
+                        match whisper
                             .lock()
                             .unwrap()
                             .transcribe_chunk(&chunk, sample_rate)
@@ -693,21 +670,77 @@ fn start_recording(
                                     let elapsed = start_time.elapsed().as_millis() as u32;
                                     println!(
                                         "[TRANSCRIPT] \"{}\" (took {}ms)",
-                                        transcript.trim(),
-                                        elapsed
+                                        transcript, elapsed
                                     );
                                     let _ = app_clone.emit(
                                         "transcription-chunk",
                                         TranscriptionChunk {
                                             text: transcript,
                                             processing_time_ms: elapsed,
-                                            method: "Parakeet".to_string(),
+                                            method: "Whisper".to_string(),
                                         },
                                     );
                                 }
                             }
-                            Err(e) => eprintln!("[ERROR] Parakeet error: {}", e),
+                            Err(e) => eprintln!("[ERROR] Whisper error: {}", e),
                         }
+                    } else {
+                        println!(
+                            "[VAD] 🔇 Silence ({:.0}%) - Skipping Whisper chunk",
+                            (1.0 - is_speech) * 100.0
+                        );
+                    }
+                }
+            } else {
+                // Parakeet logic: Process in ~1.12s chunks (NVIDIA Spec [70, 13] for Best Accuracy)
+                // We reuse the same buffer logic as Whisper but with the optimized chunk size
+                buffer.extend(samples);
+
+                // 1.12s chunk size = 17920 samples at 16kHz
+                // This corresponds to NVIDIA's "High Accuracy" operating point.
+                let parakeet_chunk_size = (sample_rate as f32 * 1.12) as usize;
+                let max_buffer_size = parakeet_chunk_size * 2;
+
+                while buffer.len() >= parakeet_chunk_size {
+                    if buffer.len() > max_buffer_size {
+                        buffer.drain(..parakeet_chunk_size); // Drop if falling behind
+                    }
+
+                    let chunk: Vec<f32> = buffer.drain(..parakeet_chunk_size).collect();
+                    let start_time = std::time::Instant::now();
+
+                    // Optional: You could enable VAD here if desired, but Parakeet is fast enough to just run.
+                    match parakeet_manager
+                        .lock()
+                        .unwrap()
+                        .transcribe_chunk(&chunk, sample_rate)
+                    {
+                        Ok(transcript) => {
+                            if !transcript.trim().is_empty() {
+                                let elapsed = start_time.elapsed().as_millis() as u32;
+                                println!(
+                                    "[TRANSCRIPT] 🦜 \"{}\" (took {}ms)",
+                                    transcript.trim(),
+                                    elapsed
+                                );
+                                let _ = app_clone.emit(
+                                    "transcription-chunk",
+                                    TranscriptionChunk {
+                                        text: transcript.trim().to_string(),
+                                        processing_time_ms: elapsed,
+                                        method: "Parakeet".to_string(),
+                                    },
+                                );
+
+                                // Append to session transcript
+                                let mut session = session_transcript.lock().unwrap();
+                                if !session.is_empty() {
+                                    session.push(' ');
+                                }
+                                session.push_str(transcript.trim());
+                            }
+                        }
+                        Err(e) => eprintln!("[ERROR] Parakeet error: {}", e),
                     }
                 }
             }
@@ -726,19 +759,25 @@ fn start_recording(
                     .transcribe_chunk(&chunk, sample_rate)
                     .ok();
             } else {
-                parakeet_manager
-                    .lock()
-                    .unwrap()
-                    .transcribe_chunk(&chunk, sample_rate)
-                    .ok();
+                let mut p_manager = parakeet_manager.lock().unwrap();
+                if let Ok(transcript) = p_manager.transcribe_chunk(&chunk, sample_rate) {
+                    if !transcript.trim().is_empty() {
+                        let mut session = session_transcript.lock().unwrap();
+                        if !session.is_empty() {
+                            session.push(' ');
+                        }
+                        session.push_str(transcript.trim());
+                        println!("[TRANSCRIPT] 🦜 (Final) \"{}\"", transcript.trim());
+                    }
+                }
             }
         }
 
         // Process the very last partial chunk
         if !buffer.is_empty() {
             let chunk_duration = buffer.len() as f32 / sample_rate as f32;
-            if chunk_duration > 1.0 {
-                // ignore < 1s
+            if chunk_duration > 0.1 {
+                // Lower threshold to capture end of words
                 if active_engine == ASREngine::Whisper {
                     whisper
                         .lock()
@@ -746,11 +785,17 @@ fn start_recording(
                         .transcribe_chunk(&buffer, sample_rate)
                         .ok();
                 } else {
-                    parakeet_manager
-                        .lock()
-                        .unwrap()
-                        .transcribe_chunk(&buffer, sample_rate)
-                        .ok();
+                    let mut p_manager = parakeet_manager.lock().unwrap();
+                    if let Ok(transcript) = p_manager.transcribe_chunk(&buffer, sample_rate) {
+                        if !transcript.trim().is_empty() {
+                            let mut session = session_transcript.lock().unwrap();
+                            if !session.is_empty() {
+                                session.push(' ');
+                            }
+                            session.push_str(transcript.trim());
+                            println!("[TRANSCRIPT] 🦜 (Final Partial) \"{}\"", transcript.trim());
+                        }
+                    }
                 }
             }
         }
@@ -817,6 +862,22 @@ fn stop_recording(state: State<AudioState>) -> Result<String, String> {
         std::thread::sleep(std::time::Duration::from_millis(500));
 
         // 2. Run FINAL "Professional" Transcription
+        let active_engine = *state.active_engine.lock().unwrap();
+
+        // Parakeet is fast enough in streaming mode, so we SKIP the final pass to keep it snappy.
+        // We return the accumulated text we gathered during the real-time stream.
+        if active_engine == ASREngine::Parakeet {
+            println!("[PROCESSING] Skipping final pass (Parakeet streaming is sufficient)");
+            let transcript = state.session_transcript.lock().unwrap().clone();
+            let final_text = if transcript.is_empty() {
+                "Recording saved.".to_string()
+            } else {
+                clean_transcript(&transcript)
+            };
+            println!("[FINAL_TRANSCRIPT] (Cleaned)\n{}", final_text);
+            return Ok(final_text);
+        }
+
         let path_opt = state.last_recording_path.lock().unwrap().clone();
         if let Some(path) = path_opt {
             println!(
@@ -827,42 +888,27 @@ fn stop_recording(state: State<AudioState>) -> Result<String, String> {
             // Access Audio State
             let mut whisper = state.whisper.lock().unwrap();
             let audio_data = whisper.load_audio(&path)?;
-            let active_engine = *state.active_engine.lock().unwrap();
 
-            let final_audio = if active_engine == ASREngine::Whisper {
-                // Whisper: Use VAD to cut out silence (prevents hallucinations)
-                println!("[PROCESSING] Applying VAD filtering for Whisper...");
-                let mut vad = state.vad.lock().unwrap();
-                let timestamps = vad.get_speech_timestamps(&audio_data, 500)?;
+            // Whisper: Use VAD to cut out silence (prevents hallucinations)
+            println!("[PROCESSING] Applying VAD filtering for Whisper...");
+            let mut vad = state.vad.lock().unwrap();
+            let timestamps = vad.get_speech_timestamps(&audio_data, 500)?;
 
-                if timestamps.is_empty() {
-                    return Ok("[silence]".to_string());
-                }
+            if timestamps.is_empty() {
+                return Ok("[silence]".to_string());
+            }
 
-                let mut clean = Vec::with_capacity(audio_data.len());
-                for (start, end) in timestamps {
-                    let s = (start * 16000.0) as usize;
-                    let e = (end * 16000.0) as usize;
-                    clean.extend_from_slice(
-                        &audio_data[s.min(audio_data.len())..e.min(audio_data.len())],
-                    );
-                }
-                clean
-            } else {
-                // Parakeet: NO VAD (cleaner streaming transition)
-                println!("[PROCESSING] Skipping VAD for Parakeet final pass...");
-                audio_data
-            };
+            let mut clean = Vec::with_capacity(audio_data.len());
+            for (start, end) in timestamps {
+                let s = (start * 16000.0) as usize;
+                let e = (end * 16000.0) as usize;
+                clean.extend_from_slice(
+                    &audio_data[s.min(audio_data.len())..e.min(audio_data.len())],
+                );
+            }
 
-            // Step D: Transcribe the audio
-            let parakeet_manager = state.parakeet.clone();
-            let result = match active_engine {
-                ASREngine::Whisper => whisper.transcribe_audio_data(&final_audio),
-                ASREngine::Parakeet => parakeet_manager
-                    .lock()
-                    .unwrap()
-                    .transcribe_chunk(&final_audio, 16000),
-            };
+            // Step D: Transcribe the audio (Whisper Only)
+            let result = whisper.transcribe_audio_data(&clean);
 
             match result {
                 Ok(text) => {
@@ -1015,6 +1061,7 @@ pub fn run() {
     // 4. Build the Tauri App
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::default().build()) // Persistence
         // Inject our global state so commands can access it
         .manage(AudioState {
             recording_handle: Mutex::new(None),
@@ -1024,6 +1071,7 @@ pub fn run() {
             last_recording_path: Mutex::new(None),
             current_app_state: Mutex::new(AppState::Ready),
             active_engine: Mutex::new(ASREngine::Whisper),
+            session_transcript: Arc::new(Mutex::new(String::new())),
         })
         .setup(|app| {
             // Setup System Tray

@@ -99,7 +99,6 @@ impl VADManager {
 
     /// Advanced Function: Find exactly WHEN speech happens in a full file
     /// Returns a list of (start_time, end_time) pairs in seconds
-    #[allow(dead_code)] // Suppress warning if this function isn't used yet
     pub fn get_speech_timestamps(
         &mut self,
         audio: &[f32],     // The full audio recording data

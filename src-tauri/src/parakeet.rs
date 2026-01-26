@@ -1,4 +1,7 @@
 use parakeet_rs::{Nemotron, Parakeet, ParakeetEOU, ParakeetTDT, TimestampMode, Transcriber};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 use std::path::PathBuf;
 
 /// GPU Backend Type
@@ -27,7 +30,6 @@ pub struct ParakeetModelInfo {
 }
 
 /// Wrapper for different loaded model types
-#[allow(dead_code)]
 enum LoadedModel {
     Nemotron(Nemotron),
     Ctc(Parakeet),
@@ -49,6 +51,7 @@ pub struct ParakeetManager {
     model: Option<LoadedModel>,
     model_name: Option<String>,
     backend: GpuBackend,
+    resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>, // (Sample Rate, Input Size, Resampler)
 }
 
 impl ParakeetManager {
@@ -58,6 +61,7 @@ impl ParakeetManager {
             model: None,
             model_name: None,
             backend: GpuBackend::Cpu,
+            resampler: None,
         }
     }
 
@@ -154,65 +158,8 @@ impl ParakeetManager {
             }
         }
 
-        // 2. Check explicitly in 'parakeet' subdirectory for both CTC and Nemotron models
-        let parakeet_dir = models_dir.join("parakeet");
-        if parakeet_dir.exists() {
-            let entries = std::fs::read_dir(&parakeet_dir).ok();
-            if let Some(entries) = entries {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-
-                        // Check for CTC
-                        if path.join("model.onnx").exists() && path.join("tokenizer.json").exists()
-                        {
-                            models.push(ParakeetModelInfo {
-                                id: format!("ctc:parakeet/{}", dir_name),
-                                display_name: format!("Parakeet CTC - {}", dir_name),
-                                model_type: "CTC".to_string(),
-                                size_mb: Self::estimate_model_size(&path),
-                            });
-                        }
-
-                        // Check for Nemotron
-                        if path.join("encoder.onnx").exists()
-                            && path.join("decoder_joint.onnx").exists()
-                        {
-                            if path.join("tokenizer.model").exists() {
-                                models.push(ParakeetModelInfo {
-                                    id: format!("nemotron:parakeet/{}", dir_name),
-                                    display_name: format!("Nemotron - {}", dir_name),
-                                    model_type: "Nemotron".to_string(),
-                                    size_mb: Self::estimate_model_size(&path),
-                                });
-                            } else if path.join("tokenizer.json").exists() {
-                                models.push(ParakeetModelInfo {
-                                    id: format!("eou:parakeet/{}", dir_name),
-                                    display_name: format!("Parakeet EOU - {}", dir_name),
-                                    model_type: "EOU".to_string(),
-                                    size_mb: Self::estimate_model_size(&path),
-                                });
-                            }
-                        }
-
-                        // Check for TDT
-                        if path.join("encoder.onnx").exists()
-                            && path.join("decoder.onnx").exists()
-                            && path.join("joint.onnx").exists()
-                        {
-                            models.push(ParakeetModelInfo {
-                                id: format!("tdt:parakeet/{}", dir_name),
-                                display_name: format!("Parakeet TDT - {}", dir_name),
-                                model_type: "TDT".to_string(),
-                                size_mb: Self::estimate_model_size(&path),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
+        // 2. (Removed) Explicit subdirectory check is redundant as the first loop handles scanning.
+        // If models are missing, ensure they are in the root 'models' directory or a direct subdirectory.
         Ok(models)
     }
 
@@ -229,18 +176,6 @@ impl ParakeetManager {
             }
         }
         total_size as f64 / (1024.0 * 1024.0)
-    }
-
-    /// Get the name of the currently loaded model
-    #[allow(dead_code)] // Public API - may be called from frontend
-    pub fn get_current_model(&self) -> Option<&String> {
-        self.model_name.as_ref()
-    }
-
-    /// Get which GPU backend we are using
-    #[allow(dead_code)] // Public API - may be called from frontend
-    pub fn get_backend(&self) -> &GpuBackend {
-        &self.backend
     }
 
     /// Get full status of the engine
@@ -405,16 +340,58 @@ impl ParakeetManager {
 
     // --- Transcription ---
 
+    /// Clear the internal context/state of the model (Reset for new recording)
+    pub fn clear_context(&mut self) {
+        if let Some(model) = &mut self.model {
+            match model {
+                LoadedModel::Nemotron(m) => {
+                    m.reset();
+                }
+                _ => {
+                    // Other models (CTC, EOU, TDT) either don't support or don't need manual resetting
+                }
+            }
+        }
+    }
+
     /// Transcribe a chunk of audio
-    #[allow(dead_code)]
     pub fn transcribe_chunk(
         &mut self,
         samples: &[f32],
         sample_rate: u32,
     ) -> Result<String, String> {
-        // Resample first
+        // 1. Resample to 16kHz
         let audio = if sample_rate != 16000 {
-            Self::resample_audio(samples, sample_rate, 16000)?
+            // Check if we already have a resampler for this rate with this input size
+            let needs_new_resampler = self
+                .resampler
+                .as_ref()
+                .map_or(true, |(r, s, _)| *r != sample_rate || *s != samples.len());
+
+            if needs_new_resampler {
+                let params = SincInterpolationParameters {
+                    sinc_len: 256,
+                    f_cutoff: 0.95,
+                    interpolation: SincInterpolationType::Linear,
+                    oversampling_factor: 256,
+                    window: WindowFunction::BlackmanHarris2,
+                };
+                let resampler = SincFixedIn::<f32>::new(
+                    16000.0 / sample_rate as f64,
+                    2.0,
+                    params,
+                    samples.len(),
+                    1,
+                )
+                .map_err(|e| e.to_string())?;
+                self.resampler = Some((sample_rate, samples.len(), Box::new(resampler)));
+            }
+
+            let (_, _, resampler) = self.resampler.as_mut().unwrap();
+            let waves = resampler
+                .process(&vec![samples.to_vec()], None)
+                .map_err(|e| e.to_string())?;
+            waves[0].clone()
         } else {
             samples.to_vec()
         };
@@ -431,7 +408,6 @@ impl ParakeetManager {
                         }
                         transcript.push_str(&m.transcribe_chunk(&chunk_vec).unwrap_or_default());
                     }
-                    println!("[PARAKEET NEMOTRON] {}", transcript.trim());
                     Ok(transcript)
                 }
                 LoadedModel::Ctc(m) => {
@@ -463,103 +439,6 @@ impl ParakeetManager {
             }
         } else {
             Err("No model loaded".to_string())
-        }
-    }
-
-    /// Transcribe a file
-    #[allow(dead_code)]
-    pub fn transcribe_file(&mut self, file_path: &str) -> Result<String, String> {
-        println!("[PARAKEET FILE] Loading: {}", file_path);
-        let start_time = std::time::Instant::now();
-
-        let audio = Self::load_audio(file_path)?;
-        let load_time = start_time.elapsed();
-
-        println!(
-            "[PARAKEET FILE] Audio loaded: {} samples ({:.2}s), took {:.2}ms",
-            audio.len(),
-            audio.len() as f64 / 16000.0,
-            load_time.as_secs_f64() * 1000.0
-        );
-
-        let transcribe_start = std::time::Instant::now();
-        let transcript = self.transcribe_chunk(&audio, 16000)?;
-        let transcribe_time = transcribe_start.elapsed();
-
-        let audio_duration = audio.len() as f64 / 16000.0;
-        let speed_factor = audio_duration / transcribe_time.as_secs_f64();
-
-        println!(
-            "[PARAKEET FILE] ✅ Transcription complete in {:.2}ms ({:.1}x realtime)",
-            transcribe_time.as_secs_f64() * 1000.0,
-            speed_factor
-        );
-
-        println!("[PARAKEET FINAL] {}", transcript.trim());
-        Ok(transcript)
-    }
-
-    /// Helper: Resample audio to target sample rate
-    fn resample_audio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, String> {
-        use rubato::{
-            Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
-            WindowFunction,
-        };
-        let params = SincInterpolationParameters {
-            sinc_len: 256,
-            f_cutoff: 0.95,
-            interpolation: SincInterpolationType::Linear,
-            oversampling_factor: 256,
-            window: WindowFunction::BlackmanHarris2,
-        };
-        let mut resampler = SincFixedIn::<f32>::new(
-            to_rate as f64 / from_rate as f64,
-            2.0,
-            params,
-            samples.len(),
-            1,
-        )
-        .map_err(|e| e.to_string())?;
-
-        let waves = resampler
-            .process(&vec![samples.to_vec()], None)
-            .map_err(|e| e.to_string())?;
-        Ok(waves[0].clone())
-    }
-
-    /// Helper: Load and prepare a WAV file
-    #[allow(dead_code)] // Used internally by transcribe_file
-    #[allow(dead_code)]
-    fn load_audio(file_path: &str) -> Result<Vec<f32>, String> {
-        let mut reader = hound::WavReader::open(file_path).map_err(|e| e.to_string())?;
-        let spec = reader.spec();
-
-        println!(
-            "[PARAKEET] WAV specs: {}Hz, {} channels, {} bits",
-            spec.sample_rate, spec.channels, spec.bits_per_sample
-        );
-
-        let samples: Vec<f32> = if spec.sample_format == hound::SampleFormat::Float {
-            reader.samples::<f32>().map(|s| s.unwrap_or(0.0)).collect()
-        } else {
-            reader
-                .samples::<i16>()
-                .map(|s| s.unwrap_or(0) as f32 / 32768.0)
-                .collect()
-        };
-
-        // Mono
-        let mono = if spec.channels == 2 {
-            samples.chunks(2).map(|c| (c[0] + c[1]) / 2.0).collect()
-        } else {
-            samples
-        };
-
-        // Resample to 16kHz if needed
-        if spec.sample_rate != 16000 {
-            Self::resample_audio(&mono, spec.sample_rate, 16000)
-        } else {
-            Ok(mono)
         }
     }
 }

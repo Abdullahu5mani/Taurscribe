@@ -46,6 +46,7 @@ pub struct WhisperManager {
     last_transcript: String,         // Memorizes what was said previously (context)
     backend: GpuBackend,             // Current hardware being used (CPU/GPU)
     current_model: Option<String>,   // Name of the currently loaded model
+    resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>, // (Sample Rate, Chunk Size, Resampler)
 }
 
 // specialized "callback" function to hide confusing logs from the C++ library
@@ -62,6 +63,7 @@ impl WhisperManager {
             last_transcript: String::new(), // Start with empty memory
             backend: GpuBackend::Cpu,       // Assume CPU until we prove otherwise
             current_model: None,            // No model selected yet
+            resampler: None,
         }
     }
 
@@ -345,38 +347,39 @@ impl WhisperManager {
             .ok_or("Whisper context not initialized")?;
 
         // 🔧 STEP 1: Resample Audio
-        // Whisper ONLY understands 16000 Hz audio.
-        // If microphone gave us 48000 Hz, we must squeeze it.
         let audio_data = if input_sample_rate != 16000 {
-            // Configure the "Sinc" resampler (high quality math)
-            let params = SincInterpolationParameters {
-                sinc_len: 256,
-                f_cutoff: 0.95,
-                interpolation: SincInterpolationType::Linear,
-                window: WindowFunction::BlackmanHarris2,
-                oversampling_factor: 128,
+            // Check if we need to (re)create the resampler
+            let needs_new = match &self.resampler {
+                Some((rate, size, _)) => *rate != input_sample_rate || *size != samples.len(),
+                None => true,
             };
 
-            // Calculate ratio (e.g. 16000 / 48000 = 0.333...)
-            let mut resampler = SincFixedIn::<f32>::new(
-                16000_f64 / input_sample_rate as f64, // conversion ratio
-                2.0,                                  // safety buffer
-                params,
-                samples.len(), // input size
-                1,             // channels (mono)
-            )
-            .map_err(|e| format!("Failed to create resampler: {:?}", e))?;
+            if needs_new {
+                let params = SincInterpolationParameters {
+                    sinc_len: 256,
+                    f_cutoff: 0.95,
+                    interpolation: SincInterpolationType::Linear,
+                    window: WindowFunction::BlackmanHarris2,
+                    oversampling_factor: 128,
+                };
+                let resampler = SincFixedIn::<f32>::new(
+                    16000_f64 / input_sample_rate as f64,
+                    2.0,
+                    params,
+                    samples.len(),
+                    1,
+                )
+                .map_err(|e| format!("Failed to create resampler: {:?}", e))?;
+                self.resampler = Some((input_sample_rate, samples.len(), Box::new(resampler)));
+            }
 
-            // Perform the resampling
-            let waves_in = vec![samples.to_vec()]; // Wrap in channels vector
+            let (_, _, resampler) = self.resampler.as_mut().unwrap();
+            let waves_in = vec![samples.to_vec()];
             let waves_out = resampler
                 .process(&waves_in, None)
                 .map_err(|e| format!("Resampling failed: {:?}", e))?;
-
-            // Take the first (and only) channel result
             waves_out[0].clone()
         } else {
-            // Already 16kHz? Just use it as is.
             samples.to_vec()
         };
 

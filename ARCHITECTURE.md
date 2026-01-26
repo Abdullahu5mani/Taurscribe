@@ -1,7 +1,7 @@
-# Taurscribe Architecture Guide for Rust Beginners
+# Taurscribe Architecture Guide for Beginners
 
-> **Audience**: Developers new to Rust, Tauri, or real-time audio processing.  
-> **Goal**: Understand how Taurscribe works through clear explanations and real-world analogies.
+> **Perfect for**: Complete beginners to programming, Rust newcomers, or anyone curious about how speech recognition works!  
+> **Goal**: Understand how Taurscribe works through simple explanations, fun analogies, and visual diagrams.
 
 ---
 
@@ -9,36 +9,42 @@
 
 1. [What is Taurscribe?](#what-is-taurscribe)
 2. [The Big Picture](#the-big-picture)
-3. [Complete Audio Processing Flow](#-complete-audio-processing-flow)
-4. [Rust Basics You Need to Know](#rust-basics-you-need-to-know)
-5. [Complete Flow: Start to Finish](#complete-flow-start-to-finish)
-6. [Component Deep Dive](#component-deep-dive)
-7. [Understanding Rust Ownership](#understanding-rust-ownership)
-8. [Dependencies Explained](#dependencies-explained)
-9. [Common Beginner Questions](#common-beginner-questions)
-10. [Cumulative Context Feature](#cumulative-context-feature)
-11. [Annotated Rust Code Examples](#annotated-rust-code-examples)
-12. [Model Selection Feature](#model-selection-feature)
-13. [Voice Activity Detection (VAD)](#-voice-activity-detection-vad)
-14. [File & Function Reference](#-file--function-reference)
+3. [🎙️ Audio Processing: Whisper vs Parakeet](#-audio-processing-whisper-vs-parakeet)
+4. [Complete Audio Processing Flow](#-complete-audio-processing-flow)
+5. [Rust Basics You Need to Know](#rust-basics-you-need-to-know)
+6. [Complete Flow: Start to Finish](#complete-flow-start-to-finish)
+7. [Component Deep Dive](#component-deep-dive)
+8. [Understanding Rust Ownership](#understanding-rust-ownership)
+9. [Dependencies Explained](#dependencies-explained)
+10. [Common Beginner Questions](#common-beginner-questions)
+11. [Cumulative Context Feature](#cumulative-context-feature)
+12. [Annotated Rust Code Examples](#annotated-rust-code-examples)
+13. [Model Selection Feature](#model-selection-feature)
+14. [Voice Activity Detection (VAD)](#-voice-activity-detection-vad)
+15. [File & Function Reference](#-file--function-reference)
 
 ---
 
 ## What is Taurscribe?
 
-Taurscribe is a **desktop application** that records your voice and transcribes it to text using AI.
+Taurscribe is a **desktop application** that listens to your voice and magically turns it into text using artificial intelligence!
 
-**Technology Stack**:
-- **Frontend**: React + TypeScript (the pretty UI you see)
-- **Backend**: Rust + Tauri (the powerful engine doing the work)
-- **AI**: Whisper.cpp (OpenAI's speech recognition model)
+Think of it like having a super-fast personal assistant that writes down everything you say.
+
+**Technology Stack** (in plain English):
+- **Frontend**: React + TypeScript (the pretty buttons and screens you see)
+- **Backend**: Rust + Tauri (the super-fast engine that does all the hard work)
+- **AI Engines**: Two powerful brains to choose from:
+  - 🧠 **Whisper AI** - Very accurate, great for all situations
+  - ⚡ **Parakeet Nemotron** - Lightning fast, optimized for real-time streaming
 
 **Key Features**:
-- ✅ Real-time transcription while you speak
+- ✅ Real-time transcription while you speak (see words appear as you talk!)
 - ✅ High-quality final transcript when you stop
-- ✅ GPU acceleration for speed (CUDA/Vulkan)
-- ✅ Thread-safe concurrent processing
-- ✅ **Model Selection** - Choose from multiple Whisper models
+- ✅ GPU acceleration for blazing speed (uses your graphics card!)
+- ✅ Two AI engines to choose from (Whisper or Parakeet)
+- ✅ Multiple models for each engine (pick small & fast or large & accurate)
+- ✅ Voice Activity Detection (automatically skips silence)
 
 ---
 
@@ -98,6 +104,441 @@ Imagine Taurscribe as a **restaurant kitchen**. Here's how the pieces work toget
     │
     └──► Stream 2 → 🤖 AI transcription → 📝 Text
 ```
+
+---
+
+## 🎙️ Audio Processing: Whisper vs Parakeet
+
+This is where the magic happens! Let's see exactly what happens to your voice when it goes through each AI engine.
+
+### 🍕 Pizza Delivery Analogy
+
+Imagine your audio is like a pizza being delivered:
+
+- **Whisper AI** = Traditional delivery - waits for a full pizza box (6 seconds), checks if it's worth delivering (VAD), then delivers high-quality results
+- **Parakeet Nemotron** = Speed delivery service - delivers small slices instantly (0.56 seconds), no checking, maximum speed!
+
+---
+
+### 🧠 WHISPER AI PIPELINE
+
+Whisper is like a **perfectionist chef** - it waits for enough ingredients, carefully checks quality, and delivers amazing results.
+
+```
+═══════════════════════════════════════════════════════════════════════════════
+                        🎤 YOUR VOICE → WHISPER AI
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1: 🎤 MICROPHONE CAPTURE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Raw Audio Stream (from your microphone)                                     │
+│ • Format: 48,000 samples per second (48kHz)                                 │
+│ • Channels: 2 (Stereo - Left & Right)                                       │
+│ • Data Type: Floating point numbers (-1.0 to 1.0)                           │
+│                                                                              │
+│ Example data: [0.01, -0.02, 0.03, -0.01, 0.04, ...]                         │
+│ (These numbers represent air pressure at each moment in time)               │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ New audio arrives every ~10 milliseconds
+         ▼
+
+STEP 2: 🎛️ CONVERT TO MONO (Stereo → Single Channel)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Why? AI models expect ONE audio channel, not two                            │
+│                                                                              │
+│ BEFORE (Stereo):                                                             │
+│   Left:  [0.5, 0.3, 0.7]                                                     │
+│   Right: [0.4, 0.2, 0.6]                                                     │
+│                                                                              │
+│ AFTER (Mono):                                                                │
+│   Combined: [(0.5+0.4)/2, (0.3+0.2)/2, (0.7+0.6)/2]                         │
+│            = [0.45, 0.25, 0.65]                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Now we have single-channel audio
+         ▼
+
+STEP 3: 🔄 RESAMPLE (48kHz → 16kHz)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Why? Whisper was trained on 16kHz audio (CD quality uses 44kHz)             │
+│                                                                              │
+│ BEFORE: 48,000 samples per second                                           │
+│   [s1, s2, s3, s4, s5, s6, s7, s8, ...]  (very detailed)                    │
+│                                                                              │
+│ AFTER: 16,000 samples per second                                            │
+│   [s1, ----, s3, ----, s5, ----]  (every 3rd sample, simplified)            │
+│                                                                              │
+│ Result: File is 3x smaller, but still perfect for speech!                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Audio is now ready for AI processing
+         ▼
+
+STEP 4: 📦 BUFFER INTO CHUNKS (16kHz audio → 6-second chunks)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Whisper needs larger chunks to understand context                           │
+│                                                                              │
+│ Chunk Size: 6 seconds = 96,000 samples                                      │
+│                                                                              │
+│ Incoming stream: [████████████████████████████████████████████...]          │
+│                                                                              │
+│ Buffered chunks:                                                             │
+│   Chunk 1 (0-6s):  [████████████████] → Ready to process                    │
+│   Chunk 2 (6-12s): [████████░░░░░░░░] → Still collecting...                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Every 6 seconds, we process a chunk
+         ▼
+
+STEP 5: 🔇 VAD CHECK (Voice Activity Detection)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Before processing, check: "Is anyone actually talking?"                     │
+│                                                                              │
+│ VAD Algorithm (Energy-Based):                                                │
+│   1. Calculate audio "loudness" (RMS = Root Mean Square)                    │
+│   2. If RMS < 0.005 → Silence (0% speech)                                   │
+│   3. If RMS > 0.025 → Speech (100% speech)                                  │
+│   4. In between → Calculate probability                                     │
+│                                                                              │
+│ Example:                                                                     │
+│   Chunk 1: [0.001, 0.002, 0.001, ...] → VAD = 0% → ❌ SKIP                  │
+│   Chunk 2: [0.15, 0.22, 0.18, ...]    → VAD = 95% → ✅ PROCESS              │
+│                                                                              │
+│ Benefit: Saves GPU time and prevents hallucinations (Whisper making up text)│
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Only chunks with speech continue
+         ▼
+
+STEP 6: 🧠 WHISPER AI TRANSCRIPTION
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ The AI model processes the audio and outputs text                           │
+│                                                                              │
+│ Input: 96,000 audio samples (6 seconds of speech)                           │
+│                                                                              │
+│ Processing Steps:                                                            │
+│   1. Create Whisper State (AI session)                                      │
+│   2. Configure parameters:                                                   │
+│      • Language: English                                                     │
+│      • Strategy: Greedy (pick most likely word immediately)                 │
+│      • Threads: 4 CPU cores                                                  │
+│      • Context: Previous transcript (for better accuracy)                   │
+│   3. Run AI inference on GPU/CPU                                             │
+│   4. Extract text segments from AI output                                   │
+│                                                                              │
+│ Output: "Hello world, this is a test transcription."                        │
+│                                                                              │
+│ Performance: Typically 100-300ms per 6-second chunk on GPU                  │
+│              (20-60x faster than real-time!)                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Text is ready!
+         ▼
+
+STEP 7: 💾 CUMULATIVE CONTEXT (Memory)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Whisper remembers what was said before for better accuracy                  │
+│                                                                              │
+│ First chunk:  "Hello world"                                                 │
+│   → Save to memory: "Hello world"                                           │
+│                                                                              │
+│ Second chunk: "this is cool"                                                │
+│   → Context provided: "Hello world"                                         │
+│   → AI understands: "...continuing from 'Hello world', so 'this' refers..." │
+│   → Save to memory: "Hello world this is cool"                              │
+│                                                                              │
+│ This makes transcription much more accurate!                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Send to frontend
+         ▼
+
+STEP 8: 📤 SEND TO UI (Frontend Display)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Text appears in your application window!                                    │
+│                                                                              │
+│ Event: "transcription-chunk"                                                │
+│   {                                                                          │
+│     text: "Hello world this is cool",                                       │
+│     processing_time_ms: 150,                                                │
+│     method: "Whisper"                                                        │
+│   }                                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                            🎯 FINAL PROCESSING PASS
+═══════════════════════════════════════════════════════════════════════════════
+
+When you click "Stop Recording", Whisper does ONE more high-quality pass:
+
+1. 📁 Load the complete WAV file from disk
+2. 🔇 Apply VAD to remove ALL silence (not just chunks)
+3. 🧠 Process entire cleaned audio in one go (with 8 CPU threads instead of 4)
+4. 📝 Return ultra-accurate final transcript
+
+Why? The final pass has full context and can make better decisions!
+
+═══════════════════════════════════════════════════════════════════════════════
+```
+
+---
+
+### ⚡ PARAKEET NEMOTRON PIPELINE
+
+Parakeet is like a **speed demon** - optimized for instant results with minimal delay. Perfect for live streaming!
+
+```
+═══════════════════════════════════════════════════════════════════════════════
+                      🎤 YOUR VOICE → PARAKEET NEMOTRON
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1: 🎤 MICROPHONE CAPTURE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Same as Whisper - raw audio from microphone                                 │
+│ • Format: 48,000 samples per second                                         │
+│ • Channels: 2 (Stereo)                                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+
+STEP 2: 🎛️ CONVERT TO MONO
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Same process as Whisper                                                     │
+│ Stereo → Mono conversion                                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+
+STEP 3: 🔄 RESAMPLE (48kHz → 16kHz)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Same process as Whisper                                                     │
+│ Parakeet also expects 16kHz audio                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+
+STEP 4: ⚡ IMMEDIATE PROCESSING (No Buffering!)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 🚀 KEY DIFFERENCE: Parakeet processes IMMEDIATELY as audio arrives!         │
+│                                                                              │
+│ Chunk Size: 0.56 seconds = 8,960 samples                                    │
+│ (10x smaller than Whisper's 6-second chunks!)                               │
+│                                                                              │
+│ Incoming stream: [████░░░░]                                                  │
+│                   ▲                                                          │
+│                   └─── Process NOW! (no waiting)                             │
+│                                                                              │
+│ Timeline:                                                                    │
+│   0.00s - 0.56s: [████] → Process → "Hello"                                 │
+│   0.56s - 1.12s: [████] → Process → "world"                                 │
+│   1.12s - 1.68s: [████] → Process → "this"                                  │
+│   1.68s - 2.24s: [████] → Process → "is"                                    │
+│                                                                              │
+│ Result: Words appear almost instantly as you speak!                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ No VAD checking (speed is priority)
+         ▼
+
+STEP 5: ❌ NO VAD CHECK
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 🎯 Parakeet SKIPS Voice Activity Detection for speed                        │
+│                                                                              │
+│ Why?                                                                         │
+│   • VAD adds processing delay                                               │
+│   • Parakeet's streaming model handles silence well                         │
+│   • Goal is minimum latency, not maximum efficiency                         │
+│                                                                              │
+│ Trade-off: Processes slightly more silence, but results come faster         │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Straight to AI
+         ▼
+
+STEP 6: 🦜 PARAKEET NEMOTRON INFERENCE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Nemotron model: NVIDIA's streaming-optimized ASR                            │
+│                                                                              │
+│ Input: 8,960 audio samples (0.56 seconds of audio)                          │
+│                                                                              │
+│ Model Architecture:                                                          │
+│   • Encoder: Processes audio features                                       │
+│   • Decoder + Joint Network: Produces text                                  │
+│   • Stateful: Remembers previous audio automatically                        │
+│                                                                              │
+│ Processing:                                                                  │
+│   1. Audio → Encoder (ONNX model: encoder.onnx)                             │
+│   2. Features → Decoder + Joint (ONNX model: decoder_joint.onnx)            │
+│   3. Decoder uses built-in state from previous chunks                       │
+│   4. Output: Text tokens → Decoded string                                   │
+│                                                                              │
+│ Output: "Hello " (partial result)                                           │
+│                                                                              │
+│ Performance: 50-100ms per chunk on GPU (even faster than Whisper!)          │
+│              (because chunks are 10x smaller)                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Text is ready (almost instantly!)
+         ▼
+
+STEP 7: 🔄 BUILT-IN STATE (No Manual Context Needed)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 🎯 Parakeet automatically maintains internal state                          │
+│                                                                              │
+│ Unlike Whisper (where WE provide context), Nemotron has:                    │
+│   • Hidden state vector (remembers what it heard)                           │
+│   • Automatic reset on silence                                              │
+│   • Seamless continuation between chunks                                    │
+│                                                                              │
+│ We just call: nemotron.transcribe_chunk(audio) → it handles context!       │
+│                                                                              │
+│ This makes integration simpler and faster                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         │ Send to frontend
+         ▼
+
+STEP 8: 📤 SEND TO UI (Frontend Display)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Text appears in your application window (almost instantly!)                 │
+│                                                                              │
+│ Event: "transcription-chunk"                                                │
+│   {                                                                          │
+│     text: "Hello ",                                                          │
+│     processing_time_ms: 75,                                                 │
+│     method: "Parakeet"                                                       │
+│   }                                                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                            🎯 FINAL PROCESSING PASS
+═══════════════════════════════════════════════════════════════════════════════
+
+When you click "Stop Recording", Parakeet does:
+
+1. 📁 Load the complete WAV file from disk
+2. ❌ NO VAD processing (maintains streaming consistency)
+3. 🦜 Process entire audio with Parakeet in small chunks
+4. 📝 Return final transcript
+
+Difference from Whisper: No VAD on final pass to keep streaming characteristics!
+
+═══════════════════════════════════════════════════════════════════════════════
+```
+
+---
+
+### 📊 SIDE-BY-SIDE COMPARISON
+
+Let's compare both engines processing the same 12-second recording: "Hello world, this is a test."
+
+```
+═══════════════════════════════════════════════════════════════════════════════
+                           TIME COMPARISON DIAGRAM
+═══════════════════════════════════════════════════════════════════════════════
+
+🧠 WHISPER AI TIMELINE (6-second chunks + VAD)
+─────────────────────────────────────────────────────────────────────────────
+
+Time:  0s         6s                    12s
+       │          │                     │
+Audio: [══════════]                     ]══════════]
+       │          │                     │
+       │   Wait...│                     Wait...
+       │          ▼                              ▼
+VAD:              [Check... 95% speech ✓]       [Check... 92% speech ✓]
+       │          │                     │
+       │          ▼                              ▼
+AI:               [Process 6s... 150ms]         [Process 6s... 140ms]
+       │          │                     │
+Output:           "Hello world"                 "this is a test"
+
+Total Latency: 6 seconds (buffering) + 150ms (processing) = 6.15 seconds
+
+
+⚡ PARAKEET NEMOTRON TIMELINE (0.56-second chunks, no VAD)
+─────────────────────────────────────────────────────────────────────────────
+
+Time:  0.56s  1.12s  1.68s  2.24s  2.80s  ... 12s
+       │      │      │      │      │          │
+Audio: ]█]    ]█]    ]█]    ]█]    ]█]   ... ]█]
+       │      │      │      │      │          │
+       ▼      ▼      ▼      ▼      ▼          ▼
+AI:    [75ms] [68ms] [72ms] [70ms] [71ms] ... [69ms]
+       │      │      │      │      │          │
+       ▼      ▼      ▼      ▼      ▼          ▼
+Output:"Hel"  "lo "  "wor" "ld"  "this" ... "test"
+
+Total Latency: 0.56 seconds (buffering) + 75ms (processing) = 0.635 seconds
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                                WINNER: Parakeet
+                     10x faster display of first word!
+═══════════════════════════════════════════════════════════════════════════════
+```
+
+---
+
+### 🎯 WHEN TO USE WHICH ENGINE?
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          USE WHISPER AI WHEN...                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ✅ You need maximum accuracy                                                 │
+│ ✅ Recording has lots of silence (VAD helps skip it)                         │
+│ ✅ You're transcribing lectures, meetings, or long-form content             │
+│ ✅ Background noise is an issue (VAD filters it out)                         │
+│ ✅ You prefer better context understanding (cumulative memory)              │
+│ ✅ You can wait 6 seconds for each result                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        USE PARAKEET NEMOTRON WHEN...                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ ⚡ You need minimum latency (live streaming, gaming, real-time apps)        │
+│ ⚡ Continuous speech without long pauses                                     │
+│ ⚡ You want to see words appear almost instantly                             │
+│ ⚡ You're doing live captions or real-time subtitles                         │
+│ ⚡ Speed is more important than perfect accuracy                             │
+│ ⚡ You have a good GPU (CUDA acceleration is amazing!)                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 🧪 TECHNICAL SPECIFICATIONS
+
+| Feature | Whisper AI | Parakeet Nemotron |
+|---------|-----------|------------------|
+| **Chunk Size** | 6.0 seconds (96,000 samples) | 0.56 seconds (8,960 samples) |
+| **Latency** | ~6.15 seconds | ~0.635 seconds |
+| **VAD** | ✅ Yes (energy-based) | ❌ No |
+| **Context Management** | Manual (we provide previous text) | Automatic (built-in state) |
+| **GPU Support** | CUDA, Vulkan, CPU | CUDA, CPU |
+| **Model Format** | GGML (.bin files) | ONNX (.onnx files) |
+| **Accuracy** | Excellent (95-98%) | Very Good (92-96%) |
+| **Best For** | Accuracy | Speed |
+| **Threads (Live)** | 4 CPU threads | GPU-optimized |
+| **Threads (Final)** | 8 CPU threads | GPU-optimized |
+
+---
+
+### 💡 BEGINNER TIP: How to Choose?
+
+**Try this simple test:**
+
+1. Install both models
+2. Record yourself saying a sentence
+3. Try Whisper first → Notice the 6-second wait, then high accuracy
+4. Try Parakeet → Notice words appearing almost instantly
+
+**My recommendation?**
+- For meetings/lectures: Use Whisper
+- For live streaming/gaming: Use Parakeet
+- Can't decide? Start with Whisper (it's more forgiving of imperfect audio)
 
 ---
 
