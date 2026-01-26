@@ -112,9 +112,21 @@ jobs:
       - name: Install macOS Dependencies
         if: contains(matrix.platform, 'macos')
         run: |
-          brew install onnxruntime
-          echo "ORT_STRATEGY=system" >> $env:GITHUB_ENV
-          echo "ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib" >> $env:GITHUB_ENV
+          if [[ "${{ matrix.target }}" == *"aarch64"* ]]; then
+            echo "🍏 macOS ARM (Apple Silicon) - Using Homebrew"
+            brew install onnxruntime
+            echo "ORT_STRATEGY=system" >> $env:GITHUB_ENV
+            echo "ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib" >> $env:GITHUB_ENV
+          else
+            echo "💻 macOS Intel (x86_64) - Downloading manual binary"
+            # Manually download ONNX Runtime 1.17.3 (Compatible with ort 2.0.0-rcs) for Intel Mac
+            wget https://github.com/microsoft/onnxruntime/releases/download/v1.17.3/onnxruntime-osx-x86_64-1.17.3.tgz
+            tar -xzf onnxruntime-osx-x86_64-1.17.3.tgz
+            
+            # Set environment variables for this job
+            echo "ORT_STRATEGY=system" >> $env:GITHUB_ENV
+            echo "ORT_LIB_LOCATION=$(pwd)/onnxruntime-osx-x86_64-1.17.3/lib" >> $env:GITHUB_ENV
+          fi
         shell: bash
 
       # --- JS/Frontend Setup ---
