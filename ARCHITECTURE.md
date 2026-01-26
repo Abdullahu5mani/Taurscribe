@@ -21,7 +21,8 @@
 12. [Annotated Rust Code Examples](#annotated-rust-code-examples)
 13. [Model Selection Feature](#model-selection-feature)
 14. [Voice Activity Detection (VAD)](#-voice-activity-detection-vad)
-15. [File & Function Reference](#-file--function-reference)
+15. [📐 Module Architecture](#-module-architecture) **← NEW!**
+16. [File & Function Reference](#-file--function-reference)
 
 ---
 
@@ -45,6 +46,29 @@ Think of it like having a super-fast personal assistant that writes down everyth
 - ✅ Two AI engines to choose from (Whisper or Parakeet)
 - ✅ Multiple models for each engine (pick small & fast or large & accurate)
 - ✅ Voice Activity Detection (automatically skips silence)
+
+---
+
+## 🎉 Refactored Architecture (January 2026)
+
+Taurscribe recently underwent a major code reorganization for better maintainability:
+
+### **Before Refactoring**
+```
+❌ lib.rs: 1,151 lines (monolithic, hard to navigate)
+❌ Everything in one file
+❌ Hard to find specific features
+```
+
+### **After Refactoring**
+```
+✅ lib.rs: 115 lines (90% reduction!)
+✅ 19 focused modules organized by feature
+✅ Easy to navigate: recording → commands/recording.rs
+✅ Ready for team development
+```
+
+**No Breaking Changes!** The app works exactly the same - we just made the code much easier to maintain. See [Module Architecture](#-module-architecture) for details.
 
 ---
 
@@ -4660,41 +4684,275 @@ rdev = "0.5"                     # Global hotkeys
 
 ---
 
+## 📐 Module Architecture
+
+This section documents Taurscribe's modular architecture introduced in January 2026.
+
+---
+
 ## 🗂️ **File Organization Summary**
+
+### 📐 **New Modular Architecture** (Refactored January 2026)
+
+Taurscribe follows a **feature-based module structure** for maximum maintainability:
 
 ```
 Taurscribe/
 ├── 🎨 Frontend
-│   ├── src/App.tsx           # Main UI logic (369 lines)
-│   ├── src/App.css           # Styling (9110 bytes)
+│   ├── src/App.tsx           # Main UI logic (585 lines)
+│   ├── src/App.css           # Styling
 │   ├── src/main.tsx          # React entry point
 │   └── index.html            # HTML shell
 │
-├── 🦀 Backend (Rust)
+├── 🦀 Backend (Rust) - REFACTORED STRUCTURE
 │   ├── src-tauri/
 │   │   ├── src/
-│   │   │   ├── lib.rs        # Main orchestrator (913 lines)
-│   │   │   ├── whisper.rs    # AI manager (735 lines)
-│   │   │   ├── vad.rs        # VAD manager (186 lines)
-│   │   │   └── main.rs       # Entry point (7 lines)
+│   │   │   ├── 🎯 Core
+│   │   │   │   ├── lib.rs              # App entry point (115 lines) ✨ 90% reduction!
+│   │   │   │   ├── main.rs             # Binary entry (6 lines)
+│   │   │   │   ├── types.rs            # Shared types & enums (30 lines)
+│   │   │   │   ├── state.rs            # Global AudioState (54 lines)
+│   │   │   │   └── utils.rs            # Helper functions (46 lines)
+│   │   │   │
+│   │   │   ├── 🎤 Audio Processing
+│   │   │   │   ├── audio.rs            # Audio primitives (16 lines)
+│   │   │   │   ├── whisper.rs          # Whisper AI manager (780 lines)
+│   │   │   │   ├── parakeet.rs         # Parakeet AI manager (578 lines)
+│   │   │   │   └── vad.rs              # Voice Activity Detection (214 lines)
+│   │   │   │
+│   │   │   ├── 📡 Commands (Tauri API)
+│   │   │   │   ├── commands/
+│   │   │   │   │   ├── mod.rs          # Module exports (11 lines)
+│   │   │   │   │   ├── misc.rs         # Test commands (5 lines)
+│   │   │   │   │   ├── models.rs       # Model management (60 lines)
+│   │   │   │   │   ├── settings.rs     # Engine & backend config (55 lines)
+│   │   │   │   │   ├── recording.rs    # Start/stop recording (344 lines)
+│   │   │   │   │   └── transcription.rs # Benchmarks & samples (223 lines)
+│   │   │   │
+│   │   │   ├── 🖼️ System Tray
+│   │   │   │   └── tray/
+│   │   │   │       ├── mod.rs          # Module exports (2 lines)
+│   │   │   │       └── icons.rs        # Icon management & menu (92 lines)
+│   │   │   │
+│   │   │   └── ⌨️ Global Hotkeys
+│   │   │       └── hotkeys/
+│   │   │           ├── mod.rs          # Module exports (2 lines)
+│   │   │           └── listener.rs     # Ctrl+Win listener (74 lines)
+│   │   │
 │   │   ├── build.rs          # Build script (4 lines)
-│   │   └── Cargo.toml        # Rust config (50 lines)
+│   │   └── Cargo.toml        # Rust dependencies (109 lines)
 │
 ├── ⚙️ Configuration
-│   ├── package.json          # Node.js config (27 lines)
+│   ├── package.json          # Node.js config (29 lines)
 │   ├── vite.config.ts        # Vite config
 │   ├── tsconfig.json         # TypeScript config
 │   └── .gitignore
 │
 ├── 📦 Runtime Assets
 │   └── taurscribe-runtime/
-│       ├── models/           # Whisper .bin files
-│       └── samples/          # Test audio files
+│       ├── models/           # AI model files (.bin, .onnx)
+│       └── samples/          # Test audio files (.wav)
 │
 └── 📚 Documentation
     ├── ARCHITECTURE.md       # This file!
     └── README.md
 ```
+
+---
+
+## 📚 **Module Organization Guide**
+
+### 🎯 **Why This Structure?**
+
+The codebase was refactored from a **monolithic 1,151-line `lib.rs`** into a clean, modular architecture that:
+
+- ✅ Makes code **easy to find** (organized by feature)
+- ✅ Enables **parallel development** (multiple people can work on different modules)
+- ✅ Simplifies **testing** (each module is self-contained)
+- ✅ Reduces **merge conflicts** (changes are isolated)
+- ✅ Follows **Rust best practices** (single responsibility principle)
+
+### 📂 **Module Breakdown**
+
+#### **1️⃣ Core Modules** (Foundation)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `lib.rs` | 115 | **App entry point** - Initializes engines, sets up Tauri, registers commands |
+| `types.rs` | 30 | **Shared types** - `AppState`, `ASREngine`, `TranscriptionChunk`, `SampleFile` |
+| `state.rs` | 54 | **Global state** - `AudioState` struct that holds all shared data |
+| `utils.rs` | 46 | **Helper functions** - `clean_transcript()`, `get_recordings_dir()` |
+| `audio.rs` | 16 | **Audio primitives** - `SendStream`, `RecordingHandle` |
+
+**Key Concept**: These modules provide the foundation that all other modules depend on.
+
+#### **2️⃣ AI Engines** (Audio Processing)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `whisper.rs` | 780 | **Whisper AI** - Model loading, CUDA/Vulkan, chunk transcription, context management |
+| `parakeet.rs` | 578 | **Parakeet AI** - NVIDIA Nemotron, CTC/TDT variants, streaming transcription |
+| `vad.rs` | 214 | **Voice Activity Detection** - Energy-based & Silero model speech detection |
+
+**Key Concept**: These modules are unchanged from the original structure - they were already well-organized!
+
+#### **3️⃣ Commands Module** (Tauri API Handlers)
+
+The `commands/` directory contains all Tauri commands organized by domain:
+
+| File | Lines | Handles |
+|------|-------|---------|
+| `misc.rs` | 5 | Test commands (`greet`) |
+| `models.rs` | 60 | Model management: `list_models`, `switch_model`, `list_parakeet_models`, `init_parakeet` |
+| `settings.rs` | 55 | Engine settings: `get_backend_info`, `set_active_engine`, `set_tray_state` |
+| `recording.rs` | 344 | Recording lifecycle: `start_recording`, `stop_recording` (includes threading logic) |
+| `transcription.rs` | 223 | Testing: `benchmark_test`, `list_sample_files` |
+
+**Why Split by Domain?**
+- Easy to find: "Where's the recording logic?" → `recording.rs`
+- Clear ownership: Each file has a specific responsibility
+- Better imports: Only import what you need
+
+**Example**: Adding a new model-related command?
+```rust
+// Go to: src-tauri/src/commands/models.rs
+#[tauri::command]
+pub fn my_new_model_command(state: State<AudioState>) -> Result<String, String> {
+    // Implementation here
+}
+
+// Then add to lib.rs invoke_handler:
+commands::my_new_model_command,
+```
+
+#### **4️⃣ Tray Module** (System Tray)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `tray/icons.rs` | 92 | Icon macros, `update_tray_icon()`, `setup_tray()` - manages tray icon state |
+
+**Key Functions**:
+- `setup_tray()` - Creates tray icon with menu on app startup
+- `update_tray_icon()` - Changes icon color based on app state (green/red/yellow)
+
+#### **5️⃣ Hotkeys Module** (Global Keyboard)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `hotkeys/listener.rs` | 74 | `start_hotkey_listener()` - Monitors Ctrl+Win keypresses system-wide |
+
+**How it works**:
+1. Spawns background thread
+2. Uses `rdev` to listen to all keyboard events
+3. Emits Tauri events when Ctrl+Win is pressed/released
+4. Frontend listens for these events and triggers recording
+
+---
+
+## 🔄 **Data Flow Through Modules**
+
+Here's how a recording session flows through the new architecture:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                      USER CLICKS "RECORD"                       │
+└────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌────────────────────────────────────────────────────────────────┐
+│  FRONTEND (App.tsx)                                             │
+│  - invoke("start_recording")                                    │
+└────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌────────────────────────────────────────────────────────────────┐
+│  COMMANDS MODULE (commands/recording.rs)                        │
+│  - start_recording() receives request                           │
+│  - Gets state from AudioState (state.rs)                        │
+│  - Calls utils::get_recordings_dir()                            │
+└────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌────────────────────────────────────────────────────────────────┐
+│  AUDIO MODULE (audio.rs)                                        │
+│  - Creates RecordingHandle with streams                         │
+│  - Spawns file writer thread                                    │
+│  - Spawns transcription thread                                  │
+└────────────────────────────────────────────────────────────────┘
+                              │
+                     ┌────────┴────────┐
+                     ▼                 ▼
+          ┌─────────────────┐  ┌─────────────────┐
+          │  WHISPER.RS     │  │  PARAKEET.RS    │
+          │  (depending on  │  │  (depending on  │
+          │  active engine) │  │  active engine) │
+          └─────────────────┘  └─────────────────┘
+                     │                 │
+                     └────────┬────────┘
+                              ▼
+                    ┌─────────────────┐
+                    │  VAD.RS         │
+                    │  (speech check) │
+                    └─────────────────┘
+                              │
+                              ▼
+                    Live transcription
+                    streamed to frontend
+```
+
+---
+
+## 🎓 **Module Design Philosophy**
+
+### **Feature-First Organization**
+
+Instead of organizing by technical layer (controllers, services, models), we organize by **feature**:
+
+❌ **Bad** (Layer-first):
+```
+src/
+  ├── controllers/
+  ├── services/
+  └── models/
+```
+
+✅ **Good** (Feature-first):
+```
+src/
+  ├── commands/      # All user-facing commands
+  ├── audio/         # All audio processing
+  ├── tray/          # All tray functionality
+  └── hotkeys/       # All hotkey functionality
+```
+
+**Why?** When you need to modify "recording", all recording-related code is in one place!
+
+### **Dependency Rules**
+
+```
+┌─────────────────────────────────────────┐
+│              lib.rs (top)               │  ← Depends on everything
+├─────────────────────────────────────────┤
+│  commands/  tray/  hotkeys/             │  ← Depend on core & engines
+├─────────────────────────────────────────┤
+│  whisper.rs  parakeet.rs  vad.rs        │  ← Depend on core only
+├─────────────────────────────────────────┤
+│  types.rs  state.rs  utils.rs  audio.rs │  ← No dependencies (bottom)
+└─────────────────────────────────────────┘
+```
+
+**Rule**: Lower modules never depend on higher modules. This prevents circular dependencies!
+
+### **File Size Guidelines**
+
+| Size | Status | Action |
+|------|--------|--------|
+| < 200 lines | ✅ Ideal | Perfect size, easy to understand |
+| 200-500 lines | ✅ Good | Manageable, consider splitting if it grows |
+| 500-800 lines | ⚠️ Large | Should be split soon, but acceptable for now |
+| > 800 lines | ❌ Too Big | **Split immediately!** Hard to maintain |
+
+**Current Status**: All modules are ≤ 780 lines (whisper.rs is the largest, but it's cohesive).
 
 ---
 
@@ -4706,10 +4964,16 @@ Taurscribe/
 |------|------|----------|
 | Change UI layout | `App.tsx` | Component JSX |
 | Add new button | `App.tsx` | Add button in render |
-| Add Tauri command | `lib.rs` | Create function + add to `.invoke_handler()` |
-| Change model behavior | `whisper.rs` | Modify `transcribe_chunk()` or `transcribe_file()` |
-| Adjust recording | `lib.rs` | `start_recording()` audio callback |
+| Add Tauri command | `commands/*.rs` → `lib.rs` | Create in appropriate commands file + add to `.invoke_handler()` |
+| Change model behavior | `whisper.rs` / `parakeet.rs` | Modify `transcribe_chunk()` or `transcribe_file()` |
+| Adjust recording | `commands/recording.rs` | `start_recording()` audio callback |
+| Add model command | `commands/models.rs` | New function + register in `lib.rs` |
+| Add engine setting | `commands/settings.rs` | New function + register in `lib.rs` |
 | Change VAD threshold | `vad.rs` | `VADManager::new()` threshold value |
+| Modify tray behavior | `tray/icons.rs` | `update_tray_icon()` or `setup_tray()` |
+| Change hotkey combo | `hotkeys/listener.rs` | Modify key detection logic |
+| Add helper function | `utils.rs` | Create new public function |
+| Add shared type | `types.rs` | Define struct/enum with derive macros |
 | Add dependency | `Cargo.toml` | Add to `[dependencies]` |
 | Change styling | `App.css` | Modify CSS classes |
 
@@ -4717,13 +4981,71 @@ Taurscribe/
 
 | Issue | Check File | Check Function |
 |-------|-----------|---------------|
-| Recording not starting | `lib.rs` | `start_recording()` |
-| No audio in WAV file | `lib.rs` | File writer thread |
-| Transcription wrong | `whisper.rs` | `transcribe_chunk()` or `transcribe_file()` |
+| Recording not starting | `commands/recording.rs` | `start_recording()` |
+| No audio in WAV file | `commands/recording.rs` | File writer thread (line ~601) |
+| Transcription wrong | `whisper.rs` / `parakeet.rs` | `transcribe_chunk()` or `transcribe_file()` |
 | UI not updating | `App.tsx` | State setters, event listeners |
-| Model not loading | `whisper.rs` | `initialize()`, `try_gpu()` |
-| Hotkey not working | `lib.rs` | `start_hotkey_listener()` |
-| Tray icon wrong | `lib.rs` | `set_tray_state()`, `update_tray_icon()` |
+| Model not loading | `whisper.rs` / `parakeet.rs` | `initialize()`, check GPU detection |
+| Model switching fails | `commands/models.rs` | `switch_model()` or `init_parakeet()` |
+| Backend info wrong | `commands/settings.rs` | `get_backend_info()` |
+| Hotkey not working | `hotkeys/listener.rs` | `start_hotkey_listener()` callback |
+| Tray icon wrong | `commands/settings.rs` | `set_tray_state()` → `tray/icons.rs` |
+| Tray menu not working | `tray/icons.rs` | `setup_tray()` event handlers |
+| Audio format issues | `audio.rs` | `RecordingHandle` struct |
+| State not persisting | `state.rs` | `AudioState` struct fields |
+| Transcript cleaning | `utils.rs` | `clean_transcript()` |
+
+### **Module Cheat Sheet** 🎯
+
+Quick reference for finding code:
+
+| I want to... | Go to |
+|-------------|-------|
+| Add a new command | `commands/*.rs` (choose appropriate file) |
+| Modify recording behavior | `commands/recording.rs` |
+| Change AI engine logic | `whisper.rs` or `parakeet.rs` |
+| Add a new model | `commands/models.rs` |
+| Change app settings | `commands/settings.rs` |
+| Modify tray icon | `tray/icons.rs` |
+| Change hotkey combo | `hotkeys/listener.rs` |
+| Add shared types | `types.rs` |
+| Add utility function | `utils.rs` |
+| Modify global state | `state.rs` |
+| Change audio handling | `audio.rs` |
+| Run benchmarks | `commands/transcription.rs` |
+
+### **Adding a New Feature: Step-by-Step** 📝
+
+**Example: Adding a "Pause Recording" feature**
+
+1. **Add State** (`state.rs`):
+   ```rust
+   pub is_paused: Mutex<bool>,
+   ```
+
+2. **Add Command** (`commands/recording.rs`):
+   ```rust
+   #[tauri::command]
+   pub fn pause_recording(state: State<AudioState>) -> Result<(), String> {
+       *state.is_paused.lock().unwrap() = true;
+       Ok(())
+   }
+   ```
+
+3. **Register Command** (`lib.rs`):
+   ```rust
+   .invoke_handler(tauri::generate_handler![
+       // ... existing commands ...
+       commands::pause_recording,
+   ])
+   ```
+
+4. **Call from Frontend** (`App.tsx`):
+   ```typescript
+   await invoke("pause_recording");
+   ```
+
+Done! ✅
 
 ---
 

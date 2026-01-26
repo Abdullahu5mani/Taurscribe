@@ -142,7 +142,6 @@ jobs:
             libvulkan-dev \
             vulkan-tools \
             vulkan-utility-libraries-dev \
-            shaderc \
             glslang-tools \
             spirv-tools \
             libshaderc-dev \
@@ -180,7 +179,8 @@ jobs:
       - name: Install Vulkan SDK (Windows)
         if: matrix.platform == 'windows-latest' && matrix.arch == 'x86_64'
         run: |
-          choco install vulkan-sdk -y
+          curl -LO https://sdk.lunarg.com/sdk/download/latest/windows/VulkanSDK.exe
+          ./VulkanSDK.exe /S
 
       - name: Install LLVM (Windows)
         if: contains(matrix.platform, 'windows')
@@ -229,6 +229,12 @@ jobs:
 
       - name: Install frontend dependencies
         run: bun install
+
+      - name: Clean CMake Cache
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+          Get-ChildItem -Path C:\bld -Recurse -Filter CMakeCache.txt -ErrorAction SilentlyContinue | Remove-Item -Force
+          Get-ChildItem -Path C:\bld -Recurse -Filter CMakeFiles -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 
       # --- Build ---
       - name: Build Tauri application

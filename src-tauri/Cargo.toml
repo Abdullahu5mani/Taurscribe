@@ -66,7 +66,7 @@ ort = { version = "2.0.0-rc.11", features = ["download-binaries", "coreml", "xnn
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda", "vulkan"] }
 parakeet-rs = { version = "=0.3.0", features = ["cuda", "directml"] }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "directml", "tensorrt", "webgpu", "xnnpack"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "directml", "tensorrt", "xnnpack"] }
 
 # 3b. Linux (x86_64) -> CUDA + TensorRT
 # CUDA: NVIDIA GPU acceleration (primary)
@@ -77,7 +77,7 @@ ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "direc
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda", "vulkan"] }
 parakeet-rs = { version = "=0.3.0", features = ["cuda"] }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "tensorrt", "webgpu", "xnnpack"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "tensorrt", "xnnpack"] }
 
 # 4. Windows (ARM64) -> DirectML + XNNPACK
 # DirectML: Hardware-accelerated on Qualcomm Snapdragon X ARM processors
