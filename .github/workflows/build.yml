@@ -64,9 +64,8 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.14
         id: cuda-toolkit
         with:
-          cuda: '12.2.0' # Downgraded to a known stable available version
+          cuda: '12.2.0'
           method: 'network'
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "cufft", "cufft_dev", "curand", "curand_dev", "cusolver", "cusolver_dev", "cusparse", "cusparse_dev"]'
 
       - name: Show CUDA Info
         if: matrix.cuda == true
