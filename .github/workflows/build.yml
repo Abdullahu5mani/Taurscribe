@@ -98,6 +98,25 @@ jobs:
           
       # --- System Dependencies ---
       
+      # macOS Dependencies
+      - name: Verify macOS Build Tools
+        if: contains(matrix.platform, 'macos')
+        run: |
+          echo "=== macOS Build Environment ==="
+          echo "macOS Version:"
+          sw_vers
+          echo ""
+          echo "Xcode Version:"
+          xcodebuild -version || echo "Xcode command line tools not found"
+          echo ""
+          echo "CMake Version:"
+          cmake --version || { echo "ERROR: CMake not found!"; brew install cmake; }
+          echo ""
+          echo "Checking deployment target:"
+          echo "MACOSX_DEPLOYMENT_TARGET will be set to: 13.4"
+          echo ""
+          echo "=== Verification complete ==="
+      
       # Linux Dependencies
       - name: Install Linux System Dependencies
         if: contains(matrix.platform, 'ubuntu')
@@ -122,7 +141,7 @@ jobs:
           sudo apt-get install -y \
             libvulkan-dev \
             vulkan-tools \
-            vulkan-validationlayers-dev \
+            vulkan-utility-libraries-dev \
             glslang-tools \
             spirv-tools \
             libshaderc-dev \
@@ -186,9 +205,18 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      - name: Remove Windows cargo config on Unix
+      - name: Clean Windows-specific paths from cargo config on Unix
         if: runner.os != 'Windows'
-        run: rm -f src-tauri/.cargo/config.toml
+        run: |
+          # Remove Windows-specific sections but keep macOS and Linux configs
+          sed -i.bak '/\[target\.x86_64-pc-windows-msvc\]/,/^$/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/\[target\.x86_64-pc-windows-gnu\]/,/^$/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/WHISPER_LIB_DIR/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/VULKAN_SDK.*VulkanSDK/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/LIBCLANG_PATH.*Microsoft/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/target-dir.*C:\/bld/d' src-tauri/.cargo/config.toml || true
+          echo "=== Cleaned cargo config for Unix ==="
+          cat src-tauri/.cargo/config.toml
  
 
 
@@ -206,8 +234,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS: ONNX Runtime deployment target
+          # macOS: ONNX Runtime deployment target (both env vars for Rust and CMake)
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           # CUDA: NVIDIA GPU toolkit
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           # Vulkan: Linux SDK paths (set by previous step on Linux)

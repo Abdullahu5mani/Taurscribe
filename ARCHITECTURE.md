@@ -5239,26 +5239,76 @@ This is automatically configured in three places:
     // ONNX Runtime requires macOS 13.4+ on Apple Silicon
     println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
     std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "13.4");
+    
+    // Also set CMAKE_OSX_DEPLOYMENT_TARGET for CMake-based dependencies (whisper-rs-sys)
+    std::env::set_var("CMAKE_OSX_DEPLOYMENT_TARGET", "13.4");
 }
 ```
+
+**Why two environment variables?**
+- **`MACOSX_DEPLOYMENT_TARGET`**: Used by Rust compiler and linker
+- **`CMAKE_OSX_DEPLOYMENT_TARGET`**: Used by CMake when building C/C++ dependencies
+- Both must be set to ensure consistency across the entire build
 
 2. **`.cargo/config.toml`** (compiler flags):
 ```toml
 [target.x86_64-apple-darwin]
-rustflags = ["-C", "link-arg=-mmacosx-version-min=13.4"]
+rustflags = [
+    "-C", "link-arg=-mmacosx-version-min=13.4",
+    "-lc++",                          # Link C++ standard library
+    "-l", "framework=Accelerate"      # Link Apple Accelerate framework
+]
 
 [target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-mmacosx-version-min=13.4"]
+rustflags = [
+    "-C", "link-arg=-mmacosx-version-min=13.4",
+    "-lc++",                          # Link C++ standard library
+    "-l", "framework=Accelerate"      # Link Apple Accelerate framework (M1/M2/M3/M4 optimizations)
+]
 
 [env]
 MACOSX_DEPLOYMENT_TARGET = "13.4"
 ```
 
+**Why these flags?**
+- **`-lc++`**: Links the C++ standard library (required by whisper.cpp)
+- **`-l framework=Accelerate`**: Links Apple's Accelerate framework for optimized BLAS/LAPACK operations on Apple Silicon
+
+**Why these flags?**
+- **`-lc++`**: Links the C++ standard library (required by whisper.cpp)
+- **`-l framework=Accelerate`**: Links Apple's Accelerate framework for optimized BLAS/LAPACK operations on Apple Silicon
+
+**What is the Accelerate framework?**
+
+Apple's Accelerate framework provides:
+- **BLAS**: Basic Linear Algebra Subprograms (matrix operations)
+- **LAPACK**: Linear Algebra Package (advanced matrix computations)
+- **vDSP**: Digital Signal Processing (FFT, convolution, etc.)
+- **Hardware acceleration**: Optimized for Apple Silicon Neural Engine
+
+Whisper.cpp uses these for **extremely fast** matrix multiplications on M1/M2/M3/M4 chips.
+
+**Build Tools Required:**
+
+macOS runners on GitHub Actions already include:
+- ✅ **Xcode Command Line Tools** (clang, clang++)
+- ✅ **CMake** (build system)
+- ✅ **Rust toolchain** (installed in workflow)
+
+If building locally on macOS, install CMake:
+```bash
+brew install cmake
+```
+
 3. **`.github/workflows/build.yml`** (CI environment):
 ```yaml
 env:
-  MACOSX_DEPLOYMENT_TARGET: "13.4"
+  MACOSX_DEPLOYMENT_TARGET: "13.4"           # For Rust
+  CMAKE_OSX_DEPLOYMENT_TARGET: "13.4"        # For CMake (whisper-rs-sys)
 ```
+
+**Critical: Both variables must be set!** 
+- Missing `CMAKE_OSX_DEPLOYMENT_TARGET` will cause `std::filesystem` errors during `whisper-rs-sys` compilation
 
 **What this means for users:**
 
@@ -5345,6 +5395,43 @@ choco install llvm -y
 
 Standard MSVC toolchain works perfectly. Multiple GPU acceleration options available.
 
+**Build Tools Required:**
+
+**Option 1: MSVC (Recommended for x86_64)**
+- ✅ **Visual Studio 2019/2022** with "Desktop development with C++"
+- ✅ **CMake** (included with Visual Studio or install separately)
+- ✅ **LLVM/Clang** for better optimization
+  ```powershell
+  choco install llvm -y
+  ```
+- ✅ Set `LIBCLANG_PATH` environment variable:
+  ```powershell
+  setx LIBCLANG_PATH "C:\Program Files\LLVM\bin"
+  ```
+
+**Option 2: MSYS2/MinGW (Alternative)**
+
+If you prefer GCC/MinGW:
+1. Install MSYS2 from https://www.msys2.org/
+2. Install toolchain:
+   ```bash
+   pacman -S --needed base-devel mingw-w64-x86_64-toolchain
+   pacman -S make cmake
+   ```
+3. Add to PATH: `C:\msys64\ucrt64\bin`
+4. Configure Rust:
+   ```powershell
+   rustup toolchain install stable-x86_64-pc-windows-gnu
+   ```
+5. Use the existing `.cargo/config.toml`:
+   ```toml
+   [target.x86_64-pc-windows-gnu]
+   linker = "C:\\msys64\\ucrt64\\bin\\gcc.exe"
+   ar = "C:\\msys64\\ucrt64\\bin\\ar.exe"
+   ```
+
+**GitHub Actions:** All tools are pre-installed on `windows-latest` runners.
+
 **ONNX Runtime Execution Providers (Windows x86_64):**
 - 🟢 **CUDA**: NVIDIA GPU acceleration (RTX 20/30/40 series) - **Primary**
 - 🔷 **DirectML**: Universal Windows GPU acceleration (AMD/Intel fallback)
@@ -5371,14 +5458,27 @@ Could NOT find Vulkan (missing: glslc)
 Install the complete Vulkan development stack:
 
 ```bash
-# Ubuntu/Debian (Complete Installation)
+# Ubuntu 24.04+ (Complete Installation)
 sudo apt-get update
 sudo apt-get install -y \
-  libvulkan-dev \               # Vulkan headers and libraries
-  vulkan-tools \                # Utilities (vulkaninfo, etc.)
-  vulkan-validationlayers \     # Debugging and validation
-  glslang-tools \               # GLSL→SPIR-V compiler (glslc)
-  spirv-tools                   # SPIR-V utilities and optimizer
+  libvulkan-dev \                   # Vulkan headers and libraries
+  vulkan-tools \                    # Utilities (vulkaninfo, etc.)
+  vulkan-utility-libraries-dev \    # Validation layers (Ubuntu 24.04+)
+  glslang-tools \                   # GLSL→SPIR-V compiler (glslc)
+  spirv-tools \                     # SPIR-V utilities and optimizer
+  libshaderc-dev \                  # Shader compilation library
+  cmake                             # Build system
+
+# Ubuntu 22.04 or older
+sudo apt-get update
+sudo apt-get install -y \
+  libvulkan-dev \
+  vulkan-tools \
+  vulkan-validationlayers \         # Old package name
+  glslang-tools \
+  spirv-tools \
+  libshaderc-dev \
+  cmake
 
 # Fedora/RHEL
 sudo dnf install -y \
@@ -5386,16 +5486,29 @@ sudo dnf install -y \
   vulkan-tools \
   vulkan-validation-layers \
   glslang \
-  spirv-tools
+  spirv-tools \
+  cmake
 
 # Arch Linux
-sudo pacman -S \
+sudo pacman -Syy \
   vulkan-icd-loader \
   vulkan-tools \
   vulkan-validation-layers \
   glslang \
-  spirv-tools
+  spirv-tools \
+  llvm \
+  clang \
+  cmake \
+  cargo
 ```
+
+**Ubuntu Package Name Change (Important!):**
+
+Ubuntu 24.04+ renamed the validation layers package:
+- ❌ Old: `vulkan-validationlayers-dev`
+- ✅ New: `vulkan-utility-libraries-dev`
+
+If you get "package has no installation candidate" error, use the new package name.
 
 **Set Environment Variables:**
 
@@ -5428,7 +5541,8 @@ vulkaninfo --summary
 
 - ✅ **libvulkan-dev**: Vulkan API headers and development libraries
 - ✅ **vulkan-tools**: `vulkaninfo`, `vkcube` (debugging utilities)  
-- ✅ **vulkan-validationlayers-dev**: Debugging and validation layers
+- ✅ **vulkan-utility-libraries-dev**: Validation and utility layers (Ubuntu 24.04+)
+  - *Note: On Ubuntu 22.04 or older, use `vulkan-validationlayers` instead*
 - ✅ **glslang-tools**: `glslc` - **GLSL to SPIR-V shader compiler (REQUIRED)**
 - ✅ **spirv-tools**: `spirv-as`, `spirv-opt` - SPIR-V utilities and optimizer
 - ✅ **libshaderc-dev**: Additional shader compilation library

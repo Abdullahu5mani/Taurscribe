@@ -9,6 +9,9 @@ fn main() {
         // (also satisfies whisper.cpp C++17 std::filesystem requirement which needs 10.15+)
         println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
         std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "13.4");
+        
+        // Also set CMAKE_OSX_DEPLOYMENT_TARGET for CMake-based dependencies (whisper-rs-sys)
+        std::env::set_var("CMAKE_OSX_DEPLOYMENT_TARGET", "13.4");
     }
 
     // CUSTOM: Force Clang for ARM64 Windows (whisper.cpp requirement)

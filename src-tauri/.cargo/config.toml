@@ -4,10 +4,18 @@ rustflags = [
 ]
 
 [target.x86_64-apple-darwin]
-rustflags = ["-C", "link-arg=-mmacosx-version-min=13.4"]
+rustflags = [
+    "-C", "link-arg=-mmacosx-version-min=13.4",
+    "-lc++",
+    "-l", "framework=Accelerate"
+]
 
 [target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-mmacosx-version-min=13.4"]
+rustflags = [
+    "-C", "link-arg=-mmacosx-version-min=13.4",
+    "-lc++",
+    "-l", "framework=Accelerate"
+]
 
 [env]
 MACOSX_DEPLOYMENT_TARGET = "13.4"
