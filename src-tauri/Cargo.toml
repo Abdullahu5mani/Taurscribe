@@ -48,13 +48,11 @@ ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 # 2. macOS Configuration
 # -------------------------------------------------------------------------
 
-# macOS Apple Silicon (ARM64) -> Metal + CoreML
-[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["metal"] }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "coreml"] }
-
-# macOS Intel (x86_64) -> Metal + CPU ORT (CoreML binaries often missing for Intel)
-[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+# 2. macOS Configuration (ARM & Intel)
+# Note: CoreML is disabled as parakeet-rs docs mention it is unstable/broken.
+# CPU performance on Apple Silicon is reported to be very good.
+# -------------------------------------------------------------------------
+[target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["metal"] }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 
