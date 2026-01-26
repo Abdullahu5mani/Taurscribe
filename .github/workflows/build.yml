@@ -165,8 +165,10 @@ jobs:
       # Windows Dependencies
       - name: Install Vulkan SDK (Windows)
         if: matrix.platform == 'windows-latest' && matrix.arch == 'x86_64'
-        run: |
-          choco install vulkan-sdk -y
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
 
       - name: Install LLVM (Windows)
         if: contains(matrix.platform, 'windows')
