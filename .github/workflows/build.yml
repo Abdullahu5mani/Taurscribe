@@ -64,7 +64,7 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.14
         id: cuda-toolkit
         with:
-          cuda: '12.4.1' # Matches a recent stable version
+          cuda: '12.2.0' # Downgraded to a known stable available version
           method: 'network'
           sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "cufft", "cufft_dev", "curand", "curand_dev", "cusolver", "cusolver_dev", "cusparse", "cusparse_dev"]'
 
