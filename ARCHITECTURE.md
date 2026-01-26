@@ -38,7 +38,7 @@
 ### 🌟 Start Here (For Beginners)
 1. [What is Taurscribe?](#what-is-taurscribe)
 2. [The Big Picture](#the-big-picture)
-3. [🎵 Journey of a Sound Wave](#-journey-of-a-sound-wave)
+3. [🎵 Journey of a Sound Wave](#-journey-of-a-sound-wave)f
 4. [🎮 Backend Architecture Strategy](#-backend-architecture-strategy)
 5. [📖 Glossary of Terms](#-glossary-of-terms)
 6. [❓ Common Beginner Confusions](#-common-beginner-confusions)
