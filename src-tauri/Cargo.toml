@@ -30,10 +30,18 @@ chrono = "0.4"
 # whisper-rs with CUDA + Vulkan (includes 12x iGPU performance boost from whisper.cpp v1.8.3)
 # Update periodically: cargo update -p whisper-rs
 # NOTE: Disabled CUDA/Vulkan for now - enable if you have CUDA Toolkit and Vulkan SDK installed
+# Base dependencies (CPU Fallback)
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+parakeet-rs = { version = "=0.3.0" }
+
+# macOS (ARM & Intel) - Enable Metal acceleration
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["metal"] }
+
+# Windows & Linux x86_64 - Enable CUDA acceleration
+# Note: Requires CUDA Toolkit installed on the build machine
+[target.'cfg(all(any(target_os = "windows", target_os = "linux"), target_arch = "x86_64"))'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda"] }
-# parakeet-rs - NVIDIA Parakeet ASR models via ONNX Runtime (alternative to Whisper)
-# Supports CTC (English), TDT (25 languages), EOU (streaming), and Nemotron (streaming)
-# NOTE: Disabled CUDA for now - enable if you have CUDA Toolkit installed
 parakeet-rs = { version = "=0.3.0", features = ["cuda"] }
 rubato = "0.14"
 dirs = "6.0.0"
