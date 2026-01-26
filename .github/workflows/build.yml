@@ -17,31 +17,50 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # --- macOS ---
-          - platform: 'macos-latest' # ARM (M1/M2)
+          # 1. macOS (Apple Silicon) - STABLE (DO NOT CHANGE LOGIC)
+          - platform: 'macos-latest'
             name: 'macOS (Apple Silicon)'
             target: 'aarch64-apple-darwin'
             cuda: false
-          - platform: 'macos-latest' # Run on standard latest runner (likely ARM)
+            os_name: 'macOS'
+            arch: 'ARM64'
+            acceleration: 'Metal'
+
+          # 2. macOS (Intel)
+          - platform: 'macos-latest'
             name: 'macOS (Intel)'
             target: 'x86_64-apple-darwin'
             cuda: false
+            os_name: 'macOS'
+            arch: 'x86_64'
+            acceleration: 'Metal'
           
-          # --- Windows ---
+          # 3. Windows (x86_64)
           - platform: 'windows-latest'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
             cuda: true
+            os_name: 'Windows'
+            arch: 'x86_64'
+            acceleration: 'CUDA'
+
+          # 4. Windows (ARM64)
           - platform: 'windows-latest'
             name: 'Windows (ARM64)'
             target: 'aarch64-pc-windows-msvc'
             cuda: false
+            os_name: 'Windows'
+            arch: 'ARM64'
+            acceleration: 'CPU'
 
-          # --- Linux ---
+          # 5. Linux (x86_64)
           - platform: 'ubuntu-22.04'
             name: 'Linux (x86_64)'
             target: 'x86_64-unknown-linux-gnu'
             cuda: true
+            os_name: 'Linux'
+            arch: 'x86_64'
+            acceleration: 'CUDA'
           
           # Note: Linux ARM builds are complex on GitHub Actions due to GTK linking.
           # This configuration attempts it but it may require a dedicated ARM runner or container.
@@ -119,13 +138,17 @@ jobs:
             echo "ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib" >> $GITHUB_ENV
           else
             echo "💻 macOS Intel (x86_64) - Downloading manual binary"
-            # Manually download ONNX Runtime 1.17.3 (Compatible with ort 2.0.0-rcs) for Intel Mac
-            wget https://github.com/microsoft/onnxruntime/releases/download/v1.17.3/onnxruntime-osx-x86_64-1.17.3.tgz
-            tar -xzf onnxruntime-osx-x86_64-1.17.3.tgz
+            # Manually download ONNX Runtime 1.16.3 for Intel Mac
+            wget https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-osx-x86_64-1.16.3.tgz
+            tar -xzf onnxruntime-osx-x86_64-1.16.3.tgz
             
-            # Set environment variables for this job
+            EXTRACT_PATH="$(pwd)/onnxruntime-osx-x86_64-1.16.3"
             echo "ORT_STRATEGY=system" >> $GITHUB_ENV
-            echo "ORT_LIB_LOCATION=$(pwd)/onnxruntime-osx-x86_64-1.17.3/lib" >> $GITHUB_ENV
+            echo "ORT_LIB_LOCATION=$EXTRACT_PATH/lib" >> $GITHUB_ENV
+            echo "ORT_INCLUDE_LOCATION=$EXTRACT_PATH/include" >> $GITHUB_ENV
+            
+            echo "DEBUG: Listing Intel lib contents"
+            ls -al "$EXTRACT_PATH/lib"
           fi
         shell: bash
 
