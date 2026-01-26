@@ -45,7 +45,7 @@ jobs:
             acceleration: 'CPU'
 
           # 5. Linux (x86_64)
-          - platform: 'ubuntu-22.04'
+          - platform: 'ubuntu-24.04'
             name: 'Linux (x86_64)'
             target: 'x86_64-unknown-linux-gnu'
             cuda: true
@@ -108,6 +108,12 @@ jobs:
           choco install llvm -y
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
+          
+      - name: Configure Clang for ARM64 (Windows)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+           echo "CC=clang-cl" >> $env:GITHUB_ENV
+           echo "CXX=clang-cl" >> $env:GITHUB_ENV
       # --- Rust Setup ---
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -123,27 +129,7 @@ jobs:
         if: runner.os != 'Windows'
         run: rm -f src-tauri/.cargo/config.toml
  
-      # macOS Dependencies
-      - name: Install macOS Dependencies
-        if: contains(matrix.platform, 'macos')
-        run: |
-          if [[ "${{ matrix.target }}" == *"aarch64"* ]]; then
-            echo "🍏 macOS ARM (Apple Silicon) - Using Homebrew"
-            brew install onnxruntime
-            echo "ORT_STRATEGY=system" >> $GITHUB_ENV
-            echo "ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib" >> $GITHUB_ENV
-          else
-            echo "💻 macOS Intel (x86_64) - Downloading manual binary"
-            # Manually download ONNX Runtime 1.16.3 for Intel Mac
-            wget https://github.com/microsoft/onnxruntime/releases/download/v1.16.3/onnxruntime-osx-x86_64-1.16.3.tgz
-            tar -xzf onnxruntime-osx-x86_64-1.16.3.tgz
-            
-            EXTRACT_PATH="$(pwd)/onnxruntime-osx-x86_64-1.16.3"
-            echo "ORT_STRATEGY=system" >> $GITHUB_ENV
-            echo "ORT_LIB_LOCATION=$EXTRACT_PATH/lib" >> $GITHUB_ENV
-            echo "ORT_INCLUDE_LOCATION=$EXTRACT_PATH/include" >> $GITHUB_ENV
-          fi
-        shell: bash
+
 
       # --- JS/Frontend Setup ---
       - name: Setup Bun
@@ -160,8 +146,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Fix for whisper.cpp on older macOS targets
-          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '10.15' || '' }}
-          CMAKE_OS_CONTEXT_TARGET: ${{ contains(matrix.platform, 'macos') && '10.15' || '' }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          CMAKE_OS_CONTEXT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           # CUDA env vars
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         with:
