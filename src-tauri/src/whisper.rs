@@ -51,8 +51,15 @@ pub struct WhisperManager {
 
 // specialized "callback" function to hide confusing logs from the C++ library
 // "unsafe" means we are doing dangerous manual memory management (needed for C interop)
+// macOS bindings expect u32 for log level, others (Windows/Linux) usually expect i32
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn null_log_callback(_level: u32, _text: *const c_char, _user_data: *mut c_void) {
+    // Do nothing.
+}
+
+#[cfg(not(target_os = "macos"))]
 unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
-    // Do nothing. This swallows the logs so they don't clutter our terminal.
+    // Do nothing.
 }
 
 impl WhisperManager {

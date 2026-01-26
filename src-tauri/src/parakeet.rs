@@ -284,8 +284,16 @@ impl ParakeetManager {
 
     fn try_gpu_nemotron(path: &str) -> Result<Nemotron, String> {
         use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-        Nemotron::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+
+        #[cfg(feature = "cuda")]
+        {
+            let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
+            Nemotron::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err("CUDA feature not enabled".to_string())
+        }
     }
 
     fn try_cpu_nemotron(path: &str) -> Result<Nemotron, String> {
@@ -294,8 +302,16 @@ impl ParakeetManager {
 
     fn try_gpu_ctc(path: &str) -> Result<Parakeet, String> {
         use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-        Parakeet::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+
+        #[cfg(feature = "cuda")]
+        {
+            let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
+            Parakeet::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err("CUDA feature not enabled".to_string())
+        }
     }
 
     fn try_cpu_ctc(path: &str) -> Result<Parakeet, String> {
@@ -312,8 +328,16 @@ impl ParakeetManager {
 
     fn try_gpu_eou(path: &str) -> Result<ParakeetEOU, String> {
         use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-        ParakeetEOU::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+
+        #[cfg(feature = "cuda")]
+        {
+            let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
+            ParakeetEOU::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err("CUDA feature not enabled".to_string())
+        }
     }
 
     fn try_cpu_eou(path: &str) -> Result<ParakeetEOU, String> {
@@ -330,8 +354,16 @@ impl ParakeetManager {
 
     fn try_gpu_tdt(path: &str) -> Result<ParakeetTDT, String> {
         use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-        ParakeetTDT::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+
+        #[cfg(feature = "cuda")]
+        {
+            let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
+            ParakeetTDT::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err("CUDA feature not enabled".to_string())
+        }
     }
 
     fn try_cpu_tdt(path: &str) -> Result<ParakeetTDT, String> {
