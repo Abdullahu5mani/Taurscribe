@@ -136,10 +136,6 @@ jobs:
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '10.15' || '' }}
           # CUDA env vars
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
-          # ORT Linking for macOS
-          ORT_STRATEGY: ${{ contains(matrix.platform, 'macos') && 'system' || 'download' }}
-          ORT_LIB_LOCATION: ${{ contains(matrix.platform, 'macos') && '/opt/homebrew/opt/onnxruntime/lib' || '' }} # Default to M1 path, but correct one is dynamically found in previous step if manual env var set. 
-          # Actually, better to just let the previous step set ENV vars globally.
         with:
           args: --target ${{ matrix.target }}
 
