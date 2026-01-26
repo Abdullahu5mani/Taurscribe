@@ -199,7 +199,8 @@ jobs:
       - name: Clean local paths from cargo config (Windows)
         if: runner.os == 'Windows'
         run: |
-          (Get-Content src-tauri/.cargo/config.toml) -replace 'C:/Users/abdul/OneDrive/Desktop/Taurscribe', '${{ github.workspace }}' | Set-Content src-tauri/.cargo/config.toml
+          $workspace = '${{ github.workspace }}' -replace '\\', '/'
+          (Get-Content src-tauri/.cargo/config.toml) -replace 'C:/Users/abdul/OneDrive/Desktop/Taurscribe', $workspace | Set-Content src-tauri/.cargo/config.toml
           cat src-tauri/.cargo/config.toml
 
       - name: Clean Windows-specific paths from cargo config on Unix
@@ -244,6 +245,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MSBUILDDISABLENODEREUSE: 1
+          # Use short path for build artifacts to avoid path length issues
+          CARGO_TARGET_DIR: ${{ contains(matrix.platform, 'windows') && 'C:\\bld' || '' }}
           # macOS: ONNX Runtime deployment target (both env vars for Rust and CMake)
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
