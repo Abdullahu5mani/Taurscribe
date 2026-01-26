@@ -115,8 +115,8 @@ jobs:
           if [[ "${{ matrix.target }}" == *"aarch64"* ]]; then
             echo "🍏 macOS ARM (Apple Silicon) - Using Homebrew"
             brew install onnxruntime
-            echo "ORT_STRATEGY=system" >> $env:GITHUB_ENV
-            echo "ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib" >> $env:GITHUB_ENV
+            echo "ORT_STRATEGY=system" >> $GITHUB_ENV
+            echo "ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib" >> $GITHUB_ENV
           else
             echo "💻 macOS Intel (x86_64) - Downloading manual binary"
             # Manually download ONNX Runtime 1.17.3 (Compatible with ort 2.0.0-rcs) for Intel Mac
@@ -124,8 +124,8 @@ jobs:
             tar -xzf onnxruntime-osx-x86_64-1.17.3.tgz
             
             # Set environment variables for this job
-            echo "ORT_STRATEGY=system" >> $env:GITHUB_ENV
-            echo "ORT_LIB_LOCATION=$(pwd)/onnxruntime-osx-x86_64-1.17.3/lib" >> $env:GITHUB_ENV
+            echo "ORT_STRATEGY=system" >> $GITHUB_ENV
+            echo "ORT_LIB_LOCATION=$(pwd)/onnxruntime-osx-x86_64-1.17.3/lib" >> $GITHUB_ENV
           fi
         shell: bash
 
