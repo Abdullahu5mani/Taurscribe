@@ -142,6 +142,7 @@ jobs:
             libvulkan-dev \
             vulkan-tools \
             vulkan-utility-libraries-dev \
+            shaderc \
             glslang-tools \
             spirv-tools \
             libshaderc-dev \
