@@ -5266,6 +5266,7 @@ env:
 - ✅ Compatible with all **Apple Silicon Macs** (M1/M2/M3/M4)
 - ✅ Compatible with **Intel Macs** running Ventura 13.4 or newer
 - ✅ Full **ONNX Runtime** support (Parakeet + Silero VAD)
+- ✅ **CoreML** hardware acceleration on Apple Silicon
 - ❌ Will NOT run on macOS 13.3 or older
 
 **macOS Version Reference:**
@@ -5276,6 +5277,10 @@ env:
 - macOS 12.x (Monterey) ❌
 - macOS 11.x (Big Sur) ❌
 - macOS 10.15 (Catalina) ❌
+
+**ONNX Runtime Execution Providers (macOS):**
+- 🍎 **CoreML**: Hardware-accelerated on Apple Silicon (M1/M2/M3/M4)
+- ⚡ **XNNPACK**: CPU optimization (fallback for Intel Macs)
 
 ### Windows Build Configuration
 
@@ -5327,12 +5332,25 @@ choco install llvm -y
 
 - ✅ Requires LLVM/Clang to be installed on the build machine
 - ✅ Uses `clang-cl` (Clang with MSVC compatibility layer)
-- ✅ Compatible with Windows 11 ARM and future ARM-based Windows PCs
+- ✅ Compatible with Windows 11 ARM and Qualcomm Snapdragon X PCs
+- ✅ **DirectML** hardware acceleration (NPU/GPU)
+- ✅ **XNNPACK** CPU optimization
 - ⚠️ Cannot build with MSVC alone
+
+**ONNX Runtime Execution Providers (Windows ARM64):**
+- 🔷 **DirectML**: Hardware-accelerated on Qualcomm Snapdragon X Elite/Plus NPU
+- ⚡ **XNNPACK**: CPU optimization (fallback)
 
 #### Windows x86_64
 
-Standard MSVC toolchain works perfectly. No special configuration needed beyond CUDA/Vulkan for GPU support.
+Standard MSVC toolchain works perfectly. Multiple GPU acceleration options available.
+
+**ONNX Runtime Execution Providers (Windows x86_64):**
+- 🟢 **CUDA**: NVIDIA GPU acceleration (RTX 20/30/40 series) - **Primary**
+- 🔷 **DirectML**: Universal Windows GPU acceleration (AMD/Intel fallback)
+- 🚀 **TensorRT**: NVIDIA optimized inference engine (even faster than CUDA)
+- 🌐 **WebGPU**: Cross-platform GPU API (additional fallback)
+- ⚡ **XNNPACK**: CPU optimization (last resort)
 
 ### Linux Build Configuration
 
@@ -5390,7 +5408,40 @@ sudo apt-get update
 sudo apt-get -y install cuda-toolkit-12-6
 ```
 
-**Without CUDA**: The build will automatically fall back to Vulkan or CPU.
+**Without CUDA**: The build will automatically fall back to WebGPU, Vulkan, or CPU.
+
+**ONNX Runtime Execution Providers (Linux x86_64):**
+- 🟢 **CUDA**: NVIDIA GPU acceleration (primary)
+- 🚀 **TensorRT**: NVIDIA optimized inference engine (even faster)
+- 🌐 **WebGPU**: Cross-platform GPU API (AMD/Intel fallback)
+- ⚡ **XNNPACK**: CPU optimization (fallback)
+
+#### Linux ARM64 (Raspberry Pi, etc.)
+
+**ONNX Runtime Execution Providers (Linux ARM64):**
+- ⚡ **XNNPACK**: CPU optimization for ARM processors
+
+---
+
+## Platform-Specific Acceleration Summary
+
+Here's a quick reference for what GPU/NPU acceleration is available on each platform:
+
+| Platform | Primary Acceleration | Fallback Options | Hardware Support |
+|----------|---------------------|------------------|------------------|
+| **macOS ARM64** | CoreML (Neural Engine) | XNNPACK (CPU) | M1/M2/M3/M4 Neural Engine |
+| **macOS Intel** | XNNPACK (CPU) | - | CPU only |
+| **Windows x86_64** | CUDA → TensorRT | DirectML → WebGPU → XNNPACK | NVIDIA RTX / AMD / Intel |
+| **Windows ARM64** | DirectML (NPU) | XNNPACK (CPU) | Snapdragon X Elite/Plus NPU |
+| **Linux x86_64** | CUDA → TensorRT | WebGPU → XNNPACK | NVIDIA GPUs |
+| **Linux ARM64** | XNNPACK (CPU) | - | Raspberry Pi, etc. |
+
+**Key Points:**
+- 🍎 **CoreML** on Apple Silicon uses the **Neural Engine** (dedicated ML accelerator)
+- 🟢 **CUDA** + **TensorRT** on NVIDIA GPUs provides **fastest** inference
+- 🔷 **DirectML** on Windows provides **universal** GPU support (AMD/Intel/NVIDIA)
+- 🌐 **WebGPU** works across **all modern GPUs** (cross-platform fallback)
+- ⚡ **XNNPACK** optimizes **CPU** inference when no GPU available
 
 ---
 

@@ -49,25 +49,51 @@ ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 # -------------------------------------------------------------------------
 
 # 2. macOS Configuration (ARM & Intel)
-# Note: CoreML is disabled as parakeet-rs docs mention it is unstable/broken.
-# CPU performance on Apple Silicon is reported to be very good.
+# CoreML: Hardware-accelerated on Apple Silicon (M1/M2/M3/M4)
+# XNNPACK: Cross-platform CPU optimization (fallback for Intel Macs)
 # -------------------------------------------------------------------------
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "coreml", "xnnpack"] }
 
-# 3. Windows & Linux (x86_64) -> CUDA
+# 3. Windows (x86_64) -> CUDA + DirectML + TensorRT
+# CUDA: NVIDIA GPU acceleration (primary)
+# DirectML: Universal Windows GPU acceleration (AMD/Intel fallback)
+# TensorRT: NVIDIA optimized inference
+# WebGPU: Cross-platform GPU (additional fallback)
+# XNNPACK: CPU optimization
 # -------------------------------------------------------------------------
-[target.'cfg(all(any(target_os = "windows", target_os = "linux"), target_arch = "x86_64"))'.dependencies]
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda", "vulkan"] }
 parakeet-rs = { version = "=0.3.0", features = ["cuda", "directml"] }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "directml"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "directml", "tensorrt", "webgpu", "xnnpack"] }
 
-# 4. Windows (ARM64) -> DirectML
+# 3b. Linux (x86_64) -> CUDA + TensorRT
+# CUDA: NVIDIA GPU acceleration (primary)
+# TensorRT: NVIDIA optimized inference
+# WebGPU: Cross-platform GPU (AMD/Intel fallback)
+# XNNPACK: CPU optimization
+# -------------------------------------------------------------------------
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda", "vulkan"] }
+parakeet-rs = { version = "=0.3.0", features = ["cuda"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "tensorrt", "webgpu", "xnnpack"] }
+
+# 4. Windows (ARM64) -> DirectML + XNNPACK
+# DirectML: Hardware-accelerated on Qualcomm Snapdragon X ARM processors
+# XNNPACK: Cross-platform CPU optimization
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "directml"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "directml", "xnnpack"] }
 parakeet-rs = { version = "=0.3.0", features = ["directml"] }
+
+# 5. Linux (ARM64) -> XNNPACK
+# XNNPACK: CPU optimization for ARM processors (Raspberry Pi, etc.)
+# -------------------------------------------------------------------------
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+parakeet-rs = { version = "=0.3.0" }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack"] }
 
 # Speed up dev builds by optimizing dependencies but not your code
 [profile.dev]

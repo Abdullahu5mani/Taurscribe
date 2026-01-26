@@ -3102,6 +3102,7 @@ version = "2.0.0-rc.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06503bb33f294c5f1ba484011e053bfa6ae227074bdb841e9863492dc5960d4b"
 dependencies = [
+ "glob",
  "hmac-sha256",
  "lzma-rust2",
  "ureq",
