@@ -61,12 +61,20 @@ jobs:
           #   target: 'aarch64-unknown-linux-gnu'
           #   cuda: false
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.platform == 'windows-latest' && 'windows-2019' || matrix.platform }}
     name: Build - ${{ matrix.name }}
 
     steps:
+      - name: Enable long paths for Git
+        run: git config --global core.longpaths true
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Enable Long File Paths (Windows)
+        if: contains(matrix.platform, 'windows')
+        run: |
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWord -Force
 
       # --- CUDA Setup (Windows/Linux x86 Only) ---
       - name: Install CUDA Toolkit (Linux)
