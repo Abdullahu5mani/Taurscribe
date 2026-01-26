@@ -201,6 +201,8 @@ jobs:
         run: |
           $workspace = '${{ github.workspace }}' -replace '\\', '/'
           (Get-Content src-tauri/.cargo/config.toml) -replace 'C:/Users/abdul/OneDrive/Desktop/Taurscribe', $workspace | Set-Content src-tauri/.cargo/config.toml
+          # Remove WHISPER_LIB_DIR to force build from source
+          (Get-Content src-tauri/.cargo/config.toml) | Where-Object { $_ -notmatch 'WHISPER_LIB_DIR' } | Set-Content src-tauri/.cargo/config.toml
           cat src-tauri/.cargo/config.toml
 
       - name: Clean Windows-specific paths from cargo config on Unix
@@ -219,6 +221,11 @@ jobs:
 
 
       # --- JS/Frontend Setup ---
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -243,6 +250,7 @@ jobs:
 
       - name: Build Tauri application
         uses: tauri-apps/tauri-action@v0
+
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MSBUILDDISABLENODEREUSE: 1
