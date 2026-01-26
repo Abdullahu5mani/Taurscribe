@@ -108,6 +108,15 @@ jobs:
         if: runner.os != 'Windows'
         run: rm -f src-tauri/.cargo/config.toml
 
+      # macOS Dependencies
+      - name: Install macOS Dependencies
+        if: contains(matrix.platform, 'macos')
+        run: |
+          brew install onnxruntime
+          echo "ORT_STRATEGY=system" >> $env:GITHUB_ENV
+          echo "ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib" >> $env:GITHUB_ENV
+        shell: bash
+
       # --- JS/Frontend Setup ---
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -127,6 +136,10 @@ jobs:
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '10.15' || '' }}
           # CUDA env vars
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          # ORT Linking for macOS
+          ORT_STRATEGY: ${{ contains(matrix.platform, 'macos') && 'system' || 'download' }}
+          ORT_LIB_LOCATION: ${{ contains(matrix.platform, 'macos') && '/opt/homebrew/opt/onnxruntime/lib' || '' }} # Default to M1 path, but correct one is dynamically found in previous step if manual env var set. 
+          # Actually, better to just let the previous step set ENV vars globally.
         with:
           args: --target ${{ matrix.target }}
 
