@@ -5211,15 +5211,22 @@ tauri::api::shell::open("file.txt")?;
 
 ### macOS Build Configuration
 
-**⚠️ IMPORTANT**: Taurscribe requires macOS 10.15 (Catalina) or newer to build.
+**⚠️ IMPORTANT**: Taurscribe requires **macOS 13.4 (Ventura)** or newer to build and run.
 
 **Why?**
 
-The `whisper.cpp` dependency uses C++17 `std::filesystem`, which was only introduced in macOS 10.15. Building with an older deployment target will fail with errors like:
+The project has two key dependencies with macOS version requirements:
 
-```
-error: 'path' is unavailable: introduced in macOS 10.15
-```
+1. **ONNX Runtime** (highest requirement): macOS **13.4+**
+   - Used by: Parakeet transcription engine, Silero VAD (Voice Activity Detection)
+   - Required for: Apple Silicon (ARM64) optimizations
+   - Error if missing: Runtime crashes or "library not loaded" errors
+
+2. **C++17 `std::filesystem`**: macOS **10.15+**
+   - Used by: `whisper.cpp` dependency
+   - Error if missing: `'path' is unavailable: introduced in macOS 10.15`
+
+Since ONNX Runtime requires **13.4**, this becomes our minimum deployment target (it also satisfies the 10.15 requirement).
 
 **Solution:**
 
@@ -5229,35 +5236,46 @@ This is automatically configured in three places:
 ```rust
 #[cfg(target_os = "macos")]
 {
-    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=10.15");
-    std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "10.15");
+    // ONNX Runtime requires macOS 13.4+ on Apple Silicon
+    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
+    std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "13.4");
 }
 ```
 
 2. **`.cargo/config.toml`** (compiler flags):
 ```toml
 [target.x86_64-apple-darwin]
-rustflags = ["-C", "link-arg=-mmacosx-version-min=10.15"]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=13.4"]
 
 [target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-mmacosx-version-min=10.15"]
+rustflags = ["-C", "link-arg=-mmacosx-version-min=13.4"]
 
 [env]
-MACOSX_DEPLOYMENT_TARGET = "10.15"
+MACOSX_DEPLOYMENT_TARGET = "13.4"
 ```
 
 3. **`.github/workflows/build.yml`** (CI environment):
 ```yaml
 env:
-  MACOSX_DEPLOYMENT_TARGET: "10.15"
+  MACOSX_DEPLOYMENT_TARGET: "13.4"
 ```
 
 **What this means for users:**
 
-- ✅ App will run on macOS 10.15 (Catalina) and newer
-- ✅ Compatible with all Apple Silicon Macs (M1/M2/M3/M4)
-- ✅ Compatible with Intel Macs running Catalina or newer
-- ❌ Will NOT run on macOS 10.14 (Mojave) or older
+- ✅ App will run on **macOS 13.4 (Ventura)** and newer
+- ✅ Compatible with all **Apple Silicon Macs** (M1/M2/M3/M4)
+- ✅ Compatible with **Intel Macs** running Ventura 13.4 or newer
+- ✅ Full **ONNX Runtime** support (Parakeet + Silero VAD)
+- ❌ Will NOT run on macOS 13.3 or older
+
+**macOS Version Reference:**
+- macOS 15.x (Sequoia) ✅
+- macOS 14.x (Sonoma) ✅
+- macOS 13.4+ (Ventura) ✅ **← Minimum Required**
+- macOS 13.0-13.3 (Ventura) ❌
+- macOS 12.x (Monterey) ❌
+- macOS 11.x (Big Sur) ❌
+- macOS 10.15 (Catalina) ❌
 
 ### Windows Build Configuration
 

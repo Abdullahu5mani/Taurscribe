@@ -2,12 +2,13 @@ fn main() {
     // Standard Tauri build process
     tauri_build::build();
 
-    // CUSTOM: Set minimum macOS deployment target for std::filesystem support
+    // CUSTOM: Set minimum macOS deployment target for ONNX Runtime
     #[cfg(target_os = "macos")]
     {
-        // whisper.cpp requires C++17 std::filesystem which needs macOS 10.15+
-        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=10.15");
-        std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "10.15");
+        // ONNX Runtime requires macOS 13.4+ on Apple Silicon
+        // (also satisfies whisper.cpp C++17 std::filesystem requirement which needs 10.15+)
+        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
+        std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "13.4");
     }
 
     // CUSTOM: Force Clang for ARM64 Windows (whisper.cpp requirement)

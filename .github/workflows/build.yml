@@ -157,8 +157,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Fix for whisper.cpp C++17 filesystem support (requires macOS 10.15+)
-          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '10.15' || '' }}
+          # Fix for ONNX Runtime on Apple Silicon (requires macOS 13.4+)
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           # CUDA env vars
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
         with:
