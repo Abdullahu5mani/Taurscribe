@@ -260,6 +260,11 @@ jobs:
           # Disable AVX to prevent crashes on some CI runners
           WHISPER_NO_AVX: "1"
           WHISPER_NO_AVX2: "1"
+          # FORCE CUDA architectures (headless CI cannot detect 'native')
+          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
+          # Explicitly disable AVX for CMake
+          GGML_AVX: "OFF"
+          GGML_AVX2: "OFF"
           # macOS: ONNX Runtime deployment target (both env vars for Rust and CMake)
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
