@@ -191,6 +191,7 @@ jobs:
         run: |
            echo "CC=clang-cl" >> $env:GITHUB_ENV
            echo "CXX=clang-cl" >> $env:GITHUB_ENV
+           echo "CXXFLAGS=/EHsc" >> $env:GITHUB_ENV
            # Note: Do NOT set CMAKE_GENERATOR_TOOLSET with Ninja as it causes a build error.
            # The CC/CXX variables above are sufficient for Ninja to use clang-cl.
 
