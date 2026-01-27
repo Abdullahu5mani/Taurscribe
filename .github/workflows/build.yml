@@ -1,12 +1,15 @@
 name: Build & Test
+# This workflow automates the building and testing of the Taurscribe application.
+# It runs on every push and pull request to ensure code quality and stability across platforms.
 
 on:
   push:
-    branches: ['*']
+    branches: ['*']        # Trigger on push to any branch
   pull_request:
-    branches: ['*']
+    branches: ['*']        # Trigger on pull requests to any branch
 
-# Cancel in-progress runs when a new workflow is triggered
+# Cancel in-progress runs when a new workflow is triggered for the same branch/ref
+# This saves CI minutes and prevents out-of-date builds from queuing up.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -14,10 +17,12 @@ concurrency:
 jobs:
   build:
     strategy:
-      fail-fast: false
+      fail-fast: false     # If one platform fails, don't automatically cancel the others. Helps debug multi-platform issues.
       matrix:
         include:
-          # 1. macOS (Apple Silicon) - STABLE (DO NOT CHANGE LOGIC)
+          # --- 1. macOS (Apple Silicon) ---
+          # Uses the latest macOS runner which runs on Apple Silicon (M1/M2/etc).
+          # Vital for testing CoreML acceleration for Whisper.
           - platform: 'macos-latest'
             name: 'macOS (Apple Silicon)'
             target: 'aarch64-apple-darwin'
@@ -26,7 +31,9 @@ jobs:
             arch: 'ARM64'
             acceleration: 'Metal'
 
-          # 3. Windows (x86_64)
+          # --- 2. Windows (x86_64) ---
+          # Standard Windows builds. "windows-latest" currently points to Windows Server 2022.
+          # We enable CUDA here for NVIDIA GPU acceleration.
           - platform: 'windows-latest'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
@@ -35,7 +42,9 @@ jobs:
             arch: 'x86_64'
             acceleration: 'CUDA'
 
-          # 4. Windows (ARM64)
+          # --- 3. Windows (ARM64) ---
+          # Cross-compilation for Windows on ARM (Snapdragon, Surface Pro X).
+          # Does not support CUDA, relies on CPU fallback or NPU (future).
           - platform: 'windows-latest'
             name: 'Windows (ARM64)'
             target: 'aarch64-pc-windows-msvc'
@@ -44,7 +53,9 @@ jobs:
             arch: 'ARM64'
             acceleration: 'CPU'
 
-          # 5. Linux (x86_64)
+          # --- 4. Linux (x86_64) ---
+          # Standard Linux build on Ubuntu 24.04 (Noble Numbat).
+          # Includes CUDA support for Linux users with NVIDIA cards.
           - platform: 'ubuntu-24.04'
             name: 'Linux (x86_64)'
             target: 'x86_64-unknown-linux-gnu'
@@ -53,32 +64,36 @@ jobs:
             arch: 'x86_64'
             acceleration: 'CUDA'
           
-          # Note: Linux ARM builds are complex on GitHub Actions due to GTK linking.
-          # This configuration attempts it but it may require a dedicated ARM runner or container.
-          # We use standard runner but specify the target.
-          # - platform: 'ubuntu-22.04' 
-          #   name: 'Linux (ARM64)'
-          #   target: 'aarch64-unknown-linux-gnu'
-          #   cuda: false
+          # Note: Linux ARM builds (e.g., Raspberry Pi) are commented out.
+          # They require complex cross-compilation setup (linker issues with GTK/Webkit).
 
+    # Use the platform specified in the matrix.
     runs-on: ${{ matrix.platform }}
     name: Build - ${{ matrix.name }}
 
     steps:
+      # Git Long Paths: Essential for Windows to handle deeply nested folders in node_modules and Rust crates.
       - name: Enable long paths for Git
         run: git config --global core.longpaths true
 
+      # Check out the source code from the repository.
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # --- CUDA Setup (Windows/Linux x86 Only) ---
+      # This block installs the NVIDIA CUDA Toolkit.
+      # It is ONLY run if 'cuda: true' in the matrix matches the platform.
+
       - name: Install CUDA Toolkit (Linux)
         if: contains(matrix.platform, 'ubuntu') && matrix.cuda == true
         run: |
+          # Download the CUDA keyring for Ubuntu 24.04 to get access to NVIDIA repos
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
+          # Install the toolkit (compiler, libraries, etc.)
           sudo apt-get -y install cuda-toolkit-12-6
+          # Set Environment variables so build scripts can find CUDA
           echo "CUDA_PATH=/usr/local/cuda-12.6" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
           echo "PATH=/usr/local/cuda-12.6/bin:$PATH" >> $GITHUB_ENV
@@ -88,39 +103,35 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.21
         id: cuda-toolkit
         with:
-          cuda: '12.5.1'
-          method: 'network'
-          use-github-cache: false
+          cuda: '12.5.1'          # Version compatible with common drivers
+          method: 'network'       # Download dynamically
+          use-github-cache: false # Disable caching to prevent stale artifacts
           use-local-cache: false
 
       - name: Show CUDA Info
         if: matrix.cuda == true
         run: |
+          # Verify installation by printing version configuration
           nvcc --version
           echo "CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}"
           
       # --- System Dependencies ---
       
       # macOS Dependencies
+      # macOS runners come with Xcode, but we verify tools and set deployment targets.
       - name: Verify macOS Build Tools
         if: contains(matrix.platform, 'macos')
         run: |
           echo "=== macOS Build Environment ==="
-          echo "macOS Version:"
           sw_vers
-          echo ""
-          echo "Xcode Version:"
           xcodebuild -version || echo "Xcode command line tools not found"
-          echo ""
-          echo "CMake Version:"
           cmake --version || { echo "ERROR: CMake not found!"; brew install cmake; }
-          echo ""
-          echo "Checking deployment target:"
+          # Set deployment target to ensure compatibility with recent macOS versions
           echo "MACOSX_DEPLOYMENT_TARGET will be set to: 13.4"
-          echo ""
-          echo "=== Verification complete ==="
       
       # Linux Dependencies
+      # Install system libraries needed for Tauri (WebKit, GTK, AppIndicator)
+      # and build tools (build-essential, cmake).
       - name: Install Linux System Dependencies
         if: contains(matrix.platform, 'ubuntu')
         run: |
@@ -137,6 +148,7 @@ jobs:
             libgtk-3-dev \
             cmake
 
+      # Install Vulkan SDK on Linux for GPU-accelerated audio processing (Whisper Vulkan backend)
       - name: Install Vulkan SDK (Linux)
         if: contains(matrix.platform, 'ubuntu')
         uses: humbletim/install-vulkan-sdk@v1.2
@@ -148,23 +160,11 @@ jobs:
         if: contains(matrix.platform, 'ubuntu')
         run: |
           echo "=== Vulkan SDK Verification ==="
-          echo "VULKAN_SDK: $VULKAN_SDK"
-          echo "VK_ICD_FILENAMES: $VK_ICD_FILENAMES"
-          echo "VK_LAYER_PATH: $VK_LAYER_PATH"
-          echo ""
-          echo "Checking glslc (REQUIRED)..."
+          # Check for Shader Compiler (glslc) needed by whisper-rs
           which glslc && glslc --version || { echo "ERROR: glslc not found!"; exit 1; }
-          echo ""
-          echo "Checking SPIR-V tools..."
-          which spirv-as && spirv-as --version || echo "INFO: spirv-as not found (optional)"
-          which spirv-opt && spirv-opt --version || echo "INFO: spirv-opt not found (optional)"
-          echo ""
-          echo "Checking Vulkan runtime..."
-          which vulkaninfo && vulkaninfo --summary || echo "INFO: vulkaninfo failed (no GPU in CI, expected)"
-          echo ""
-          echo "=== Verification complete - glslc is available ==="
 
-      # Windows Dependencies
+      # Windows Dependencies (Critical)
+      # 1. Vulkan SDK: Required for whisper-rs Vulkan backend on Windows
       - name: Install Vulkan SDK (Windows)
         if: matrix.platform == 'windows-latest' && matrix.arch == 'x86_64'
         uses: humbletim/install-vulkan-sdk@v1.2
@@ -172,30 +172,43 @@ jobs:
           version: 1.4.309.0
           cache: true
 
+      # 2. Build Tools (LLVM, NASM, Ninja)
+      # - LLVM: Required for bindgen to generate C++ bindings for Rust.
+      # - NASM: Assembler required for some crypto/media libraries.
+      # - Ninja: High-speed build system. Replaces MSBuild to fix "File path too long" errors.
       - name: Install Windows Build Dependencies
         if: contains(matrix.platform, 'windows')
         run: |
           choco install llvm nasm ninja -y
+          # Point 'bindgen' to the LLVM installation
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-
           
+      # 3. Clang configuration for ARM64 Cross-compilation (Windows)
+      # Since we are building for ARM64 on x64, we need to explicitly tell CMake 
+      # to use the clang-cl compiler provided by Visual Studio.
       - name: Configure Clang for ARM64 (Windows)
         if: matrix.target == 'aarch64-pc-windows-msvc'
         run: |
            echo "CC=clang-cl" >> $env:GITHUB_ENV
            echo "CXX=clang-cl" >> $env:GITHUB_ENV
-           echo "CMAKE_GENERATOR_TOOLSET=ClangCL" >> $env:GITHUB_ENV
+           # Note: Do NOT set CMAKE_GENERATOR_TOOLSET with Ninja as it causes a build error.
+           # The CC/CXX variables above are sufficient for Ninja to use clang-cl.
+
       # --- Rust Setup ---
+      # Install the Rust toolchain with the specific target for the matrix job.
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
+      # Cache Cargo registry and target directory to speed up future builds.
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
 
+      # Clean config: Rewrite local paths in .cargo/config.toml to match CI environment.
+      # This file often contains absolute paths from the developer's machine that break CI.
       - name: Clean local paths from cargo config (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -208,7 +221,8 @@ jobs:
       - name: Clean Windows-specific paths from cargo config on Unix
         if: runner.os != 'Windows'
         run: |
-          # Remove Windows-specific sections but keep macOS and Linux configs
+          # Strip out Windows-specific config sections when running on Linux/macOS
+          # to prevent "unknown field" errors or invalid paths.
           sed -i.bak '/\[target\.x86_64-pc-windows-msvc\]/,/^$/d' src-tauri/.cargo/config.toml || true
           sed -i.bak '/\[target\.x86_64-pc-windows-gnu\]/,/^$/d' src-tauri/.cargo/config.toml || true
           sed -i.bak '/WHISPER_LIB_DIR/d' src-tauri/.cargo/config.toml || true
@@ -234,13 +248,18 @@ jobs:
       - name: Install frontend dependencies
         run: bun install
 
+      # Clear CMake cache for ARM64 builds to prevent cross-compilation contamination
       - name: Clean CMake Cache
         if: matrix.target == 'aarch64-pc-windows-msvc'
         run: |
           Get-ChildItem -Path C:\bld -Recurse -Filter CMakeCache.txt -ErrorAction SilentlyContinue | Remove-Item -Force
           Get-ChildItem -Path C:\bld -Recurse -Filter CMakeFiles -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 
-      # --- Build ---
+      # --- Build Process ---
+      
+      # Enable Long File Paths in Registry: 
+      # Even with git config, Windows OS limits paths to 260 chars unless this Registry key is set.
+      # Also set CARGO_TARGET_DIR to C:\bld to shorten path length for intermediate artifacts.
       - name: Enable Long File Paths (Windows)
         if: contains(matrix.platform, 'windows')
         run: |
@@ -248,35 +267,49 @@ jobs:
           git config --system core.longpaths true
           echo "CARGO_TARGET_DIR=C:\bld" >> $env:GITHUB_ENV
 
+      # Initialize Visual Studio Developer Environment ("Developer Command Prompt").
+      # This adds cl.exe (C++ compiler), link.exe, and other MSVC tools to PATH.
+      # Required for Ninja/CMake to find the compiler without using MSBuild.
       - name: Setup MSVC Developer Command Prompt
         if: contains(matrix.platform, 'windows')
         uses: ilammy/msvc-dev-cmd@v1
 
+      # Run the Build/Check
       - name: Check application
         run: |
           cd src-tauri
           cargo check --verbose --target ${{ matrix.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MSBUILDDISABLENODEREUSE: 1
-          RUST_BACKTRACE: 1
-          CMAKE_BUILD_PARALLEL_LEVEL: 4
-          CMAKE_VERBOSE_MAKEFILE: "ON"
+          MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
+          RUST_BACKTRACE: 1              # Print full stack traces on panic
+          CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
+          CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
+          
+          # Use Ninja Generator for CMake on Windows.
+          # MSBuild (Visual Studio) often fails with "Path too long" errors in deep dependency trees.
+          # Ninja is faster and does not have this limitation.
           CMAKE_GENERATOR: "Ninja"
-          # Disable AVX to prevent crashes on some CI runners
+          
+          # Disable AVX instructions for Whisper:
+          # GitHub Action runners (especially older/virtualized ones) may crash with AVX.
+          # We force these off to ensure stability in CI.
           WHISPER_NO_AVX: "1"
           WHISPER_NO_AVX2: "1"
-          # FORCE CUDA architectures (headless CI cannot detect 'native')
-          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
-          # Explicitly disable AVX for CMake
           GGML_AVX: "OFF"
           GGML_AVX2: "OFF"
-          # macOS: ONNX Runtime deployment target (both env vars for Rust and CMake)
+          
+          # Force CUDA architectures:
+          # In CI (headless), cmake cannot auto-detect the GPU architecture.
+          # We specify a list of common supported architectures (Pascal, Volta, Turing, Ampere).
+          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
+          
+          # macOS: Set minimum deployment target for ONNX Runtime/CoreML support.
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
-          # CUDA: NVIDIA GPU toolkit
+          
+          # Pass environment variables set in previous steps to the build process
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
-          # Vulkan: Linux SDK paths (set by previous step on Linux)
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}

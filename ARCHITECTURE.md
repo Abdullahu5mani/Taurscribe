@@ -9,20 +9,21 @@
 
 1. [What is Taurscribe?](#what-is-taurscribe)
 2. [The Big Picture](#the-big-picture)
-3. [🎙️ Audio Processing: Whisper vs Parakeet](#-audio-processing-whisper-vs-parakeet)
-4. [Complete Audio Processing Flow](#-complete-audio-processing-flow)
-5. [Rust Basics You Need to Know](#rust-basics-you-need-to-know)
-6. [Complete Flow: Start to Finish](#complete-flow-start-to-finish)
-7. [Component Deep Dive](#component-deep-dive)
-8. [Understanding Rust Ownership](#understanding-rust-ownership)
-9. [Dependencies Explained](#dependencies-explained)
-10. [Common Beginner Questions](#common-beginner-questions)
-11. [Cumulative Context Feature](#cumulative-context-feature)
-12. [Annotated Rust Code Examples](#annotated-rust-code-examples)
-13. [Model Selection Feature](#model-selection-feature)
-14. [Voice Activity Detection (VAD)](#-voice-activity-detection-vad)
-15. [📐 Module Architecture](#-module-architecture) **← NEW!**
-16. [File & Function Reference](#-file--function-reference)
+3. [🖥️ Platform Support & Hardware Acceleration](#️-platform-support--hardware-acceleration) **← NEW!**
+4. [🎙️ Audio Processing: Whisper vs Parakeet](#-audio-processing-whisper-vs-parakeet)
+5. [Complete Audio Processing Flow](#-complete-audio-processing-flow)
+6. [Rust Basics You Need to Know](#rust-basics-you-need-to-know)
+7. [Complete Flow: Start to Finish](#complete-flow-start-to-finish)
+8. [Component Deep Dive](#component-deep-dive)
+9. [Understanding Rust Ownership](#understanding-rust-ownership)
+10. [Dependencies Explained](#dependencies-explained)
+11. [Common Beginner Questions](#common-beginner-questions)
+12. [Cumulative Context Feature](#cumulative-context-feature)
+13. [Annotated Rust Code Examples](#annotated-rust-code-examples)
+14. [Model Selection Feature](#model-selection-feature)
+15. [Voice Activity Detection (VAD)](#-voice-activity-detection-vad)
+16. [📐 Module Architecture](#-module-architecture)
+17. [File & Function Reference](#-file--function-reference)
 
 ---
 
@@ -127,6 +128,502 @@ Imagine Taurscribe as a **restaurant kitchen**. Here's how the pieces work toget
     ├──► Stream 1 → 💾 Save to disk (WAV file)
     │
     └──► Stream 2 → 🤖 AI transcription → 📝 Text
+```
+
+---
+
+## 🖥️ Platform Support & Hardware Acceleration
+
+Taurscribe is designed to run on **multiple operating systems** and **leverage hardware acceleration** for maximum performance. This section explains how the application adapts to different platforms and hardware configurations.
+
+---
+
+### 🌍 Supported Platforms
+
+Taurscribe supports the following platforms with optimized builds for each:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    TAURSCRIBE PLATFORM MATRIX                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ✅ Windows (x86_64)    - CUDA + Vulkan + DirectML                  │
+│  ✅ Windows (ARM64)     - DirectML + CPU (Snapdragon X)             │
+│  ✅ macOS (Apple Silicon) - CoreML + Metal                          │
+│  ✅ macOS (Intel)       - CPU + XNNPACK                             │
+│  ✅ Linux (x86_64)      - CUDA + Vulkan + TensorRT                  │
+│  ✅ Linux (ARM64)       - CPU + XNNPACK (Raspberry Pi, etc.)        │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### ⚡ Hardware Acceleration Technologies
+
+Taurscribe intelligently selects the best acceleration technology based on your hardware:
+
+#### 🎯 **CUDA** (NVIDIA GPUs)
+**Platforms**: Windows x64, Linux x64  
+**Use Case**: NVIDIA graphics cards (GeForce RTX, Quadro, Tesla)  
+**Performance**: ⭐⭐⭐⭐⭐ **Best Performance** (up to 60x realtime)
+
+```rust
+// Enabled in Cargo.toml for Windows/Linux x86_64:
+whisper-rs = { features = ["cuda", "vulkan"] }
+parakeet-rs = { features = ["cuda"] }
+ort = { features = ["cuda", "tensorrt"] }
+```
+
+**How It Works**:
+- Whisper: CUDA kernel acceleration for encoder/decoder
+- Parakeet: CUDA execution provider for ONNX Runtime
+- Automatic fallback to CPU if NVIDIA driver not found
+
+**Detection Logic** (`whisper.rs` lines 317-322):
+```rust
+fn is_cuda_available(&self) -> bool {
+    std::process::Command::new("nvidia-smi")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+```
+
+---
+
+#### 🌋 **Vulkan** (Universal GPU)
+**Platforms**: Windows x64, Linux x64  
+**Use Case**: AMD GPUs, Intel Arc, older NVIDIA GPUs  
+**Performance**: ⭐⭐⭐⭐ **Excellent** (up to 30x realtime)
+
+```rust
+// Enabled in Cargo.toml for Windows/Linux x86_64:
+whisper-rs = { features = ["vulkan"] }
+```
+
+**How It Works**:
+- Cross-platform GPU API (works on AMD, Intel, NVIDIA)
+- Whisper: Vulkan compute shaders for parallel processing
+- Automatic selection if CUDA not available
+
+**Use Cases**:
+- AMD Radeon RX 6000/7000 series
+- Intel Arc A-series
+- NVIDIA GPUs without CUDA drivers
+
+---
+
+#### 🪟 **DirectML** (Windows Universal GPU)
+**Platforms**: Windows x64, Windows ARM64  
+**Use Case**: Windows devices with any GPU or NPU (Neural Processing Unit)  
+**Performance**: ⭐⭐⭐⭐ **Very Good** (up to 25x realtime)
+
+```rust
+// Enabled in Cargo.toml for Windows:
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+parakeet-rs = { features = ["directml"] }
+ort = { features = ["directml"] }
+
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+parakeet-rs = { features = ["directml"] }
+ort = { features = ["directml"] }
+```
+
+**How It Works**:
+- Microsoft's hardware-accelerated ML framework
+- Works with ANY GPU (NVIDIA, AMD, Intel) via DirectX 12
+- **Special**: Supports NPUs on Snapdragon X ARM processors
+- Parakeet: DirectML execution provider for ONNX Runtime
+
+**Use Cases**:
+- Qualcomm Snapdragon X Elite/Plus (Windows ARM laptops)
+- AMD Radeon GPUs on Windows
+- Intel Iris Xe integrated graphics
+- Surface devices with NPUs
+
+---
+
+#### 🍎 **CoreML** (Apple Silicon)
+**Platforms**: macOS ARM64 (M1/M2/M3/M4)  
+**Use Case**: Apple Silicon Macs  
+**Performance**: ⭐⭐⭐⭐⭐ **Excellent** (Neural Engine acceleration)
+
+```rust
+// Enabled in Cargo.toml for macOS:
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { features = ["coreml", "xnnpack"] }
+```
+
+**How It Works**:
+- Parakeet: CoreML execution provider uses Apple Neural Engine
+- Leverages dedicated ML hardware on Apple Silicon chips
+- Fallback to Metal GPU if Neural Engine unavailable
+
+**Special Notes**:
+- Requires macOS 13.4+ (set in `build.rs`)
+- Only applies to Parakeet (ONNX Runtime models)
+- Whisper uses Metal GPU acceleration by default
+
+---
+
+#### 🏎️ **TensorRT** (NVIDIA Optimized Inference)
+**Platforms**: Windows x64, Linux x64  
+**Use Case**: NVIDIA GPUs with TensorRT runtime installed  
+**Performance**: ⭐⭐⭐⭐⭐ **Maximum Speed** (up to 80x realtime)
+
+```rust
+// Enabled in Cargo.toml for Windows/Linux x86_64:
+ort = { features = ["tensorrt"] }
+```
+
+**How It Works**:
+- NVIDIA's optimized inference engine
+- Parakeet: TensorRT execution provider for ONNX models
+- Requires separate TensorRT installation
+- Automatic fallback to CUDA if TensorRT unavailable
+
+---
+
+#### 💨 **XNNPACK** (Optimized CPU)
+**Platforms**: All (macOS, Windows, Linux, ARM)  
+**Use Case**: CPU fallback or devices without GPU  
+**Performance**: ⭐⭐⭐ **Good** (up to 10x realtime)
+
+```rust
+// Enabled in Cargo.toml for all platforms:
+ort = { features = ["xnnpack"] }
+```
+
+**How It Works**:
+- Optimized CPU inference using SIMD instructions (SSE, AVX, NEON)
+- Parakeet: XNNPACK execution provider for ONNX Runtime
+- Automatic selection if no GPU acceleration available
+
+**Use Cases**:
+- Intel Macs (no CoreML support)
+- Raspberry Pi / ARM Linux devices
+- Virtual machines without GPU passthrough
+- Fallback when GPU drivers missing
+
+---
+
+#### 🐢 **Pure CPU** (Fallback)
+**Platforms**: All  
+**Use Case**: No hardware acceleration available  
+**Performance**: ⭐⭐ **Acceptable** (2-5x realtime)
+
+**How It Works**:
+- Whisper: Multi-threaded CPU inference
+- Parakeet: CPU execution provider for ONNX Runtime
+- Always available as last resort
+
+---
+
+### 🧠 Platform-Specific Configuration
+
+#### **Cargo.toml Platform Targets**
+
+Taurscribe uses Rust's conditional compilation to include only the necessary features for each platform:
+
+```toml
+# ===== BASE DEPENDENCIES (All Platforms) =====
+[dependencies]
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+parakeet-rs = { version = "=0.3.0" }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
+
+# ===== PLATFORM-SPECIFIC OVERRIDES =====
+
+# --- macOS (ARM & Intel) ---
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+ort = { features = ["download-binaries", "coreml", "xnnpack"] }
+# CoreML: Apple Neural Engine (M1/M2/M3/M4)
+# XNNPACK: CPU optimization (Intel Macs fallback)
+
+# --- Windows (x86_64) ---
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+whisper-rs = { features = ["cuda", "vulkan"] }
+parakeet-rs = { features = ["cuda", "directml"] }
+ort = { features = ["cuda", "directml", "tensorrt", "xnnpack"] }
+# CUDA: NVIDIA GPU (primary)
+# DirectML: Universal Windows GPU (AMD/Intel fallback)
+# TensorRT: NVIDIA optimized inference
+# Vulkan: Whisper GPU acceleration
+# XNNPACK: CPU optimization
+
+# --- Linux (x86_64) ---
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+whisper-rs = { features = ["cuda", "vulkan"] }
+parakeet-rs = { features = ["cuda"] }
+ort = { features = ["cuda", "tensorrt", "xnnpack"] }
+# CUDA: NVIDIA GPU (primary)
+# Vulkan: Whisper GPU acceleration (AMD/Intel)
+# TensorRT: NVIDIA optimized inference
+# XNNPACK: CPU optimization
+
+# --- Windows (ARM64) ---
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+parakeet-rs = { features = ["directml"] }
+ort = { features = ["directml", "xnnpack"] }
+# DirectML: Snapdragon X NPU/GPU acceleration
+# XNNPACK: CPU optimization
+# Note: No whisper-rs CUDA/Vulkan (ARM Windows limitation)
+
+# --- Linux (ARM64) ---
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+parakeet-rs = { version = "=0.3.0" }
+ort = { features = ["xnnpack"] }
+# XNNPACK: CPU optimization for ARM (Raspberry Pi, etc.)
+# No GPU acceleration (driver limitations on ARM Linux)
+```
+
+---
+
+### 🔧 Build Configuration (`build.rs`)
+
+The `build.rs` file contains platform-specific build logic:
+
+#### **1. macOS Deployment Target**
+```rust
+#[cfg(target_os = "macos")]
+{
+    // ONNX Runtime requires macOS 13.4+ for CoreML support
+    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
+    std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "13.4");
+    std::env::set_var("CMAKE_OSX_DEPLOYMENT_TARGET", "13.4");
+}
+```
+**Why?** CoreML and ONNX Runtime require modern macOS versions.
+
+---
+
+#### **2. Windows ARM64 Clang Requirement**
+```rust
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+{
+    // whisper.cpp requires Clang for ARM64 Windows (MSVC not supported)
+    println!("cargo:warning=Building for Windows ARM64 - Clang/LLVM required");
+    std::env::set_var("CC", "clang-cl");
+    std::env::set_var("CXX", "clang-cl");
+    std::env::set_var("CMAKE_GENERATOR_TOOLSET", "ClangCL");
+}
+```
+**Why?** The `whisper.cpp` C++ library doesn't support MSVC on ARM64, only Clang.
+
+---
+
+#### **3. CUDA Library Search Path (Windows)**
+```rust
+#[cfg(windows)]
+{
+    // 1. Try CUDA_PATH environment variable
+    if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+        let lib_path = cuda_path.join("lib").join("x64");
+        if lib_path.exists() {
+            println!("cargo:rustc-link-search=native={}", lib_path.display());
+        }
+    }
+
+    // 2. Fallback: Standard installation path
+    let fallback = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\lib\x64";
+    if std::path::Path::new(fallback).exists() {
+        println!("cargo:rustc-link-search=native={}", fallback);
+    }
+}
+```
+**Why?** The Rust linker needs help finding CUDA libraries (`cublas.lib`, `cudart.lib`, etc.).
+
+---
+
+### 🚀 Hardware Detection Flow
+
+Here's how Taurscribe selects the best acceleration at runtime:
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│              TAURSCRIBE STARTUP: INITIALIZATION               │
+└───────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────┐
+│  STEP 1: WHISPER ENGINE INITIALIZATION (lib.rs)               │
+│  - WhisperManager::new()                                      │
+│  - whisper.initialize(None)                                   │
+└───────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────┐
+│  STEP 2: GPU DETECTION (whisper.rs::initialize)              │
+│                                                                │
+│  try_gpu():                                                    │
+│    ├─► Set use_gpu(true) in WhisperContextParameters          │
+│    ├─► Attempt WhisperContext::new_with_params()              │
+│    │                                                           │
+│    ├─► SUCCESS? ─┐                                            │
+│    │             │                                            │
+│    │             └─► detect_gpu_backend():                    │
+│    │                   ├─► Run "nvidia-smi" command           │
+│    │                   │                                      │
+│    │                   ├─► Success? → GpuBackend::Cuda ✓      │
+│    │                   └─► Failed?  → GpuBackend::Vulkan ✓    │
+│    │                                                           │
+│    └─► FAILED? → try_cpu() → GpuBackend::Cpu ✓               │
+│                                                                │
+│  Result: Whisper loaded with CUDA/Vulkan/CPU                  │
+└───────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────┐
+│  STEP 3: PARAKEET ENGINE INITIALIZATION (lib.rs)             │
+│  - ParakeetManager::new()                                     │
+│  - parakeet.initialize(Some("nemotron:nemotron"))             │
+└───────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────┐
+│  STEP 4: PARAKEET GPU DETECTION (parakeet.rs::init_nemotron) │
+│                                                                │
+│  Cascade try:                                                  │
+│    ├─► try_gpu_nemotron():                                    │
+│    │     └─► ExecutionConfig + ExecutionProvider::Cuda        │
+│    │         ├─► SUCCESS? → GpuBackend::Cuda ✓               │
+│    │         └─► FAILED?  → Continue ↓                        │
+│    │                                                           │
+│    ├─► try_directml_nemotron(): (Windows only)                │
+│    │     └─► ExecutionConfig + ExecutionProvider::DirectML    │
+│    │         ├─► SUCCESS? → GpuBackend::DirectML ✓            │
+│    │         └─► FAILED?  → Continue ↓                        │
+│    │                                                           │
+│    └─► try_cpu_nemotron():                                    │
+│          └─► Nemotron::from_pretrained(path, None)            │
+│              └─► SUCCESS → GpuBackend::Cpu ✓                  │
+│                                                                │
+│  Result: Parakeet loaded with CUDA/DirectML/CPU               │
+└───────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────┐
+│  FINAL STATE: TWO ENGINES READY                               │
+│                                                                │
+│  Whisper:  CUDA/Vulkan/CPU                                    │
+│  Parakeet: CUDA/DirectML/CPU (with CoreML/TensorRT if avail.) │
+│                                                                │
+│  Printed to console:                                           │
+│    [SUCCESS] Whisper Backend: CUDA                            │
+│    [SUCCESS] Loaded Nemotron (Streaming) - nemotron (CUDA)    │
+└───────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 📊 Platform Comparison Table
+
+| Platform | Whisper Acceleration | Parakeet Acceleration | Best Use Case |
+|----------|---------------------|----------------------|---------------|
+| **Windows x64 + NVIDIA** | CUDA + Vulkan | CUDA + TensorRT | ⭐⭐⭐⭐⭐ Gaming PCs, Workstations |
+| **Windows x64 + AMD** | Vulkan | DirectML | ⭐⭐⭐⭐ AMD Radeon systems |
+| **Windows ARM64** | CPU | DirectML (NPU) | ⭐⭐⭐⭐ Snapdragon X laptops |
+| **macOS Apple Silicon** | Metal | CoreML (Neural Engine) | ⭐⭐⭐⭐⭐ MacBook Pro M1/M2/M3 |
+| **macOS Intel** | CPU | XNNPACK | ⭐⭐⭐ Older MacBooks |
+| **Linux x64 + NVIDIA** | CUDA + Vulkan | CUDA + TensorRT | ⭐⭐⭐⭐⭐ Linux workstations |
+| **Linux x64 + AMD** | Vulkan | XNNPACK | ⭐⭐⭐ AMD Linux desktops |
+| **Linux ARM64** | CPU | XNNPACK | ⭐⭐⭐ Raspberry Pi 4/5 |
+
+---
+
+### 🛠️ CI/CD Platform Matrix (`.github/workflows/build.yml`)
+
+The GitHub Actions workflow tests all supported platforms:
+
+```yaml
+strategy:
+  fail-fast: false
+  matrix:
+    include:
+      # --- macOS (Apple Silicon) ---
+      - platform: 'macos-latest'
+        target: 'aarch64-apple-darwin'
+        cuda: false
+        acceleration: 'Metal + CoreML'
+
+      # --- Windows (x86_64) ---
+      - platform: 'windows-latest'
+        target: 'x86_64-pc-windows-msvc'
+        cuda: true
+        acceleration: 'CUDA + DirectML'
+
+      # --- Windows (ARM64) ---
+      - platform: 'windows-latest'
+        target: 'aarch64-pc-windows-msvc'
+        cuda: false
+        acceleration: 'DirectML (NPU)'
+
+      # --- Linux (x86_64) ---
+      - platform: 'ubuntu-24.04'
+        target: 'x86_64-unknown-linux-gnu'
+        cuda: true
+        acceleration: 'CUDA + Vulkan'
+```
+
+**Key Environment Variables** (build.yml lines 281-314):
+```yaml
+env:
+  CMAKE_GENERATOR: "Ninja"              # Avoid "Path too long" on Windows
+  WHISPER_NO_AVX: "1"                   # Disable AVX for CI stability
+  WHISPER_NO_AVX2: "1"
+  CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"  # Pascal, Volta, Turing, Ampere
+  MACOSX_DEPLOYMENT_TARGET: "13.4"      # macOS CoreML requirement
+  CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+  VULKAN_SDK: ${{ env.VULKAN_SDK }}
+```
+
+---
+
+### 🧩 Platform-Specific Considerations
+
+#### **Windows**
+- **Long Path Support**: Enabled via registry + `CARGO_TARGET_DIR=C:\bld`
+- **CUDA Toolkit**: Installed via `Jimver/cuda-toolkit` action
+- **Vulkan SDK**: Required for Whisper Vulkan backend
+- **LLVM**: Required for bindgen (Rust ↔ C++ bindings)
+- **Ninja**: Replaces MSBuild to avoid path length issues
+
+#### **macOS**
+- **Deployment Target**: 13.4+ for CoreML/ONNX Runtime
+- **Xcode**: Command line tools required for C++ compilation
+- **CMake**: Used to build whisper.cpp from source
+
+#### **Linux**
+- **GTK/WebKit**: Required for Tauri window rendering
+- **ALSA**: Audio device access
+- **Vulkan SDK**: Required for Whisper Vulkan backend
+- **CUDA Toolkit**: Manual installation (Ubuntu 24.04 repos)
+
+---
+
+### 🎓 Key Takeaways
+
+1. **Automatic Selection**: Taurscribe tries GPU first, falls back to CPU
+2. **Platform Optimization**: Each OS gets optimized feature flags
+3. **Graceful Degradation**: Always works, even without GPU
+4. **Transparent**: Backend is printed to console on startup
+5. **Future-Proof**: Easy to add new acceleration (e.g., WebGPU, ROCm)
+
+**Example Console Output**:
+```
+[INFO] Initializing Whisper transcription engine...
+[GPU] Attempting GPU acceleration...
+[SUCCESS] ✓ GPU acceleration enabled (CUDA)
+[INFO] Backend: CUDA
+[INFO] Model loaded: tiny.en-q5_1
+[INFO] GPU warm-up complete
+
+[INFO] Initializing Parakeet ASR manager...
+[PARAKEET] Loaded Nemotron with CUDA
+[SUCCESS] Loaded Nemotron (Streaming) - nemotron (CUDA)
 ```
 
 ---
@@ -2502,10 +2999,10 @@ thread::spawn(move || tx2.send(data2).unwrap());
 ### AI & Transcription
 
 ```toml
-whisper-rs = { 
-    git = "https://codeberg.org/tazz4843/whisper-rs.git", 
-    features = ["cuda", "vulkan"] 
-}
+# Base dependencies (see Platform Support section for platform-specific config)
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+parakeet-rs = { version = "=0.3.0" }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 rubato = "0.14"
 ```
 
@@ -2518,9 +3015,36 @@ rubato = "0.14"
 - Git version has CUDA + Vulkan features
 - Active development
 
-**Features**:
-- `cuda` - NVIDIA GPU support (very fast)
-- `vulkan` - AMD/Intel GPU support (fast)
+**Platform-Specific Features**:
+> 🔗 **See [Platform Support & Hardware Acceleration](#️-platform-support--hardware-acceleration) for detailed configuration**
+
+- **Windows x64**: `features = ["cuda", "vulkan"]` - NVIDIA + AMD/Intel GPU support
+- **Linux x64**: `features = ["cuda", "vulkan"]` - NVIDIA + AMD/Intel GPU support  
+- **macOS/ARM**: Base features only (uses Metal for GPU acceleration)
+- **Windows ARM64**: Base features only (no GPU acceleration for whisper on ARM)
+- **Linux ARM64**: Base features only (CPU-only on ARM Linux)
+
+**parakeet-rs** - NVIDIA Nemotron ASR
+
+**What it does**: Streaming-optimized speech recognition for real-time transcription
+
+**Platform-Specific Features**:
+- **Windows x64**: `features = ["cuda", "directml"]` - NVIDIA + Universal Windows GPU
+- **Windows ARM64**: `features = ["directml"]` - NPU/GPU acceleration on Snapdragon X
+- **Linux x64**: `features = ["cuda"]` - NVIDIA GPU support
+- **macOS**: Base features (uses CoreML via ONNX Runtime)
+- **Linux ARM64**: Base features (CPU-only)
+
+**ort** - ONNX Runtime
+
+**What it does**: Runs Parakeet models with hardware acceleration
+
+**Platform-Specific Features**:
+- **Windows x64**: `features = ["cuda", "directml", "tensorrt", "xnnpack"]`
+- **Windows ARM64**: `features = ["directml", "xnnpack"]`
+- **macOS**: `features = ["coreml", "xnnpack"]` - Apple Neural Engine
+- **Linux x64**: `features = ["cuda", "tensorrt", "xnnpack"]`
+- **Linux ARM64**: `features = ["xnnpack"]` - Optimized CPU inference
 
 **rubato** - Audio Resampling
 
