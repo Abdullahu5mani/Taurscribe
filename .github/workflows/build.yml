@@ -61,7 +61,7 @@ jobs:
           #   target: 'aarch64-unknown-linux-gnu'
           #   cuda: false
 
-    runs-on: ${{ matrix.platform == 'windows-latest' && 'windows-2019' || matrix.platform }}
+    runs-on: ${{ matrix.platform }}
     name: Build - ${{ matrix.name }}
 
     steps:
@@ -172,10 +172,10 @@ jobs:
           version: 1.4.309.0
           cache: true
 
-      - name: Install LLVM (Windows)
+      - name: Install Windows Build Dependencies
         if: contains(matrix.platform, 'windows')
         run: |
-          choco install llvm -y
+          choco install llvm nasm ninja -y
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
 
           
