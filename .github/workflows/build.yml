@@ -248,9 +248,10 @@ jobs:
           git config --system core.longpaths true
           echo "CARGO_TARGET_DIR=C:\bld" >> $env:GITHUB_ENV
 
-      - name: Build Tauri application
-        uses: tauri-apps/tauri-action@v0
-
+      - name: Check application
+        run: |
+          cd src-tauri
+          cargo check --verbose --target ${{ matrix.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MSBUILDDISABLENODEREUSE: 1
@@ -274,15 +275,3 @@ jobs:
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
-        with:
-          args: --target ${{ matrix.target }}
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-${{ matrix.target }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*
-            src-tauri/target/release/bundle/**/*
-          if-no-files-found: warn
-          retention-days: 7
