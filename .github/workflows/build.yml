@@ -248,6 +248,10 @@ jobs:
           git config --system core.longpaths true
           echo "CARGO_TARGET_DIR=C:\bld" >> $env:GITHUB_ENV
 
+      - name: Setup MSVC Developer Command Prompt
+        if: contains(matrix.platform, 'windows')
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Check application
         run: |
           cd src-tauri
@@ -258,6 +262,7 @@ jobs:
           RUST_BACKTRACE: 1
           CMAKE_BUILD_PARALLEL_LEVEL: 4
           CMAKE_VERBOSE_MAKEFILE: "ON"
+          CMAKE_GENERATOR: "Ninja"
           # Disable AVX to prevent crashes on some CI runners
           WHISPER_NO_AVX: "1"
           WHISPER_NO_AVX2: "1"
