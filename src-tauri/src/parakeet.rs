@@ -261,35 +261,55 @@ impl ParakeetManager {
     }
 
     fn init_nemotron(path: &PathBuf) -> Result<(Nemotron, GpuBackend), String> {
-        // Try CUDA
-        if let Ok(m) = Self::try_gpu_nemotron(path.to_str().unwrap()) {
-            println!("[PARAKEET] Loaded Nemotron with CUDA");
-            return Ok((m, GpuBackend::Cuda));
+        #[cfg(target_os = "macos")]
+        {
+            println!("[PARAKEET] macOS detected - explicitly forcing CPU for Nemotron");
+            let m = Self::try_cpu_nemotron(path.to_str().unwrap())?;
+            return Ok((m, GpuBackend::Cpu));
         }
-        // Try DirectML
-        if let Ok(m) = Self::try_directml_nemotron(path.to_str().unwrap()) {
-            println!("[PARAKEET] Loaded Nemotron with DirectML");
-            return Ok((m, GpuBackend::DirectML));
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Try CUDA
+            if let Ok(m) = Self::try_gpu_nemotron(path.to_str().unwrap()) {
+                println!("[PARAKEET] Loaded Nemotron with CUDA");
+                return Ok((m, GpuBackend::Cuda));
+            }
+            // Try DirectML
+            if let Ok(m) = Self::try_directml_nemotron(path.to_str().unwrap()) {
+                println!("[PARAKEET] Loaded Nemotron with DirectML");
+                return Ok((m, GpuBackend::DirectML));
+            }
+            println!("[PARAKEET] Fallback to CPU for Nemotron");
+            let m = Self::try_cpu_nemotron(path.to_str().unwrap())?;
+            Ok((m, GpuBackend::Cpu))
         }
-        println!("[PARAKEET] Fallback to CPU for Nemotron");
-        let m = Self::try_cpu_nemotron(path.to_str().unwrap())?;
-        Ok((m, GpuBackend::Cpu))
     }
 
     fn init_ctc(path: &PathBuf) -> Result<(Parakeet, GpuBackend), String> {
-        // Try CUDA
-        if let Ok(m) = Self::try_gpu_ctc(path.to_str().unwrap()) {
-            println!("[PARAKEET] Loaded CTC with CUDA");
-            return Ok((m, GpuBackend::Cuda));
+        #[cfg(target_os = "macos")]
+        {
+            println!("[PARAKEET] macOS detected - explicitly forcing CPU for CTC");
+            let m = Self::try_cpu_ctc(path.to_str().unwrap())?;
+            return Ok((m, GpuBackend::Cpu));
         }
-        // Try DirectML
-        if let Ok(m) = Self::try_directml_ctc(path.to_str().unwrap()) {
-            println!("[PARAKEET] Loaded CTC with DirectML");
-            return Ok((m, GpuBackend::DirectML));
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Try CUDA
+            if let Ok(m) = Self::try_gpu_ctc(path.to_str().unwrap()) {
+                println!("[PARAKEET] Loaded CTC with CUDA");
+                return Ok((m, GpuBackend::Cuda));
+            }
+            // Try DirectML
+            if let Ok(m) = Self::try_directml_ctc(path.to_str().unwrap()) {
+                println!("[PARAKEET] Loaded CTC with DirectML");
+                return Ok((m, GpuBackend::DirectML));
+            }
+            println!("[PARAKEET] Fallback to CPU for CTC");
+            let m = Self::try_cpu_ctc(path.to_str().unwrap())?;
+            Ok((m, GpuBackend::Cpu))
         }
-        println!("[PARAKEET] Fallback to CPU for CTC");
-        let m = Self::try_cpu_ctc(path.to_str().unwrap())?;
-        Ok((m, GpuBackend::Cpu))
     }
 
     // --- GPU/CPU Loaders ---
@@ -371,14 +391,24 @@ impl ParakeetManager {
     }
 
     fn init_eou(path: &PathBuf) -> Result<(ParakeetEOU, GpuBackend), String> {
-        if let Ok(m) = Self::try_gpu_eou(path.to_str().unwrap()) {
-            return Ok((m, GpuBackend::Cuda));
+        #[cfg(target_os = "macos")]
+        {
+            // Make explicit: macOS always uses CPU for now
+            let m = Self::try_cpu_eou(path.to_str().unwrap())?;
+            return Ok((m, GpuBackend::Cpu));
         }
-        if let Ok(m) = Self::try_directml_eou(path.to_str().unwrap()) {
-            return Ok((m, GpuBackend::DirectML));
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Ok(m) = Self::try_gpu_eou(path.to_str().unwrap()) {
+                return Ok((m, GpuBackend::Cuda));
+            }
+            if let Ok(m) = Self::try_directml_eou(path.to_str().unwrap()) {
+                return Ok((m, GpuBackend::DirectML));
+            }
+            let m = Self::try_cpu_eou(path.to_str().unwrap())?;
+            Ok((m, GpuBackend::Cpu))
         }
-        let m = Self::try_cpu_eou(path.to_str().unwrap())?;
-        Ok((m, GpuBackend::Cpu))
     }
 
     fn try_gpu_eou(path: &str) -> Result<ParakeetEOU, String> {
@@ -420,14 +450,24 @@ impl ParakeetManager {
     }
 
     fn init_tdt(path: &PathBuf) -> Result<(ParakeetTDT, GpuBackend), String> {
-        if let Ok(m) = Self::try_gpu_tdt(path.to_str().unwrap()) {
-            return Ok((m, GpuBackend::Cuda));
+        #[cfg(target_os = "macos")]
+        {
+            // Make explicit: macOS always uses CPU for now
+            let m = Self::try_cpu_tdt(path.to_str().unwrap())?;
+            return Ok((m, GpuBackend::Cpu));
         }
-        if let Ok(m) = Self::try_directml_tdt(path.to_str().unwrap()) {
-            return Ok((m, GpuBackend::DirectML));
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Ok(m) = Self::try_gpu_tdt(path.to_str().unwrap()) {
+                return Ok((m, GpuBackend::Cuda));
+            }
+            if let Ok(m) = Self::try_directml_tdt(path.to_str().unwrap()) {
+                return Ok((m, GpuBackend::DirectML));
+            }
+            let m = Self::try_cpu_tdt(path.to_str().unwrap())?;
+            Ok((m, GpuBackend::Cpu))
         }
-        let m = Self::try_cpu_tdt(path.to_str().unwrap())?;
-        Ok((m, GpuBackend::Cpu))
     }
 
     fn try_gpu_tdt(path: &str) -> Result<ParakeetTDT, String> {

@@ -54,7 +54,7 @@ ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 # -------------------------------------------------------------------------
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "coreml", "xnnpack"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack"] }
 
 # 3. Windows (x86_64) -> CUDA + DirectML + TensorRT
 # CUDA: NVIDIA GPU acceleration (primary)
