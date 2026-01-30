@@ -32,9 +32,6 @@ pub struct AudioState {
 
     // Accumulates the full transcript during a recording session (for Parakeet streaming reuse)
     pub session_transcript: Arc<Mutex<String>>,
-
-    // LLM Manager for grammar correction
-    pub llm: Arc<Mutex<crate::llm::LlmManager>>,
 }
 
 impl AudioState {
@@ -42,7 +39,6 @@ impl AudioState {
         whisper: WhisperManager,
         parakeet: ParakeetManager,
         vad: VADManager,
-        llm: crate::llm::LlmManager,
     ) -> Self {
         Self {
             recording_handle: Mutex::new(None),
@@ -53,7 +49,6 @@ impl AudioState {
             current_app_state: Mutex::new(AppState::Ready),
             active_engine: Mutex::new(ASREngine::Whisper),
             session_transcript: Arc::new(Mutex::new(String::new())),
-            llm: Arc::new(Mutex::new(llm)),
         }
     }
 }

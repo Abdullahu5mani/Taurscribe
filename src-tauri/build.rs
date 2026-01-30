@@ -24,15 +24,6 @@ fn main() {
         std::env::set_var("CMAKE_GENERATOR_TOOLSET", "ClangCL");
     }
 
-    // CUSTOM: Force dynamic CRT (/MD) for all C/C++ compilations on Windows x64
-    // This fixes linker mismatch between esaxx-rs (/MT) and whisper-rs-sys (/MD)
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    {
-        // Force /MD (dynamic CRT) for consistency with whisper-rs-sys
-        std::env::set_var("CFLAGS", "/MD /EHsc");
-        std::env::set_var("CXXFLAGS", "/MD /EHsc");
-    }
-
     // CUSTOM: Add CUDA library search path to fix linker errors (Windows only)
     #[cfg(windows)]
     {

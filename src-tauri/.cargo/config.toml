@@ -30,10 +30,6 @@ WHISPER_LIB_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime
 VULKAN_SDK = "C:/VulkanSDK/1.4.335.0"
 LIBCLANG_PATH = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
 
-# Force dynamic CRT (/MD) for all C/C++ compilations to fix esaxx-rs and whisper-rs-sys mismatch
-CFLAGS = "/MD /EHsc"
-CXXFLAGS = "/MD /EHsc"
-
 
 [target.x86_64-pc-windows-gnu]
 linker = "C:\\msys64\\ucrt64\\bin\\gcc.exe"
