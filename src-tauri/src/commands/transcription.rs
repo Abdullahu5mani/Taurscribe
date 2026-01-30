@@ -221,3 +221,9 @@ pub fn benchmark_test(state: State<AudioState>, file_path: String) -> Result<Str
         num_chunks
     ))
 }
+
+#[tauri::command]
+pub fn correct_text(state: State<AudioState>, text: String) -> Result<String, String> {
+    let mut llm = state.llm.lock().map_err(|e| e.to_string())?;
+    llm.generate_correction(&text).map_err(|e| e.to_string())
+}

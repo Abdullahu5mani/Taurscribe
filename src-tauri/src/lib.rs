@@ -2,6 +2,7 @@
 mod audio;
 mod commands;
 mod hotkeys;
+mod llm;
 mod parakeet;
 mod state;
 mod tray;
@@ -15,6 +16,7 @@ use parakeet::ParakeetManager;
 use state::AudioState;
 use vad::VADManager;
 use whisper::WhisperManager;
+use llm::LlmManager;
 
 /// MAIN ENTRY POINT
 /// This is where the app starts!
@@ -68,11 +70,19 @@ pub fn run() {
         }
     }
 
-    // 4. Build the Tauri App
+    // 4. Initialize LLM (SmolLM2)
+    println!("[INFO] Initializing LLM for grammar correction...");
+    let mut llm = LlmManager::new();
+    match llm.initialize() {
+        Ok(msg) => println!("[SUCCESS] {}", msg),
+        Err(e) => eprintln!("[WARN] LLM not available: {}", e),
+    }
+
+    // 5. Build the Tauri App
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .manage(AudioState::new(whisper, parakeet, vad))
+        .manage(AudioState::new(whisper, parakeet, vad, llm))
         .setup(|app| {
             // Setup System Tray
             tray::setup_tray(app)?;
@@ -108,7 +118,8 @@ pub fn run() {
             commands::get_parakeet_status,
             commands::set_active_engine,
             commands::get_active_engine,
-            commands::set_tray_state
+            commands::set_tray_state,
+            commands::correct_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

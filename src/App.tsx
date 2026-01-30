@@ -59,6 +59,7 @@ function App() {
   const [currentParakeetModel, setCurrentParakeetModel] = useState<string | null>(null);
   const [, setParakeetStatus] = useState<ParakeetStatus | null>(null);
   const [activeEngine, setActiveEngine] = useState<ASREngine>("whisper");
+  const [isCorrecting, setIsCorrecting] = useState(false);
 
   // Ref to track recording state for hotkey handlers (avoids stale closure)
   const isRecordingRef = useRef(false);
@@ -573,7 +574,32 @@ function App() {
               <p>{liveTranscript || "Listening..."}</p>
             </div>
           ) : (
-            <pre>{greetMsg}</pre>
+            <>
+              <pre>{greetMsg}</pre>
+              {!isRecording && liveTranscript && (
+                <div className="correction-container">
+                  <button
+                    onClick={async () => {
+                      setIsCorrecting(true);
+                      toast.loading("Correcting grammar...");
+                      try {
+                        const corrected = await invoke("correct_text", { text: liveTranscript });
+                        setLiveTranscript(corrected as string);
+                        toast.success("Grammar corrected!");
+                      } catch (e) {
+                        toast.error("Correction failed: " + e);
+                      } finally {
+                        setIsCorrecting(false);
+                      }
+                    }}
+                    disabled={isCorrecting}
+                    className="btn btn-correct"
+                  >
+                    {isCorrecting ? "🪄 Correcting..." : "✨ Correct Grammar"}
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

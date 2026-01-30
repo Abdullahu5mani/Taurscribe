@@ -584,3 +584,26 @@ h1 {
     transform: scale(1);
   }
 }
+
+/* Grammar Correction Styles */
+.correction-container {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-correct {
+  background: linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%);
+  color: white;
+  box-shadow: 0 4px 15px rgba(124, 58, 237, 0.4);
+  min-width: 180px;
+  font-size: 0.9rem;
+  padding: 10px 20px;
+}
+
+.btn-correct:not(:disabled):hover {
+  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.5);
+  background: linear-gradient(135deg, #8b5cf6 0%, #c4b5fd 100%);
+}
