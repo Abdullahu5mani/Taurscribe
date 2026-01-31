@@ -2,6 +2,8 @@
 rustflags = [
     "-L",
     "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin",
+    "-C",
+    "link-arg=/NODEFAULTLIB:LIBCMT",
 ]
 
 [target.x86_64-apple-darwin]
@@ -24,12 +26,11 @@ rustflags = [
 
 [env]
 MACOSX_DEPLOYMENT_TARGET = "13.4"
-# Tell whisper-rs to use pre-built libraries instead of building
-# WHISPER_DONT_GENERATE_BINDINGS = "1"
 WHISPER_LIB_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin"
 VULKAN_SDK = "C:/VulkanSDK/1.4.335.0"
 LIBCLANG_PATH = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
-
+CFLAGS = "/MD"
+CXXFLAGS = "/MD"
 
 [target.x86_64-pc-windows-gnu]
 linker = "C:\\msys64\\ucrt64\\bin\\gcc.exe"

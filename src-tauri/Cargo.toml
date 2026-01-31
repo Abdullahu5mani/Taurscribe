@@ -37,6 +37,14 @@ rdev = "0.5"
 regex = "1.12.2"
 tauri-plugin-store = "2.4.2"
 
+# Candle ML Framework
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.9.2" }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.9.2" }
+candle-transformers = { git = "https://github.com/huggingface/candle.git", version = "0.9.2" }
+tokenizers = "0.21.0"
+hf-hub = "0.4"
+anyhow = "1.0"
+
 # --- Platform-Specific AI Backends ---
 
 
@@ -46,9 +54,7 @@ whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 parakeet-rs = { version = "=0.3.0" }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
 # Candle (Hugging Face) - Machine Learning Framework
-candle-core = "0.9.2"
-candle-nn = "0.9.2"
-candle-transformers = "0.9.2"
+
 
 # 2. macOS Configuration
 # -------------------------------------------------------------------------
@@ -69,6 +75,8 @@ ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack"] }
 # XNNPACK: CPU optimization
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+
+
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "cuda",
     "vulkan",
@@ -81,8 +89,6 @@ ort = { version = "2.0.0-rc.11", features = [
     "tensorrt",
     "xnnpack",
 ] }
-candle-core = { version = "0.9.2", features = ["cuda"] }
-
 # 3b. Linux (x86_64) -> CUDA + TensorRT
 # CUDA: NVIDIA GPU acceleration (primary)
 # TensorRT: NVIDIA optimized inference
@@ -90,6 +96,8 @@ candle-core = { version = "0.9.2", features = ["cuda"] }
 # XNNPACK: CPU optimization
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+
+
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "cuda",
     "vulkan",
@@ -101,8 +109,6 @@ ort = { version = "2.0.0-rc.11", features = [
     "tensorrt",
     "xnnpack",
 ] }
-candle-core = { version = "0.9.2", features = ["cuda"] }
-
 # 4. Windows (ARM64) -> DirectML + XNNPACK
 # DirectML: Hardware-accelerated on Qualcomm Snapdragon X ARM processors
 # XNNPACK: Cross-platform CPU optimization

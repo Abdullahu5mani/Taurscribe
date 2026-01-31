@@ -9,6 +9,7 @@ mod types;
 mod utils;
 mod vad;
 mod whisper;
+mod llm;
 
 // Imports
 use parakeet::ParakeetManager;
