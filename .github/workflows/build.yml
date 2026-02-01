@@ -230,6 +230,8 @@ jobs:
           sed -i.bak '/VULKAN_SDK.*VulkanSDK/d' src-tauri/.cargo/config.toml || true
           sed -i.bak '/LIBCLANG_PATH.*Microsoft/d' src-tauri/.cargo/config.toml || true
           sed -i.bak '/target-dir.*C:\/bld/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/CFLAGS.*\/MD/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/CXXFLAGS.*\/MD/d' src-tauri/.cargo/config.toml || true
           echo "=== Cleaned cargo config for Unix ==="
           cat src-tauri/.cargo/config.toml
  
