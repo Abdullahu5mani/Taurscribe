@@ -225,7 +225,7 @@ function App() {
           toast.error("Grammar correction failed: " + e);
         }
       }
-      
+
       setIsCorrecting(false);
       if (!enableSpellCheckRef.current && !enableGrammarLMRef.current) {
         toast.dismiss();
@@ -663,7 +663,11 @@ function App() {
           }}
           disabled={llmStatus === "Loading..." || llmStatus === "Loaded"}
           className="btn btn-benchmark" // Reuse existing style for now
-          style={{ backgroundColor: llmStatus === "Loaded" ? "#4CAF50" : "#673AB7" }}
+          style={{
+            backgroundColor: llmStatus === "Loaded" ? "var(--success)" : "var(--bg-tertiary)",
+            borderColor: llmStatus === "Loaded" ? "var(--success)" : "var(--accent-primary)",
+            color: llmStatus === "Loaded" ? "#fff" : "var(--accent-primary)"
+          }}
         >
           {llmStatus === "Not Loaded" && "🧠 Load Gemma LLM"}
           {llmStatus === "Loading..." && "⏳ Loading..."}
@@ -720,7 +724,6 @@ function App() {
                     }}
                     disabled={isCorrecting}
                     className="btn btn-correct"
-                    style={{ backgroundColor: '#3b82f6' }}
                   >
                     {isCorrecting ? "🔤 Checking..." : "🔤 Fix Spelling"}
                   </button>
