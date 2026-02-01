@@ -2,6 +2,7 @@
 mod audio;
 mod commands;
 mod hotkeys;
+mod llm;
 mod parakeet;
 mod state;
 mod tray;
@@ -9,7 +10,6 @@ mod types;
 mod utils;
 mod vad;
 mod whisper;
-mod llm;
 
 // Imports
 use parakeet::ParakeetManager;
@@ -61,12 +61,10 @@ pub fn run() {
     println!("[INFO] Attempting to auto-load Parakeet model...");
     match parakeet.initialize(Some("nemotron:nemotron")) {
         Ok(msg) => println!("[SUCCESS] {}", msg),
-        Err(_) => {
-            match parakeet.initialize(None) {
-                Ok(msg) => println!("[SUCCESS] Fallback load: {}", msg),
-                Err(e) => eprintln!("[WARN] No Parakeet models loaded: {}", e),
-            }
-        }
+        Err(_) => match parakeet.initialize(None) {
+            Ok(msg) => println!("[SUCCESS] Fallback load: {}", msg),
+            Err(e) => eprintln!("[WARN] No Parakeet models loaded: {}", e),
+        },
     }
 
     // 4. Build the Tauri App
@@ -109,7 +107,11 @@ pub fn run() {
             commands::get_parakeet_status,
             commands::set_active_engine,
             commands::get_active_engine,
-            commands::set_tray_state
+            commands::set_tray_state,
+            commands::init_llm,
+            commands::run_llm_inference,
+            commands::check_llm_status,
+            commands::correct_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,9 +2,9 @@ use anyhow::{Error, Result};
 use candle_core::quantized::gguf_file;
 use candle_core::{Device, Tensor};
 use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::quantized_gemma3 as model; 
+use candle_transformers::models::quantized_gemma3 as model;
 // NOTE: Using quantized_gemma2 as it is the stable architecture for Gemma models in Candle 0.9.2.
-// If actual Gemma 3 architecture differs significantly, this might need adjustment, 
+// If actual Gemma 3 architecture differs significantly, this might need adjustment,
 // but typically they share the same base or are backward compatible.
 use std::path::PathBuf;
 use tokenizers::Tokenizer;
@@ -19,8 +19,10 @@ pub struct LLMEngine {
 impl LLMEngine {
     pub fn new() -> Result<Self> {
         // Hardcoded path to the specific model requested
-        let base_path = PathBuf::from(r"c:\Users\abdul\OneDrive\Desktop\Taurscribe\taurscribe-runtime\models\GRMR-V3-G1B-GGUF");
-        let model_path = base_path.join("GRMR-V3-G1B-Q2_K.gguf");
+        let base_path = PathBuf::from(
+            r"c:\Users\abdul\OneDrive\Desktop\Taurscribe\taurscribe-runtime\models\GRMR-V3-G1B-GGUF",
+        );
+        let model_path = base_path.join("GRMR-V3-G1B-Q4_K_M.gguf");
         // Note: Gemma models usually use a specific tokenizer, ensure tokenizer.json is correct for Gemma
         let tokenizer_path = base_path.join("tokenizer.json");
 
@@ -85,7 +87,10 @@ impl LLMEngine {
         // Sample using the LogitsProcessor (Temperature + Top-P)
         let next_token = self.logits_processor.sample(&last_logits)?;
 
-        let decoded = self.tokenizer.decode(&[next_token], true).map_err(Error::msg)?;
+        let decoded = self
+            .tokenizer
+            .decode(&[next_token], true)
+            .map_err(Error::msg)?;
 
         Ok(decoded)
     }

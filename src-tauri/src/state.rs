@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
 use crate::audio::RecordingHandle;
 use crate::parakeet::ParakeetManager;
-use crate::types::{AppState, ASREngine};
+use crate::types::{ASREngine, AppState};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
+use std::sync::{Arc, Mutex};
 
 /// The Global "Brain" of the application.
 /// This struct holds all the data that needs to live as long as the app runs.
@@ -32,14 +32,13 @@ pub struct AudioState {
 
     // Accumulates the full transcript during a recording session (for Parakeet streaming reuse)
     pub session_transcript: Arc<Mutex<String>>,
+
+    // The Gemma LLM engine (optional, loaded on demand)
+    pub llm: Arc<Mutex<Option<crate::llm::LLMEngine>>>,
 }
 
 impl AudioState {
-    pub fn new(
-        whisper: WhisperManager,
-        parakeet: ParakeetManager,
-        vad: VADManager,
-    ) -> Self {
+    pub fn new(whisper: WhisperManager, parakeet: ParakeetManager, vad: VADManager) -> Self {
         Self {
             recording_handle: Mutex::new(None),
             whisper: Arc::new(Mutex::new(whisper)),
@@ -49,6 +48,7 @@ impl AudioState {
             current_app_state: Mutex::new(AppState::Ready),
             active_engine: Mutex::new(ASREngine::Whisper),
             session_transcript: Arc::new(Mutex::new(String::new())),
+            llm: Arc::new(Mutex::new(None)),
         }
     }
 }
