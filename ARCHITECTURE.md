@@ -1063,344 +1063,6 @@ Total Latency: 0.56 seconds (buffering) + 75ms (processing) = 0.635 seconds
 
 ---
 
-## 🎙️ Complete Audio Processing Flow
-
-This section shows **exactly what happens** when you start recording, from microphone to final transcript.
-
-### 📊 Recording Timeline Visualization
-
-```
-═══════════════════════════════════════════════════════════════════════════════
-                        📱 USER CLICKS "START RECORDING"
-═══════════════════════════════════════════════════════════════════════════════
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  PHASE 1: INITIALIZATION (lib.rs::start_recording)                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-    [1] Get Microphone Device
-         ↓
-    cpal::default_host()
-         ↓
-    device.default_input_config()
-         ↓
-    ┌─────────────────────────────┐
-    │ Config: 48kHz, Stereo, f32  │  (example config)
-    └─────────────────────────────┘
-         ↓
-    [2] Create WAV File
-         ↓
-    "C:\Users\YOU\AppData\Local\Taurscribe\temp\recording_1737687024.wav"
-         ↓
-    [3] Create WAV Writer
-         ↓
-    hound::WavWriter { 48kHz, 2ch, 32-bit float }
-         ↓
-    [4] Create Communication Channels
-         ↓
-    ┌──────────────────────────────────────────────────────┐
-    │  (file_tx, file_rx)       = Channel #1               │
-    │  (whisper_tx, whisper_rx) = Channel #2               │
-    └──────────────────────────────────────────────────────┘
-         ↓
-    [5] Spawn Two Worker Threads
-         ↓
-    ┌───────────────┬───────────────────────────────────────┐
-    │               │                                       │
-    ▼               ▼                                       ▼
-MAIN THREAD    THREAD #1                              THREAD #2
-(Audio Loop)   (File Writer)                          (Whisper AI)
-
-
-═══════════════════════════════════════════════════════════════════════════════
-                     🎬 RECORDING STARTS - 3 THREADS RUNNING
-═══════════════════════════════════════════════════════════════════════════════
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            TIME PROGRESSION                                  │
-│  (Each tick = ~10ms, showing first 18 seconds of recording)                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-
-TIME:   0ms     10ms    20ms    30ms    40ms    ...    6000ms   ...   12000ms
-        │       │       │       │       │       │       │        │      │
-        ▼       ▼       ▼       ▼       ▼       ▼       ▼        ▼      ▼
-
-┌───────────────────────────────────────────────────────────────────────────────┐
-│ 🎤 MAIN THREAD: Audio Callback (runs every ~10ms)                            │
-├───────────────────────────────────────────────────────────────────────────────┤
-│                                                                               │
-│  [Audio Callback Triggered by OS]                                            │
-│         │                                                                     │
-│         ├─► Microphone captures: Vec<f32> (~480 samples at 48kHz)            │
-│         │   Example: [0.01, -0.02, 0.03, -0.01, ..., 0.02]                   │
-│         │                                                                     │
-│         ├─► SPLIT AUDIO INTO TWO PATHS:                                      │
-│         │                                                                     │
-│         │   ┌─────────────────────────────────────────────────────────┐      │
-│         │   │ PATH A: Stereo Audio (for file - preserve quality)     │      │
-│         │   │ [L1, R1, L2, R2, L3, R3, ...]                           │      │
-│         │   │ Size: ~480 samples                                      │      │
-│         │   └─────────────────────────────────────────────────────────┘      │
-│         │         │                                                          │
-│         │         └──► file_tx.send(data.to_vec())                           │
-│         │                  │                                                 │
-│         │                  └──► Channel #1 ──┐                               │
-│         │                                    │                               │
-│         │   ┌─────────────────────────────────────────────────────────┐      │
-│         │   │ PATH B: Mono Audio (for Whisper - must be mono)        │      │
-│         │   │ Convert stereo → mono:                                  │      │
-│         │   │ [L1, R1] → (L1+R1)/2 = M1                               │      │
-│         │   │ [L2, R2] → (L2+R2)/2 = M2                               │      │
-│         │   │ Result: [M1, M2, M3, ...]                               │      │
-│         │   │ Size: ~240 samples                                      │      │
-│         │   └─────────────────────────────────────────────────────────┘      │
-│         │         │                                                          │
-│         │         └──► whisper_tx.send(mono_data)                            │
-│         │                  │                                                 │
-│         │                  └──► Channel #2 ──┐                               │
-│         │                                    │                               │
-│         ▼                                    ▼                               │
-│   [REPEAT EVERY 10ms]                                                        │
-│                                                                               │
-└───────────────────────────────────────────────────────────────────────────────┘
-                                               │                               │
-                                               │                               │
-        ┌──────────────────────────────────────┘                               │
-        │                                                                      │
-        ▼                                                                      ▼
-
-┌───────────────────────────────────────┐    ┌─────────────────────────────────────┐
-│ 💾 THREAD #1: File Writer             │    │ 🤖 THREAD #2: Whisper AI            │
-│ (Runs in parallel, saves everything)  │    │ (Buffers 6s, then transcribes)      │
-├───────────────────────────────────────┤    ├─────────────────────────────────────┤
-│                                       │    │                                     │
-│  while let Ok(samples) = file_rx.recv()    │  let mut buffer = Vec::new();       │
-│      ↓                                │    │  let chunk_size = 48000 * 6;        │
-│  [BLOCKING - waits for audio]         │    │  // = 288,000 samples = 6 seconds   │
-│      ↓                                │    │                                     │
-│  Receives: Vec<f32> stereo            │    │  while let Ok(samples) = whisper_rx │
-│  (~480 samples every 10ms)            │    │      ↓                              │
-│      ↓                                │    │  [BLOCKING - waits for audio]       │
-│  for sample in samples {              │    │      ↓                              │
-│      writer.write_sample(sample)      │    │  buffer.extend(samples)             │
-│  }                                    │    │  // Accumulate samples              │
-│      ↓                                │    │      ↓                              │
-│  [File grows ~1,920 bytes/10ms]       │    │  ┌──────────────────────────────┐   │
-│      ↓                                │    │  │ BUFFER GROWTH:               │   │
-│  0ms:    0 samples                    │    │  │ 0ms:      0 samples          │   │
-│  10ms:   480 samples                  │    │  │ 10ms:    ~240 samples        │   │
-│  20ms:   960 samples                  │    │  │ 20ms:    ~480 samples        │   │
-│  30ms:  1440 samples                  │    │  │ ...                          │   │
-│  ...                                  │    │  │ 6000ms: ~288,000 samples ✓   │   │
-│  6000ms: ~288,000 samples             │    │  └──────────────────────────────┘   │
-│  ...                                  │    │      ↓                              │
-│  [Continues until stop]               │    │  if buffer.len() >= chunk_size {    │
-│                                       │    │      ↓                              │
-│  ═══════════════════════════════════  │    │  ┌─────────────────────────────┐   │
-│  WHEN RECORDING STOPS:                │    │  │ EXTRACT 6 SECONDS           │   │
-│  ═══════════════════════════════════  │    │  └─────────────────────────────┘   │
-│      ↓                                │    │      │                              │
-│  Channel closes (tx dropped)          │    │      ├─► let chunk: Vec<f32> =      │
-│      ↓                                │    │      │   buffer.drain(..288000)     │
-│  recv() returns Err                   │    │      │   .collect()                 │
-│      ↓                                │    │      │                              │
-│  Loop exits                           │    │      │   ┌──────────────────────┐   │
-│      ↓                                │    │      │   │ chunk = [6s audio]   │   │
-│  writer.finalize()                    │    │      │   │ buffer = [leftover]  │   │
-│      ↓                                │    │      │   └──────────────────────┘   │
-│  ✅ WAV file saved!                   │    │      │                              │
-│      ↓                                │    │      └─► whisper.transcribe_chunk() │
-│  Thread exits                         │    │              │                      │
-│                                       │    │              ▼                      │
-└───────────────────────────────────────┘    │      ┌──────────────────────────┐   │
-                                             │      │ WHISPER PROCESSING       │   │
-                                             │      │ (whisper.rs line 312+)   │   │
-                                             │      └──────────────────────────┘   │
-                                             │              ↓                      │
-                                             │      [1] Resample 48kHz → 16kHz     │
-                                             │          │                          │
-                                             │          ├─► Create resampler       │
-                                             │          │   (rubato library)       │
-                                             │          │                          │
-                                             │          ├─► Input: 288,000 samples │
-                                             │          │   @ 48kHz                │
-                                             │          │                          │
-                                             │          └─► Output: 96,000 samples │
-                                             │              @ 16kHz (Whisper needs)│
-                                             │              │                      │
-                                             │              ▼                      │
-                                             │      [2] Create Whisper state       │
-                                             │          ctx.create_state()         │
-                                             │              │                      │
-                                             │              ▼                      │
-                                             │      [3] Set parameters             │
-                                             │          ├─ n_threads: 4            │
-                                             │          ├─ language: "en"          │
-                                             │          ├─ translate: false        │
-                                             │          └─ initial_prompt:         │
-                                             │             last_transcript 📝      │
-                                             │             (cumulative context!)   │
-                                             │              │                      │
-                                             │              ▼                      │
-                                             │      [4] 🚀 RUN AI INFERENCE        │
-                                             │          state.full(params, audio)  │
-                                             │              │                      │
-                                             │              ├─► GPU Encoder        │
-                                             │              │   (CUDA/Vulkan)      │
-                                             │              │   ~50ms              │
-                                             │              │                      │
-                                             │              ├─► GPU Decoder        │
-                                             │              │   (token generation) │
-                                             │              │   ~100-200ms         │
-                                             │              │                      │
-                                             │              └─► Total: ~150ms      │
-                                             │                  for 6s audio       │
-                                             │                  (40x realtime!)    │
-                                             │              │                      │
-                                             │              ▼                      │
-                                             │      [5] Extract segments           │
-                                             │          for i in 0..num_segments   │
-                                             │              │                      │
-                                             │              └─► "Hello, this is a" │
-                                             │                                     │
-                                             │              ▼                      │
-                                             │      [6] Update context             │
-                                             │          last_transcript +=         │
-                                             │          "Hello, this is a"         │
-                                             │              │                      │
-                                             │              ▼                      │
-                                             │      [7] Print to console           │
-                                             │          println!("[TRANSCRIPT]")   │
-                                             │              │                      │
-                                             │              ▼                      │
-                                             │      [8] Go back to buffering       │
-                                             │          buffer = [leftover samples]│
-                                             │              │                      │
-                                             │              └──► WAIT for next 6s  │
-                                             │                                     │
-                                             │      ═══════════════════════════     │
-                                             │      TIMELINE EXAMPLE:               │
-                                             │      ═══════════════════════════     │
-                                             │      0-6s:   Buffering...            │
-                                             │      6s:     Transcribe → "Hello,"   │
-                                             │      6-12s:  Buffering...            │
-                                             │      12s:    Transcribe → "my name"  │
-                                             │      12-18s: Buffering...            │
-                                             │      18s:    Transcribe → "is John"  │
-                                             │      ...                             │
-                                             │                                     │
-                                             │      Context accumulates:            │
-                                             │      6s:  "Hello,"                   │
-                                             │      12s: "Hello, my name"           │
-                                             │      18s: "Hello, my name is John"   │
-                                             │                                     │
-                                             └─────────────────────────────────────┘
-
-
-═══════════════════════════════════════════════════════════════════════════════
-                     🛑 USER CLICKS "STOP RECORDING"
-═══════════════════════════════════════════════════════════════════════════════
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  PHASE 2: CLEANUP & FINAL TRANSCRIPTION (lib.rs::stop_recording)            │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-    [1] Stop audio stream
-         ↓
-    stream.pause()  // Mic stops capturing
-         ↓
-    Drop RecordingHandle {
-        stream,
-        file_tx,      // ← Dropping causes channel to close
-        whisper_tx,   // ← Same here
-    }
-         ↓
-    ┌────────────────────────────────────────────────────────┐
-    │ Both threads detect channel closure                    │
-    │  ├─► File Writer: recv() returns Err → finalize & exit │
-    │  └─► Whisper AI: recv() returns Err → stop buffering   │
-    └────────────────────────────────────────────────────────┘
-         ↓
-    [2] Wait for threads to finish
-         ↓
-    ✅ WAV file is now complete and saved
-         ↓
-    [3] Run FINAL high-quality transcription
-         ↓
-    whisper.transcribe_file("recording_1737687024.wav")
-         ↓
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 🎯 FINAL TRANSCRIPTION (whisper.rs::transcribe_file)                       │
-│                                                                             │
-│ This is MUCH better than the live previews because:                        │
-│  ✓ Processes entire recording as one context                               │
-│  ✓ No 6-second chunk boundaries                                            │
-│  ✓ Better punctuation & capitalization                                     │
-│  ✓ More accurate word recognition                                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-         ↓
-    ┌────────────────────────────────────────────┐
-    │ STEP 1: Load WAV file                      │
-    │  ├─ Read all samples                       │
-    │  └─ Example: 20s recording = 960,000 samples│
-    └────────────────────────────────────────────┘
-         ↓
-    ┌────────────────────────────────────────────┐
-    │ STEP 2: Convert Stereo → Mono             │
-    │  ├─ [L, R, L, R] → [(L+R)/2, (L+R)/2]     │
-    │  └─ 960,000 → 480,000 samples              │
-    └────────────────────────────────────────────┘
-         ↓
-    ┌────────────────────────────────────────────┐
-    │ STEP 3: Resample 48kHz → 16kHz            │
-    │  ├─ Process in 10,240 sample chunks        │
-    │  └─ 480,000 → 160,000 samples @ 16kHz      │
-    └────────────────────────────────────────────┘
-         ↓
-    ┌────────────────────────────────────────────┐
-    │ STEP 4: Create Whisper state               │
-    └────────────────────────────────────────────┘
-         ↓
-    ┌────────────────────────────────────────────┐
-    │ STEP 5: Set optimized parameters           │
-    │  ├─ n_threads: 8 (more CPU for encoding)   │
-    │  ├─ language: "en"                          │
-    │  ├─ max_len: 1 (no extra tokens)           │
-    │  └─ NO initial_prompt (fresh context)      │
-    └────────────────────────────────────────────┘
-         ↓
-    ┌────────────────────────────────────────────┐
-    │ STEP 6: 🚀 RUN FULL INFERENCE              │
-    │  state.full(params, &audio_data)           │
-    │                                             │
-    │  Processing 160,000 samples (10 seconds):  │
-    │  ├─ Encoder: ~100ms (GPU)                  │
-    │  └─ Decoder: ~400ms (GPU)                  │
-    │  Total: ~500ms for 10s audio (20x!)        │
-    └────────────────────────────────────────────┘
-         ↓
-    ┌────────────────────────────────────────────┐
-    │ STEP 7: Extract all segments               │
-    │  ├─ Segment 0: "Hello, my name is John."   │
-    │  ├─ Segment 1: "I'm recording this to..."  │
-    │  └─ Segment 2: "test the transcription."   │
-    └────────────────────────────────────────────┘
-         ↓
-    ┌────────────────────────────────────────────┐
-    │ STEP 8: Combine & return transcript        │
-    │  "Hello, my name is John. I'm recording    │
-    │   this to test the transcription."         │
-    └────────────────────────────────────────────┘
-         ↓
-    [4] Display final transcript in UI
-         ↓
-    ✅ DONE!
-```
-
----
-
 ## 🎙️ Voice Activity Detection (VAD)
 
 **VAD** is the "gatekeeper" of the system. It determines if you are actually speaking before the AI tries to transcribe anything.
@@ -1531,268 +1193,6 @@ Adding VAD significantly improves transcription speed, especially for recordings
 - `Arc<Mutex<WhisperManager>>` shared between threads
 - Channels for lock-free communication
 - No data races, no deadlocks
-
----
-
-## Rust Basics You Need to Know
-
-Before diving in, let's understand key Rust concepts used in Taurscribe.
-
-### 1. Ownership - Rust's Superpower
-
-**The Problem**: In languages like C/C++, you can accidentally:
-- Use memory after freeing it (use-after-free)
-- Free memory twice (double-free)
-- Never free memory (memory leak)
-
-**Rust's Solution**: **Ownership Rules**
-
-```rust
-// Rule 1: Each value has ONE owner
-let audio_data = vec![1.0, 2.0, 3.0];  // audio_data OWNS the Vec
-
-// Rule 2: When owner goes out of scope, value is dropped (freed)
-{
-    let temp = vec![4.0, 5.0];
-}  // temp goes out of scope here → Vec is automatically freed!
-
-// Rule 3: You can't use a value after moving it
-let data1 = vec![1.0, 2.0];
-let data2 = data1;  // Ownership MOVED to data2
-// println!("{:?}", data1);  // ❌ ERROR! data1 no longer owns the Vec
-```
-
-**Real-World Analogy**: 
-- **Ownership** = Having the car keys
-- **Moving** = Giving your keys to someone else (you can't drive anymore!)
-- **Borrowing** = Letting someone borrow your car (you still own it)
-
-### 2. Borrowing - Using Without Owning
-
-```rust
-fn print_length(data: &Vec<f32>) {  // &Vec means "borrow, don't take ownership"
-    println!("Length: {}", data.len());
-}  // Borrow ends here
-
-let audio = vec![1.0, 2.0, 3.0];
-print_length(&audio);  // Lend audio to function
-println!("{:?}", audio);  // ✅ Still works! We still own audio
-```
-
-**Types of Borrowing**:
-- `&T` - Immutable borrow (read-only, can have many)
-- `&mut T` - Mutable borrow (read-write, only ONE at a time)
-
-**Analogy**:
-- `&T` = Library book (many people can read, but nobody can write in it)
-- `&mut T` = Whiteboard marker (only one person can write at a time)
-
-### 3. Option<T> - Dealing with "Maybe"
-
-Rust doesn't have `null`. Instead, it uses `Option<T>`:
-
-```rust
-enum Option<T> {
-    Some(T),  // There IS a value
-    None,     // There is NO value
-}
-
-// Example from Taurscribe
-let maybe_recording: Option<RecordingHandle> = None;  // Not recording yet
-
-// Later...
-maybe_recording = Some(recording_handle);  // Now recording!
-
-// To use it:
-match maybe_recording {
-    Some(handle) => {
-        // We have a recording, use it!
-        println!("Recording active");
-    }
-    None => {
-        // No recording
-        println!("Not recording");
-    }
-}
-```
-
-**Why Better Than Null?**
-```rust
-// In C/Java/JavaScript:
-// let x = null;
-// x.doSomething();  // 💥 NullPointerException!
-
-// In Rust:
-let x: Option<String> = None;
-// x.len();  // ❌ Won't compile! Rust forces you to check first
-match x {
-    Some(string) => println!("{}", string.len()),  // Safe!
-    None => println!("No string"),
-}
-```
-
-### 4. Result<T, E> - Error Handling
-
-Rust doesn't use exceptions. Instead, functions return `Result`:
-
-```rust
-enum Result<T, E> {
-    Ok(T),   // Success with value T
-    Err(E),  // Failure with error E
-}
-
-// Example from Taurscribe
-fn start_recording() -> Result<String, String> {
-    //                  ^^^^^^^^^^^^^^^^^^^^^^^^
-    //                  Returns either:
-    //                  - Ok(String) with success message
-    //                  - Err(String) with error message
-    
-    let device = get_microphone()?;  // The ? operator
-    //                            ^
-    //                            If this returns Err, immediately return that error
-    //                            If Ok, unwrap the value and continue
-    
-    Ok("Recording started!".to_string())
-}
-```
-
-**The `?` Operator Magic**:
-```rust
-// Without ?
-let device = match get_microphone() {
-    Ok(dev) => dev,
-    Err(e) => return Err(e),  // Early return on error
-};
-
-// With ? (equivalent but cleaner!)
-let device = get_microphone()?;
-```
-
-### 5. Threads - Doing Multiple Things at Once
-
-```rust
-use std::thread;
-
-// Spawn a new thread
-thread::spawn(|| {
-    // This code runs in parallel!
-    println!("Hello from thread!");
-});
-
-// With move (take ownership)
-let data = vec![1, 2, 3];
-thread::spawn(move || {
-    // 'move' transfers ownership of 'data' into this thread
-    println!("{:?}", data);
-});
-// println!("{:?}", data);  // ❌ ERROR! Thread now owns data
-```
-
-**Why Threads?**
-```
-❌ WITHOUT THREADS (Sequential):
-Record (30s) → Save (2s) → Transcribe (5s) = 37 seconds frozen!
-
-✅ WITH THREADS (Parallel):
-Main Thread: Handle UI (always responsive)
-Thread 1: Record audio in background
-Thread 2: Save to file in background  
-Thread 3: Transcribe in background
-= UI never freezes!
-```
-
-### 6. Arc<Mutex<T>> - Sharing Data Between Threads
-
-**The Problem**: Only one thread can own data. How do multiple threads share?
-
-**The Solution**: `Arc<Mutex<T>>`
-
-```rust
-use std::sync::{Arc, Mutex};
-
-// Arc = "Atomic Reference Counter" (shared ownership)
-// Mutex = "Mutual Exclusion" (only one thread at a time)
-
-let counter = Arc::new(Mutex::new(0));
-//            ^^^      ^^^^^ Lock  ^^^ The data
-//            Shared ownership
-
-// Clone Arc (creates new reference, NOT copy of data)
-let counter_clone = counter.clone();
-
-thread::spawn(move || {
-    let mut num = counter_clone.lock().unwrap();
-    //                          ^^^^^^ Acquire lock (wait if another thread has it)
-    //                                 ^^^^^^^ Panic if lock is poisoned (rare)
-    *num += 1;  // Modify the data
-});  // Lock automatically released when 'num' goes out of scope!
-```
-
-**Analogy**:
-- `Arc` = Multiple people sharing a gym locker combination
-- `Mutex` = The lock on the locker (only one person can open it at a time)
-- `lock()` = Waiting your turn to open the locker
-- Dropping the guard = Automatically locking it when you're done
-
-**Visual**:
-```
-Thread 1                Thread 2                Thread 3
-   │                        │                       │
-   ├─ lock() [WAITING]      │                       │
-   │                        ├─ lock() [HAS LOCK]    │
-   │                        │   Read/Write data     │
-   │                        │   (others wait)       │
-   │                        └─ drop [RELEASES]      │
-   ├─ lock() [GOT LOCK!]    │                       ├─ lock() [WAITING]
-   │   Read/Write data      │                       │
-   └─ drop [RELEASES]       │                       ├─ lock() [GOT LOCK!]
-                            │                       │   Read/Write data
-                            │                       └─ drop [RELEASES]
-```
-
-### 7. Channels - Sending Data Between Threads
-
-Channels are like **pipes** or **conveyor belts** between threads.
-
-```rust
-use crossbeam_channel::unbounded;
-
-// Create a channel
-let (tx, rx) = unbounded::<String>();
-//   ^^  ^^
-//   Sender  Receiver
-
-// Thread 1: Producer
-thread::spawn(move || {
-    tx.send("Hello".to_string()).unwrap();
-    //  ^^^^ Send data through the channel
-});
-
-// Thread 2: Consumer
-thread::spawn(move || {
-    let message = rx.recv().unwrap();
-    //               ^^^^^^ Receive data (blocks until data arrives)
-    println!("Got: {}", message);
-});
-```
-
-**Analogy**: 
-- Channel = **Mail chute** in an apartment building
-- Sender = **Person dropping letters** in the chute
-- Receiver = **Mailbox owner** waiting for letters
-
-**Taurscribe Uses Two Channels**:
-```
-🎤 Microphone
-       │
-       ▼
-   Split data
-       │
-       ├──► Channel 1 (tx → rx) → Thread 1 (File Writer)
-       │
-       └──► Channel 2 (tx → rx) → Thread 2 (Whisper AI)
-```
 
 ---
 
@@ -2740,429 +2140,6 @@ Chunk 2: (AI knows "Hello my name" was said) → "is John Smith." ✅
 ```
 
 **Analogy**: Like telling someone "Here's what we were talking about" before continuing the conversation.
-
----
-
-## Understanding Rust Ownership
-
-Let's dive deeper into real examples from Taurscribe.
-
-### Example 1: Moving Ownership to Threads
-
-**From lib.rs lines 162-172**:
-
-```rust
-let writer = hound::WavWriter::create(&path, spec)?;
-// 'writer' is owned by this function
-
-std::thread::spawn(move || {
-    let mut writer = writer;
-    // Ownership of 'writer' MOVED into this thread
-    
-    while let Ok(samples) = file_rx.recv() {
-        writer.write_sample(sample).ok();
-    }
-    
-    writer.finalize().ok();
-});
-
-// ❌ Can't use 'writer' here anymore!
-// writer.write_sample(0.0);  // Compile error!
-```
-
-**Why move?**
-
-1. Thread might outlive the function
-2. If we just borrowed `&writer`, it could be freed while thread uses it
-3. Moving = Thread takes full responsibility
-
-**Analogy**:
-- You give your friend your phone (move)
-- They take it home (thread runs independently)
-- You can't use your phone anymore (moved ownership)
-- When they're done, phone gets recycled (dropped when thread exits)
-
-### Example 2: Cloning Arc (Shared Ownership)
-
-**From lib.rs lines 175**:
-
-```rust
-// In AudioState:
-whisper: Arc<Mutex<WhisperManager>>
-
-// In start_recording:
-let whisper = state.whisper.clone();
-// Creates NEW Arc pointing to SAME data
-
-std::thread::spawn(move || {
-    // Thread takes ownership of this Arc clone
-    whisper.lock().unwrap().transcribe_chunk(&chunk, sample_rate);
-});
-
-// Original Arc still usable!
-state.whisper.lock().unwrap().transcribe_file(&path);
-```
-
-**What's happening behind the scenes**:
-
-```
-Initial:
-    Arc { count: 1 } → WhisperManager
-
-After clone():
-    Arc { count: 2 } → WhisperManager  ← Both Arcs point here!
-    Arc { count: 2 } ↗
-
-After thread exits:
-    Arc { count: 1 } → WhisperManager  ← One Arc dropped!
-
-When all Arcs dropped:
-    (count: 0) → WhisperManager gets freed
-```
-
-**Analogy**:
-- WhisperManager = House
-- Arc = Key to the house
-- Clone = Make a copy of the key
-- Multiple people can have keys
-- House only demolished when last key returned
-
-### Example 3: Channel Ownership Transfer
-
-**From lib.rs lines 301-314**:
-
-```rust
-let data = vec![1.0, 2.0, 3.0];
-file_tx.send(data.to_vec()).ok();
-//           ^^^^^^^^^^^ Creates NEW Vec (ownership transferred through channel)
-
-// If we just did:
-// file_tx.send(data).ok();  // 'data' moved
-// println!("{:?}", data);   // ❌ Error! Can't use after move
-```
-
-**Channel ownership flow**:
-
-```
-Sender thread:
-    Creates: Vec [1.0, 2.0, 3.0]
-        ↓
-    Calls: tx.send(vec)
-        ↓ (ownership transferred through channel)
-        
-Receiver thread:
-    Calls: rx.recv()
-        ↓ (receives ownership)
-    Owns: Vec [1.0, 2.0, 3.0]
-```
-
-**Safety**: The Vec can only be in ONE place at a time!
-
-### Example 4: Mutex Guards
-
-**From lib.rs line 337**:
-
-```rust
-let mut handle = state.recording_handle.lock().unwrap();
-//              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-//              Returns: MutexGuard<Option<RecordingHandle>>
-
-if let Some(recording) = handle.take() {
-    // Use recording...
-    drop(recording.stream);
-}
-// MutexGuard dropped here → lock automatically released!
-```
-
-**What's MutexGuard?**
-
-Smart pointer that:
-1. Locks the mutex when created
-2. Gives you access to the data
-3. Automatically unlocks when dropped
-
-**Visual timeline**:
-
-```
-Thread 1:
-    ├─ let guard = mutex.lock()     [LOCK ACQUIRED]
-    │      ↓
-    │  Access data through guard
-    │      ↓
-    └─ }                             [LOCK RELEASED]
-       guard dropped here
-
-Thread 2: (was waiting)
-    ├─ let guard = mutex.lock()     [LOCK ACQUIRED]
-    │      ↓
-    │  Access data
-```
-
-**Manual vs Automatic**:
-
-```rust
-// C++ manual locking:
-mutex.lock();
-// do stuff
-mutex.unlock();  // ❌ Forget this? Deadlock!
-
-// Rust automatic:
-{
-    let guard = mutex.lock();
-    // do stuff
-}  // Automatically unlocked! ✅
-```
-
----
-
-## Dependencies Explained
-
-Let's understand every dependency in `Cargo.toml`.
-
-### Audio Libraries
-
-```toml
-cpal = "0.15"
-hound = "3.5"
-```
-
-**cpal** - Cross-Platform Audio Library
-
-**What it does**: Access microphone and speakers
-
-**Why this library?**
-- Works on Windows, macOS, Linux
-- Low-latency (important for real-time)
-- Stream-based API (callback when audio arrives)
-
-**Example**:
-```rust
-use cpal::traits::{DeviceTrait, HostTrait};
-
-let host = cpal::default_host();  // Windows: WASAPI, macOS: CoreAudio, Linux: ALSA
-let device = host.default_input_device()?;  // Get default mic
-```
-
-**hound** - WAV File I/O
-
-**What it does**: Read and write WAV files
-
-**Why this library?**
-- Simple API
-- Pure Rust (no C dependencies)
-- Supports float samples (our use case)
-
-**Example**:
-```rust
-let spec = hound::WavSpec {
-    channels: 2,
-    sample_rate: 48000,
-    bits_per_sample: 32,
-    sample_format: hound::SampleFormat::Float,
-};
-let mut writer = hound::WavWriter::create("output.wav", spec)?;
-writer.write_sample(0.5)?;
-```
-
-### Threading & Concurrency
-
-```toml
-crossbeam-channel = "0.5"
-```
-
-**crossbeam-channel** - Better Channels
-
-**Why not std::sync::mpsc?**
-
-| Feature | std::mpsc | crossbeam |
-|---------|-----------|-----------|
-| Multiple senders | ✅ | ✅ |
-| Multiple receivers | ❌ | ✅ |
-| Select (wait on multiple) | ❌ | ✅ |
-| Performance | Good | **Excellent** |
-| Error handling | Basic | **Better** |
-
-**Example**:
-```rust
-use crossbeam_channel::unbounded;
-
-let (tx, rx) = unbounded::<Vec<f32>>();
-
-// Can clone sender
-let tx2 = tx.clone();
-
-// Send from multiple threads
-thread::spawn(move || tx.send(data).unwrap());
-thread::spawn(move || tx2.send(data2).unwrap());
-```
-
-### AI & Transcription
-
-```toml
-# Base dependencies (see Platform Support section for platform-specific config)
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
-parakeet-rs = { version = "=0.3.0" }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
-rubato = "0.14"
-```
-
-**whisper-rs** - Whisper.cpp Rust Bindings
-
-**What it does**: Rust bindings to OpenAI's Whisper C++ library
-
-**Why Git version?**
-- Published crate (on crates.io) doesn't have GPU support
-- Git version has CUDA + Vulkan features
-- Active development
-
-**Platform-Specific Features**:
-> 🔗 **See [Platform Support & Hardware Acceleration](#️-platform-support--hardware-acceleration) for detailed configuration**
-
-- **Windows x64**: `features = ["cuda", "vulkan"]` - NVIDIA + AMD/Intel GPU support
-- **Linux x64**: `features = ["cuda", "vulkan"]` - NVIDIA + AMD/Intel GPU support  
-- **macOS/ARM**: Base features only (uses Metal for GPU acceleration)
-- **Windows ARM64**: Base features only (no GPU acceleration for whisper on ARM)
-- **Linux ARM64**: Base features only (CPU-only on ARM Linux)
-
-**parakeet-rs** - NVIDIA Nemotron ASR
-
-**What it does**: Streaming-optimized speech recognition for real-time transcription
-
-**Platform-Specific Features**:
-- **Windows x64**: `features = ["cuda", "directml"]` - NVIDIA + Universal Windows GPU
-- **Windows ARM64**: `features = ["directml"]` - NPU/GPU acceleration on Snapdragon X
-- **Linux x64**: `features = ["cuda"]` - NVIDIA GPU support
-- **macOS**: Base features (uses CoreML via ONNX Runtime)
-- **Linux ARM64**: Base features (CPU-only)
-
-**ort** - ONNX Runtime
-
-**What it does**: Runs Parakeet models with hardware acceleration
-
-**Platform-Specific Features**:
-- **Windows x64**: `features = ["cuda", "directml", "tensorrt", "xnnpack"]`
-- **Windows ARM64**: `features = ["directml", "xnnpack"]`
-- **macOS**: `features = ["coreml", "xnnpack"]` - Apple Neural Engine
-- **Linux x64**: `features = ["cuda", "tensorrt", "xnnpack"]`
-- **Linux ARM64**: `features = ["xnnpack"]` - Optimized CPU inference
-
-**rubato** - Audio Resampling
-
-**What it does**: Convert sample rate (e.g., 48kHz → 16kHz)
-
-**Why needed?** Whisper requires 16kHz audio
-
-**Example**:
-```rust
-use rubato::{Resampler, SincFixedIn};
-
-let mut resampler = SincFixedIn::<f32>::new(
-    16000.0 / 48000.0,  // Ratio: 16kHz / 48kHz
-    2.0,                 // Max resample ratio
-    params,
-    chunk_size,
-    1,                   // Channels
-)?;
-
-let resampled = resampler.process(&input)?;
-```
-
-### Utilities
-
-```toml
-chrono = "0.4"
-dirs = "6.0.0"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-```
-
-**chrono** - Date and Time
-
-**Use in Taurscribe**: Generate timestamps for filenames
-
-```rust
-use chrono::Utc;
-
-let timestamp = Utc::now().timestamp();  // 1737280000
-let filename = format!("recording_{}.wav", timestamp);
-// recording_1737280000.wav
-```
-
-**dirs** - System Directories
-
-**Use**: Find AppData/Application Support directory
-
-```rust
-use dirs::data_local_dir;
-
-let app_data = data_local_dir()?;  // C:\Users\YOU\AppData\Local\
-let recordings = app_data.join("Taurscribe").join("temp");
-```
-
-**Why not hardcode?**
-- Windows: `C:\Users\NAME\AppData\Local\`
-- macOS: `/Users/NAME/Library/Application Support/`
-- Linux: `/home/NAME/.local/share/`
-
-**serde + serde_json** - Serialization
-
-**Use**: Convert Rust ↔ JSON (for Tauri commands)
-
-```rust
-use serde::{Serialize, Deserialize};
-
-#[derive(Serialize)]
-struct Response {
-    message: String,
-    count: u32,
-}
-
-let response = Response {
-    message: "Hello".to_string(),
-    count: 42,
-};
-
-// Rust → JSON
-let json = serde_json::to_string(&response)?;
-// {"message":"Hello","count":42}
-
-// JSON → Rust
-let response: Response = serde_json::from_str(&json)?;
-```
-
-### Tauri Framework
-
-```toml
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
-tauri-plugin-fs = "2"
-tauri-build = { version = "2", features = [] }
-```
-
-**tauri** - Main Framework
-
-**What it does**: 
-- Creates desktop window
-- Bridges Rust ↔ JavaScript
-- Handles platform-specific code
-
-**tauri-plugin-opener** - Open Files/URLs
-
-**What it does**: Open files in default program
-
-**Example**:
-```rust
-// Opens file in default program (e.g., Notepad for .txt)
-tauri::api::shell::open("file.txt")?;
-```
-
-**tauri-plugin-fs** - File System Access
-
-**What it does**: Safe file system operations from frontend
-
-**tauri-build** - Build Script
-
-**What it does**: Generates code from `tauri.conf.json` at compile time
 
 ---
 
@@ -4589,622 +3566,6 @@ To add a new Whisper model:
 4. The model will appear in the dropdown!
 
 **Naming convention**: `ggml-{model_name}.bin`
-
----
-
-## 📁 File & Function Reference
-
-This section provides a complete reference of all major files in Taurscribe and what each function does.
-
----
-
-### 🎨 **Frontend Files (React/TypeScript)**
-
-#### **`src/App.tsx`** (369 lines)
-**Purpose**: Main UI component - handles all user interactions and state management
-
-##### **React State Variables**
-```typescript
-const [greetMsg, setGreetMsg] = useState("")           // Output/transcript display
-const [isRecording, setIsRecording] = useState(false)  // Recording state
-const [backendInfo, setBackendInfo] = useState("...")  // GPU backend info
-const [models, setModels] = useState<ModelInfo[]>([])  // Available models
-const [currentModel, setCurrentModel] = useState(null) // Selected model
-const [sampleFiles, setSampleFiles] = useState([])     // Benchmark samples
-const [selectedSample, setSelectedSample] = useState() // Selected sample
-const [isLoading, setIsLoading] = useState(false)      // Loading overlay
-const [loadingMessage, setLoadingMessage] = useState() // Loading text
-```
-
-##### **React Refs**
-```typescript
-isRecordingRef           // Tracks recording state (avoids stale closures)
-startingRecordingRef     // Prevents duplicate start calls
-pendingStopRef           // Queues stop if start is in progress
-listenersSetupRef        // Prevents duplicate event listeners
-lastStartTime            // Debounces rapid start events
-```
-
-##### **Functions**
-
-**`loadInitialData()` (async)**
-- **Purpose**: Loads backend info, models, and sample files on app start
-- **Called**: Once on component mount
-- **Actions**:
-  - Calls `get_backend_info()` → displays GPU backend
-  - Calls `list_models()` → populates model dropdown
-  - Calls `get_current_model()` → shows active model
-  - Calls `list_sample_files()` → loads benchmark samples
-
-**`handleModelChange(modelId)` (async)**
-- **Purpose**: Switches to a different Whisper model
-- **Called**: When user selects model from dropdown
-- **Actions**:
-  - Shows loading overlay
-  - Calls `switch_model(modelId)` on backend
-  - Updates tray icon to "processing"
-  - Refreshes backend info (GPU might change)
-  - Updates UI with success/error message
-
-**`formatSize(sizeMb)`**
-- **Purpose**: Formats file size (MB → GB conversion)
-- **Returns**: "75 MB" or "1.5 GB"
-- **Example**: `formatSize(1536)` → "1.5 GB"
-
-**`setTrayState(newState)` (async)**
-- **Purpose**: Updates tray icon color
-- **States**: "ready" (green), "recording" (red), "processing" (yellow)
-- **Called**: Before/after recording, model switching
-
-**Event Listeners (useEffect hooks)**
-
-**Hotkey Start Listener**
-- **Event**: `hotkey-start-recording`
-- **Trigger**: User presses Ctrl+Win
-- **Actions**:
-  - Debounces duplicate events (500ms window)
-  - Prevents starting if already recording
-  - Calls `start_recording()`
-  - Handles pending stop requests
-
-**Hotkey Stop Listener**
-- **Event**: `hotkey-stop-recording`
-- **Trigger**: User releases Ctrl+Win
-- **Actions**:
-  - Queues stop if still starting
-  - Calls `stop_recording()`
-  - Handles race conditions gracefully
-
----
-
-#### **`src/App.css`** (9110 bytes)
-**Purpose**: Styling for the entire application
-
-##### **Key CSS Classes**
-
-**`.container`**
-- Main app container with glassmorphism effect
-- Dark background with blur
-- Centered layout
-
-**`.status-bar`**
-- Displays GPU backend and current model
-- Color-coded indicators
-
-**`.model-select`**
-- Dropdown for model selection
-- Gradient border animation on hover
-
-**`.btn-start`, `.btn-stop`, `.btn-benchmark`**
-- Recording control buttons
-- Animated hover effects
-- Disabled states
-
-**`.loading-overlay`**
-- Full-screen loading indicator
-- Spinning animation
-- Blur background
-
----
-
-### 🦀 **Backend Files (Rust)**
-
-#### **`src-tauri/src/lib.rs`** (913 lines)
-**Purpose**: Main orchestrator - handles all Tauri commands, threading, and audio processing
-
-##### **Structs**
-
-**`SendStream(cpal::Stream)`** (lines 41-44)
-- **Purpose**: Wrapper to make audio stream thread-safe
-- **Why**: `cpal::Stream` isn't `Send`/`Sync` by default
-- **Safety**: We only drop it, never access across threads
-
-**`AudioState`** (lines 45-51)
-```rust
-pub struct AudioState {
-    recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
-    whisper: Arc<Mutex<WhisperManager>>,
-}
-```
-- **Purpose**: Shared state across Tauri commands
-- **`recording_handle`**: Currently active recording (if any)
-- **`whisper`**: Whisper AI manager (shared across threads)
-
-**`RecordingHandle`** (lines 53-57)
-```rust
-struct RecordingHandle {
-    stream: SendStream,      // Audio stream (keeps mic active)
-    file_tx: Sender,        // Channel to file writer thread
-    whisper_tx: Sender,     // Channel to Whisper AI thread
-}
-```
-- **Purpose**: Holds resources for active recording
-- **Cleanup**: Dropping this stops recording automatically
-
-##### **Tauri Commands (Functions callable from JavaScript)**
-
-**`greet(name: &str)` → `String`** (lines 59-62)
-- **Purpose**: Demo function from Tauri template
-- **Not used**: Can be removed
-
-**`get_backend_info(state)` → `Result<String, String>`** (lines 64-68)
-- **Purpose**: Returns GPU backend being used
-- **Returns**: "Backend: CUDA" or "Backend: CPU"
-- **Called**: On app start and after model switch
-
-**`list_models()` → `Result<Vec<ModelInfo>, String>`** (lines 70-74)
-- **Purpose**: Lists all available Whisper models
-- **Returns**: Array of model metadata (id, name, size)
-- **Called**: On app start to populate dropdown
-
-**`get_current_model(state)` → `Result<Option<String>, String>`** (lines 76-81)
-- **Purpose**: Gets currently loaded model name
-- **Returns**: "tiny.en-q5_1" or None
-- **Called**: On app start
-
-**`switch_model(state, model_id)` → `Result<String, String>`** (lines 83-97)
-- **Purpose**: Switches to a different Whisper model
-- **Checks**: Can't switch while recording
-- **Actions**:
-  - Clears context (fresh start)
-  - Calls `whisper.initialize(model_id)`
-  - Returns backend info
-- **Called**: When user selects new model
-
-**`set_tray_state(app, state, new_state)` → `Result<(), String>`** (lines 99-120)
-- **Purpose**: Updates tray icon color
-- **States**:
-  - "ready" → green circle
-  - "recording" → red circle
-  - "processing" → yellow circle
-- **Called**: Throughout recording lifecycle
-
-**`update_tray_icon(app, state)` → `Result<(), String>`** (lines 122-147)
-- **Purpose**: Helper to actually change the tray icon
-- **Uses**: Built-in tray icons (emoji-red_circle.ico, etc.)
-
-**`list_sample_files()` → `Result<Vec<SampleFile>, String>`** (lines 155-209)
-- **Purpose**: Lists WAV files in samples directory
-- **Returns**: File names and paths for benchmarking
-- **Called**: On app start
-
-**`benchmark_test(state, file_path)` → `Result<String, String>`** (lines 211-390)
-- **Purpose**: Tests transcription performance on sample file
-- **Process**:
-  1. Load sample audio file
-  2. Simulate real-time chunks (6s each)
-  3. Run final transcription
-  4. Compare performance
-- **Returns**: Detailed timing breakdown
-- **Called**: When user clicks "Run Benchmark"
-
-##### **Core Recording Functions**
-
-**`get_recordings_dir()` → `Result<PathBuf, String>`** (lines 392-406)
-- **Purpose**: Gets/creates AppData directory for recordings
-- **Path**: `C:\Users\YOU\AppData\Local\Taurscribe\temp\`
-- **Creates**: Directory if it doesn't exist
-- **Called**: By `start_recording()`
-
-**`start_recording(state)` → `Result<String, String>`** (lines 408-647)
-- **Purpose**: Main recording orchestrator
-- **Process**:
-  1. Get microphone device
-  2. Create WAV file in AppData
-  3. Create two channels (file, whisper)
-  4. Spawn file writer thread
-  5. Spawn Whisper AI thread
-  6. Build audio stream with callback
-  7. Start recording
-  8. Save handle for cleanup
-- **Returns**: Success message
-- **Called**: When user starts recording
-
-**Audio Callback (inside `start_recording`)** (lines 290-322)
-- **Runs**: Every ~10ms when audio available
-- **Actions**:
-  1. Receive audio samples from microphone
-  2. Convert stereo → mono
-  3. Send stereo to file channel
-  4. Send mono to Whisper channel
-- **Purpose**: Splits audio into two streams
-
-**File Writer Thread** (lines 162-172)
-- **Runs**: In background, parallel to main thread
-- **Process**:
-  - Waits for audio on channel
-  - Writes samples to WAV file
-  - Continues until channel closes
-  - Finalizes WAV file on exit
-- **Purpose**: Saves all audio to disk
-
-**Whisper AI Thread** (lines 180-285)
-- **Runs**: In background, parallel to main thread
-- **Process**:
-  - Buffers audio in memory
-  - When 6 seconds accumulated:
-    - Extract chunk
-    - Transcribe with Whisper
-    - Print to console
-    - Update context
-  - Repeat until channel closes
-- **Purpose**: Live transcription preview
-
-**`stop_recording(state)` → `Result<String, String>`** (lines 649-722)
-- **Purpose**: Stops recording and runs final transcription
-- **Process**:
-  1. Get recording handle
-  2. Drop it (closes channels, stops threads)
-  3. Wait for WAV file to finalize
-  4. Run `transcribe_file()` on saved audio
-  5. Return final transcript
-- **Returns**: Complete transcription
-- **Called**: When user stops recording
-
-**`start_hotkey_listener(app_handle)`** (lines 724-797)
-- **Purpose**: Listens for Ctrl+Win global hotkey
-- **Process**:
-  - Spawns background thread
-  - Uses `rdev` to detect key events
-  - Tracks Ctrl and Win key states
-  - Emits events to frontend:
-    - `hotkey-start-recording` (both pressed)
-    - `hotkey-stop-recording` (either released)
-- **Called**: Once on app startup
-
-**`run()`** (lines 799-912)
-- **Purpose**: Main application entry point
-- **Process**:
-  1. Initialize Whisper manager
-  2. Load default model
-  3. Create audio state
-  4. Build Tauri app
-  5. Register all commands
-  6. Setup tray icon
-  7. Start hotkey listener
-  8. Run event loop
-- **Called**: By `main.rs` on app start
-
----
-
-#### **`src-tauri/src/whisper.rs`** (735 lines)
-**Purpose**: Whisper AI manager - handles model loading, transcription, and audio preprocessing
-
-##### **Enums**
-
-**`GpuBackend`** (lines 14-19)
-```rust
-pub enum GpuBackend {
-    Cuda,    // NVIDIA GPUs
-    Vulkan,  // AMD/Intel/Universal
-    Cpu,     // Fallback
-}
-```
-- **Purpose**: Tracks which GPU backend is active
-- **Display**: Implements `Display` trait for pretty printing
-
-##### **Structs**
-
-**`ModelInfo`** (lines 32-38)
-```rust
-pub struct ModelInfo {
-    pub id: String,           // "tiny.en-q5_1"
-    pub display_name: String, // "Tiny English (Q5_1)"
-    pub file_name: String,    // "ggml-tiny.en-q5_1.bin"
-    pub size_mb: f32,         // 75.0
-}
-```
-- **Purpose**: Metadata about available models
-- **Serializable**: Can be sent to JavaScript
-
-**`WhisperManager`** (lines 41-46)
-```rust
-pub struct WhisperManager {
-    context: Option<WhisperContext>,  // Loaded model
-    last_transcript: String,          // Cumulative context
-    backend: GpuBackend,              // Active backend
-    current_model: Option<String>,    // Model ID
-}
-```
-- **Purpose**: Manages Whisper model lifecycle and transcription
-
-##### **Functions**
-
-**`null_log_callback(_level, _text, _user_data)`** (lines 48-51)
-- **Purpose**: Silences verbose whisper.cpp logs
-- **Why**: Prevents console spam
-- **Used**: In `initialize()`
-
-**`WhisperManager::new()` → `Self`** (lines 54-62)
-- **Purpose**: Creates empty manager (no model loaded)
-- **Returns**: Manager with None context
-- **Called**: Once on app startup
-
-**`WhisperManager::get_models_dir()` → `Result<PathBuf>`** (lines 64-82)
-- **Purpose**: Finds the models directory
-- **Tries**:
-  - `taurscribe-runtime/models` (dev)
-  - `../taurscribe-runtime/models` (build)
-  - `../../taurscribe-runtime/models` (other)
-- **Returns**: Canonical path or error
-
-**`WhisperManager::list_available_models()` → `Result<Vec<ModelInfo>>`** (lines 84-130)
-- **Purpose**: Scans models directory for .bin files
-- **Process**:
-  1. Read directory
-  2. Filter for `ggml-*.bin` files
-  3. Parse model ID from filename
-  4. Get file size
-  5. Format display name
-  6. Sort by size
-- **Returns**: Array of model metadata
-
-**`WhisperManager::format_model_name(id)` → `String`** (lines 132-174)
-- **Purpose**: Converts model ID to human-readable name
-- **Examples**:
-  - `"tiny.en-q5_1"` → `"Tiny English (Q5_1)"`
-  - `"base-q5_0"` → `"Base Multilingual (Q5_0)"`
-  - `"large-v3-turbo"` → `"Large V3 Turbo Multilingual"`
-
-**`WhisperManager::get_current_model()` → `Option<&String>`** (lines 176-179)
-- **Purpose**: Returns currently loaded model ID
-- **Returns**: Reference to model name or None
-
-**`WhisperManager::get_backend()` → `&GpuBackend`** (lines 181-184)
-- **Purpose**: Returns active GPU backend
-- **Returns**: Reference to backend enum
-
-**`WhisperManager::clear_context()`** (lines 186-190)
-- **Purpose**: Resets cumulative transcript
-- **When**: Before starting new recording
-- **Effect**: Next chunk has no prior context
-
-**`WhisperManager::initialize(model_id)` → `Result<String>`** (lines 192-240)
-- **Purpose**: Loads Whisper model with GPU acceleration
-- **Process**:
-  1. Suppress logs
-  2. Find model file
-  3. Try GPU (CUDA/Vulkan)
-  4. Fallback to CPU if GPU fails
-  5. Warm-up pass (1s silence)
-  6. Store model and backend
-- **Returns**: Backend info string
-- **Called**: On app start and model switch
-
-**`WhisperManager::try_gpu(model_path)` → `Result<(Context, Backend)>`** (lines 242-265)
-- **Purpose**: Attempts to load model with GPU
-- **Process**:
-  1. Enable GPU in parameters
-  2. Load model
-  3. Detect which backend (CUDA vs Vulkan)
-  4. Return context and backend
-- **Returns**: Success or error
-
-**`WhisperManager::detect_gpu_backend()` → `GpuBackend`** (lines 267-278)
-- **Purpose**: Determines if using CUDA or Vulkan
-- **Method**: Checks for `nvidia-smi` command
-- **Logic**:
-  - nvidia-smi exists → CUDA
-  - Otherwise → Vulkan
-
-**`WhisperManager::is_cuda_available()` → `bool`** (lines 280-287)
-- **Purpose**: Checks if NVIDIA GPU present
-- **Method**: Runs `nvidia-smi` command
-- **Returns**: true if successful
-
-**`WhisperManager::try_cpu(model_path)` → `Result<(Context, Backend)>`** (lines 289-305)
-- **Purpose**: Loads model with CPU (fallback)
-- **Process**: Same as GPU but no acceleration
-- **Returns**: Context with CPU backend
-
-**`WhisperManager::transcribe_chunk(samples, sample_rate)` → `Result<String>`** (lines 307-417)
-- **Purpose**: Transcribes a 6-second audio chunk (real-time)
-- **Process**:
-  1. Resample to 16kHz if needed
-  2. Create Whisper state
-  3. Set parameters (threads, language, context)
-  4. Run inference
-  5. Extract transcript
-  6. Update cumulative context
-  7. Log performance
-- **Returns**: Transcribed text
-- **Called**: By Whisper AI thread every 6s
-
-**`WhisperManager::transcribe_file(file_path)` → `Result<String>`** (lines 419-601)
-- **Purpose**: Transcribes complete WAV file (final, high-quality)
-- **Process**:
-  1. **STEP 1**: Load WAV file
-  2. **STEP 2**: Convert stereo → mono
-  3. **STEP 3**: Resample to 16kHz
-  4. **STEP 4**: Create Whisper state
-  5. **STEP 5**: Set optimized parameters
-  6. **STEP 6**: Run full inference
-  7. **STEP 7**: Extract all segments
-  8. **STEP 8**: Combine and return
-- **Returns**: Complete transcript
-- **Logs**: Detailed timing breakdown
-- **Called**: By `stop_recording()`
-
-**`WhisperManager::transcribe_audio_data(audio_data)` → `Result<String>`** (lines 602-659)
-- **Purpose**: Transcribes pre-processed 16kHz mono audio
-- **Similar to**: `transcribe_file` but skips preprocessing
-- **Used by**: Benchmark tests
-- **Returns**: Transcript
-
-**`WhisperManager::load_audio(file_path)` → `Result<Vec<f32>>`** (lines 660-733)
-- **Purpose**: Loads and preprocesses WAV file
-- **Process**:
-  1. Open WAV file
-  2. Read all samples
-  3. Convert stereo → mono
-  4. Resample to 16kHz
-- **Returns**: Ready-to-transcribe audio
-- **Called**: By benchmark function
-
----
-
-#### **`src-tauri/src/vad.rs`** (186 lines)
-**Purpose**: Voice Activity Detection - filters silence from audio
-
-##### **Struct**
-
-**`VADManager`** (lines 8-10)
-```rust
-pub struct VADManager {
-    threshold: f32,  // Energy threshold for speech detection
-}
-```
-- **Purpose**: Simple energy-based VAD
-- **Note**: Placeholder for future Silero VAD integration
-
-##### **Functions**
-
-**`VADManager::new()` → `Result<Self>`** (lines 13-35)
-- **Purpose**: Creates VAD manager
-- **Process**:
-  1. Find models directory
-  2. Check for `silero_vad.onnx`
-  3. Set energy threshold (0.005)
-- **Returns**: Manager ready to detect speech
-
-**`VADManager::get_models_dir()` → `Result<PathBuf>`** (lines 37-54)
-- **Purpose**: Finds models directory (same logic as WhisperManager)
-- **Returns**: Path to models
-
-**`VADManager::is_speech(audio)` → `Result<f32>`** (lines 56-77)
-- **Purpose**: Checks if audio chunk contains speech
-- **Method**:
-  1. Calculate RMS (Root Mean Square) energy
-  2. Compare to threshold
-  3. Return probability (0.0 = silence, 1.0 = speech)
-- **Returns**: Speech probability
-- **Called**: Every frame during VAD processing
-
-**`VADManager::get_speech_timestamps(audio, padding_ms)` → `Result<Vec<(f32, f32)>>`** (lines 79-184)
-- **Purpose**: Extracts speech segments from full audio
-- **Process**:
-  1. Process audio in 512-sample frames (~32ms)
-  2. Detect speech/silence transitions
-  3. Apply padding around speech
-  4. Merge overlapping segments
-  5. Filter out very short segments (<150ms)
-- **Returns**: Array of (start_time, end_time) tuples
-- **Called**: By benchmark VAD tests
-
----
-
-#### **`src-tauri/src/main.rs`** (7 lines)
-**Purpose**: Application entry point
-
-```rust
-fn main() {
-    taurscribe_lib::run()
-}
-```
-- **Purpose**: Launches the app
-- **Special**: `windows_subsystem = "windows"` hides console in release builds
-
----
-
-#### **`src-tauri/build.rs`** (4 lines)
-**Purpose**: Build-time script
-
-```rust
-fn main() {
-    tauri_build::build()
-}
-```
-- **Purpose**: Generates Tauri build artifacts
-- **Runs**: Before compilation
-
----
-
-### ⚙️ **Configuration Files**
-
-#### **`src-tauri/Cargo.toml`** (50 lines)
-**Purpose**: Rust project configuration and dependencies
-
-##### **Section Breakdown**
-
-**`[package]`** (lines 1-6)
-- **name**: "taurscribe"
-- **version**: "0.1.0"
-- **edition**: "2021" (Rust edition)
-
-**`[lib]`** (lines 10-15)
-- **name**: "taurscribe_lib"
-- **crate-type**: Library types for Tauri
-
-**`[dependencies]`** (lines 20-37)
-```toml
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-opener = "2"
-tauri-plugin-fs = "2"
-serde = { version = "1", features = ["derive"] }
-cpal = "0.15"                    # Audio I/O
-crossbeam-channel = "0.5"        # Thread communication
-hound = "3.5"                    # WAV file reading/writing
-chrono = "0.4"                   # Timestamps
-whisper-rs = { git = "...", features = ["cuda", "vulkan"] }
-rubato = "0.14"                  # Audio resampling
-dirs = "6.0.0"                   # AppData paths
-rdev = "0.5"                     # Global hotkeys
-```
-
-**`[profile.dev]`** (lines 40-44)
-- **opt-level = 0**: Don't optimize your code (fast builds)
-- **package."*" opt-level = 1**: Lightly optimize dependencies
-
----
-
-#### **`package.json`** (27 lines)
-**Purpose**: Node.js/npm project configuration
-
-##### **Scripts**
-```json
-"dev": "vite",                    // Start dev server
-"build": "tsc && vite build",     // Build for production
-"preview": "vite preview",        // Preview build
-"tauri": "cd src-tauri && cargo check && cd .. && tauri",
-"check": "cd src-tauri && cargo check"
-```
-
-##### **Dependencies**
-```json
-"react": "^19.1.0",              // UI framework
-"react-dom": "^19.1.0",
-"@tauri-apps/api": "^2",         // Tauri JavaScript API
-"@tauri-apps/plugin-opener": "^2"
-```
-
-##### **DevDependencies**
-```json
-"@types/react": "^19.1.8",       // TypeScript types
-"@vitejs/plugin-react": "^4.6.0", // Vite React plugin
-"typescript": "~5.8.3",
-"vite": "^7.0.4",                // Build tool
-"@tauri-apps/cli": "^2"          // Tauri CLI
-```
 
 ---
 
@@ -7382,6 +5743,1449 @@ OUTPUT: "Hello world, this is a test."
 
 ---
 
+## 🎤 COMPLETE AUDIO PIPELINE: From Button Click to Transcription
+
+This section answers ALL your questions about how audio recording and transcription works in Taurscribe!
+
+### 📍 Table of Contents
+
+1. [Where Does the Code Start?](#where-does-the-code-start)
+2. [How Does Recording Start?](#how-does-recording-start)
+3. [How is Audio Captured?](#how-is-audio-captured)
+4. [How is Audio Sent to Whisper?](#how-is-audio-sent-to-whisper)
+5. [How is Audio Fed into Whisper Model?](#how-is-audio-fed-into-whisper-model)
+6. [How is Audio Sent to Parakeet?](#how-is-audio-sent-to-parakeet)
+7. [How is Audio Fed into Parakeet Model?](#how-is-audio-fed-into-parakeet-model)
+8. [How is Text Outputted?](#how-is-text-outputted)
+9. [Complete Visual Flow](#complete-visual-flow)
+
+---
+
+### 🚦 Where Does the Code Start?
+
+**The journey begins when YOU click the microphone button!**
+
+#### 📍 Location: `src/App.tsx` (Line 168)
+
+```tsx
+const res = await invoke("start_recording");
+```
+
+**What happens here:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  STEP 1: USER INTERACTION                               │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  You (User) clicks: [🎤 Start Recording]                │
+│                                                          │
+│  React Event Handler fires:                             │
+│  ├─ Sets isRecording = true                             │
+│  ├─ Updates UI (button turns red)                       │
+│  └─ Calls: invoke("start_recording")                    │
+│                                                          │
+│  What is invoke()?                                       │
+│  ➜ Tauri's "magic bridge" function                      │
+│  ➜ Sends message from JavaScript → Rust backend         │
+│  ➜ Like calling a phone: "Hey backend, start recording!"│
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+         │
+         ▼
+   (Travels through Tauri IPC bridge...)
+         │
+         ▼
+┌─────────────────────────────────────────────────────────┐
+│  RUST BACKEND RECEIVES THE CALL                         │
+│  📍 src-tauri/src/commands/recording.rs (Line 12)       │
+│                                                          │
+│  #[tauri::command]                                       │
+│  pub fn start_recording(...)                            │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Analogy**: You pressing a doorbell (button click) that sends an electric signal (invoke) through wires (Tauri IPC) to ring a bell (Rust function) inside the house (backend).
+
+---
+
+### 🎬 How Does Recording Start?
+
+#### 📍 Location: `src-tauri/src/commands/recording.rs` (Lines 13-272)
+
+The `start_recording` function is the **control center** that sets up everything. Let's break it down step-by-step:
+
+```rust
+#[tauri::command]
+pub fn start_recording(
+    app_handle: AppHandle,
+    state: State<AudioState>,
+) -> Result<String, String>
+```
+
+**Step-by-Step Breakdown:**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 1: Setup Microphone (Lines 17-23)                     │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  let host = cpal::default_host();                            │
+│  let device = host.default_input_device()                    │
+│                                                               │
+│  What's happening:                                            │
+│  ├─ Ask the OS: "Which microphone should I use?"            │
+│  ├─ Get the default mic (the one you selected in settings)   │
+│  └─ Get its config (sample rate, channels, etc.)            │
+│                                                               │
+│  Analogy: Finding the restaurant's supplier                  │
+│  "Which farm delivers fresh vegetables?"                     │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 2: Prepare Output File (Lines 25-30)                  │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  let filename = format!(                                      │
+│      "recording_{}.wav",                                      │
+│      chrono::Utc::now().timestamp()                          │
+│  );                                                           │
+│  let path = recordings_dir.join(&filename);                  │
+│                                                               │
+│  Example: "recording_1738368000.wav"                         │
+│                                                               │
+│  Analogy: Getting a fresh notepad                            │
+│  "I need a new notebook to write in!"                        │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 3: Reset AI Context (Lines 32-41)                     │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  if active_engine == ASREngine::Whisper {                    │
+│      state.whisper.lock().unwrap().clear_context();         │
+│  } else {                                                     │
+│      state.parakeet.lock().unwrap().clear_context();        │
+│  }                                                            │
+│                                                               │
+│  Why? Start fresh for new recording!                         │
+│  The AI needs to "forget" the previous conversation.         │
+│                                                               │
+│  Analogy: Erasing the blackboard                             │
+│  "Clear the board before starting new lesson!"               │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 4: Create Communication Pipes (Lines 54-55)           │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  let (file_tx, file_rx) = unbounded::<Vec<f32>>();          │
+│  let (whisper_tx, whisper_rx) = unbounded::<Vec<f32>>();    │
+│                                                               │
+│  What are these?                                              │
+│  ➜ CHANNELS! Think: Garden hoses for data                   │
+│  ➜ tx = Transmitter (sends data)                            │
+│  ➜ rx = Receiver (receives data)                            │
+│                                                               │
+│  Two separate pipes:                                          │
+│  1. file_tx → file_rx (saves audio to disk)                 │
+│  2. whisper_tx → whisper_rx (sends to AI)                   │
+│                                                               │
+│  Analogy: Setting up conveyor belts                          │
+│  Belt 1: Raw food → Freezer                                  │
+│  Belt 2: Raw food → Chef (for cooking)                       │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 5: Spawn File Saver Thread (Lines 62-72)              │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  std::thread::spawn(move || {                                │
+│      let mut writer = writer;                                │
+│      while let Ok(samples) = file_rx.recv() {                │
+│          for sample in samples {                             │
+│              writer.write_sample(sample).ok();               │
+│          }                                                    │
+│      }                                                        │
+│      writer.finalize().ok();                                 │
+│  });                                                          │
+│                                                               │
+│  What's happening:                                            │
+│  ├─ Create a NEW background thread                           │
+│  ├─ This thread WAITS for audio data on file_rx             │
+│  ├─ When data arrives, write it to WAV file                  │
+│  └─ Runs in parallel with everything else!                   │
+│                                                               │
+│  Analogy: Hiring a dedicated recorder                        │
+│  "Your only job: Write down everything on tape!"             │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 6: Spawn Transcriber Thread (Lines 82-235)            │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  std::thread::spawn(move || {                                │
+│      let mut buffer = Vec::new();                            │
+│      while let Ok(samples) = whisper_rx.recv() {             │
+│          buffer.extend(samples);                             │
+│                                                               │
+│          // Process in chunks...                             │
+│          if active_engine == ASREngine::Whisper {            │
+│              // Whisper path (we'll detail this later)       │
+│          } else {                                             │
+│              // Parakeet path (we'll detail this later)      │
+│          }                                                    │
+│      }                                                        │
+│  });                                                          │
+│                                                               │
+│  What's happening:                                            │
+│  ├─ Create ANOTHER background thread                         │
+│  ├─ This thread WAITS for audio data on whisper_rx          │
+│  ├─ Collects audio into a buffer (basket)                    │
+│  ├─ When buffer is full enough, send to AI!                  │
+│  └─ Emits results back to frontend                           │
+│                                                               │
+│  Analogy: Hiring a translator                                │
+│  "Listen to everything and translate in real-time!"          │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 7: Start Microphone Stream (Lines 240-263)            │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  let stream = device.build_input_stream(                     │
+│      &config,                                                 │
+│      move |data: &[f32], _: &_| {                            │
+│          // THIS CALLBACK RUNS EVERY 10ms!                   │
+│          file_tx_clone.send(data.to_vec()).ok();             │
+│          whisper_tx_clone.send(mono_data).ok();              │
+│      },                                                       │
+│      ...                                                      │
+│  )?;                                                          │
+│                                                               │
+│  stream.play()?; // 🎬 START RECORDING!                      │
+│                                                               │
+│  What's happening:                                            │
+│  ├─ Tell the microphone: "Start capturing!"                  │
+│  ├─ EVERY 10 MILLISECONDS, the callback fires                │
+│  ├─ Each time: Get ~480 samples (10ms of audio)              │
+│  ├─ Send copies to BOTH channels (file + transcriber)        │
+│  └─ This keeps running until we call stream.stop()           │
+│                                                               │
+│  Analogy: Opening the water faucet                           │
+│  Water (audio) now flows continuously!                       │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**The Result**: Three things are now running in parallel!
+
+```
+┌────────────────────────────────────────────────────────┐
+│         🎤 MICROPHONE THREAD                            │
+│         Captures audio every 10ms                       │
+│              ↓                                          │
+│         Sends to channels                               │
+│              ├──────────────────┐                       │
+│              ↓                  ↓                       │
+│    ┌─────────────────┐   ┌──────────────────┐         │
+│    │ 💾 FILE SAVER   │   │ 🧠 TRANSCRIBER   │         │
+│    │    THREAD       │   │     THREAD       │         │
+│    │                 │   │                  │         │
+│    │ Writes to disk  │   │ Sends to AI      │         │
+│    └─────────────────┘   └──────────────────┘         │
+│                                                         │
+│    ALL RUNNING AT THE SAME TIME! ⚡                     │
+└────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 🎙️ How is Audio Captured?
+
+#### 📍 Location: `src-tauri/src/commands/recording.rs` (Lines 243-254)
+
+This is the **audio callback** - the heart of the recording system!
+
+```rust
+move |data: &[f32], _: &_| {
+    // Send raw audio to file
+    file_tx_clone.send(data.to_vec()).ok();
+    
+    // Convert stereo → mono
+    let mono_data: Vec<f32> = if channels > 1 {
+        data.chunks(channels)
+            .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
+            .collect()
+    } else {
+        data.to_vec()
+    };
+    
+    // Send mono audio to transcriber
+    whisper_tx_clone.send(mono_data).ok();
+}
+```
+
+**Breaking It Down:**
+
+```
+EVERY 10 MILLISECONDS (100 times per second):
+
+┌──────────────────────────────────────────────────────────────┐
+│  AUDIO CALLBACK FIRES                                        │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  Input: data = [0.001, 0.002, -0.001, 0.003, ...]           │
+│         ↑ Array of audio samples (floating point numbers)    │
+│         ↑ Each number = microphone membrane position         │
+│         ↑ Range: -1.0 (fully in) to +1.0 (fully out)        │
+│                                                               │
+│  Typical size: ~480 samples for 10ms at 48kHz                │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 1: Send to File Saver                                  │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  file_tx_clone.send(data.to_vec()).ok();                     │
+│                                                               │
+│  What happens:                                                │
+│  1. Clone the audio data (make a copy)                       │
+│  2. Send it through the file_tx channel                      │
+│  3. File saver thread receives it                            │
+│  4. Writes to WAV file                                        │
+│                                                               │
+│  Why clone? We need TWO copies (file + AI)!                  │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 2: Convert Stereo → Mono                              │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  Why? AI models expect MONO (1 channel) audio!               │
+│                                                               │
+│  Stereo (2 channels):                                         │
+│  [L1, R1, L2, R2, L3, R3, ...]                               │
+│   ↑   ↑   ↑   ↑   ↑   ↑                                      │
+│  Left Right ...                                               │
+│                                                               │
+│  Conversion Formula: (Left + Right) / 2                      │
+│                                                               │
+│  data.chunks(2)  ← Split into pairs: [L1, R1], [L2, R2] ...│
+│      .map(|chunk| {                                           │
+│          (chunk[0] + chunk[1]) / 2.0  ← Average them         │
+│      })                                                       │
+│                                                               │
+│  Result (mono):                                               │
+│  [M1, M2, M3, ...]                                            │
+│   ↑   ↑   ↑                                                   │
+│  Averaged samples                                             │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 3: Send to Transcriber                                 │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  whisper_tx_clone.send(mono_data).ok();                      │
+│                                                               │
+│  The mono audio travels through the channel...               │
+│  Arrives at the Transcriber Thread!                          │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Visual Flow:**
+
+```
+🎤 Microphone captures sound waves
+     ↓
+   [Audio Hardware ADC]
+     ↓
+   Digital samples (10ms chunks)
+     ↓
+     📦 [0.001, -0.002, 0.003, ...]
+     │
+     ├────────────────────┐
+     │                    │
+     ▼                    ▼
+ 💾 File Saver      🧠 Transcriber
+ (Stereo)           (Mono)
+     │                    │
+     ▼                    ▼
+ recording.wav      AI Processing
+```
+
+**Analogy**: Security Camera System
+
+- **Camera** = Microphone (captures everything)
+- **Video Feed** = Audio stream
+- **Recording DVR** = File saver (saves raw footage)
+- **AI Analyzer** = Transcriber (processes in real-time)
+- **Split Signal** = Sending to both DVR and AI simultaneously
+
+---
+
+### 🧠 How is Audio Sent to Whisper?
+
+Whisper has **TWO different paths**: Real-time chunks and Final pass.
+
+#### Path 1: Real-Time Chunks (During Recording)
+
+#### 📍 Location: `src-tauri/src/commands/recording.rs` (Lines 94-139)
+
+```rust
+if active_engine == ASREngine::Whisper {
+    buffer.extend(samples);
+    
+    while buffer.len() >= chunk_size {  // chunk_size = 6 seconds worth
+        let chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
+        let is_speech = vad.lock().unwrap().is_speech(&chunk)?;
+        
+        if is_speech > 0.5 {
+            whisper.lock().unwrap().transcribe_chunk(&chunk, sample_rate)?;
+        }
+    }
+}
+```
+
+**Step-by-Step:**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  REAL-TIME TRANSCRIPTION (Whisper Path)                     │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  STEP 1: Accumulate audio in buffer                          │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  buffer = [] (empty array)                                    │
+│                                                               │
+│  Every 10ms: New audio arrives!                              │
+│  ├─ 10ms: buffer = [480 samples]                             │
+│  ├─ 20ms: buffer = [960 samples]                             │
+│  ├─ 30ms: buffer = [1440 samples]                            │
+│  └─ ...                                                       │
+│  └─ 6000ms: buffer = [288,000 samples] ✅ READY!            │
+│                                                               │
+│  chunk_size = sample_rate * 6 = 48000 * 6 = 288,000         │
+│               └─ 6 seconds of audio                          │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 2: Extract chunk from buffer                           │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  let chunk = buffer.drain(..chunk_size).collect();           │
+│                                                               │
+│  Before:                                                      │
+│  buffer = [288,000 samples, maybe more...]                   │
+│                                                               │
+│  drain() = Take and REMOVE first 288,000 samples            │
+│                                                               │
+│  After:                                                       │
+│  chunk = [288,000 samples] ← Extracted                       │
+│  buffer = [remaining samples] ← What's left                  │
+│                                                               │
+│  Analogy: Scooping soup                                       │
+│  Take a ladle (chunk) from the pot (buffer)                  │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 3: Voice Activity Detection (VAD)                      │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  📍 src-tauri/src/vad.rs (Line 78)                           │
+│                                                               │
+│  let is_speech = vad.is_speech(&chunk)?;                     │
+│                                                               │
+│  What happens:                                                │
+│  1. Calculate RMS (Root Mean Square) = Loudness              │
+│     rms = sqrt(sum(x²) / count)                              │
+│                                                               │
+│  2. Compare to threshold (0.005)                             │
+│     - Too quiet? → 0.0 (silence)                             │
+│     - Very loud? → 1.0 (speech)                              │
+│     - In between? → 0.0-1.0 (probability)                    │
+│                                                               │
+│  Example:                                                     │
+│  - Silence: is_speech = 0.1                                  │
+│  - Speech: is_speech = 0.85                                  │
+│                                                               │
+│  Why? Skip transcribing silence (saves time/money!)          │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 4: Transcribe if speech detected                       │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  if is_speech > 0.5 {  // More than 50% sure it's speech    │
+│      whisper.transcribe_chunk(&chunk, sample_rate)?;         │
+│  }                                                            │
+│                                                               │
+│  If VAD says "YES, this is speech":                          │
+│  ➜ Send to Whisper for transcription                        │
+│                                                               │
+│  If VAD says "NO, this is silence":                          │
+│  ➜ Skip! Save compute. Don't bother the AI.                 │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 5: Whisper Transcription                               │
+│  📍 src-tauri/src/whisper.rs (Line 345)                      │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  whisper.transcribe_chunk(&chunk, sample_rate)               │
+│                                                               │
+│  (We'll detail this next!)                                    │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Visual Timeline:**
+
+```
+Time: 0s ──────── 6s ──────── 12s ─────── 18s ─────── STOP
+
+      │ Collecting │ Collecting │ Collecting │
+      │   audio    │   audio    │   audio    │
+      ▼            ▼            ▼            ▼
+    Chunk 1      Chunk 2      Chunk 3      Chunk 4
+    (6 sec)      (6 sec)      (6 sec)      (6 sec)
+      │            │            │            │
+      ▼            ▼            ▼            ▼
+    VAD Check    VAD Check    VAD Check    VAD Check
+   [0.9=Speech] [0.1=Silence] [0.85=Speech] [0.2=Silence]
+      │            │            │            │
+      ▼            X            ▼            X
+   Whisper AI    SKIP!      Whisper AI    SKIP!
+      │                         │
+      ▼                         ▼
+   "Hello there"           "How are you"
+      │                         │
+      ▼                         ▼
+   Emit to UI              Emit to UI
+```
+
+---
+
+### 🔬 How is Audio Fed into Whisper Model?
+
+#### 📍 Location: `src-tauri/src/whisper.rs` (Lines 345-458)
+
+Now let's see what happens INSIDE the Whisper transcription function!
+
+```rust
+pub fn transcribe_chunk(
+    &mut self,
+    samples: &[f32],
+    input_sample_rate: u32,
+) -> Result<String, String>
+```
+
+**Complete Process:**
+
+```
+INPUT: chunk = [288,000 samples at 48kHz]
+
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 1: Resample Audio (Lines 357-391)                     │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  Why? Whisper ONLY works with 16kHz audio!                   │
+│  Your mic might record at 48kHz or 44.1kHz                   │
+│                                                               │
+│  if input_sample_rate != 16000 {                             │
+│      // Use resampler to convert                             │
+│      let resampler = SincFixedIn::new(                       │
+│          16000 / input_sample_rate,  // Target ratio         │
+│          ...                                                  │
+│      );                                                       │
+│      audio_data = resampler.process(&samples)?;              │
+│  }                                                            │
+│                                                               │
+│  Before: 288,000 samples @ 48kHz = 6 seconds                 │
+│  After:  96,000 samples @ 16kHz = 6 seconds                  │
+│                                                               │
+│  Analogy: Video Format Conversion                            │
+│  Converting 4K video → 1080p (same content, different size)  │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 2: Create Whisper State (Lines 394-396)               │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  let mut state = ctx.create_state()?;                        │
+│                                                               │
+│  What's a "state"?                                            │
+│  ➜ A temporary workspace for THIS transcription              │
+│  ➜ Holds intermediate calculations                           │
+│  ➜ Gets thrown away after we're done                         │
+│                                                               │
+│  Analogy: Chef's Cutting Board                               │
+│  A clean surface to prepare THIS dish                        │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 3: Configure Parameters (Lines 400-415)               │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  let mut params = FullParams::new(                           │
+│      SamplingStrategy::Greedy { best_of: 1 }                │
+│  );                                                           │
+│                                                               │
+│  params.set_n_threads(4);        // Use 4 CPU cores          │
+│  params.set_language(Some("en")); // English                 │
+│  params.set_translate(false);    // Don't translate          │
+│                                                               │
+│  // CONTEXT MAGIC! (Lines 413-415)                           │
+│  if !self.last_transcript.is_empty() {                       │
+│      params.set_initial_prompt(&self.last_transcript);       │
+│  }                                                            │
+│                                                               │
+│  What's initial_prompt?                                       │
+│  ➜ Tell Whisper what was said BEFORE                        │
+│  ➜ Helps maintain context across chunks                      │
+│  ➜ Example: "The cat sat on the" → Next: "mat"              │
+│                                                               │
+│  Analogy: Story Context                                       │
+│  "Previously on Taurscribe: ..."                             │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 4: Run Whisper AI! (Lines 421-423)                    │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  state.full(params, &audio_data)?;                           │
+│                                                               │
+│  🚀 THIS IS WHERE THE MAGIC HAPPENS!                        │
+│                                                               │
+│  What happens inside (whisper-rs library):                   │
+│  1. Compute Mel Spectrogram (audio → visual representation)  │
+│  2. Run through Encoder (understands audio features)         │
+│  3. Run through Decoder (generates text tokens)              │
+│  4. Beam search / Sampling (pick best words)                 │
+│                                                               │
+│  Time: 100-500ms on GPU, 1-3 seconds on CPU                  │
+│                                                               │
+│  Analogy: Oracle's Prophecy                                   │
+│  Give the AI audio, it speaks back text!                     │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 5: Extract Text (Lines 426-432)                       │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  let num_segments = state.full_n_segments();                 │
+│  let mut transcript = String::new();                         │
+│                                                               │
+│  for i in 0..num_segments {                                  │
+│      if let Some(segment) = state.get_segment(i) {           │
+│          transcript.push_str(&segment.to_string());          │
+│      }                                                        │
+│  }                                                            │
+│                                                               │
+│  What's a segment?                                            │
+│  ➜ Whisper breaks text into pieces (usually sentences)       │
+│  ➜ Each segment has text + timestamp                         │
+│  ➜ We concatenate them all together                          │
+│                                                               │
+│  Example:                                                     │
+│  Segment 0: "Hello"                                           │
+│  Segment 1: " there"                                          │
+│  Segment 2: ", how are you?"                                 │
+│  Combined: "Hello there, how are you?"                       │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 6: Update Context Memory (Lines 438-443)              │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  if !final_text.is_empty() {                                 │
+│      if !self.last_transcript.is_empty() {                   │
+│          self.last_transcript.push(' ');                     │
+│      }                                                        │
+│      self.last_transcript.push_str(&final_text);             │
+│  }                                                            │
+│                                                               │
+│  Save this text for next chunk!                              │
+│  This accumulated text becomes the "initial_prompt"          │
+│                                                               │
+│  Example Timeline:                                            │
+│  Chunk 1: "Hello" → last_transcript = "Hello"               │
+│  Chunk 2: "there" → last_transcript = "Hello there"         │
+│  Chunk 3: "friend" → last_transcript = "Hello there friend" │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 7: Return Text (Line 457)                             │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  Ok(final_text)                                               │
+│                                                               │
+│  Text travels back through the call stack...                 │
+│  ➜ transcribe_chunk() returns                               │
+│  ➜ Back to recording.rs                                      │
+│  ➜ Emit to frontend!                                         │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+
+OUTPUT: "Hello there, how are you?"
+```
+
+**Visual Architecture of Whisper Model:**
+
+```
+┌────────────────────────────────────────────────────────┐
+│                    WHISPER MODEL                        │
+│                (Inside whisper-rs library)              │
+├────────────────────────────────────────────────────────┤
+│                                                         │
+│  INPUT: audio_data [96,000 samples @ 16kHz]            │
+│         │                                               │
+│         ▼                                               │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │ MEL SPECTROGRAM COMPUTATION                      │ │
+│  │ Convert audio wave → visual representation       │ │
+│  │ Like a piano roll or heat map                    │ │
+│  │ Output: [80 mel bins × time frames]              │ │
+│  └──────────────────────────────────────────────────┘ │
+│         │                                               │
+│         ▼                                               │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │ ENCODER (Transformer Layers)                     │ │
+│  │ Processes the mel spectrogram                    │ │
+│  │ Extracts audio features                          │ │
+│  │ Outputs: Hidden states (compressed understanding)│ │
+│  └──────────────────────────────────────────────────┘ │
+│         │                                               │
+│         ▼                                               │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │ DECODER (Transformer Layers)                     │ │
+│  │ Generates text token by token                    │ │
+│  │ Uses encoder output + previous tokens            │ │
+│  │ Initial prompt provides context!                 │ │
+│  └──────────────────────────────────────────────────┘ │
+│         │                                               │
+│         ▼                                               │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │ SAMPLING / BEAM SEARCH                           │ │
+│  │ Pick the best words from probability dist.       │ │
+│  │ "Greedy" = Always pick most likely word          │ │
+│  └──────────────────────────────────────────────────┘ │
+│         │                                               │
+│         ▼                                               │
+│  OUTPUT: "Hello there, how are you?"                   │
+│                                                         │
+└────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 🦜 How is Audio Sent to Parakeet?
+
+Parakeet is **streaming-only** - no final pass needed!
+
+#### 📍 Location: `src-tauri/src/commands/recording.rs` (Lines 140-182)
+
+```rust
+} else {  // Parakeet path
+    buffer.extend(samples);
+    
+    let parakeet_chunk_size = (sample_rate as f32 * 1.12) as usize;
+    
+    while buffer.len() >= parakeet_chunk_size {
+        let chunk = buffer.drain(..parakeet_chunk_size).collect();
+        
+        parakeet_manager.transcribe_chunk(&chunk, sample_rate)?;
+    }
+}
+```
+
+**Breaking It Down:**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  REAL-TIME TRANSCRIPTION (Parakeet Path)                    │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  STEP 1: Accumulate audio (same as Whisper)                  │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  buffer = [] (empty)                                          │
+│  Every 10ms: buffer.extend(new_samples)                      │
+│                                                               │
+│  BUT! Chunk size is different:                               │
+│  parakeet_chunk_size = sample_rate * 1.12                    │
+│                      = 48000 * 1.12                          │
+│                      = 53,760 samples                         │
+│                      = ~1.12 seconds of audio                 │
+│                                                               │
+│  Why 1.12 seconds?                                            │
+│  ➜ Parakeet is FASTER than Whisper                          │
+│  ➜ Can process smaller chunks quickly                        │
+│  ➜ More responsive (updates more frequently)                 │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 2: Extract chunk (same as Whisper)                     │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  let chunk = buffer.drain(..parakeet_chunk_size).collect();  │
+│                                                               │
+│  chunk = [53,760 samples] @ 48kHz = 1.12 seconds             │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 3: NO VAD CHECK!                                       │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  Parakeet path SKIPS voice activity detection!               │
+│                                                               │
+│  Why?                                                         │
+│  ├─ Parakeet is very fast (can handle all audio)            │
+│  ├─ Better continuity (no gaps from skipping silence)        │
+│  └─ Streaming models need consistent input                   │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 4: Transcribe with Parakeet                            │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  parakeet_manager.transcribe_chunk(&chunk, sample_rate)?;    │
+│                                                               │
+│  📍 src-tauri/src/parakeet.rs (Line 528)                     │
+│                                                               │
+│  (We'll detail this next!)                                    │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 5: Accumulate in Session Transcript                    │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  let mut session = session_transcript.lock().unwrap();       │
+│  if !session.is_empty() {                                    │
+│      session.push(' ');  // Add space                        │
+│  }                                                            │
+│  session.push_str(transcript.trim());                        │
+│                                                               │
+│  Why? Parakeet outputs INCREMENTAL text                      │
+│  Each chunk adds to the full transcript                      │
+│                                                               │
+│  Example:                                                     │
+│  Chunk 1: "Hello" → session = "Hello"                       │
+│  Chunk 2: "there" → session = "Hello there"                 │
+│  Chunk 3: "friend" → session = "Hello there friend"         │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Comparison: Whisper vs Parakeet Chunking**
+
+```
+WHISPER (6 second chunks):
+
+Time: 0─────6─────12────18────24 seconds
+      │═══════│═══════│═══════│═══════│
+      Chunk 1  Chunk 2  Chunk 3  Chunk 4
+      
+      Less frequent updates, but more accurate
+
+
+PARAKEET (1.12 second chunks):
+
+Time: 0──1.12──2.24──3.36──4.48──5.60 seconds
+      │══│══│══│══│══│══│══│══│══│══│
+      C1 C2 C3 C4 C5 C6 C7 C8 C9 C10
+      
+      Very frequent updates, streaming feel!
+```
+
+---
+
+### 🔬 How is Audio Fed into Parakeet Model?
+
+#### 📍 Location: `src-tauri/src/parakeet.rs` (Lines 528-613)
+
+```rust
+pub fn transcribe_chunk(
+    &mut self,
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<String, String>
+```
+
+**Complete Process:**
+
+```
+INPUT: chunk = [53,760 samples at 48kHz]
+
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 1: Resample to 16kHz (Lines 534-567)                  │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  Same as Whisper! Parakeet also needs 16kHz.                 │
+│                                                               │
+│  Before: 53,760 samples @ 48kHz = 1.12 seconds               │
+│  After:  17,920 samples @ 16kHz = 1.12 seconds               │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 2: Match with correct model type (Lines 569-609)      │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  Parakeet has 4 different model architectures:               │
+│                                                               │
+│  ┌────────────────────────────────────────────────┐         │
+│  │ 1. NEMOTRON (Streaming RNN-T)                 │         │
+│  │    ➜ Best for real-time                        │         │
+│  │    ➜ Has internal state (memory)               │         │
+│  │    ➜ Process in tiny 560ms chunks              │         │
+│  └────────────────────────────────────────────────┘         │
+│                                                               │
+│  ┌────────────────────────────────────────────────┐         │
+│  │ 2. CTC (Connectionist Temporal Classification) │         │
+│  │    ➜ Fast offline processing                   │         │
+│  │    ➜ No state (stateless)                      │         │
+│  │    ➜ Process whole chunk at once               │         │
+│  └────────────────────────────────────────────────┘         │
+│                                                               │
+│  ┌────────────────────────────────────────────────┐         │
+│  │ 3. EOU (End of Utterance)                      │         │
+│  │    ➜ Detects sentence boundaries               │         │
+│  │    ➜ Process in 160ms micro-chunks             │         │
+│  └────────────────────────────────────────────────┘         │
+│                                                               │
+│  ┌────────────────────────────────────────────────┐         │
+│  │ 4. TDT (Token-and-Duration Transducer)         │         │
+│  │    ➜ Includes timing information               │         │
+│  │    ➜ Process whole chunk                       │         │
+│  └────────────────────────────────────────────────┘         │
+│                                                               │
+│  match model {                                                │
+│      LoadedModel::Nemotron(m) => { ... }                     │
+│      LoadedModel::Ctc(m) => { ... }                          │
+│      LoadedModel::Eou(m) => { ... }                          │
+│      LoadedModel::Tdt(m) => { ... }                          │
+│  }                                                            │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  PATH A: NEMOTRON (Most common for streaming)               │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  Lines 571-582                                                │
+│                                                               │
+│  LoadedModel::Nemotron(m) => {                               │
+│      let mut transcript = String::new();                     │
+│      const CHUNK_SIZE: usize = 8960; // 560ms @ 16kHz        │
+│                                                               │
+│      for chunk in audio.chunks(CHUNK_SIZE) {                 │
+│          let mut chunk_vec = chunk.to_vec();                 │
+│          if chunk_vec.len() < CHUNK_SIZE {                   │
+│              chunk_vec.resize(CHUNK_SIZE, 0.0); // Pad!      │
+│          }                                                    │
+│          transcript.push_str(                                 │
+│              &m.transcribe_chunk(&chunk_vec)?                │
+│          );                                                   │
+│      }                                                        │
+│      Ok(transcript)                                           │
+│  }                                                            │
+│                                                               │
+│  What's happening:                                            │
+│  1. Break 1.12s audio into even SMALLER pieces (560ms)      │
+│  2. Nemotron processes each 560ms chunk                      │
+│  3. Concatenate results                                       │
+│                                                               │
+│  Why so small?                                                │
+│  ➜ Nemotron is an RNN-T (Recurrent Neural Network)          │
+│  ➜ Maintains hidden state across chunks                      │
+│  ➜ Very responsive (updates every 560ms!)                    │
+│                                                               │
+│  Visual:                                                      │
+│  1.12s audio:                                                 │
+│  [═══════════════════════]                                   │
+│  [════════][════════]                                        │
+│   560ms    560ms                                              │
+│   Chunk1   Chunk2                                             │
+│     │        │                                                │
+│     ▼        ▼                                                │
+│  "Hello"  " there"                                            │
+│                                                               │
+│  Combined: "Hello there"                                      │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  INSIDE Nemotron Model (parakeet-rs library)                │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                  │
+│                                                               │
+│  m.transcribe_chunk(&chunk)                                   │
+│                                                               │
+│  Architecture:                                                │
+│  ┌────────────────────────────────────────────────┐         │
+│  │ INPUT: [8960 samples] @ 16kHz = 560ms          │         │
+│  └────────────────────────────────────────────────┘         │
+│         │                                                     │
+│         ▼                                                     │
+│  ┌────────────────────────────────────────────────┐         │
+│  │ ENCODER (ONNX model: encoder.onnx)             │         │
+│  │ Processes audio features                        │         │
+│  │ Outputs: Encoded representations                │         │
+│  │ Uses: Recurrent layers (LSTM/GRU)               │         │
+│  └────────────────────────────────────────────────┘         │
+│         │                                                     │
+│         ▼                                                     │
+│  ┌────────────────────────────────────────────────┐         │
+│  │ DECODER + JOINT NETWORK                         │         │
+│  │ (ONNX model: decoder_joint.onnx)                │         │
+│  │                                                  │         │
+│  │ Loop:                                            │         │
+│  │   1. Predict next token                         │         │
+│  │   2. Update internal state                      │         │
+│  │   3. Repeat until end-of-utterance              │         │
+│  │                                                  │         │
+│  │ Internal State = "Memory" of previous words     │         │
+│  │ This is WHY we can call .reset() to clear it!   │         │
+│  └────────────────────────────────────────────────┘         │
+│         │                                                     │
+│         ▼                                                     │
+│  ┌────────────────────────────────────────────────┐         │
+│  │ TOKENIZER (tokenizer.model - SentencePiece)    │         │
+│  │ Token IDs → Text                                │         │
+│  │ Example: [123, 456, 789] → "Hello"              │         │
+│  └────────────────────────────────────────────────┘         │
+│         │                                                     │
+│         ▼                                                     │
+│  OUTPUT: "Hello"                                              │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+
+OUTPUT: "Hello there" (or whatever was said)
+```
+
+**Key Difference: Nemotron has STATE!**
+
+```
+NEMOTRON (Stateful):
+
+Chunk 1: "Hello" ┐
+                 ├─► Internal State Updated
+Chunk 2: " there"│   (Remembers "Hello")
+                 │
+                 └─► Better context across chunks!
+
+
+CTC/TDT/EOU (Stateless):
+
+Chunk 1: "Hello"  → Process → Output
+                     ↓
+                  Forget everything
+                     ↓
+Chunk 2: "there"  → Process → Output
+
+Each chunk is independent!
+```
+
+---
+
+### 📤 How is Text Outputted?
+
+Text gets back to the UI through **Tauri Events**!
+
+#### 📍 Location: `src-tauri/src/commands/recording.rs` (Lines 121-128 for Whisper, 163-170 for Parakeet)
+
+```rust
+// After transcription finishes:
+app_clone.emit(
+    "transcription-chunk",
+    TranscriptionChunk {
+        text: transcript,
+        processing_time_ms: elapsed,
+        method: "Whisper".to_string(),
+    },
+)?;
+```
+
+**Complete Flow:**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  RUST BACKEND (Transcriber Thread)                          │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  1. AI finishes transcription                                │
+│     transcript = "Hello there"                               │
+│                                                               │
+│  2. Create event payload                                     │
+│     TranscriptionChunk {                                     │
+│         text: "Hello there",                                 │
+│         processing_time_ms: 250,                             │
+│         method: "Whisper",                                   │
+│     }                                                         │
+│                                                               │
+│  3. Emit event to frontend                                   │
+│     app_handle.emit("transcription-chunk", payload)?;        │
+│                                                               │
+│     What's emit()?                                            │
+│     ➜ Tauri's event system                                  │
+│     ➜ Broadcasts a message to ALL listeners                 │
+│     ➜ Like shouting in a room                               │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         │ (Event travels through Tauri bridge...)
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  FRONTEND (React) - Event Listener                          │
+│  📍 src/App.tsx (somewhere in useEffect)                     │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  useEffect(() => {                                            │
+│      const unlisten = listen(                                │
+│          "transcription-chunk",                              │
+│          (event) => {                                         │
+│              const chunk = event.payload;                    │
+│              setLiveTranscript(prev => prev + chunk.text);   │
+│          }                                                    │
+│      );                                                       │
+│      return () => unlisten();                                │
+│  }, []);                                                      │
+│                                                               │
+│  What happens:                                                │
+│  1. listen() registers an event handler                      │
+│  2. When "transcription-chunk" event arrives...              │
+│  3. Callback function runs                                   │
+│  4. Updates React state (setLiveTranscript)                  │
+│  5. React re-renders UI with new text!                       │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  UI UPDATE                                                    │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ┌────────────────────────────────────────────────┐         │
+│  │  📱 TAURSCRIBE UI                              │         │
+│  │                                                 │         │
+│  │  🔴 Recording...                                │         │
+│  │                                                 │         │
+│  │  Transcript:                                    │         │
+│  │  ┌──────────────────────────────────────────┐ │         │
+│  │  │ Hello there                               │ │         │
+│  │  │                                           │ │         │
+│  │  │ █ (cursor blinks)                        │ │         │
+│  │  └──────────────────────────────────────────┘ │         │
+│  │                                                 │         │
+│  │  Processing: 250ms | Method: Whisper           │         │
+│  └────────────────────────────────────────────────┘         │
+│                                                               │
+│  USER SEES THE TEXT APPEAR IN REAL-TIME! ✨                  │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 🎬 Complete Visual Flow: Start to Finish
+
+Here's the ENTIRE journey from button click to seeing text:
+
+```
+═══════════════════════════════════════════════════════════════
+                    THE COMPLETE JOURNEY
+═══════════════════════════════════════════════════════════════
+
+👤 USER
+ │ Clicks [🎤 Start Recording]
+ │
+ ▼
+📱 FRONTEND (src/App.tsx:168)
+ │ await invoke("start_recording")
+ │
+ ▼
+🌉 TAURI IPC BRIDGE
+ │ Serializes call → Sends to Rust
+ │
+ ▼
+🦀 RUST BACKEND (src-tauri/src/commands/recording.rs:13)
+ │ start_recording() function begins
+ │
+ ├─► STEP 1: Setup microphone (cpal library)
+ ├─► STEP 2: Create WAV file
+ ├─► STEP 3: Clear AI context
+ ├─► STEP 4: Create channels (file_tx/rx, whisper_tx/rx)
+ ├─► STEP 5: Spawn File Saver Thread 💾
+ ├─► STEP 6: Spawn Transcriber Thread 🧠
+ └─► STEP 7: Start microphone stream ▶️
+     │
+     │ Microphone now captures audio every 10ms!
+     │
+     ▼
+┌────────────────────────────────────────────────────────┐
+│         PARALLEL EXECUTION (3 threads)                  │
+├────────────────────────────────────────────────────────┤
+│                                                         │
+│  Thread 1: 🎤 MICROPHONE CALLBACK                      │
+│  │ Every 10ms:                                         │
+│  │   1. Get 480 samples from mic                       │
+│  │   2. Send to file_tx                                │
+│  │   3. Convert stereo → mono                          │
+│  │   4. Send to whisper_tx                             │
+│  │                                                      │
+│  │  ┌──────────────────┐  ┌──────────────────┐        │
+│  └──┤ file_tx channel  ├──┤ whisper_tx chan  ├──┐     │
+│     └────────┬─────────┘  └─────────┬────────┘  │     │
+│              │                       │           │     │
+│              ▼                       ▼           │     │
+│  Thread 2: 💾 FILE SAVER    Thread 3: 🧠 TRANSCRIBER  │
+│  │ Receives audio        │ Receives audio             │
+│  │ Writes to disk        │ Accumulates in buffer      │
+│  │ Creates WAV file      │ When buffer full:          │
+│  │                       │                             │
+│  │                       ├─► (If Whisper):            │
+│  │                       │   - Check VAD (is speech?) │
+│  │                       │   - If yes: transcribe     │
+│  │                       │   - Wait 6 seconds         │
+│  │                       │                             │
+│  │                       └─► (If Parakeet):           │
+│  │                           - Transcribe (no VAD)    │
+│  │                           - Wait 1.12 seconds      │
+│  │                                                     │
+└─────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+                   ┌───────────────────────┐
+                   │   AI TRANSCRIPTION    │
+                   ├───────────────────────┤
+                   │                       │
+   ┌───────────────┴──────────┬────────────────────────┐
+   │                           │                        │
+   ▼ WHISPER                   ▼ PARAKEET               │
+   │                           │                        │
+   ├─ Resample → 16kHz         ├─ Resample → 16kHz     │
+   ├─ Create state             ├─ Match model type     │
+   ├─ Set parameters           │  (Nemotron/CTC/etc)   │
+   ├─ Set context prompt       ├─ Break into chunks    │
+   ├─ Run model (GPU/CPU)      ├─ Run ONNX inference   │
+   ├─ Extract segments         ├─ Decode tokens        │
+   ├─ Update context           └─ Return text          │
+   └─ Return text                                       │
+        │                           │                   │
+        └───────────────┬───────────┘                   │
+                        │                               │
+                        ▼                               │
+        ┌───────────────────────────────┐              │
+        │  EMIT EVENT TO FRONTEND       │              │
+        │  "transcription-chunk"        │              │
+        │  { text, time, method }       │              │
+        └───────────────┬───────────────┘              │
+                        │                               │
+                        ▼                               │
+        🌉 TAURI EVENT BRIDGE                           │
+                        │                               │
+                        ▼                               │
+        📱 FRONTEND EVENT LISTENER                      │
+        │ listen("transcription-chunk", ...)            │
+        │                                                │
+        ├─► Receive event payload                       │
+        ├─► Update React state                          │
+        │   setLiveTranscript(prev => prev + text)      │
+        └─► React re-renders                            │
+                        │                               │
+                        ▼                               │
+        ┌───────────────────────────────┐              │
+        │   👀 USER SEES TEXT!           │              │
+        │                                │              │
+        │   "Hello there"                │              │
+        │   "How are you doing?"         │              │
+        │   "This is amazing!"           │              │
+        │                                │              │
+        └───────────────────────────────┘              │
+                                                        │
+═══════════════════════════════════════════════════════════════
+                      STOP RECORDING
+═══════════════════════════════════════════════════════════════
+
+👤 USER
+ │ Clicks [⏹️ Stop Recording]
+ │
+ ▼
+📱 FRONTEND
+ │ await invoke("stop_recording")
+ │
+ ▼
+🦀 RUST BACKEND (src-tauri/src/commands/recording.rs:276)
+ │ stop_recording() function
+ │
+ ├─► Drop stream (stops microphone)
+ ├─► Drop channels (closes pipes)
+ ├─► Wait 500ms (let threads finish)
+ │
+ ├─► (If Whisper): FINAL HIGH-QUALITY PASS
+ │   │
+ │   ├─► Load full WAV file from disk
+ │   ├─► Run VAD to find speech segments
+ │   ├─► Extract only speech parts
+ │   ├─► Transcribe with Whisper (8 threads!)
+ │   └─► Return final transcript
+ │
+ └─► (If Parakeet): Use accumulated session
+     └─► Return session_transcript (already complete!)
+         │
+         ▼
+     📱 FRONTEND
+         │ Receives final transcript
+         │ Displays in UI
+         │
+         ▼
+     👀 USER SEES FINAL POLISHED TRANSCRIPT! ✨
+```
+
+---
+
+### 🎓 Key Takeaways for Beginners
+
+#### 1. **Threads & Parallelism**
+
+Think of threads like workers in a restaurant:
+- Worker 1 (Mic): Takes orders constantly
+- Worker 2 (File): Writes down every order
+- Worker 3 (AI): Translates orders for the chef
+
+All working at the SAME TIME!
+
+#### 2. **Channels (Pipes)**
+
+Channels are like conveyor belts:
+- `send()` = Put item on belt
+- `recv()` = Take item off belt
+- Data flows from one thread to another safely!
+
+#### 3. **Buffering**
+
+We collect audio in a "buffer" (basket) until we have enough:
+- Too small: Waste time processing tiny pieces
+- Too big: User waits forever for results
+- Just right: 6 seconds for Whisper, 1.12s for Parakeet
+
+#### 4. **Sample Rates**
+
+Audio frequency (like video frame rate):
+- 48kHz = 48,000 samples per second (high quality)
+- 16kHz = 16,000 samples per second (AI standard)
+- Resampling = Converting between rates
+
+#### 5. **Stereo vs Mono**
+
+- Stereo = 2 channels (Left + Right ears)
+- Mono = 1 channel (averaged)
+- AI models need mono!
+
+#### 6. **Events**
+
+Rust → Frontend communication:
+- `emit()` = Shout a message
+- `listen()` = Ear listening for messages
+- Real-time updates without polling!
+
+---
+
+### 📝 Summary Table: Where Everything Happens
+
+| Task | File | Function | Line |
+|------|------|----------|------|
+| **Start button click** | `src/App.tsx` | Button onClick | ~168 |
+| **Start recording command** | `src-tauri/src/commands/recording.rs` | `start_recording()` | 13-272 |
+| **Setup microphone** | ↑ Same | ↑ Same | 17-23 |
+| **Create channels** | ↑ Same | ↑ Same | 54-55 |
+| **File saver thread** | ↑ Same | ↑ Same | 62-72 |
+| **Transcriber thread** | ↑ Same | ↑ Same | 82-235 |
+| **Audio callback** | ↑ Same | ↑ Same | 243-254 |
+| **Whisper real-time path** | ↑ Same | Transcriber thread | 94-139 |
+| **Parakeet real-time path** | ↑ Same | Transcriber thread | 140-182 |
+| **VAD check** | `src-tauri/src/vad.rs` | `is_speech()` | 78-98 |
+| **Whisper transcription** | `src-tauri/src/whisper.rs` | `transcribe_chunk()` | 345-458 |
+| **Whisper model inference** | ↑ Same (whisper-rs lib) | `state.full()` | 421-423 |
+| **Parakeet transcription** | `src-tauri/src/parakeet.rs` | `transcribe_chunk()` | 528-613 |
+| **Nemotron inference** | ↑ Same (parakeet-rs lib) | `m.transcribe_chunk()` | 579 |
+| **Emit event to frontend** | `src-tauri/src/commands/recording.rs` | `app_clone.emit()` | 121-128 |
+| **Stop recording command** | ↑ Same | `stop_recording()` | 276-344 |
+| **Whisper final pass** | ↑ Same | ↑ Same | 306-326 |
+| **Load audio file** | `src-tauri/src/whisper.rs` | `load_audio()` | 707-779 |
+| **Final transcription** | ↑ Same | `transcribe_audio_data()` | 647-703 |
+
+---
+
+### 🎉 You Now Understand the Complete Audio Pipeline!
+
+From clicking a button to seeing text appear on screen, you now know:
+
+✅ Where every piece of code lives  
+✅ How audio flows through the system  
+✅ How Whisper processes audio (chunks + final pass)  
+✅ How Parakeet streams audio (smaller chunks)  
+✅ How text gets back to the UI  
+✅ Why we use threads, channels, and buffers  
+✅ The difference between real-time and final transcription  
+
+**You're ready to modify, debug, and extend the audio system!** 🚀
+
+---
+
 Done! ✅
 
 ---
@@ -8979,6 +8783,10833 @@ You now understand how Taurscribe added AI-powered grammar correction! You learn
 - ✅ Neural network basics
 
 Keep exploring and building amazing things! 🚀
+
+---
+
+## 📚 Complete Rust File Reference (Detailed)
+
+This section provides **in-depth, line-by-line documentation** for every Rust file in the Taurscribe codebase. Each file is explained with:
+- Complete struct/enum definitions with field explanations
+- Every function with step-by-step breakdowns
+- Where types and values come from (imports vs local definitions)
+- Visual flow diagrams
+- Rust concepts explained
+
+---
+
+### 📁 File Structure Overview
+
+```
+src-tauri/
+├── build.rs                 # Build-time configuration (CUDA paths, macOS targets)
+├── src/
+│   ├── main.rs              # Entry point - calls lib::run()
+│   ├── lib.rs               # App orchestrator - initializes everything
+│   ├── state.rs             # Global application state (AudioState)
+│   ├── types.rs             # Shared type definitions (enums, structs)
+│   ├── utils.rs             # Helper functions (clean_transcript, get_recordings_dir)
+│   ├── audio.rs             # Audio stream wrappers (SendStream, RecordingHandle)
+│   ├── whisper.rs           # Whisper AI engine manager (781 lines)
+│   ├── parakeet.rs          # Parakeet/Nemotron ASR manager (615 lines)
+│   ├── vad.rs               # Voice Activity Detection (215 lines)
+│   ├── llm.rs               # Gemma LLM for grammar correction (98 lines)
+│   ├── commands/
+│   │   ├── mod.rs           # Module re-exports
+│   │   ├── recording.rs     # start_recording, stop_recording commands
+│   │   ├── transcription.rs # list_sample_files, benchmark_test commands
+│   │   ├── models.rs        # list_models, switch_model commands
+│   │   ├── settings.rs      # get_backend_info, set_active_engine commands
+│   │   ├── llm.rs           # init_llm, correct_text commands
+│   │   └── misc.rs          # greet (test command)
+│   ├── hotkeys/
+│   │   ├── mod.rs           # Module re-exports
+│   │   └── listener.rs      # Global hotkey listener (Ctrl+Win)
+│   └── tray/
+│       ├── mod.rs           # Module re-exports
+│       └── icons.rs         # System tray setup and icon management
+```
+
+---
+
+## 🔴 `src-tauri/src/main.rs` (7 lines)
+
+**Purpose**: The absolute entry point of the Rust application.
+
+### Complete File
+
+```rust
+// Line 1-2: Prevent Windows from opening a console window in release builds
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+// Line 4-6: Main function - calls the library's run() function
+fn main() {
+    taurscribe_lib::run()
+}
+```
+
+### Line-by-Line Explanation
+
+#### Line 1-2: Compiler Attribute
+```rust
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+```
+
+| Component | Meaning |
+|-----------|---------|
+| `#![]` | Inner attribute - applies to entire file/crate |
+| `cfg_attr(condition, attribute)` | Conditionally apply an attribute |
+| `not(debug_assertions)` | True when building in release mode |
+| `windows_subsystem = "windows"` | Don't show console window on Windows |
+
+**Why**: In release mode, the app runs as a GUI-only application without a console window.
+
+#### Lines 4-6: Main Function
+```rust
+fn main() {
+    taurscribe_lib::run()
+}
+```
+
+| Component | Meaning |
+|-----------|---------|
+| `fn main()` | Standard Rust entry point |
+| `taurscribe_lib` | The library crate name (from `Cargo.toml` → `name = "taurscribe_lib"`) |
+| `::run()` | Calls the `run()` function exported from `lib.rs` |
+
+### Flow Diagram
+
+```
+┌─────────────────────────────────────────┐
+│  Operating System                        │
+│      │                                   │
+│      │ Executes binary                   │
+│      ▼                                   │
+│  main.rs::main()                         │
+│      │                                   │
+│      │ Calls                             │
+│      ▼                                   │
+│  lib.rs::run()                           │
+│      │                                   │
+│      │ Initializes everything            │
+│      │ Starts Tauri app                  │
+│      ▼                                   │
+│  [App Running]                           │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## 🟢 `src-tauri/src/lib.rs` (119 lines)
+
+**Purpose**: The main orchestrator that initializes all AI engines and starts the Tauri application.
+
+### Imports & Module Declarations (Lines 1-18)
+
+```rust
+// Lines 1-12: Declare submodules
+mod audio;      // Audio stream handling
+mod commands;   // Tauri command handlers
+mod hotkeys;    // Global hotkey listener
+mod llm;        // Gemma LLM engine
+mod parakeet;   // Parakeet ASR engine
+mod state;      // Global state struct
+mod tray;       // System tray management
+mod types;      // Shared type definitions
+mod utils;      // Helper functions
+mod vad;        // Voice Activity Detection
+mod whisper;    // Whisper AI engine
+
+// Lines 14-18: Import specific items from our modules
+use parakeet::ParakeetManager;
+use state::AudioState;
+use vad::VADManager;
+use whisper::WhisperManager;
+```
+
+### The `run()` Function (Lines 20-118)
+
+This is the main entry point called from `main.rs`.
+
+#### Step 1: Initialize Whisper AI (Lines 24-47)
+
+```rust
+// Line 24-26: Create a new WhisperManager (not loaded yet)
+println!("[INFO] Initializing Whisper transcription engine...");
+let whisper = WhisperManager::new();
+
+// Lines 28-37: Load model in a separate thread with large stack
+let (whisper, init_result) = std::thread::Builder::new()
+    .stack_size(8 * 1024 * 1024) // 8 MiB stack (needed for large models)
+    .spawn(move || {
+        let mut whisper = whisper;           // Take ownership
+        let res = whisper.initialize(None);  // Load default model
+        (whisper, res)                       // Return both
+    })
+    .expect("Failed to spawn whisper init thread")
+    .join()                                  // Wait for thread to finish
+    .expect("Whisper init thread panicked");
+
+// Lines 39-47: Handle initialization result
+match init_result {
+    Ok(backend_msg) => {
+        println!("[SUCCESS] {}", backend_msg);  // e.g., "Backend: CUDA"
+    }
+    Err(e) => {
+        eprintln!("[ERROR] Failed to initialize Whisper: {}", e);
+        eprintln!("   Transcription will be disabled.");
+    }
+}
+```
+
+**Why separate thread?**: Loading AI models requires large stack space (8MB vs default 2MB) to avoid stack overflow.
+
+#### Step 2: Initialize VAD (Lines 49-55)
+
+```rust
+println!("[INFO] Initializing Voice Activity Detection...");
+let vad = VADManager::new().unwrap_or_else(|e| {
+    eprintln!("[ERROR] Failed to initialize VAD: {}", e);
+    panic!("VAD initialization failed");  // VAD is required
+});
+println!("[SUCCESS] VAD initialized successfully");
+```
+
+#### Step 3: Initialize Parakeet (Lines 57-68)
+
+```rust
+println!("[INFO] Initializing Parakeet ASR manager...");
+let mut parakeet = ParakeetManager::new();
+
+// Try to load Nemotron model first, then fallback to any available
+println!("[INFO] Attempting to auto-load Parakeet model...");
+match parakeet.initialize(Some("nemotron:nemotron")) {
+    Ok(msg) => println!("[SUCCESS] {}", msg),
+    Err(_) => match parakeet.initialize(None) {  // Fallback
+        Ok(msg) => println!("[SUCCESS] Fallback load: {}", msg),
+        Err(e) => eprintln!("[WARN] No Parakeet models loaded: {}", e),
+    },
+}
+```
+
+#### Step 4: Build Tauri App (Lines 70-118)
+
+```rust
+tauri::Builder::default()
+    // Register plugins
+    .plugin(tauri_plugin_opener::init())      // Open URLs/files
+    .plugin(tauri_plugin_store::Builder::default().build())  // Settings storage
+    
+    // Register global state
+    .manage(AudioState::new(whisper, parakeet, vad))
+    
+    // Setup callback (runs once after window is created)
+    .setup(|app| {
+        tray::setup_tray(app)?;               // Create system tray
+        
+        // Start hotkey listener in background
+        let app_handle = app.handle().clone();
+        std::thread::spawn(move || {
+            hotkeys::start_hotkey_listener(app_handle);
+        });
+        
+        println!("[INFO] Global hotkey listener started (Ctrl+Win to record)");
+        Ok(())
+    })
+    
+    // Window close handler (minimize to tray instead)
+    .on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let _ = window.hide();            // Hide window
+            api.prevent_close();              // Don't actually close
+            println!("[INFO] Window minimized to tray");
+        }
+    })
+    
+    // Register all Tauri commands (callable from frontend)
+    .invoke_handler(tauri::generate_handler![
+        commands::greet,
+        commands::start_recording,
+        commands::stop_recording,
+        // ... 15 more commands
+    ])
+    
+    // Run the app!
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
+```
+
+### Complete Flow Diagram
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                        lib.rs::run()                            │
+├────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  STEP 1: Initialize Whisper                                     │
+│  ┌──────────────────────────────────────────┐                   │
+│  │ WhisperManager::new()                     │                   │
+│  │      ↓                                    │                   │
+│  │ spawn thread (8MB stack)                  │                   │
+│  │      ↓                                    │                   │
+│  │ whisper.initialize(None)                  │                   │
+│  │      ↓                                    │                   │
+│  │ Load ggml-tiny.en-q5_1.bin               │                   │
+│  │      ↓                                    │                   │
+│  │ GPU warmup                                │                   │
+│  └──────────────────────────────────────────┘                   │
+│                      ↓                                           │
+│  STEP 2: Initialize VAD                                         │
+│  ┌──────────────────────────────────────────┐                   │
+│  │ VADManager::new()                         │                   │
+│  │ → Energy-based speech detection           │                   │
+│  └──────────────────────────────────────────┘                   │
+│                      ↓                                           │
+│  STEP 3: Initialize Parakeet                                    │
+│  ┌──────────────────────────────────────────┐                   │
+│  │ ParakeetManager::new()                    │                   │
+│  │      ↓                                    │                   │
+│  │ parakeet.initialize("nemotron:nemotron") │                   │
+│  │ → Try CUDA → Try DirectML → Fallback CPU │                   │
+│  └──────────────────────────────────────────┘                   │
+│                      ↓                                           │
+│  STEP 4: Build Tauri App                                        │
+│  ┌──────────────────────────────────────────┐                   │
+│  │ Register plugins                          │                   │
+│  │ Register state (AudioState)               │                   │
+│  │ Setup tray + hotkey listener              │                   │
+│  │ Register 19 commands                      │                   │
+│  │ Start event loop                          │                   │
+│  └──────────────────────────────────────────┘                   │
+│                                                                  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🟣 `src-tauri/src/state.rs` (55 lines)
+
+**Purpose**: Defines the global application state that persists throughout the app's lifetime.
+
+### Imports (Lines 1-6)
+
+```rust
+use crate::audio::RecordingHandle;      // From audio.rs
+use crate::parakeet::ParakeetManager;   // From parakeet.rs
+use crate::types::{ASREngine, AppState}; // From types.rs
+use crate::vad::VADManager;             // From vad.rs
+use crate::whisper::WhisperManager;     // From whisper.rs
+use std::sync::{Arc, Mutex};            // Thread-safe wrappers
+```
+
+### The `AudioState` Struct (Lines 8-38)
+
+```rust
+pub struct AudioState {
+    // Field 1: Active recording (None if not recording)
+    pub recording_handle: Mutex<Option<RecordingHandle>>,
+    
+    // Field 2: Whisper AI engine (shared across threads)
+    pub whisper: Arc<Mutex<WhisperManager>>,
+    
+    // Field 3: Parakeet AI engine (shared across threads)
+    pub parakeet: Arc<Mutex<ParakeetManager>>,
+    
+    // Field 4: Voice Activity Detector (shared)
+    pub vad: Arc<Mutex<VADManager>>,
+    
+    // Field 5: Path to last recorded WAV file
+    pub last_recording_path: Mutex<Option<String>>,
+    
+    // Field 6: Current app state (Ready/Recording/Processing)
+    pub current_app_state: Mutex<AppState>,
+    
+    // Field 7: Which ASR engine is active (Whisper or Parakeet)
+    pub active_engine: Mutex<ASREngine>,
+    
+    // Field 8: Accumulated transcript during recording
+    pub session_transcript: Arc<Mutex<String>>,
+    
+    // Field 9: Optional LLM engine (loaded on demand)
+    pub llm: Arc<Mutex<Option<crate::llm::LLMEngine>>>,
+}
+```
+
+### Field Details Table
+
+| Field | Type | Initial Value | Purpose |
+|-------|------|---------------|---------|
+| `recording_handle` | `Mutex<Option<RecordingHandle>>` | `None` | Holds mic stream when recording |
+| `whisper` | `Arc<Mutex<WhisperManager>>` | Initialized | Whisper AI engine |
+| `parakeet` | `Arc<Mutex<ParakeetManager>>` | Initialized | Parakeet ASR engine |
+| `vad` | `Arc<Mutex<VADManager>>` | Initialized | Voice Activity Detection |
+| `last_recording_path` | `Mutex<Option<String>>` | `None` | Path to saved WAV file |
+| `current_app_state` | `Mutex<AppState>` | `Ready` | Tray icon state |
+| `active_engine` | `Mutex<ASREngine>` | `Whisper` | Selected transcription engine |
+| `session_transcript` | `Arc<Mutex<String>>` | Empty string | Live transcript accumulator |
+| `llm` | `Arc<Mutex<Option<LLMEngine>>>` | `None` | Gemma LLM (lazy loaded) |
+
+### Why `Arc<Mutex<T>>`?
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Arc<Mutex<T>> Explained                                     │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Arc (Atomic Reference Counting):                           │
+│  ├─ Allows MULTIPLE owners of the same data                 │
+│  ├─ Reference count is thread-safe (atomic operations)      │
+│  └─ Data is deallocated when count reaches 0                │
+│                                                              │
+│  Mutex (Mutual Exclusion):                                  │
+│  ├─ Only ONE thread can access data at a time               │
+│  ├─ .lock() waits if another thread has the lock            │
+│  └─ .unwrap() panics if lock is poisoned (rare)             │
+│                                                              │
+│  Combined:                                                   │
+│  ├─ Multiple threads can SHARE ownership (Arc)              │
+│  └─ But only ONE can ACCESS at a time (Mutex)               │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Constructor (Lines 40-54)
+
+```rust
+impl AudioState {
+    pub fn new(whisper: WhisperManager, parakeet: ParakeetManager, vad: VADManager) -> Self {
+        Self {
+            recording_handle: Mutex::new(None),
+            whisper: Arc::new(Mutex::new(whisper)),
+            parakeet: Arc::new(Mutex::new(parakeet)),
+            vad: Arc::new(Mutex::new(vad)),
+            last_recording_path: Mutex::new(None),
+            current_app_state: Mutex::new(AppState::Ready),
+            active_engine: Mutex::new(ASREngine::Whisper),
+            session_transcript: Arc::new(Mutex::new(String::new())),
+            llm: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+```
+
+---
+
+## 🟡 `src-tauri/src/types.rs` (31 lines)
+
+**Purpose**: Shared type definitions used across multiple files.
+
+### Complete File with Explanations
+
+```rust
+/// AppState - Represents the current state of the application
+/// Used to determine tray icon color
+#[derive(Debug, Clone, Copy, PartialEq)]  // Derive common traits
+pub enum AppState {
+    Ready,      // 🟢 Green - Waiting for user input
+    Recording,  // 🔴 Red - Microphone is active
+    Processing, // 🟡 Yellow - Transcribing audio
+}
+
+/// ASREngine - The two speech recognition engines available
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq)]
+pub enum ASREngine {
+    Whisper,   // OpenAI Whisper (via whisper.cpp)
+    Parakeet,  // NVIDIA Parakeet (via onnxruntime)
+}
+
+/// TranscriptionChunk - Payload sent to frontend during live transcription
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TranscriptionChunk {
+    pub text: String,           // The transcribed text
+    pub processing_time_ms: u32, // How long it took (milliseconds)
+    pub method: String,         // "Whisper" or "Parakeet"
+}
+
+/// SampleFile - Information about a test audio file
+#[derive(serde::Serialize)]
+pub struct SampleFile {
+    pub name: String,  // Filename, e.g., "test.wav"
+    pub path: String,  // Full path on disk
+}
+```
+
+### Derive Macros Explained
+
+| Macro | Purpose |
+|-------|---------|
+| `Debug` | Allows `println!("{:?}", value)` |
+| `Clone` | Allows `.clone()` to copy the value |
+| `Copy` | Allows implicit copying (small types only) |
+| `PartialEq` | Allows `==` and `!=` comparisons |
+| `serde::Serialize` | Allows conversion to JSON (for frontend) |
+| `serde::Deserialize` | Allows conversion from JSON |
+
+---
+
+## 🟠 `src-tauri/src/utils.rs` (47 lines)
+
+**Purpose**: Helper utility functions used across the application.
+
+### Function 1: `clean_transcript()` (Lines 1-31)
+
+**Purpose**: Post-processes raw ASR output to fix common formatting issues.
+
+```rust
+pub fn clean_transcript(text: &str) -> String {
+    let mut cleaned = text.trim().to_string();
+
+    // Fix 1: Remove space before punctuation
+    cleaned = cleaned.replace(" ,", ",");   // "hello , world" → "hello, world"
+    cleaned = cleaned.replace(" .", ".");   // "hello ." → "hello."
+    cleaned = cleaned.replace(" ?", "?");
+    cleaned = cleaned.replace(" !", "!");
+    cleaned = cleaned.replace(" %", "%");   // "50 %" → "50%"
+
+    // Fix 2: Remove double spaces
+    while cleaned.contains("  ") {
+        cleaned = cleaned.replace("  ", " ");
+    }
+
+    // Fix 3: Capitalize first letter
+    if let Some(first) = cleaned.chars().next() {
+        if first.is_lowercase() {
+            let mut c = cleaned.chars();
+            cleaned = match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            };
+        }
+    }
+
+    cleaned
+}
+```
+
+### Function 2: `get_recordings_dir()` (Lines 33-46)
+
+**Purpose**: Returns the path to save recordings, creating it if needed.
+
+```rust
+pub fn get_recordings_dir() -> Result<std::path::PathBuf, String> {
+    // Get OS-specific AppData folder
+    // Windows: C:\Users\Name\AppData\Local
+    // macOS: ~/Library/Application Support
+    // Linux: ~/.local/share
+    let app_data = dirs::data_local_dir()
+        .ok_or("Could not find AppData directory")?;
+
+    // Create: AppData/Taurscribe/temp
+    let recordings_dir = app_data.join("Taurscribe").join("temp");
+
+    // Create folder if it doesn't exist
+    std::fs::create_dir_all(&recordings_dir)
+        .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+
+    Ok(recordings_dir)
+}
+```
+
+### Flow Diagram
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  get_recordings_dir() Flow                                  │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Windows:                                                   │
+│  C:\Users\abdul\AppData\Local                              │
+│           │                                                 │
+│           └─► Taurscribe                                   │
+│                   │                                         │
+│                   └─► temp                                 │
+│                         │                                   │
+│                         └─► recording_1706850000.wav       │
+│                                                             │
+│  macOS:                                                     │
+│  ~/Library/Application Support                             │
+│           │                                                 │
+│           └─► Taurscribe/temp/                             │
+│                                                             │
+└────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔵 `src-tauri/src/audio.rs` (17 lines)
+
+**Purpose**: Wrapper types for thread-safe audio stream handling.
+
+### Complete File
+
+```rust
+use crossbeam_channel::Sender;
+
+/// SendStream - Wrapper to make cpal::Stream thread-safe
+/// By default, audio streams can't be moved between threads
+/// We implement Send + Sync manually to enable this
+#[allow(dead_code)]
+pub struct SendStream(pub cpal::Stream);
+
+// UNSAFE: We promise to only drop this, never access across threads
+unsafe impl Send for SendStream {}  // Can be moved to another thread
+unsafe impl Sync for SendStream {}  // Can be shared between threads
+
+/// RecordingHandle - Holds all resources needed during active recording
+pub struct RecordingHandle {
+    pub stream: SendStream,           // The mic connection (keeps recording alive)
+    pub file_tx: Sender<Vec<f32>>,    // Channel to file writer thread
+    pub whisper_tx: Sender<Vec<f32>>, // Channel to AI transcription thread
+}
+```
+
+### Why `unsafe impl Send/Sync`?
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  Thread Safety in Rust                                      │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  By default, cpal::Stream is NOT thread-safe because:       │
+│  - It contains raw pointers to audio hardware               │
+│  - The compiler can't verify safety automatically           │
+│                                                             │
+│  We manually implement Send + Sync because:                 │
+│  - We ONLY drop the stream (never read/write)               │
+│  - Dropping is always safe from any thread                  │
+│  - We control all access to this wrapper                    │
+│                                                             │
+│  ⚠️ WARNING: This is unsafe! Only do this if you're 100%   │
+│     sure about the safety guarantees.                       │
+│                                                             │
+└────────────────────────────────────────────────────────────┘
+```
+
+### How RecordingHandle Works
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  Recording Architecture                                     │
+├────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────┐                                            │
+│  │  Microphone │ ──────► Audio samples (f32[])              │
+│  └─────────────┘                 │                          │
+│                                  │                          │
+│                    ┌─────────────┴─────────────┐            │
+│                    │                           │            │
+│                    ▼                           ▼            │
+│             ┌──────────┐                ┌──────────┐        │
+│             │ file_tx  │                │whisper_tx│        │
+│             │ (Channel)│                │ (Channel)│        │
+│             └────┬─────┘                └────┬─────┘        │
+│                  │                           │              │
+│                  ▼                           ▼              │
+│         ┌────────────────┐          ┌────────────────┐      │
+│         │ File Writer    │          │ AI Transcriber │      │
+│         │ Thread         │          │ Thread         │      │
+│         │                │          │                │      │
+│         │ Saves to .wav  │          │ Whisper/       │      │
+│         │                │          │ Parakeet AI    │      │
+│         └────────────────┘          └────────────────┘      │
+│                                                             │
+└────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔷 `src-tauri/src/whisper.rs` (781 lines)
+
+**Purpose**: Complete Whisper AI transcription engine manager.
+
+### Imports (Lines 1-8)
+
+```rust
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, 
+    SincInterpolationType, WindowFunction,
+};  // Audio resampling library
+use std::ffi::c_void;      // C interop (raw pointers)
+use std::os::raw::c_char;  // C interop (strings)
+use whisper_rs::{
+    set_log_callback, FullParams, SamplingStrategy, 
+    WhisperContext, WhisperContextParameters,
+};  // Whisper AI library bindings
+```
+
+### Enum: `GpuBackend` (Lines 13-31)
+
+```rust
+#[derive(Debug, Clone)]
+pub enum GpuBackend {
+    Cuda,   // NVIDIA GPUs - fastest
+    Vulkan, // AMD/Intel/Other GPUs
+    Cpu,    // Processor - slowest fallback
+}
+
+impl std::fmt::Display for GpuBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GpuBackend::Cuda => write!(f, "CUDA"),
+            GpuBackend::Vulkan => write!(f, "Vulkan"),
+            GpuBackend::Cpu => write!(f, "CPU"),
+        }
+    }
+}
+```
+
+### Struct: `ModelInfo` (Lines 33-41)
+
+```rust
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelInfo {
+    pub id: String,           // "tiny.en-q5_1"
+    pub display_name: String, // "Tiny English (Q5_1)"
+    pub file_name: String,    // "ggml-tiny.en-q5_1.bin"
+    pub size_mb: f32,         // 75.5
+}
+```
+
+### Struct: `WhisperManager` (Lines 43-50)
+
+```rust
+pub struct WhisperManager {
+    context: Option<WhisperContext>,  // AI model (None if not loaded)
+    last_transcript: String,          // Accumulated context for coherence
+    backend: GpuBackend,              // Current hardware (CPU/CUDA/Vulkan)
+    current_model: Option<String>,    // "tiny.en-q5_1"
+    resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>,  // Cached resampler
+}
+```
+
+### Field Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  WhisperManager Field Lifecycle                                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Field           │ new()         │ initialize()    │ transcribe()│
+│  ─────────────────┼───────────────┼─────────────────┼─────────────│
+│  context         │ None          │ Some(ctx)       │ Read        │
+│  last_transcript │ ""            │ (unchanged)     │ Appended    │
+│  backend         │ Cpu           │ Cuda/Vulkan/Cpu │ Read        │
+│  current_model   │ None          │ Some("model")   │ Read        │
+│  resampler       │ None          │ (unchanged)     │ Created*    │
+│                                                                  │
+│  * Resampler is lazily created on first transcribe_chunk call   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Method: `new()` (Lines 65-75)
+
+```rust
+pub fn new() -> Self {
+    Self {
+        context: None,                  // No AI loaded
+        last_transcript: String::new(), // Empty context
+        backend: GpuBackend::Cpu,       // Assume CPU
+        current_model: None,            // No model
+        resampler: None,                // Create when needed
+    }
+}
+```
+
+### Method: `get_models_dir()` (Lines 77-108)
+
+**Purpose**: Finds the directory containing Whisper model files.
+
+```rust
+fn get_models_dir() -> Result<std::path::PathBuf, String> {
+    // Check these paths in order
+    let possible_paths = [
+        "taurscribe-runtime/models",        // From project root
+        "../taurscribe-runtime/models",     // One level up
+        "../../taurscribe-runtime/models",  // Two levels up
+    ];
+
+    for path in possible_paths {
+        // Try to convert to absolute path
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            if canonical.is_dir() {
+                // Verify it's the right folder
+                if let Ok(entries) = std::fs::read_dir(&canonical) {
+                    for entry in entries.flatten() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            // Look for ggml-*.bin files
+                            if name.starts_with("ggml-") && name.ends_with(".bin") {
+                                return Ok(canonical);  // Found!
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err("Could not find models directory containing ggml models".to_string())
+}
+```
+
+### Method: `initialize()` (Lines 225-277)
+
+**Purpose**: Load a Whisper model from disk into memory (and GPU).
+
+```rust
+pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
+    // Step 1: Silence C++ logs
+    unsafe { set_log_callback(None, std::ptr::null_mut()); }
+
+    // Step 2: Find models directory
+    let models_dir = Self::get_models_dir()?;
+
+    // Step 3: Determine which model to load
+    let target_model = model_id.unwrap_or("tiny.en-q5_1");
+    let file_name = format!("ggml-{}.bin", target_model);
+    let absolute_path = models_dir.join(&file_name);
+
+    // Step 4: Verify file exists
+    if !absolute_path.exists() {
+        return Err(format!("Model file not found: {}", absolute_path.display()));
+    }
+
+    // Step 5: Try GPU first, fallback to CPU
+    let (ctx, backend) = self
+        .try_gpu(&absolute_path)
+        .or_else(|_| self.try_cpu(&absolute_path))?;
+
+    // Step 6: Save loaded state
+    self.context = Some(ctx);
+    self.backend = backend.clone();
+    self.current_model = Some(target_model.to_string());
+
+    // Step 7: GPU warm-up (first inference is slow)
+    let warmup_audio = vec![0.0_f32; 16000];  // 1 second of silence
+    self.transcribe_chunk(&warmup_audio, 16000).ok();
+
+    Ok(format!("Backend: {}", backend))
+}
+```
+
+### Method: `transcribe_chunk()` (Lines 343-458)
+
+**Purpose**: Real-time transcription of audio chunks (6 seconds).
+
+```rust
+pub fn transcribe_chunk(
+    &mut self,
+    samples: &[f32],        // Audio data
+    input_sample_rate: u32, // e.g., 48000 Hz
+) -> Result<String, String> {
+    // Get loaded model context
+    let ctx = self.context.as_mut()
+        .ok_or("Whisper context not initialized")?;
+
+    // STEP 1: Resample to 16kHz if needed
+    let audio_data = if input_sample_rate != 16000 {
+        // Create/reuse resampler
+        // ... resampling logic ...
+    } else {
+        samples.to_vec()
+    };
+
+    // STEP 2: Create transcription state
+    let mut state = ctx.create_state()?;
+
+    // STEP 3: Configure parameters
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_n_threads(4);         // CPU threads
+    params.set_translate(false);     // Don't translate
+    params.set_language(Some("en")); // English
+    params.set_print_special(false); // No <SOT> tokens
+
+    // STEP 4: Context prompting (coherence)
+    if !self.last_transcript.is_empty() {
+        params.set_initial_prompt(&self.last_transcript);
+    }
+
+    // STEP 5: Run inference
+    state.full(params, &audio_data)?;
+
+    // STEP 6: Extract text
+    let num_segments = state.full_n_segments();
+    let mut transcript = String::new();
+    for i in 0..num_segments {
+        if let Some(segment) = state.get_segment(i) {
+            transcript.push_str(&segment.to_string());
+        }
+    }
+
+    // STEP 7: Update context for next chunk
+    let final_text = transcript.trim().to_string();
+    if !final_text.is_empty() {
+        if !self.last_transcript.is_empty() {
+            self.last_transcript.push(' ');
+        }
+        self.last_transcript.push_str(&final_text);
+    }
+
+    Ok(final_text)
+}
+```
+
+### Transcription Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  transcribe_chunk() Flow                                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Input: 6 seconds of audio @ 48kHz (288,000 samples)            │
+│      │                                                           │
+│      ▼                                                           │
+│  ┌─────────────────────────────────────┐                        │
+│  │ STEP 1: Resample                     │                        │
+│  │ 48kHz → 16kHz                        │                        │
+│  │ 288,000 → 96,000 samples             │                        │
+│  └─────────────────────────────────────┘                        │
+│      │                                                           │
+│      ▼                                                           │
+│  ┌─────────────────────────────────────┐                        │
+│  │ STEP 2: Configure Params             │                        │
+│  │ - Greedy sampling                    │                        │
+│  │ - 4 CPU threads                      │                        │
+│  │ - English language                   │                        │
+│  │ - Context prompt (previous text)     │                        │
+│  └─────────────────────────────────────┘                        │
+│      │                                                           │
+│      ▼                                                           │
+│  ┌─────────────────────────────────────┐                        │
+│  │ STEP 3: Run Whisper AI               │                        │
+│  │ state.full(params, audio)            │                        │
+│  │ → GPU matrix operations              │                        │
+│  │ → ~100-500ms per chunk               │                        │
+│  └─────────────────────────────────────┘                        │
+│      │                                                           │
+│      ▼                                                           │
+│  ┌─────────────────────────────────────┐                        │
+│  │ STEP 4: Extract Text                 │                        │
+│  │ Loop through segments                │                        │
+│  │ Concatenate into string              │                        │
+│  └─────────────────────────────────────┘                        │
+│      │                                                           │
+│      ▼                                                           │
+│  Output: "Hello world this is a test"                           │
+│      │                                                           │
+│      ▼                                                           │
+│  ┌─────────────────────────────────────┐                        │
+│  │ STEP 5: Update Context               │                        │
+│  │ last_transcript += " " + output      │                        │
+│  │ (Used as prompt for next chunk)      │                        │
+│  └─────────────────────────────────────┘                        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🟩 `src-tauri/src/parakeet.rs` (615 lines)
+
+**Purpose**: NVIDIA Parakeet/Nemotron ASR engine manager.
+
+### Key Differences from Whisper
+
+| Aspect | Whisper | Parakeet |
+|--------|---------|----------|
+| Model Format | `.bin` (GGML) | `.onnx` (ONNX Runtime) |
+| Streaming | 6-second chunks | 560ms chunks |
+| GPU Backend | CUDA/Vulkan | CUDA/DirectML |
+| Latency | ~200ms | ~50ms |
+| Model Types | Single | Nemotron, CTC, EOU, TDT |
+
+### Struct: `ParakeetManager` (Lines 52-57)
+
+```rust
+pub struct ParakeetManager {
+    model: Option<LoadedModel>,  // Loaded AI model
+    model_name: Option<String>,  // "nemotron:nemotron"
+    backend: GpuBackend,         // Cuda/DirectML/Cpu
+    resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>,
+}
+```
+
+### Enum: `LoadedModel` (Lines 35-40)
+
+```rust
+enum LoadedModel {
+    Nemotron(Nemotron),     // Streaming-optimized
+    Ctc(Parakeet),          // CTC decoder
+    Eou(ParakeetEOU),       // End-of-utterance detection
+    Tdt(ParakeetTDT),       // Token-based decoding
+}
+```
+
+### Method: `transcribe_chunk()` (Lines 528-613)
+
+**Purpose**: Transcribe small audio chunks in real-time.
+
+```rust
+pub fn transcribe_chunk(
+    &mut self,
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<String, String> {
+    // Step 1: Resample to 16kHz
+    let audio = if sample_rate != 16000 {
+        // ... resampling logic ...
+    } else {
+        samples.to_vec()
+    };
+
+    // Step 2: Transcribe based on model type
+    if let Some(model) = &mut self.model {
+        match model {
+            LoadedModel::Nemotron(m) => {
+                // Process in 560ms chunks (8960 samples)
+                let mut transcript = String::new();
+                const CHUNK_SIZE: usize = 8960;
+                for chunk in audio.chunks(CHUNK_SIZE) {
+                    transcript.push_str(&m.transcribe_chunk(chunk)?);
+                }
+                Ok(transcript)
+            }
+            LoadedModel::Ctc(m) => {
+                // Full chunk processing
+                let result = m.transcribe_samples(audio, 16000, 1, None)?;
+                Ok(result.text)
+            }
+            // ... other model types ...
+        }
+    } else {
+        Err("No model loaded".to_string())
+    }
+}
+```
+
+---
+
+## 🟨 `src-tauri/src/vad.rs` (215 lines)
+
+**Purpose**: Voice Activity Detection - distinguishes speech from silence.
+
+### Struct: `VADManager` (Lines 8-10)
+
+```rust
+pub struct VADManager {
+    threshold: f32,  // Volume level that counts as speech (0.005)
+}
+```
+
+### Method: `is_speech()` (Lines 78-98)
+
+**Purpose**: Determine if an audio chunk contains speech.
+
+```rust
+pub fn is_speech(&mut self, audio: &[f32]) -> Result<f32, String> {
+    // Calculate RMS (Root Mean Square) energy
+    let sum_squares: f32 = audio.iter().map(|&x| x * x).sum();
+    let rms = (sum_squares / audio.len() as f32).sqrt();
+
+    // Convert to probability (0.0 = silence, 1.0 = speech)
+    let prob = if rms < self.threshold {
+        0.0  // Too quiet
+    } else if rms > self.threshold * 5.0 {
+        1.0  // Very loud
+    } else {
+        // Linear interpolation
+        ((rms - self.threshold) / (self.threshold * 4.0)).min(1.0)
+    };
+
+    Ok(prob)
+}
+```
+
+### VAD Algorithm Visualization
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Energy-Based VAD Algorithm                                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Audio Signal:                                                   │
+│  ~~~~~~~~~~~~~~~_______________~~~~~~~~~~~~~~~_____             │
+│   ^^ speech ^^    ^^ silence ^^   ^^ speech ^^  ^^silent^^      │
+│                                                                  │
+│  RMS Energy:                                                     │
+│      0.05          0.001           0.04        0.002             │
+│                                                                  │
+│  Threshold = 0.005                                              │
+│                                                                  │
+│  Result:                                                         │
+│      SPEECH        SILENCE         SPEECH      SILENCE          │
+│      (1.0)         (0.0)           (1.0)       (0.0)            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Method: `get_speech_timestamps()` (Lines 100-213)
+
+**Purpose**: Find exactly when speech occurs in a full recording.
+
+**Returns**: `Vec<(start_seconds, end_seconds)>`
+
+**Example**: `[(0.5, 3.2), (5.0, 8.7)]` means speech from 0.5-3.2s and 5.0-8.7s
+
+---
+
+## 🟫 `src-tauri/src/llm.rs` (98 lines)
+
+**Purpose**: Gemma LLM engine for grammar correction.
+
+### Struct: `LLMEngine` (Lines 12-17)
+
+```rust
+pub struct LLMEngine {
+    model: model::ModelWeights,      // Neural network weights
+    tokenizer: Tokenizer,            // Text ↔ Token IDs
+    device: Device,                  // CPU or CUDA
+    logits_processor: LogitsProcessor, // Sampling (temperature, top-p)
+}
+```
+
+### Method: `new()` (Lines 19-63)
+
+```rust
+pub fn new() -> Result<Self> {
+    // Hardcoded model path
+    let base_path = PathBuf::from(
+        r"c:\Users\abdul\OneDrive\Desktop\Taurscribe\taurscribe-runtime\models\GRMR-V3-G1B-GGUF",
+    );
+    let model_path = base_path.join("GRMR-V3-G1B-Q4_K_M.gguf");
+    let tokenizer_path = base_path.join("tokenizer.json");
+
+    // Select device (try CUDA first)
+    let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
+
+    // Load tokenizer
+    let tokenizer = Tokenizer::from_file(&tokenizer_path)?;
+
+    // Load model (GGUF format)
+    let mut file = std::fs::File::open(&model_path)?;
+    let content = gguf_file::Content::read(&mut file)?;
+    let model = model::ModelWeights::from_gguf(content, &mut file, &device)?;
+
+    // Initialize sampler
+    let logits_processor = LogitsProcessor::new(1337, Some(0.7), Some(0.95));
+
+    Ok(Self { model, tokenizer, device, logits_processor })
+}
+```
+
+### Method: `run()` (Lines 65-96)
+
+```rust
+pub fn run(&mut self, prompt: &str) -> Result<String> {
+    // Format prompt for grammar correction
+    let formatted_prompt = format!("<bos>text\n{}\ncorrected\n", prompt.trim());
+
+    // Tokenize
+    let tokens = self.tokenizer.encode(formatted_prompt, true)?.get_ids().to_vec();
+    let input = Tensor::new(tokens.as_slice(), &self.device)?;
+
+    // Run model
+    let logits = self.model.forward(&input, 0)?;
+
+    // Sample next token
+    let last_logits = logits.get(logits.dims2()?.0 - 1)?;
+    let next_token = self.logits_processor.sample(&last_logits)?;
+
+    // Decode
+    let decoded = self.tokenizer.decode(&[next_token], true)?;
+
+    Ok(decoded)
+}
+```
+
+---
+
+## 🔶 `src-tauri/src/commands/` Directory
+
+### `mod.rs` (14 lines)
+
+**Purpose**: Re-exports all command modules.
+
+```rust
+mod llm;
+mod misc;
+mod models;
+mod recording;
+mod settings;
+mod transcription;
+
+pub use llm::*;
+pub use misc::*;
+pub use models::*;
+pub use recording::*;
+pub use settings::*;
+pub use transcription::*;
+```
+
+---
+
+### `recording.rs` (345 lines)
+
+**Purpose**: Start and stop recording commands.
+
+#### Command: `start_recording()` (Lines 10-272)
+
+**Purpose**: Initialize microphone, create threads, start recording.
+
+**Flow**:
+1. Get default microphone device
+2. Create WAV file path
+3. Clear AI context (fresh start)
+4. Create communication channels (crossbeam)
+5. Spawn file writer thread
+6. Spawn AI transcription thread
+7. Start microphone stream
+8. Store recording handle
+
+#### Command: `stop_recording()` (Lines 274-344)
+
+**Purpose**: Stop recording, run final transcription, cleanup.
+
+**Flow**:
+1. Take recording handle (stops mic)
+2. Wait for threads to finish
+3. For Parakeet: Return accumulated transcript
+4. For Whisper: Run VAD → High-quality final pass
+5. Clean transcript and return
+
+---
+
+### `transcription.rs` (224 lines)
+
+**Purpose**: Sample file listing and benchmarking.
+
+#### Command: `list_sample_files()` (Lines 6-67)
+
+Returns available WAV files for testing.
+
+#### Command: `benchmark_test()` (Lines 69-223)
+
+Compares Whisper vs Parakeet performance on a sample file.
+
+---
+
+### `models.rs` (61 lines)
+
+**Purpose**: Model listing and switching.
+
+#### Commands:
+- `list_models()` - List Whisper models
+- `get_current_model()` - Get active Whisper model
+- `switch_model()` - Switch Whisper model
+- `list_parakeet_models()` - List Parakeet models
+- `init_parakeet()` - Load Parakeet model
+- `get_parakeet_status()` - Get Parakeet status
+
+---
+
+### `settings.rs` (56 lines)
+
+**Purpose**: Backend info and engine selection.
+
+#### Commands:
+- `get_backend_info()` - Returns "CUDA", "Vulkan", or "CPU"
+- `set_active_engine()` - Switch between Whisper/Parakeet
+- `get_active_engine()` - Get currently active engine
+- `set_tray_state()` - Update tray icon color
+
+---
+
+### `llm.rs` (98 lines)
+
+**Purpose**: LLM initialization and inference.
+
+#### Commands:
+- `init_llm()` - Load Gemma model (async, blocking task)
+- `run_llm_inference()` - Run raw inference
+- `check_llm_status()` - Check if LLM is loaded
+- `correct_text()` - Grammar correction (main function)
+
+---
+
+### `misc.rs` (6 lines)
+
+**Purpose**: Test command.
+
+```rust
+#[tauri::command]
+pub fn greet(name: &str) -> String {
+    format!("Hello, {}! You've been greeted from Rust!", name)
+}
+```
+
+---
+
+## 🔷 `src-tauri/src/hotkeys/` Directory
+
+### `mod.rs` (3 lines)
+
+```rust
+mod listener;
+pub use listener::start_hotkey_listener;
+```
+
+### `listener.rs` (75 lines)
+
+**Purpose**: Global hotkey listener for Ctrl+Win.
+
+```rust
+pub fn start_hotkey_listener(app_handle: AppHandle) {
+    // Atomic flags for key states
+    let ctrl_held = Arc::new(AtomicBool::new(false));
+    let meta_held = Arc::new(AtomicBool::new(false));
+    let recording_active = Arc::new(AtomicBool::new(false));
+
+    let callback = move |event: Event| {
+        match event.event_type {
+            EventType::KeyPress(key) => {
+                match key {
+                    Key::ControlLeft | Key::ControlRight => {
+                        ctrl_held.store(true, Ordering::SeqCst);
+                    }
+                    Key::MetaLeft | Key::MetaRight => {
+                        meta_held.store(true, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+
+                // Both pressed? Start recording!
+                if ctrl_held.load(...) && meta_held.load(...) && !recording_active.load(...) {
+                    recording_active.store(true, ...);
+                    app_handle.emit("hotkey-start-recording", ());
+                }
+            }
+            EventType::KeyRelease(key) => {
+                // Update flags and stop recording if released
+                // ...
+            }
+            _ => {}
+        }
+    };
+
+    // Blocks forever, listening to all keyboard events
+    listen(callback).ok();
+}
+```
+
+---
+
+## 🟪 `src-tauri/src/tray/` Directory
+
+### `mod.rs` (3 lines)
+
+```rust
+mod icons;
+pub use icons::{setup_tray, update_tray_icon};
+```
+
+### `icons.rs` (93 lines)
+
+**Purpose**: System tray icon management.
+
+#### Macros (Lines 7-21)
+
+```rust
+macro_rules! tray_icon_green {
+    () => { tauri::include_image!("icons/emoji-green_circle.ico") };
+}
+macro_rules! tray_icon_red {
+    () => { tauri::include_image!("icons/emoji-red_circle.ico") };
+}
+macro_rules! tray_icon_yellow {
+    () => { tauri::include_image!("icons/emoji-yellow_circle.ico") };
+}
+```
+
+#### Function: `update_tray_icon()` (Lines 23-50)
+
+```rust
+pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> {
+    let icon = match state {
+        AppState::Ready => tray_icon_green!(),
+        AppState::Recording => tray_icon_red!(),
+        AppState::Processing => tray_icon_yellow!(),
+    };
+
+    let tooltip = match state {
+        AppState::Ready => "Taurscribe - Ready",
+        AppState::Recording => "Taurscribe - Recording...",
+        AppState::Processing => "Taurscribe - Processing...",
+    };
+
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        tray.set_icon(Some(icon))?;
+        tray.set_tooltip(Some(tooltip))?;
+    }
+
+    Ok(())
+}
+```
+
+#### Function: `setup_tray()` (Lines 53-92)
+
+Creates the system tray with menu items (Show, Exit).
+
+---
+
+## 🟤 `src-tauri/build.rs` (74 lines)
+
+**Purpose**: Build-time configuration script.
+
+### What It Does:
+
+1. **Standard Tauri build**: `tauri_build::build()`
+
+2. **macOS deployment target**: Sets `MACOSX_DEPLOYMENT_TARGET=13.4` for ONNX Runtime compatibility
+
+3. **Windows ARM64 Clang**: Forces Clang compiler for whisper.cpp
+
+4. **CUDA library paths**: Adds CUDA library search paths for Windows linker
+
+```rust
+fn main() {
+    tauri_build::build();
+
+    #[cfg(target_os = "macos")]
+    {
+        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
+    }
+
+    #[cfg(windows)]
+    {
+        // Find CUDA libraries for linking
+        if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+            let lib_path = PathBuf::from(cuda_path).join("lib").join("x64");
+            if lib_path.exists() {
+                println!("cargo:rustc-link-search=native={}", lib_path.display());
+            }
+        }
+    }
+}
+```
+
+---
+
+## 📊 Complete Module Dependency Graph
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      DEPENDENCY GRAPH                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  main.rs                                                         │
+│      │                                                           │
+│      └──► lib.rs (orchestrator)                                 │
+│               │                                                  │
+│               ├──► state.rs (AudioState)                        │
+│               │       │                                          │
+│               │       ├──► audio.rs (RecordingHandle)           │
+│               │       ├──► types.rs (enums)                     │
+│               │       ├──► whisper.rs                           │
+│               │       ├──► parakeet.rs                          │
+│               │       ├──► vad.rs                               │
+│               │       └──► llm.rs                               │
+│               │                                                  │
+│               ├──► commands/ (all commands)                     │
+│               │       ├──► recording.rs → state, audio, utils   │
+│               │       ├──► transcription.rs → state             │
+│               │       ├──► models.rs → whisper, parakeet        │
+│               │       ├──► settings.rs → state, tray            │
+│               │       ├──► llm.rs → llm engine                  │
+│               │       └──► misc.rs (standalone)                 │
+│               │                                                  │
+│               ├──► hotkeys/                                     │
+│               │       └──► listener.rs (rdev events)            │
+│               │                                                  │
+│               └──► tray/                                        │
+│                       └──► icons.rs → types (AppState)          │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔬 Complete Function Reference (Every Function Explained)
+
+This section documents **every single function** in every `.rs` file with line-by-line explanations.
+
+---
+
+### 📄 `whisper.rs` - All 15 Functions
+
+#### Function 1: `GpuBackend::fmt()` (Lines 23-30)
+**Purpose**: Implement Display trait for pretty-printing GPU backend names.
+
+```rust
+impl std::fmt::Display for GpuBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GpuBackend::Cuda => write!(f, "CUDA"),      // "Cuda" → "CUDA"
+            GpuBackend::Vulkan => write!(f, "Vulkan"),  // "Vulkan" → "Vulkan"
+            GpuBackend::Cpu => write!(f, "CPU"),        // "Cpu" → "CPU"
+        }
+    }
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `&self` | `&GpuBackend` | The enum variant to format |
+| `f` | `&mut Formatter` | The output buffer to write to |
+| **Returns** | `std::fmt::Result` | `Ok(())` on success |
+
+---
+
+#### Function 2: `null_log_callback()` (Lines 55-63)
+**Purpose**: Suppress noisy C++ logs from whisper.cpp library.
+
+```rust
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn null_log_callback(
+    _level: u32,           // Log level (ignored)
+    _text: *const c_char,  // Log message (ignored)
+    _user_data: *mut c_void // User context (ignored)
+) {
+    // Do nothing - suppress all logs
+}
+```
+
+| Attribute | Meaning |
+|-----------|---------|
+| `#[cfg(target_os = "macos")]` | Only compile for macOS |
+| `unsafe` | Manual memory management |
+| `extern "C"` | C calling convention |
+
+---
+
+#### Function 3: `WhisperManager::new()` (Lines 67-75)
+**Purpose**: Constructor - creates a new uninitialized WhisperManager.
+
+```rust
+pub fn new() -> Self {
+    Self {
+        context: None,                  // No model loaded yet
+        last_transcript: String::new(), // Empty context buffer
+        backend: GpuBackend::Cpu,       // Assume CPU (updated on init)
+        current_model: None,            // No model name
+        resampler: None,                // Created lazily
+    }
+}
+```
+
+| Field | Initial Value | Later Value |
+|-------|---------------|-------------|
+| `context` | `None` | `Some(WhisperContext)` after `initialize()` |
+| `last_transcript` | `""` | Accumulated text during session |
+| `backend` | `Cpu` | Detected backend after `initialize()` |
+| `current_model` | `None` | Model ID after `initialize()` |
+| `resampler` | `None` | Created in `transcribe_chunk()` |
+
+---
+
+#### Function 4: `WhisperManager::get_models_dir()` (Lines 78-108)
+**Purpose**: Find the directory containing Whisper model files.
+
+```rust
+fn get_models_dir() -> Result<std::path::PathBuf, String> {
+    let possible_paths = [
+        "taurscribe-runtime/models",
+        "../taurscribe-runtime/models",
+        "../../taurscribe-runtime/models",
+    ];
+
+    for path in possible_paths {
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            if canonical.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&canonical) {
+                    for entry in entries.flatten() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if name.starts_with("ggml-") && name.ends_with(".bin") {
+                                return Ok(canonical);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err("Could not find models directory containing ggml models".to_string())
+}
+```
+
+**Step-by-step flow**:
+1. Define 3 possible relative paths to check
+2. For each path:
+   - Try to canonicalize (convert to absolute path)
+   - Check if it's a directory
+   - Look for files matching `ggml-*.bin`
+   - Return immediately if found
+3. Return error if all paths failed
+
+---
+
+#### Function 5: `WhisperManager::list_available_models()` (Lines 110-161)
+**Purpose**: Scan the models directory and return metadata for all Whisper models.
+
+```rust
+pub fn list_available_models() -> Result<Vec<ModelInfo>, String> {
+    let models_dir = Self::get_models_dir()?;
+    let mut models = Vec::new();
+
+    let entries = std::fs::read_dir(&models_dir)
+        .map_err(|e| format!("Failed to read models directory: {}", e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let path = entry.path();
+
+        if path.is_file() {
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                // Filter: ggml-*.bin, NOT silero (VAD model)
+                if file_name.starts_with("ggml-")
+                    && file_name.ends_with(".bin")
+                    && !file_name.contains("silero")
+                {
+                    let size_bytes = path.metadata().map(|m| m.len()).unwrap_or(0);
+                    let size_mb = size_bytes as f32 / (1024.0 * 1024.0);
+
+                    let id = file_name
+                        .trim_start_matches("ggml-")
+                        .trim_end_matches(".bin")
+                        .to_string();
+
+                    let display_name = Self::format_model_name(&id);
+
+                    models.push(ModelInfo { id, display_name, file_name: file_name.to_string(), size_mb });
+                }
+            }
+        }
+    }
+
+    models.sort_by(|a, b| a.size_mb.partial_cmp(&b.size_mb).unwrap());
+    Ok(models)
+}
+```
+
+**Returns**: `Vec<ModelInfo>` sorted by file size (smallest first)
+
+**Example output**:
+```rust
+[
+    ModelInfo { id: "tiny.en-q5_1", display_name: "Tiny English (Q5_1)", size_mb: 42.3 },
+    ModelInfo { id: "base.en-q5_1", display_name: "Base English (Q5_1)", size_mb: 78.5 },
+    ModelInfo { id: "small.en-q5_1", display_name: "Small English (Q5_1)", size_mb: 245.0 },
+]
+```
+
+---
+
+#### Function 6: `WhisperManager::format_model_name()` (Lines 163-206)
+**Purpose**: Convert cryptic model IDs to human-readable names.
+
+```rust
+fn format_model_name(id: &str) -> String {
+    let mut name = String::new();
+
+    // Part 1: Size
+    if id.contains("tiny") { name.push_str("Tiny"); }
+    else if id.contains("base") { name.push_str("Base"); }
+    else if id.contains("small") { name.push_str("Small"); }
+    else if id.contains("medium") { name.push_str("Medium"); }
+    else if id.contains("large-v3-turbo") { name.push_str("Large V3 Turbo"); }
+    else if id.contains("large-v3") { name.push_str("Large V3"); }
+    else if id.contains("large") { name.push_str("Large"); }
+
+    // Part 2: Language
+    if id.contains(".en") { name.push_str(" English"); }
+    else { name.push_str(" Multilingual"); }
+
+    // Part 3: Quantization
+    if id.contains("q5_0") { name.push_str(" (Q5_0)"); }
+    else if id.contains("q5_1") { name.push_str(" (Q5_1)"); }
+    else if id.contains("q8_0") { name.push_str(" (Q8_0)"); }
+
+    if name.is_empty() { return id.to_string(); }
+    name
+}
+```
+
+**Examples**:
+| Input ID | Output Name |
+|----------|-------------|
+| `"tiny.en-q5_1"` | `"Tiny English (Q5_1)"` |
+| `"large-v3-turbo-q8_0"` | `"Large V3 Turbo (Q8_0)"` |
+| `"medium"` | `"Medium Multilingual"` |
+
+---
+
+#### Function 7: `WhisperManager::get_current_model()` (Lines 208-211)
+**Purpose**: Return the currently loaded model ID.
+
+```rust
+pub fn get_current_model(&self) -> Option<&String> {
+    self.current_model.as_ref()  // Convert Option<String> to Option<&String>
+}
+```
+
+---
+
+#### Function 8: `WhisperManager::get_backend()` (Lines 213-216)
+**Purpose**: Return the current GPU backend.
+
+```rust
+pub fn get_backend(&self) -> &GpuBackend {
+    &self.backend  // Return reference to avoid copying
+}
+```
+
+---
+
+#### Function 9: `WhisperManager::clear_context()` (Lines 218-223)
+**Purpose**: Reset the accumulated transcript (used when starting new recording).
+
+```rust
+pub fn clear_context(&mut self) {
+    self.last_transcript.clear();  // Empty the string
+    println!("[INFO] Context cleared - starting fresh");
+}
+```
+
+---
+
+#### Function 10: `WhisperManager::initialize()` (Lines 225-277)
+**Purpose**: Load a Whisper model from disk into memory and GPU.
+
+```rust
+pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
+    // Step 1: Disable C++ logs
+    unsafe { set_log_callback(None, std::ptr::null_mut()); }
+
+    // Step 2: Find models directory
+    let models_dir = Self::get_models_dir()?;
+
+    // Step 3: Determine target model
+    let target_model = model_id.unwrap_or("tiny.en-q5_1");  // Default
+    let file_name = format!("ggml-{}.bin", target_model);
+    let absolute_path = models_dir.join(&file_name);
+
+    // Step 4: Verify file exists
+    if !absolute_path.exists() {
+        return Err(format!("Model file not found: {}", absolute_path.display()));
+    }
+
+    // Step 5: Try GPU, fallback to CPU
+    let (ctx, backend) = self
+        .try_gpu(&absolute_path)
+        .or_else(|_| self.try_cpu(&absolute_path))?;
+
+    // Step 6: Store loaded state
+    self.context = Some(ctx);
+    self.backend = backend.clone();
+    self.current_model = Some(target_model.to_string());
+
+    // Step 7: GPU warmup (first inference is always slow)
+    let warmup_audio = vec![0.0_f32; 16000];  // 1 second of silence
+    self.transcribe_chunk(&warmup_audio, 16000).ok();  // Ignore errors
+
+    Ok(format!("Backend: {}", backend))
+}
+```
+
+**Flow diagram**:
+```
+initialize("small.en-q5_1")
+         │
+         ▼
+   Find models directory
+         │
+         ▼
+   Build path: "models/ggml-small.en-q5_1.bin"
+         │
+         ▼
+   ┌─────┴─────┐
+   │ try_gpu() │
+   └─────┬─────┘
+         │
+    ┌────┴────┐
+    │ Success │──────────────────────────────┐
+    └────┬────┘                              │
+         │ Failure                           │
+         ▼                                   │
+   ┌─────┴─────┐                             │
+   │ try_cpu() │                             │
+   └─────┬─────┘                             │
+         │                                   │
+         ▼                                   ▼
+   Store context, backend, model_name
+         │
+         ▼
+   GPU warmup (transcribe silence)
+         │
+         ▼
+   Return "Backend: CUDA"
+```
+
+---
+
+#### Function 11: `WhisperManager::try_gpu()` (Lines 279-303)
+**Purpose**: Attempt to load model with GPU acceleration.
+
+```rust
+fn try_gpu(&self, model_path: &std::path::Path) -> Result<(WhisperContext, GpuBackend), String> {
+    println!("[GPU] Attempting GPU acceleration...");
+
+    let mut params = WhisperContextParameters::default();
+    params.use_gpu(true);  // Enable GPU
+
+    match WhisperContext::new_with_params(model_path.to_str().unwrap(), params) {
+        Ok(ctx) => {
+            let backend = self.detect_gpu_backend();  // CUDA or Vulkan?
+            println!("[SUCCESS] ✓ GPU acceleration enabled ({})", backend);
+            Ok((ctx, backend))
+        }
+        Err(e) => {
+            println!("[GPU] ✗ GPU failed: {:?}", e);
+            Err(format!("GPU failed: {:?}", e))
+        }
+    }
+}
+```
+
+---
+
+#### Function 12: `WhisperManager::detect_gpu_backend()` (Lines 305-314)
+**Purpose**: Determine if CUDA or Vulkan is being used.
+
+```rust
+fn detect_gpu_backend(&self) -> GpuBackend {
+    if self.is_cuda_available() {
+        return GpuBackend::Cuda;  // NVIDIA detected
+    }
+    GpuBackend::Vulkan  // Fallback assumption
+}
+```
+
+---
+
+#### Function 13: `WhisperManager::is_cuda_available()` (Lines 316-322)
+**Purpose**: Check if NVIDIA CUDA drivers are installed.
+
+```rust
+fn is_cuda_available(&self) -> bool {
+    std::process::Command::new("nvidia-smi")  // Run nvidia-smi command
+        .output()
+        .map(|output| output.status.success())  // Check if it succeeded
+        .unwrap_or(false)  // False if command not found
+}
+```
+
+---
+
+#### Function 14: `WhisperManager::try_cpu()` (Lines 324-341)
+**Purpose**: Fallback to CPU-only inference.
+
+```rust
+fn try_cpu(&self, model_path: &std::path::Path) -> Result<(WhisperContext, GpuBackend), String> {
+    println!("[GPU] Falling back to CPU...");
+
+    let params = WhisperContextParameters::default();  // No GPU flag
+
+    match WhisperContext::new_with_params(model_path.to_str().unwrap(), params) {
+        Ok(ctx) => {
+            println!("[SUCCESS] ✓ CPU backend loaded");
+            Ok((ctx, GpuBackend::Cpu))
+        }
+        Err(e) => Err(format!("Failed to load model: {:?}", e)),
+    }
+}
+```
+
+---
+
+#### Function 15: `WhisperManager::transcribe_chunk()` (Lines 343-458)
+**Purpose**: Real-time transcription of audio chunks (~6 seconds).
+
+```rust
+pub fn transcribe_chunk(
+    &mut self,
+    samples: &[f32],        // Raw audio samples
+    input_sample_rate: u32, // e.g., 48000
+) -> Result<String, String> {
+    // STEP 1: Get model context
+    let ctx = self.context.as_mut()
+        .ok_or("Whisper context not initialized")?;
+
+    // STEP 2: Resample to 16kHz if needed
+    let audio_data = if input_sample_rate != 16000 {
+        // Check if resampler needs recreation
+        let needs_new = match &self.resampler {
+            Some((rate, size, _)) => *rate != input_sample_rate || *size != samples.len(),
+            None => true,
+        };
+
+        if needs_new {
+            // Create new resampler with sinc interpolation
+            let params = SincInterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                window: WindowFunction::BlackmanHarris2,
+                oversampling_factor: 128,
+            };
+            let resampler = SincFixedIn::<f32>::new(
+                16000_f64 / input_sample_rate as f64,  // Ratio
+                2.0,                                    // Max ratio
+                params,
+                samples.len(),                          // Input size
+                1,                                      // Channels
+            ).map_err(|e| format!("Failed to create resampler: {:?}", e))?;
+            self.resampler = Some((input_sample_rate, samples.len(), Box::new(resampler)));
+        }
+
+        // Run resampling
+        let (_, _, resampler) = self.resampler.as_mut().unwrap();
+        let waves_in = vec![samples.to_vec()];
+        let waves_out = resampler.process(&waves_in, None)
+            .map_err(|e| format!("Resampling failed: {:?}", e))?;
+        waves_out[0].clone()
+    } else {
+        samples.to_vec()
+    };
+
+    // STEP 3: Create transcription state
+    let mut state = ctx.create_state()
+        .map_err(|e| format!("Failed to create state: {:?}", e))?;
+
+    // STEP 4: Configure parameters
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_n_threads(4);          // CPU threads
+    params.set_translate(false);      // Don't translate
+    params.set_language(Some("en"));  // English
+    params.set_print_special(false);  // No special tokens
+    params.set_print_progress(false); // No progress
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+
+    // STEP 5: Add context from previous chunks
+    if !self.last_transcript.is_empty() {
+        params.set_initial_prompt(&self.last_transcript);
+    }
+
+    let start = std::time::Instant::now();
+
+    // STEP 6: Run inference
+    state.full(params, &audio_data)
+        .map_err(|e| format!("Transcription failed: {:?}", e))?;
+
+    // STEP 7: Extract text segments
+    let num_segments = state.full_n_segments();
+    let mut transcript = String::new();
+    for i in 0..num_segments {
+        if let Some(segment) = state.get_segment(i) {
+            transcript.push_str(&segment.to_string());
+        }
+    }
+
+    let final_text = transcript.trim().to_string();
+
+    // STEP 8: Update context for next chunk
+    if !final_text.is_empty() {
+        if !self.last_transcript.is_empty() {
+            self.last_transcript.push(' ');
+        }
+        self.last_transcript.push_str(&final_text);
+    }
+
+    // STEP 9: Log performance
+    let duration = start.elapsed();
+    let audio_duration_sec = audio_data.len() as f32 / 16000.0;
+    let speedup = audio_duration_sec / duration.as_secs_f32();
+    println!("[PERF] Processed {:.2}s audio in {:.0}ms | Speed: {:.1}x",
+        audio_duration_sec, duration.as_millis(), speedup);
+
+    Ok(final_text)
+}
+```
+
+**Performance example**:
+```
+Input: 6 seconds of audio @ 48kHz (288,000 samples)
+Step 1: Resample 48kHz → 16kHz (96,000 samples)
+Step 2: Configure Whisper params
+Step 3: Run inference (~200ms on GPU)
+Step 4: Extract text
+Output: "Hello, this is a test of the transcription system."
+Speed: 30x realtime (6s audio in 200ms)
+```
+
+---
+
+#### Function 16: `WhisperManager::transcribe_file()` (Lines 460-643)
+**Purpose**: High-quality batch transcription of entire WAV file.
+
+**6 Steps with timing**:
+1. **File I/O** (~10ms): Read WAV file into memory
+2. **Stereo→Mono** (~5ms): Average left/right channels
+3. **Resample** (~50ms): Convert to 16kHz
+4. **State Setup** (~1ms): Create Whisper state
+5. **AI Inference** (~500ms): Run Whisper
+6. **Extract Text** (~1ms): Get transcript segments
+
+```rust
+pub fn transcribe_file(&mut self, file_path: &str) -> Result<String, String> {
+    // ... (565 lines of detailed processing)
+    // Returns: "Full transcript of the audio file"
+}
+```
+
+---
+
+#### Function 17: `WhisperManager::transcribe_audio_data()` (Lines 645-703)
+**Purpose**: Transcribe pre-loaded audio data (used after VAD filtering).
+
+```rust
+pub fn transcribe_audio_data(&mut self, audio_data: &[f32]) -> Result<String, String> {
+    // Same as transcribe_file but skips file loading
+    // Used when audio is already in memory (after VAD filtering)
+}
+```
+
+---
+
+#### Function 18: `WhisperManager::load_audio()` (Lines 705-779)
+**Purpose**: Load and preprocess a WAV file for VAD/Whisper.
+
+```rust
+pub fn load_audio(&self, file_path: &str) -> Result<Vec<f32>, String> {
+    // 1. Open WAV file
+    // 2. Read samples (i16 or f32)
+    // 3. Convert stereo to mono
+    // 4. Resample to 16kHz
+    // Returns: Vec<f32> at 16kHz mono
+}
+```
+
+---
+
+### 📄 `parakeet.rs` - All 25 Functions
+
+#### Function 1: `GpuBackend::fmt()` (Lines 15-23)
+Same pattern as Whisper - formats "Cuda" → "CUDA", "DirectML" → "DirectML".
+
+---
+
+#### Function 2: `ParakeetManager::new()` (Lines 60-68)
+**Purpose**: Constructor - creates uninitialized manager.
+
+```rust
+pub fn new() -> Self {
+    ParakeetManager {
+        model: None,           // No model loaded
+        model_name: None,      // No model ID
+        backend: GpuBackend::Cpu,  // Assume CPU
+        resampler: None,       // Created lazily
+    }
+}
+```
+
+---
+
+#### Function 3: `ParakeetManager::get_models_dir()` (Lines 70-97)
+Similar to Whisper but also checks executable location as fallback.
+
+---
+
+#### Function 4: `ParakeetManager::list_available_models()` (Lines 99-166)
+**Purpose**: Scan for Parakeet models by detecting ONNX files.
+
+**Detection logic**:
+| Files Present | Model Type |
+|---------------|------------|
+| `encoder.onnx` + `decoder_joint.onnx` + `tokenizer.model` | Nemotron |
+| `encoder.onnx` + `decoder_joint.onnx` + `tokenizer.json` | EOU |
+| `encoder.onnx` + `decoder.onnx` + `joint.onnx` | TDT |
+| `model.onnx` + `tokenizer.json` | CTC |
+
+---
+
+#### Function 5: `ParakeetManager::estimate_model_size()` (Lines 168-181)
+**Purpose**: Calculate total size of model directory in MB.
+
+```rust
+fn estimate_model_size(path: &PathBuf) -> f64 {
+    let mut total_size = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    total_size += metadata.len();
+                }
+            }
+        }
+    }
+    total_size as f64 / (1024.0 * 1024.0)  // Convert to MB
+}
+```
+
+---
+
+#### Function 6: `ParakeetManager::get_status()` (Lines 183-198)
+**Purpose**: Return current engine status for frontend.
+
+```rust
+pub fn get_status(&self) -> ParakeetStatus {
+    ParakeetStatus {
+        loaded: self.model.is_some(),
+        model_id: self.model_name.clone(),
+        model_type: self.model.as_ref().map(|m| match m {
+            LoadedModel::Nemotron(_) => "Nemotron",
+            LoadedModel::Ctc(_) => "CTC",
+            LoadedModel::Eou(_) => "EOU",
+            LoadedModel::Tdt(_) => "TDT",
+        }.to_string()),
+        backend: self.backend.to_string(),
+    }
+}
+```
+
+---
+
+#### Function 7: `ParakeetManager::initialize()` (Lines 200-261)
+**Purpose**: Load a Parakeet model based on type.
+
+```rust
+pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
+    // 1. Get available models
+    let available = Self::list_available_models()?;
+    
+    // 2. Select target model
+    let target_id = model_id.unwrap_or(&available[0].id);
+    let info = available.iter().find(|m| m.id == target_id)?;
+    
+    // 3. Parse model path from ID (e.g., "nemotron:nemotron" → "nemotron")
+    let subpath = target_id.split_once(':').map(|(_, p)| p).unwrap_or(target_id);
+    let model_path = models_dir.join(subpath);
+    
+    // 4. Initialize based on type
+    let (model, backend) = match info.model_type.as_str() {
+        "Nemotron" => { let (m, b) = Self::init_nemotron(&model_path)?; (LoadedModel::Nemotron(m), b) }
+        "CTC" => { let (m, b) = Self::init_ctc(&model_path)?; (LoadedModel::Ctc(m), b) }
+        "EOU" => { let (m, b) = Self::init_eou(&model_path)?; (LoadedModel::Eou(m), b) }
+        "TDT" => { let (m, b) = Self::init_tdt(&model_path)?; (LoadedModel::Tdt(m), b) }
+        _ => return Err("Unknown model type"),
+    };
+    
+    // 5. Store state
+    self.model = Some(model);
+    self.model_name = Some(target_id.to_string());
+    self.backend = backend;
+    
+    Ok(format!("Loaded {} ({})", info.display_name, backend))
+}
+```
+
+---
+
+#### Functions 8-11: `init_nemotron()`, `init_ctc()`, `init_eou()`, `init_tdt()` (Lines 263-471)
+**Purpose**: Initialize each model type with GPU fallback chain.
+
+**Pattern** (same for all):
+```rust
+fn init_X(path: &PathBuf) -> Result<(ModelType, GpuBackend), String> {
+    #[cfg(target_os = "macos")]
+    { return Ok((Self::try_cpu_X(path)?, GpuBackend::Cpu)); }
+    
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Try CUDA first
+        if let Ok(m) = Self::try_gpu_X(path) {
+            return Ok((m, GpuBackend::Cuda));
+        }
+        // Try DirectML (Windows only)
+        if let Ok(m) = Self::try_directml_X(path) {
+            return Ok((m, GpuBackend::DirectML));
+        }
+        // Fallback to CPU
+        Ok((Self::try_cpu_X(path)?, GpuBackend::Cpu))
+    }
+}
+```
+
+---
+
+#### Functions 12-23: GPU/CPU Loaders (Lines 317-509)
+12 functions for loading each model type with each backend:
+
+| Function | Model | Backend |
+|----------|-------|---------|
+| `try_gpu_nemotron()` | Nemotron | CUDA |
+| `try_directml_nemotron()` | Nemotron | DirectML |
+| `try_cpu_nemotron()` | Nemotron | CPU |
+| `try_gpu_ctc()` | CTC | CUDA |
+| `try_directml_ctc()` | CTC | DirectML |
+| `try_cpu_ctc()` | CTC | CPU |
+| `try_gpu_eou()` | EOU | CUDA |
+| `try_directml_eou()` | EOU | DirectML |
+| `try_cpu_eou()` | EOU | CPU |
+| `try_gpu_tdt()` | TDT | CUDA |
+| `try_directml_tdt()` | TDT | DirectML |
+| `try_cpu_tdt()` | TDT | CPU |
+
+---
+
+#### Function 24: `ParakeetManager::clear_context()` (Lines 513-525)
+**Purpose**: Reset model state for new recording.
+
+```rust
+pub fn clear_context(&mut self) {
+    if let Some(model) = &mut self.model {
+        match model {
+            LoadedModel::Nemotron(m) => m.reset(),  // Reset streaming state
+            _ => {}  // Other models don't need reset
+        }
+    }
+}
+```
+
+---
+
+#### Function 25: `ParakeetManager::transcribe_chunk()` (Lines 527-613)
+**Purpose**: Real-time transcription with model-specific handling.
+
+```rust
+pub fn transcribe_chunk(&mut self, samples: &[f32], sample_rate: u32) -> Result<String, String> {
+    // 1. Resample to 16kHz if needed
+    let audio = if sample_rate != 16000 { /* resample */ } else { samples.to_vec() };
+    
+    // 2. Transcribe based on model type
+    match model {
+        LoadedModel::Nemotron(m) => {
+            // Process in 560ms chunks (streaming)
+            const CHUNK_SIZE: usize = 8960;  // 560ms at 16kHz
+            for chunk in audio.chunks(CHUNK_SIZE) {
+                transcript.push_str(&m.transcribe_chunk(&chunk)?);
+            }
+        }
+        LoadedModel::Ctc(m) => {
+            // Single batch call
+            let result = m.transcribe_samples(audio, 16000, 1, Some(TimestampMode::Words))?;
+            Ok(result.text)
+        }
+        LoadedModel::Eou(m) => {
+            // 160ms chunks
+            const CHUNK_SIZE: usize = 2560;
+            for chunk in audio.chunks(CHUNK_SIZE) {
+                full_text.push_str(&m.transcribe(&chunk, false)?);
+            }
+        }
+        LoadedModel::Tdt(m) => {
+            // Single batch call with sentence timestamps
+            let result = m.transcribe_samples(audio, 16000, 1, Some(TimestampMode::Sentences))?;
+            Ok(result.text)
+        }
+    }
+}
+```
+
+---
+
+### 📄 `vad.rs` - All 4 Functions
+
+#### Function 1: `VADManager::new()` (Lines 12-45)
+**Purpose**: Constructor with model detection.
+
+```rust
+pub fn new() -> Result<Self, String> {
+    // Look for Silero VAD model (for future use)
+    if let Ok(models_dir) = Self::get_models_dir() {
+        let vad_model_path = models_dir.join("silero_vad.onnx");
+        if vad_model_path.exists() {
+            println!("[VAD] Found Silero VAD model");
+        } else {
+            println!("[VAD] Silero model not found (using energy-based VAD)");
+        }
+    }
+    
+    // Currently using simple energy-based VAD
+    Ok(Self { threshold: 0.005 })
+}
+```
+
+---
+
+#### Function 2: `VADManager::get_models_dir()` (Lines 47-72)
+Same pattern as other modules - check 3 relative paths.
+
+---
+
+#### Function 3: `VADManager::is_speech()` (Lines 74-98)
+**Purpose**: Determine if audio chunk contains speech.
+
+```rust
+pub fn is_speech(&mut self, audio: &[f32]) -> Result<f32, String> {
+    // Calculate RMS energy
+    let sum_squares: f32 = audio.iter().map(|&x| x * x).sum();
+    let rms = (sum_squares / audio.len() as f32).sqrt();
+
+    // Convert to probability
+    let prob = if rms < self.threshold {
+        0.0  // Definitely silence
+    } else if rms > self.threshold * 5.0 {
+        1.0  // Definitely speech
+    } else {
+        // Linear interpolation between threshold and 5*threshold
+        ((rms - self.threshold) / (self.threshold * 4.0)).min(1.0)
+    };
+
+    Ok(prob)
+}
+```
+
+**Visualization**:
+```
+RMS Energy:  0.001   0.005   0.010   0.015   0.020   0.025
+             ─────────┬───────┬───────┬───────┬───────┬─────
+Probability:   0.0    0.0    0.25    0.50    0.75    1.0
+                      │                               │
+                 threshold                      5x threshold
+```
+
+---
+
+#### Function 4: `VADManager::get_speech_timestamps()` (Lines 100-213)
+**Purpose**: Find speech segments in full audio file.
+
+```rust
+pub fn get_speech_timestamps(
+    &mut self,
+    audio: &[f32],
+    padding_ms: usize,  // Extra time around speech (500ms typical)
+) -> Result<Vec<(f32, f32)>, String> {
+    const FRAME_SIZE: usize = 512;  // ~32ms at 16kHz
+    const MIN_SPEECH_FRAMES: usize = 5;  // ~150ms minimum speech
+    
+    // State machine
+    let mut segments = Vec::new();
+    let mut speech_start: Option<usize> = None;
+    let mut consecutive_speech_frames = 0;
+    let mut silence_frames = 0;
+    
+    for (i, chunk) in audio.chunks(FRAME_SIZE).enumerate() {
+        let is_speech = self.is_speech(chunk)? > 0.5;
+        
+        match (is_speech, speech_start) {
+            (true, None) => {
+                // Speech started
+                speech_start = Some(i);
+                consecutive_speech_frames = 1;
+            }
+            (true, Some(_)) => {
+                // Speech continuing
+                consecutive_speech_frames += 1;
+                silence_frames = 0;
+            }
+            (false, Some(_)) => {
+                // Potential speech end
+                silence_frames += 1;
+                if silence_frames > padding_frames {
+                    if consecutive_speech_frames >= MIN_SPEECH_FRAMES {
+                        // Valid segment - save it
+                        let start_time = (speech_start.unwrap() * FRAME_SIZE) as f32 / 16000.0;
+                        let end_time = (i * FRAME_SIZE) as f32 / 16000.0;
+                        segments.push((start_time, end_time));
+                    }
+                    speech_start = None;
+                }
+            }
+            (false, None) => {
+                // Still silence - do nothing
+            }
+        }
+    }
+    
+    // Merge overlapping segments
+    let merged = merge_segments(segments);
+    Ok(merged)
+}
+```
+
+**Example output**:
+```rust
+// Input: 30 seconds of audio with speech at 2-5s and 10-15s
+get_speech_timestamps(audio, 500) 
+// Returns: [(1.5, 5.5), (9.5, 15.5)]  // With 500ms padding
+```
+
+---
+
+### 📄 `llm.rs` - All 2 Functions
+
+#### Function 1: `LLMEngine::new()` (Lines 19-63)
+**Purpose**: Load Gemma LLM for grammar correction.
+
+```rust
+pub fn new() -> Result<Self> {
+    // Hardcoded model path
+    let base_path = PathBuf::from(
+        r"c:\Users\abdul\OneDrive\Desktop\Taurscribe\taurscribe-runtime\models\GRMR-V3-G1B-GGUF"
+    );
+    let model_path = base_path.join("GRMR-V3-G1B-Q4_K_M.gguf");
+    let tokenizer_path = base_path.join("tokenizer.json");
+    
+    // Try CUDA, fallback to CPU
+    let device = Device::new_cuda(0).unwrap_or(Device::Cpu);
+    
+    // Load tokenizer
+    let tokenizer = Tokenizer::from_file(&tokenizer_path)?;
+    
+    // Load model weights (GGUF format)
+    let mut file = std::fs::File::open(&model_path)?;
+    let content = gguf_file::Content::read(&mut file)?;
+    let model = model::ModelWeights::from_gguf(content, &mut file, &device)?;
+    
+    // Configure sampling (temperature=0.7, top_p=0.95)
+    let logits_processor = LogitsProcessor::new(1337, Some(0.7), Some(0.95));
+    
+    Ok(Self { model, tokenizer, device, logits_processor })
+}
+```
+
+---
+
+#### Function 2: `LLMEngine::run()` (Lines 65-96)
+**Purpose**: Run grammar correction inference.
+
+```rust
+pub fn run(&mut self, prompt: &str) -> Result<String> {
+    // Format prompt for grammar model
+    let formatted_prompt = format!("<bos>text\n{}\ncorrected\n", prompt.trim());
+    
+    // Tokenize
+    let tokens = self.tokenizer.encode(formatted_prompt, true)?.get_ids().to_vec();
+    let input = Tensor::new(tokens.as_slice(), &self.device)?;
+    
+    // Forward pass
+    let logits = self.model.forward(&input, 0)?;
+    
+    // Get last token's logits
+    let (_seq_len, _vocab_size) = logits.dims2()?;
+    let last_logits = logits.get(_seq_len - 1)?;
+    
+    // Sample next token
+    let next_token = self.logits_processor.sample(&last_logits)?;
+    
+    // Decode
+    let decoded = self.tokenizer.decode(&[next_token], true)?;
+    
+    Ok(decoded)
+}
+```
+
+---
+
+### 📄 `commands/recording.rs` - All 2 Functions
+
+#### Function 1: `start_recording()` (Lines 12-272)
+**Purpose**: Initialize microphone, create threads, start recording.
+
+**Complete flow** (10 steps):
+
+```rust
+#[tauri::command]
+pub fn start_recording(app_handle: AppHandle, state: State<AudioState>) -> Result<String, String> {
+    // STEP 1: Get microphone
+    let host = cpal::default_host();
+    let device = host.default_input_device().ok_or("No input device")?;
+    let config: cpal::StreamConfig = device.default_input_config()?.into();
+
+    // STEP 2: Prepare output file path
+    let recordings_dir = get_recordings_dir()?;  // AppData/Taurscribe/temp
+    let filename = format!("recording_{}.wav", chrono::Utc::now().timestamp());
+    let path = recordings_dir.join(&filename);
+
+    // STEP 3: Clear AI context
+    let active_engine = *state.active_engine.lock().unwrap();
+    if active_engine == ASREngine::Whisper {
+        state.whisper.lock().unwrap().clear_context();
+    } else {
+        state.parakeet.lock().unwrap().clear_context();
+    }
+
+    // STEP 4: Store recording path and clear transcript
+    *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
+    state.session_transcript.lock().unwrap().clear();
+
+    // STEP 5: Create WAV writer
+    let spec = hound::WavSpec {
+        channels: config.channels,
+        sample_rate: config.sample_rate.0,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let writer = hound::WavWriter::create(&path, spec)?;
+
+    // STEP 6: Create communication channels
+    let (file_tx, file_rx) = unbounded::<Vec<f32>>();
+    let (whisper_tx, whisper_rx) = unbounded::<Vec<f32>>();
+
+    // STEP 7: Spawn file writer thread
+    std::thread::spawn(move || {
+        let mut writer = writer;
+        while let Ok(samples) = file_rx.recv() {
+            for sample in samples {
+                writer.write_sample(sample).ok();
+            }
+        }
+        writer.finalize().ok();
+    });
+
+    // STEP 8: Spawn transcription thread
+    let whisper = state.whisper.clone();
+    let parakeet = state.parakeet.clone();
+    let vad = state.vad.clone();
+    let app_clone = app_handle.clone();
+    
+    std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let chunk_size = (sample_rate * 6) as usize;  // 6 seconds
+        
+        while let Ok(samples) = whisper_rx.recv() {
+            buffer.extend(samples);
+            
+            if active_engine == ASREngine::Whisper {
+                // Process in 6-second chunks with VAD
+                while buffer.len() >= chunk_size {
+                    let chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
+                    let is_speech = vad.lock().unwrap().is_speech(&chunk)?;
+                    
+                    if is_speech > 0.5 {
+                        let transcript = whisper.lock().unwrap()
+                            .transcribe_chunk(&chunk, sample_rate)?;
+                        
+                        if !transcript.is_empty() {
+                            app_clone.emit("transcription-chunk", TranscriptionChunk {
+                                text: transcript,
+                                processing_time_ms: elapsed,
+                                method: "Whisper".to_string(),
+                            });
+                        }
+                    }
+                }
+            } else {
+                // Parakeet: Process in 1.12-second chunks
+                let parakeet_chunk_size = (sample_rate as f32 * 1.12) as usize;
+                while buffer.len() >= parakeet_chunk_size {
+                    let chunk: Vec<f32> = buffer.drain(..parakeet_chunk_size).collect();
+                    let transcript = parakeet.lock().unwrap()
+                        .transcribe_chunk(&chunk, sample_rate)?;
+                    
+                    if !transcript.is_empty() {
+                        app_clone.emit("transcription-chunk", TranscriptionChunk { ... });
+                    }
+                }
+            }
+        }
+    });
+
+    // STEP 9: Build and start audio stream
+    let stream = device.build_input_stream(
+        &config,
+        move |data: &[f32], _| {
+            file_tx.send(data.to_vec()).ok();      // Send to file writer
+            let mono = convert_to_mono(data);       // Convert stereo to mono
+            whisper_tx.send(mono).ok();             // Send to transcriber
+        },
+        move |err| eprintln!("Audio input error: {}", err),
+        None,
+    )?;
+    stream.play()?;
+
+    // STEP 10: Store recording handle
+    *state.recording_handle.lock().unwrap() = Some(RecordingHandle {
+        stream: SendStream(stream),
+        file_tx,
+        whisper_tx,
+    });
+
+    Ok(format!("Recording started: {}", path.display()))
+}
+```
+
+**Thread architecture**:
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Recording Architecture (3 Threads)                               │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  ┌─────────────────┐                                              │
+│  │   MAIN THREAD   │  (Tauri event loop)                          │
+│  └────────┬────────┘                                              │
+│           │                                                       │
+│           │ spawn()                                               │
+│           ├─────────────────────────────────────────────┐         │
+│           │                                             │         │
+│           ▼                                             ▼         │
+│  ┌─────────────────┐                           ┌─────────────────┐│
+│  │  FILE WRITER    │                           │  TRANSCRIBER    ││
+│  │    THREAD       │                           │    THREAD       ││
+│  │                 │                           │                 ││
+│  │ while recv():   │                           │ while recv():   ││
+│  │   write_sample()│                           │   if Whisper:   ││
+│  │                 │                           │     VAD check   ││
+│  │ finalize()      │                           │     transcribe()││
+│  └────────▲────────┘                           │   else Parakeet:││
+│           │                                    │     transcribe()││
+│           │                                    │   emit event    ││
+│           │                                    └────────▲────────┘│
+│           │                                             │         │
+│           │                                             │         │
+│           └──────────────┬──────────────────────────────┘         │
+│                          │                                        │
+│                    ┌─────┴─────┐                                   │
+│                    │ CHANNELS  │                                   │
+│                    │ file_tx   │                                   │
+│                    │whisper_tx │                                   │
+│                    └─────▲─────┘                                   │
+│                          │                                        │
+│                          │                                        │
+│                 ┌────────┴────────┐                                │
+│                 │   AUDIO INPUT   │  (cpal callback)               │
+│                 │    CALLBACK     │                                │
+│                 │                 │                                │
+│                 │ for each chunk: │                                │
+│                 │   file_tx.send()│                                │
+│                 │  whisper_tx.send│                                │
+│                 └────────▲────────┘                                │
+│                          │                                        │
+│                          │                                        │
+│                    ┌─────┴─────┐                                   │
+│                    │ MICROPHONE│                                   │
+│                    └───────────┘                                   │
+│                                                                   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Function 2: `stop_recording()` (Lines 274-344)
+**Purpose**: Stop recording, run final transcription, cleanup.
+
+```rust
+#[tauri::command]
+pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
+    // STEP 1: Take recording handle (stops mic)
+    let mut handle = state.recording_handle.lock().unwrap();
+    if let Some(recording) = handle.take() {
+        // STEP 2: Drop stream and channels (signals threads to stop)
+        drop(recording.stream);
+        drop(recording.file_tx);
+        drop(recording.whisper_tx);
+
+        // STEP 3: Wait for threads to finish
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let active_engine = *state.active_engine.lock().unwrap();
+
+        // STEP 4A: For Parakeet - use accumulated transcript
+        if active_engine == ASREngine::Parakeet {
+            let transcript = state.session_transcript.lock().unwrap().clone();
+            let final_text = clean_transcript(&transcript);
+            return Ok(final_text);
+        }
+
+        // STEP 4B: For Whisper - run high-quality final pass
+        let path = state.last_recording_path.lock().unwrap().clone();
+        if let Some(path) = path {
+            // Load audio file
+            let mut whisper = state.whisper.lock().unwrap();
+            let audio_data = whisper.load_audio(&path)?;
+
+            // Apply VAD filtering
+            let mut vad = state.vad.lock().unwrap();
+            let timestamps = vad.get_speech_timestamps(&audio_data, 500)?;
+
+            if timestamps.is_empty() {
+                return Ok("[silence]".to_string());
+            }
+
+            // Extract speech segments only
+            let mut clean = Vec::new();
+            for (start, end) in timestamps {
+                let s = (start * 16000.0) as usize;
+                let e = (end * 16000.0) as usize;
+                clean.extend_from_slice(&audio_data[s..e]);
+            }
+
+            // Final transcription
+            let result = whisper.transcribe_audio_data(&clean)?;
+            Ok(result)
+        } else {
+            Ok("Recording saved.".to_string())
+        }
+    } else {
+        Err("Not recording".to_string())
+    }
+}
+```
+
+---
+
+### 📄 `commands/transcription.rs` - All 2 Functions
+
+#### Function 1: `list_sample_files()` (Lines 6-67)
+**Purpose**: List WAV files available for benchmarking.
+
+```rust
+#[tauri::command]
+pub fn list_sample_files() -> Result<Vec<SampleFile>, String> {
+    let possible_paths = [
+        "taurscribe-runtime/samples",
+        "../taurscribe-runtime/samples",
+        "../../taurscribe-runtime/samples",
+    ];
+    
+    // Find directory with .wav files
+    let mut target_dir = PathBuf::new();
+    for path in possible_paths {
+        if let Ok(p) = std::fs::canonicalize(path) {
+            if p.is_dir() && has_wav_files(&p) {
+                target_dir = p;
+                break;
+            }
+        }
+    }
+    
+    // List all .wav files
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(target_dir)? {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.extension().map(|e| e == "wav").unwrap_or(false) {
+                files.push(SampleFile {
+                    name: path.file_name().unwrap().to_string_lossy().to_string(),
+                    path: path.to_string_lossy().to_string(),
+                });
+            }
+        }
+    }
+    
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(files)
+}
+```
+
+---
+
+#### Function 2: `benchmark_test()` (Lines 69-223)
+**Purpose**: Compare Whisper vs Parakeet performance.
+
+```rust
+#[tauri::command]
+pub fn benchmark_test(state: State<AudioState>, file_path: String) -> Result<String, String> {
+    // 1. Load audio file
+    let mut reader = hound::WavReader::open(&absolute_path)?;
+    let audio_duration_secs = sample_count / sample_rate / channels;
+    
+    // 2. Convert to mono samples
+    let mono_samples = convert_to_mono(samples);
+    
+    // 3. Test Whisper (without VAD)
+    state.whisper.lock().unwrap().clear_context();
+    let start_whisper_naive = Instant::now();
+    for chunk in mono_samples.chunks(chunk_size) {
+        state.whisper.lock().unwrap().transcribe_chunk(chunk, sample_rate).ok();
+    }
+    let time_whisper_naive = start_whisper_naive.elapsed();
+    
+    // 4. Test Whisper (with VAD)
+    state.whisper.lock().unwrap().clear_context();
+    let start_whisper_vad = Instant::now();
+    let mut chunks_skipped = 0;
+    for chunk in mono_samples.chunks(chunk_size) {
+        let is_speech = state.vad.lock().unwrap().is_speech(chunk)?;
+        if is_speech > 0.5 {
+            state.whisper.lock().unwrap().transcribe_chunk(chunk, sample_rate).ok();
+        } else {
+            chunks_skipped += 1;
+        }
+    }
+    let time_whisper_vad = start_whisper_vad.elapsed();
+    
+    // 5. Test Parakeet
+    let start_parakeet = Instant::now();
+    for chunk in mono_samples.chunks(parakeet_chunk_size) {
+        state.parakeet.lock().unwrap().transcribe_chunk(chunk, sample_rate).ok();
+    }
+    let time_parakeet = start_parakeet.elapsed();
+    
+    // 6. Calculate speed factors
+    let factor_whisper = audio_duration_secs / time_whisper_vad.as_secs_f32();
+    let factor_parakeet = audio_duration_secs / time_parakeet.as_secs_f32();
+    
+    // 7. Determine winner
+    let winner = if time_whisper_vad < time_parakeet { "Whisper AI" } else { "NVIDIA Parakeet" };
+    
+    // 8. Format results
+    Ok(format!(
+        "📊 BENCHMARK RESULTS\n\
+        🎙️ WHISPER AI:\n\
+        - Baseline: {:.2}s\n\
+        - Optimized: {:.2}s\n\
+        - Speed: {:.1}x\n\n\
+        🦜 PARAKEET:\n\
+        - Streaming: {:.2}s\n\
+        - Speed: {:.1}x\n\n\
+        🏆 WINNER: {}",
+        time_whisper_naive.as_secs_f32(),
+        time_whisper_vad.as_secs_f32(),
+        factor_whisper,
+        time_parakeet.as_secs_f32(),
+        factor_parakeet,
+        winner
+    ))
+}
+```
+
+---
+
+### 📄 `commands/models.rs` - All 6 Functions
+
+#### Function 1: `list_models()` (Lines 7-11)
+```rust
+#[tauri::command]
+pub fn list_models() -> Result<Vec<whisper::ModelInfo>, String> {
+    whisper::WhisperManager::list_available_models()
+}
+```
+
+#### Function 2: `get_current_model()` (Lines 13-18)
+```rust
+#[tauri::command]
+pub fn get_current_model(state: State<AudioState>) -> Result<Option<String>, String> {
+    let whisper = state.whisper.lock().unwrap();
+    Ok(whisper.get_current_model().cloned())
+}
+```
+
+#### Function 3: `switch_model()` (Lines 20-35)
+```rust
+#[tauri::command]
+pub fn switch_model(state: State<AudioState>, model_id: String) -> Result<String, String> {
+    // Safety check
+    let handle = state.recording_handle.lock().unwrap();
+    if handle.is_some() {
+        return Err("Cannot switch models while recording".to_string());
+    }
+    drop(handle);
+    
+    let mut whisper = state.whisper.lock().unwrap();
+    whisper.initialize(Some(&model_id))
+}
+```
+
+#### Function 4: `list_parakeet_models()` (Lines 37-41)
+```rust
+#[tauri::command]
+pub fn list_parakeet_models() -> Result<Vec<parakeet::ParakeetModelInfo>, String> {
+    parakeet::ParakeetManager::list_available_models()
+}
+```
+
+#### Function 5: `init_parakeet()` (Lines 43-53)
+```rust
+#[tauri::command]
+pub fn init_parakeet(state: State<AudioState>, model_id: Option<String>) -> Result<String, String> {
+    let mut parakeet = state.parakeet.lock().unwrap();
+    let result = parakeet.initialize(model_id.as_deref())?;
+    
+    // Auto-switch to Parakeet
+    *state.active_engine.lock().unwrap() = ASREngine::Parakeet;
+    
+    Ok(result)
+}
+```
+
+#### Function 6: `get_parakeet_status()` (Lines 55-60)
+```rust
+#[tauri::command]
+pub fn get_parakeet_status(state: State<AudioState>) -> Result<parakeet::ParakeetStatus, String> {
+    let parakeet = state.parakeet.lock().unwrap();
+    Ok(parakeet.get_status())
+}
+```
+
+---
+
+### 📄 `commands/settings.rs` - All 4 Functions
+
+#### Function 1: `get_backend_info()` (Lines 7-11)
+```rust
+#[tauri::command]
+pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
+    let whisper = state.whisper.lock().unwrap();
+    Ok(format!("{}", whisper.get_backend()))  // "CUDA", "Vulkan", or "CPU"
+}
+```
+
+#### Function 2: `set_active_engine()` (Lines 13-25)
+```rust
+#[tauri::command]
+pub fn set_active_engine(state: State<AudioState>, engine: String) -> Result<String, String> {
+    let new_engine = match engine.to_lowercase().as_str() {
+        "whisper" => ASREngine::Whisper,
+        "parakeet" => ASREngine::Parakeet,
+        _ => return Err(format!("Unknown engine: {}", engine)),
+    };
+    
+    *state.active_engine.lock().unwrap() = new_engine;
+    Ok(format!("Engine switched to {:?}", new_engine))
+}
+```
+
+#### Function 3: `get_active_engine()` (Lines 27-31)
+```rust
+#[tauri::command]
+pub fn get_active_engine(state: State<AudioState>) -> Result<ASREngine, String> {
+    Ok(*state.active_engine.lock().unwrap())
+}
+```
+
+#### Function 4: `set_tray_state()` (Lines 33-55)
+```rust
+#[tauri::command]
+pub fn set_tray_state(
+    app: AppHandle,
+    state: State<AudioState>,
+    new_state: String,
+) -> Result<(), String> {
+    let app_state = match new_state.as_str() {
+        "ready" => AppState::Ready,
+        "recording" => AppState::Recording,
+        "processing" => AppState::Processing,
+        _ => return Err(format!("Unknown state: {}", new_state)),
+    };
+    
+    *state.current_app_state.lock().unwrap() = app_state;
+    tray::update_tray_icon(&app, app_state)?;
+    
+    Ok(())
+}
+```
+
+---
+
+### 📄 `commands/llm.rs` - All 4 Functions
+
+#### Function 1: `init_llm()` (Lines 5-34)
+```rust
+#[tauri::command]
+pub async fn init_llm(state: State<'_, AudioState>) -> Result<String, String> {
+    // Check if already loaded
+    {
+        let llm_guard = state.llm.lock().unwrap();
+        if llm_guard.is_some() {
+            return Ok("LLM already initialized".to_string());
+        }
+    }
+    
+    // Load in blocking task (heavy operation)
+    let result = tauri::async_runtime::spawn_blocking(move || LLMEngine::new())
+        .await
+        .map_err(|e| format!("JoinError: {}", e))?;
+    
+    match result {
+        Ok(engine) => {
+            let mut llm_guard = state.llm.lock().unwrap();
+            *llm_guard = Some(engine);
+            Ok("Gemma LLM initialized successfully".to_string())
+        }
+        Err(e) => Err(format!("Failed to load LLM: {}", e)),
+    }
+}
+```
+
+#### Function 2: `run_llm_inference()` (Lines 36-65)
+```rust
+#[tauri::command]
+pub async fn run_llm_inference(
+    state: State<'_, AudioState>,
+    prompt: String,
+) -> Result<String, String> {
+    let llm_handle = state.llm.clone();
+    
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        let mut llm_guard = llm_handle.lock().unwrap();
+        if let Some(engine) = llm_guard.as_mut() {
+            engine.run(&prompt).map_err(|e| e.to_string())
+        } else {
+            Err("LLM not initialized".to_string())
+        }
+    })
+    .await??;
+    
+    Ok(output)
+}
+```
+
+#### Function 3: `check_llm_status()` (Lines 67-71)
+```rust
+#[tauri::command]
+pub fn check_llm_status(state: State<'_, AudioState>) -> bool {
+    state.llm.lock().unwrap().is_some()
+}
+```
+
+#### Function 4: `correct_text()` (Lines 73-97)
+```rust
+#[tauri::command]
+pub async fn correct_text(state: State<'_, AudioState>, text: String) -> Result<String, String> {
+    let llm_handle = state.llm.clone();
+    
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        let mut llm_guard = llm_handle.lock().unwrap();
+        if let Some(engine) = llm_guard.as_mut() {
+            engine.run(&text).map_err(|e| e.to_string())
+        } else {
+            Err("LLM not initialized. Please load Gemma first.".to_string())
+        }
+    })
+    .await??;
+    
+    Ok(output)
+}
+```
+
+---
+
+### 📄 `commands/misc.rs` - 1 Function
+
+#### Function 1: `greet()` (Lines 2-5)
+```rust
+#[tauri::command]
+pub fn greet(name: &str) -> String {
+    format!("Hello, {}! You've been greeted from Rust!", name)
+}
+```
+
+---
+
+### 📄 `hotkeys/listener.rs` - 1 Function
+
+#### Function 1: `start_hotkey_listener()` (Lines 6-74)
+**Purpose**: Listen for Ctrl+Win global hotkey to start/stop recording.
+
+```rust
+pub fn start_hotkey_listener(app_handle: AppHandle) {
+    // Atomic flags for key states
+    let ctrl_held = Arc::new(AtomicBool::new(false));
+    let meta_held = Arc::new(AtomicBool::new(false));
+    let recording_active = Arc::new(AtomicBool::new(false));
+    
+    let callback = move |event: Event| {
+        match event.event_type {
+            EventType::KeyPress(key) => {
+                // Track key presses
+                match key {
+                    Key::ControlLeft | Key::ControlRight => {
+                        ctrl_held.store(true, Ordering::SeqCst);
+                    }
+                    Key::MetaLeft | Key::MetaRight => {
+                        meta_held.store(true, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+                
+                // Both pressed? Start recording!
+                if ctrl_held.load(Ordering::SeqCst) 
+                    && meta_held.load(Ordering::SeqCst) 
+                    && !recording_active.load(Ordering::SeqCst) 
+                {
+                    recording_active.store(true, Ordering::SeqCst);
+                    app_handle.emit("hotkey-start-recording", ());
+                }
+            }
+            EventType::KeyRelease(key) => {
+                // Track key releases
+                match key {
+                    Key::ControlLeft | Key::ControlRight => {
+                        ctrl_held.store(false, Ordering::SeqCst);
+                    }
+                    Key::MetaLeft | Key::MetaRight => {
+                        meta_held.store(false, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+                
+                // Either released? Stop recording!
+                if recording_active.load(Ordering::SeqCst) 
+                    && (!ctrl_held.load(Ordering::SeqCst) || !meta_held.load(Ordering::SeqCst))
+                {
+                    recording_active.store(false, Ordering::SeqCst);
+                    app_handle.emit("hotkey-stop-recording", ());
+                }
+            }
+            _ => {}
+        }
+    };
+    
+    // This blocks forever - must be run in separate thread
+    listen(callback).ok();
+}
+```
+
+---
+
+### 📄 `tray/icons.rs` - 2 Functions
+
+#### Function 1: `update_tray_icon()` (Lines 23-50)
+**Purpose**: Change system tray icon based on app state.
+
+```rust
+pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> {
+    // Select icon based on state
+    let icon = match state {
+        AppState::Ready => tray_icon_green!(),      // 🟢
+        AppState::Recording => tray_icon_red!(),    // 🔴
+        AppState::Processing => tray_icon_yellow!(), // 🟡
+    };
+    
+    // Select tooltip text
+    let tooltip = match state {
+        AppState::Ready => "Taurscribe - Ready",
+        AppState::Recording => "Taurscribe - Recording...",
+        AppState::Processing => "Taurscribe - Processing...",
+    };
+    
+    // Apply changes
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        tray.set_icon(Some(icon))?;
+        tray.set_tooltip(Some(tooltip))?;
+    }
+    
+    Ok(())
+}
+```
+
+#### Function 2: `setup_tray()` (Lines 53-92)
+**Purpose**: Create system tray with menu.
+
+```rust
+pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // Create menu items
+    let show_item = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&show_item, &separator, &quit_item])?;
+    
+    // Build tray icon
+    let _tray = TrayIconBuilder::with_id("main-tray")
+        .icon(tray_icon_green!())
+        .tooltip("Taurscribe - Ready")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| {
+            match event.id.as_ref() {
+                "show" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        window.show();
+                        window.set_focus();
+                    }
+                }
+                "quit" => app.exit(0),
+                _ => {}
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { .. } = event {
+                // Left-click shows window
+                if let Some(window) = tray.app_handle().get_webview_window("main") {
+                    window.show();
+                    window.set_focus();
+                }
+            }
+        })
+        .build(app)?;
+    
+    Ok(())
+}
+```
+
+---
+
+### 📄 `utils.rs` - 2 Functions
+
+#### Function 1: `clean_transcript()` (Lines 1-31)
+Already documented above.
+
+#### Function 2: `get_recordings_dir()` (Lines 33-46)
+Already documented above.
+
+---
+
+### 📄 `state.rs` - 1 Function
+
+#### Function 1: `AudioState::new()` (Lines 40-54)
+Already documented above.
+
+---
+
+### 📄 `build.rs` - 1 Function
+
+#### Function 1: `main()` (Lines 1-73)
+**Purpose**: Build-time configuration for CUDA and platform-specific settings.
+
+```rust
+fn main() {
+    // Standard Tauri build
+    tauri_build::build();
+    
+    // macOS: Set deployment target for ONNX Runtime
+    #[cfg(target_os = "macos")]
+    {
+        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
+    }
+    
+    // Windows ARM64: Force Clang compiler
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    {
+        std::env::set_var("CC", "clang-cl");
+        std::env::set_var("CXX", "clang-cl");
+    }
+    
+    // Windows: Add CUDA library search paths
+    #[cfg(windows)]
+    {
+        if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+            let lib_path = PathBuf::from(cuda_path).join("lib").join("x64");
+            if lib_path.exists() {
+                println!("cargo:rustc-link-search=native={}", lib_path.display());
+            }
+        }
+    }
+}
+```
+
+---
+
+## 📊 Function Count Summary
+
+| File | Functions | Lines |
+|------|-----------|-------|
+| `whisper.rs` | 18 | 781 |
+| `parakeet.rs` | 25 | 615 |
+| `vad.rs` | 4 | 215 |
+| `llm.rs` | 2 | 98 |
+| `lib.rs` | 1 | 119 |
+| `main.rs` | 1 | 7 |
+| `state.rs` | 1 | 55 |
+| `types.rs` | 0 (types only) | 31 |
+| `utils.rs` | 2 | 47 |
+| `audio.rs` | 0 (types only) | 17 |
+| `commands/recording.rs` | 2 | 345 |
+| `commands/transcription.rs` | 2 | 224 |
+| `commands/models.rs` | 6 | 61 |
+| `commands/settings.rs` | 4 | 56 |
+| `commands/llm.rs` | 4 | 98 |
+| `commands/misc.rs` | 1 | 6 |
+| `hotkeys/listener.rs` | 1 | 75 |
+| `tray/icons.rs` | 2 | 93 |
+| `build.rs` | 1 | 74 |
+| **TOTAL** | **77 functions** | **3,017 lines** |
+
+---
+
+## 🎭 Analogies for Complex Concepts
+
+This section explains the trickiest parts of the codebase using real-world analogies.
+
+---
+
+### 1. `Arc<Mutex<T>>` - The Shared Notebook in a Library
+
+**The Code:**
+```rust
+pub struct AudioState {
+    pub whisper: Arc<Mutex<WhisperManager>>,
+    pub vad: Arc<Mutex<VADManager>>,
+    // ...
+}
+```
+
+**The Analogy: A Shared Notebook in a Library Study Room**
+
+Imagine a library study room where multiple students need to use the same notebook:
+
+| Rust Concept | Library Analogy |
+|--------------|-----------------|
+| `WhisperManager` | The notebook itself (contains valuable information) |
+| `Mutex<...>` | A lock on the notebook - only one person can write at a time |
+| `Arc<...>` | Multiple library cards that all point to the same notebook |
+| `.lock().unwrap()` | "I'd like to check out the notebook, please" |
+| `drop(guard)` | Returning the notebook so others can use it |
+
+**Why we need both:**
+- **Without `Mutex`**: Two students write at the same time → scribbled mess (data corruption)
+- **Without `Arc`**: Each student gets their own copy → changes aren't shared
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LIBRARY (Your Application)                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   Student A              Student B              Student C        │
+│   (Main Thread)          (File Writer)          (Transcriber)    │
+│        │                      │                      │           │
+│        │                      │                      │           │
+│        ▼                      ▼                      ▼           │
+│   ┌─────────┐            ┌─────────┐            ┌─────────┐      │
+│   │  Arc    │            │  Arc    │            │  Arc    │      │
+│   │(Library │            │(Library │            │(Library │      │
+│   │  Card)  │            │  Card)  │            │  Card)  │      │
+│   └────┬────┘            └────┬────┘            └────┬────┘      │
+│        │                      │                      │           │
+│        └──────────────────────┼──────────────────────┘           │
+│                               │                                  │
+│                               ▼                                  │
+│                    ┌──────────────────┐                          │
+│                    │      Mutex       │                          │
+│                    │   (The Lock)     │                          │
+│                    │   🔒 LOCKED      │                          │
+│                    └────────┬─────────┘                          │
+│                             │                                    │
+│                             ▼                                    │
+│                    ┌──────────────────┐                          │
+│                    │  WhisperManager  │                          │
+│                    │  (The Notebook)  │                          │
+│                    │                  │                          │
+│                    │  📝 Data inside  │                          │
+│                    └──────────────────┘                          │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2. Channels (`crossbeam_channel`) - The Sushi Conveyor Belt
+
+**The Code:**
+```rust
+let (file_tx, file_rx) = unbounded::<Vec<f32>>();
+let (whisper_tx, whisper_rx) = unbounded::<Vec<f32>>();
+
+// Sender side (in audio callback)
+file_tx.send(data.to_vec()).ok();
+
+// Receiver side (in file writer thread)
+while let Ok(samples) = file_rx.recv() {
+    // process samples
+}
+```
+
+**The Analogy: A Sushi Restaurant Conveyor Belt**
+
+| Rust Concept | Sushi Analogy |
+|--------------|---------------|
+| `unbounded()` | Creating a new conveyor belt |
+| `tx` (transmitter) | The chef putting plates on the belt |
+| `rx` (receiver) | The customer taking plates off the belt |
+| `Vec<f32>` | A plate of sushi (audio samples) |
+| `.send()` | Chef places a plate on the belt |
+| `.recv()` | Customer picks up a plate |
+| `unbounded` | Belt can hold unlimited plates (no backpressure) |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  SUSHI RESTAURANT (Recording System)             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐                                                │
+│  │   🎤 CHEF    │  (Audio Input Callback)                        │
+│  │  (Microphone)│                                                │
+│  └──────┬───────┘                                                │
+│         │                                                        │
+│         │  .send(plate)                                          │
+│         ▼                                                        │
+│  ═══════════════════════════════════════════════════════════     │
+│     🍣 → 🍣 → 🍣 → 🍣 → 🍣 → 🍣 → 🍣    CONVEYOR BELT            │
+│  ═══════════════════════════════════════════════════════════     │
+│         │                              │                         │
+│         │ .recv()                      │ .recv()                 │
+│         ▼                              ▼                         │
+│  ┌──────────────┐               ┌──────────────┐                 │
+│  │  CUSTOMER 1  │               │  CUSTOMER 2  │                 │
+│  │ (File Writer)│               │(Transcriber) │                 │
+│  │              │               │              │                 │
+│  │ Saves to WAV │               │ Runs Whisper │                 │
+│  └──────────────┘               └──────────────┘                 │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+Timeline:
+─────────────────────────────────────────────────────────────────►
+Chef puts    Belt moves    Customer 1    Customer 2    Everyone
+plate on     plates        takes plate   takes plate   happy!
+belt         along                                     🎉
+```
+
+**Why this pattern?**
+- Chef doesn't wait for customers (non-blocking)
+- Customers don't fight over plates (separate belts)
+- Belt can buffer plates if customers are slow
+
+---
+
+### 3. Audio Resampling - The Currency Exchange
+
+**The Code:**
+```rust
+let resampler = SincFixedIn::<f32>::new(
+    16000_f64 / input_sample_rate as f64,  // Ratio: 16000/48000 = 0.333
+    2.0,
+    params,
+    samples.len(),
+    1,
+)?;
+let resampled = resampler.process(&[samples], None)?;
+```
+
+**The Analogy: Exchanging Currency at the Airport**
+
+| Rust Concept | Currency Analogy |
+|--------------|------------------|
+| `48000 Hz audio` | 48,000 Japanese Yen |
+| `16000 Hz audio` | 16,000 US Dollars (what Whisper accepts) |
+| `SincFixedIn` | The currency exchange booth |
+| `16000/48000 = 0.333` | Exchange rate (1 USD = 3 JPY) |
+| `sinc interpolation` | Sophisticated math to avoid losing value |
+| `samples.len()` | How many bills you're exchanging |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CURRENCY EXCHANGE BOOTH                       │
+│                      (Audio Resampler)                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  INPUT: 48,000 samples/second                                    │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │ 💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴│ │
+│  │ 💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴💴│ │
+│  │         (48,000 Japanese Yen - Microphone format)           │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                              │                                   │
+│                              ▼                                   │
+│                    ┌─────────────────┐                           │
+│                    │   EXCHANGE      │                           │
+│                    │   RATE: 0.333   │                           │
+│                    │                 │                           │
+│                    │  Sinc Filter    │                           │
+│                    │  (Smart math    │                           │
+│                    │   to preserve   │                           │
+│                    │   audio quality)│                           │
+│                    └────────┬────────┘                           │
+│                             │                                    │
+│                             ▼                                    │
+│  OUTPUT: 16,000 samples/second                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │ 💵💵💵💵💵💵💵💵💵💵💵💵💵💵💵💵                        │ │
+│  │         (16,000 US Dollars - Whisper format)                │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  Note: We have fewer "bills" but the SAME VALUE (audio content)  │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why 16kHz?**
+- Whisper was trained on 16kHz audio (it only speaks "US Dollars")
+- Human speech is mostly below 8kHz (Nyquist: 16kHz captures this perfectly)
+- Higher sample rates waste processing power with inaudible frequencies
+
+---
+
+### 4. VAD (Voice Activity Detection) - The Security Guard
+
+**The Code:**
+```rust
+pub fn is_speech(&mut self, audio: &[f32]) -> Result<f32, String> {
+    let sum_squares: f32 = audio.iter().map(|&x| x * x).sum();
+    let rms = (sum_squares / audio.len() as f32).sqrt();
+    
+    if rms < self.threshold { 0.0 }      // Silence
+    else if rms > self.threshold * 5.0 { 1.0 }  // Definitely speech
+    else { /* interpolate */ }
+}
+```
+
+**The Analogy: A Security Guard at a VIP Club**
+
+| Rust Concept | Club Analogy |
+|--------------|--------------|
+| VAD | The bouncer at the door |
+| `audio chunk` | A person trying to enter |
+| `RMS energy` | How loudly they're dressed (flashy = high energy) |
+| `threshold` | Dress code minimum |
+| `> 0.5` (speech) | "You may enter the Whisper VIP lounge" |
+| `< 0.5` (silence) | "Sorry, too quiet. Wait outside." |
+| Whisper | The expensive VIP area (costs GPU time) |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        THE WHISPER CLUB 🎤                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│                           ENTRANCE                               │
+│                              │                                   │
+│                              ▼                                   │
+│                    ┌─────────────────┐                           │
+│                    │    🕴️ VAD       │                           │
+│                    │   (Bouncer)     │                           │
+│                    │                 │                           │
+│                    │ "Let me check   │                           │
+│                    │  your energy    │                           │
+│                    │  level..."      │                           │
+│                    └────────┬────────┘                           │
+│                             │                                    │
+│              ┌──────────────┼──────────────┐                     │
+│              │              │              │                     │
+│              ▼              │              ▼                     │
+│     ┌────────────┐          │      ┌────────────┐                │
+│     │  REJECTED  │          │      │  ACCEPTED  │                │
+│     │            │          │      │            │                │
+│     │ 🤫 Silence │          │      │ 🗣️ Speech │                │
+│     │ (RMS < 0.5)│          │      │ (RMS > 0.5)│                │
+│     │            │          │      │            │                │
+│     │ "Go home,  │          │      │ "Welcome   │                │
+│     │  nothing   │          │      │  to the    │                │
+│     │  to hear"  │          │      │  VIP area!"│                │
+│     └────────────┘          │      └─────┬──────┘                │
+│                             │            │                       │
+│                             │            ▼                       │
+│                             │   ┌─────────────────┐              │
+│                             │   │  🎭 WHISPER AI  │              │
+│                             │   │   VIP LOUNGE    │              │
+│                             │   │                 │              │
+│                             │   │ (Expensive GPU  │              │
+│                             │   │  processing)    │              │
+│                             │   └─────────────────┘              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+WITHOUT VAD:                      WITH VAD:
+┌──────────────────┐              ┌──────────────────┐
+│ Process EVERYTHING│             │ Only process     │
+│                  │              │ SPEECH chunks    │
+│ 😰 GPU: 100% load│              │                  │
+│ 🐌 Slow          │              │ 😎 GPU: 30% load │
+│ 💸 Wasteful      │              │ 🚀 Fast          │
+└──────────────────┘              │ 💰 Efficient     │
+                                  └──────────────────┘
+```
+
+**Why VAD matters:**
+- 60-70% of a typical recording is silence
+- Whisper AI is expensive (GPU time = money)
+- VAD = Free filter that saves 60-70% of processing
+
+---
+
+### 5. GPU Backends - The Transportation Options
+
+**The Code:**
+```rust
+pub enum GpuBackend {
+    Cuda,   // NVIDIA
+    Vulkan, // AMD/Intel (Whisper)
+    DirectML, // Windows (Parakeet)
+    Cpu,    // Fallback
+}
+
+// Initialization tries them in order:
+let (ctx, backend) = self.try_gpu(&path)
+    .or_else(|_| self.try_cpu(&path))?;
+```
+
+**The Analogy: Getting to Work**
+
+| Rust Concept | Transportation Analogy |
+|--------------|------------------------|
+| `Cpu` | Walking (slow but always works) |
+| `Vulkan` | Taking the bus (decent, widely available) |
+| `DirectML` | Taking an Uber (good on Windows) |
+| `Cuda` | Taking a Ferrari (fastest, but need to own one) |
+| `or_else` | "If Ferrari unavailable, try Uber, then bus, then walk" |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              HOW TO GET TO WORK (Process Audio)                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  🏠 HOME                                              🏢 WORK    │
+│  (Raw Audio)                                    (Transcription)  │
+│      │                                                           │
+│      │                                                           │
+│      ▼                                                           │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                    TRANSPORTATION OPTIONS                   │ │
+│  ├─────────────────────────────────────────────────────────────┤ │
+│  │                                                             │ │
+│  │  1. 🏎️ CUDA (Ferrari)                                       │ │
+│  │     Speed: ████████████████████ 50x realtime                │ │
+│  │     Requirement: NVIDIA GPU                                 │ │
+│  │     Cost: $$$$ (need to own a Ferrari)                      │ │
+│  │                                                             │ │
+│  │  2. 🚗 DirectML (Uber)                                      │ │
+│  │     Speed: ████████████████ 30x realtime                    │ │
+│  │     Requirement: Windows + Any GPU                          │ │
+│  │     Cost: $$ (pay per ride)                                 │ │
+│  │                                                             │ │
+│  │  3. 🚌 Vulkan (Bus)                                         │ │
+│  │     Speed: ████████████ 20x realtime                        │ │
+│  │     Requirement: Any modern GPU                             │ │
+│  │     Cost: $ (public transit)                                │ │
+│  │                                                             │ │
+│  │  4. 🚶 CPU (Walking)                                        │ │
+│  │     Speed: ████ 3x realtime                                 │ │
+│  │     Requirement: None (always works)                        │ │
+│  │     Cost: Free (but takes forever)                          │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  FALLBACK LOGIC:                                                 │
+│  ┌─────────┐    ❌     ┌─────────┐    ❌     ┌─────────┐         │
+│  │  CUDA   │ ───────► │ DirectML│ ───────► │ Vulkan  │          │
+│  │(Ferrari)│ not      │ (Uber)  │ not      │  (Bus)  │          │
+│  └─────────┘ available└─────────┘ available└────┬────┘          │
+│                                                 │ ❌              │
+│                                                 ▼ not available  │
+│                                           ┌─────────┐            │
+│                                           │   CPU   │            │
+│                                           │(Walking)│            │
+│                                           │ ALWAYS  │            │
+│                                           │ WORKS   │            │
+│                                           └─────────┘            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 6. Whisper Context/Prompting - The Conversation Memory
+
+**The Code:**
+```rust
+// Store previous text
+if !final_text.is_empty() {
+    self.last_transcript.push_str(&final_text);
+}
+
+// Use it as context for next chunk
+if !self.last_transcript.is_empty() {
+    params.set_initial_prompt(&self.last_transcript);
+}
+```
+
+**The Analogy: A Stenographer Taking Notes**
+
+| Rust Concept | Stenographer Analogy |
+|--------------|---------------------|
+| `last_transcript` | The stenographer's notepad |
+| `set_initial_prompt()` | "Here's what we discussed so far..." |
+| Whisper AI | The stenographer |
+| Each audio chunk | A new sentence spoken |
+| Context | Memory of the conversation |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│            COURTROOM STENOGRAPHER (Whisper AI)                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  WITHOUT CONTEXT:                                                │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  Speaker: "...and that's why I went to the BANK."          │ │
+│  │                                                             │ │
+│  │  Stenographer: "BANK? 🤔"                                   │ │
+│  │     - River bank? (nature)                                  │ │
+│  │     - Money bank? (finance)                                 │ │
+│  │     - Blood bank? (medical)                                 │ │
+│  │                                                             │ │
+│  │  Result: "...and that's why I went to the BLANK."  ❌       │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WITH CONTEXT:                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  Notepad (last_transcript):                                 │ │
+│  │  ┌─────────────────────────────────────────────────────┐    │ │
+│  │  │ "I needed to deposit my paycheck. The ATM was       │    │ │
+│  │  │  broken, so I had to go inside..."                  │    │ │
+│  │  └─────────────────────────────────────────────────────┘    │ │
+│  │                                                             │ │
+│  │  Speaker: "...and that's why I went to the BANK."          │ │
+│  │                                                             │ │
+│  │  Stenographer: "BANK! 💡"                                   │ │
+│  │     - Context mentions paycheck, ATM, deposit              │ │
+│  │     - Obviously a MONEY bank!                              │ │
+│  │                                                             │ │
+│  │  Result: "...and that's why I went to the bank."  ✅       │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  TIMELINE:                                                       │
+│  ─────────────────────────────────────────────────────────────►  │
+│                                                                  │
+│  Chunk 1        Chunk 2           Chunk 3           Chunk 4      │
+│  "Hello"        "my name"         "is Alice"        "nice to"    │
+│     │              │                  │                │         │
+│     │              │                  │                │         │
+│     ▼              ▼                  ▼                ▼         │
+│  Notepad:       Notepad:          Notepad:         Notepad:      │
+│  ""             "Hello"           "Hello my        "Hello my     │
+│                                    name"            name is      │
+│                                                     Alice"       │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why context matters:**
+- Whisper processes audio in chunks (not the whole file at once)
+- Each chunk is independent by default
+- Giving it previous text helps it understand ambiguous words
+- Dramatically improves accuracy for names, technical terms, etc.
+
+---
+
+### 7. `Option<T>` and `Result<T, E>` - The Package Delivery
+
+**The Code:**
+```rust
+// Option: Maybe there's something inside
+let model: Option<String> = whisper.get_current_model().cloned();
+
+// Result: Either success or failure
+let transcript: Result<String, String> = whisper.transcribe_chunk(&audio, 16000);
+```
+
+**The Analogy: Checking Your Mailbox**
+
+| Rust Concept | Mailbox Analogy |
+|--------------|-----------------|
+| `Option<T>` | A mailbox (might have mail, might be empty) |
+| `Some(value)` | "You've got mail! 📬" |
+| `None` | "Mailbox is empty 📭" |
+| `Result<T, E>` | A tracked package delivery |
+| `Ok(value)` | "Package delivered successfully! 📦" |
+| `Err(error)` | "Delivery failed: Address not found 🚫" |
+| `.unwrap()` | "I'm 100% sure there's mail, just give it to me" |
+| `.ok_or()` | "If empty, pretend this error happened" |
+| `?` operator | "If error, stop and return it to caller" |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    OPTION<T> - THE MAILBOX                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│     let current_model: Option<String> = whisper.get_current_model();
+│                                                                  │
+│     SCENARIO A: Model loaded                                     │
+│     ┌──────────────────┐                                         │
+│     │   📬 MAILBOX     │                                         │
+│     │                  │                                         │
+│     │  ┌────────────┐  │                                         │
+│     │  │ Some(      │  │                                         │
+│     │  │  "tiny.en" │  │  ← There's a model name inside!        │
+│     │  │ )          │  │                                         │
+│     │  └────────────┘  │                                         │
+│     └──────────────────┘                                         │
+│                                                                  │
+│     SCENARIO B: No model loaded                                  │
+│     ┌──────────────────┐                                         │
+│     │   📭 MAILBOX     │                                         │
+│     │                  │                                         │
+│     │      None        │  ← Nothing here yet                     │
+│     │                  │                                         │
+│     └──────────────────┘                                         │
+│                                                                  │
+│     HANDLING IT:                                                 │
+│     match current_model {                                        │
+│         Some(name) => println!("Model: {}", name),  // Use it!   │
+│         None => println!("No model loaded"),        // Handle it │
+│     }                                                            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                  RESULT<T, E> - PACKAGE DELIVERY                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│     let transcript: Result<String, String> =                     │
+│         whisper.transcribe_chunk(&audio, 16000);                 │
+│                                                                  │
+│     SCENARIO A: Success!                                         │
+│     ┌──────────────────┐                                         │
+│     │  📦 DELIVERED    │                                         │
+│     │                  │                                         │
+│     │  ┌────────────┐  │                                         │
+│     │  │ Ok(        │  │                                         │
+│     │  │  "Hello    │  │  ← Transcription succeeded!            │
+│     │  │   world"   │  │                                         │
+│     │  │ )          │  │                                         │
+│     │  └────────────┘  │                                         │
+│     └──────────────────┘                                         │
+│                                                                  │
+│     SCENARIO B: Failure!                                         │
+│     ┌──────────────────┐                                         │
+│     │  🚫 FAILED       │                                         │
+│     │                  │                                         │
+│     │  ┌────────────┐  │                                         │
+│     │  │ Err(       │  │                                         │
+│     │  │  "Model    │  │  ← Something went wrong                │
+│     │  │   not      │  │                                         │
+│     │  │   loaded"  │  │                                         │
+│     │  │ )          │  │                                         │
+│     │  └────────────┘  │                                         │
+│     └──────────────────┘                                         │
+│                                                                  │
+│     HANDLING IT:                                                 │
+│     match transcript {                                           │
+│         Ok(text) => println!("Heard: {}", text),                 │
+│         Err(e) => eprintln!("Error: {}", e),                     │
+│     }                                                            │
+│                                                                  │
+│     OR with ? operator (propagate error to caller):              │
+│     let text = whisper.transcribe_chunk(&audio, 16000)?;         │
+│     // If Err, function returns early with that error            │
+│     // If Ok, unwraps and continues                              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 8. `unsafe` and `Send`/`Sync` - The Safety Waiver
+
+**The Code:**
+```rust
+pub struct SendStream(pub cpal::Stream);
+
+// "I promise this is safe to send between threads"
+unsafe impl Send for SendStream {}
+unsafe impl Sync for SendStream {}
+```
+
+**The Analogy: Signing a Liability Waiver at an Adventure Park**
+
+| Rust Concept | Adventure Park Analogy |
+|--------------|------------------------|
+| Rust's type system | The safety rules (helmets, harnesses, etc.) |
+| `Send` trait | "Can this equipment be passed to another person?" |
+| `Sync` trait | "Can multiple people use this at the same time?" |
+| `unsafe impl` | Signing the waiver: "I take responsibility" |
+| `cpal::Stream` | A specialized piece of equipment |
+| The compiler | The safety inspector |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│               ADVENTURE PARK SAFETY SYSTEM                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  NORMAL EQUIPMENT (Rust-approved):                               │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  String, Vec<f32>, etc.                                     │ │
+│  │                                                             │ │
+│  │  ✅ Send: Can pass to another person                        │ │
+│  │  ✅ Sync: Multiple people can reference                     │ │
+│  │                                                             │ │
+│  │  Safety Inspector: "All good! ✓"                            │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  SPECIAL EQUIPMENT (cpal::Stream):                               │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  cpal::Stream (Audio hardware handle)                       │ │
+│  │                                                             │ │
+│  │  ❓ Send: Compiler doesn't know if safe                     │ │
+│  │  ❓ Sync: Compiler doesn't know if safe                     │ │
+│  │                                                             │ │
+│  │  Safety Inspector: "I can't verify this... 🤷"              │ │
+│  │                                                             │ │
+│  │  YOU (the developer):                                       │ │
+│  │  ┌─────────────────────────────────────────────────────┐    │ │
+│  │  │        📝 LIABILITY WAIVER                          │    │ │
+│  │  │                                                     │    │ │
+│  │  │  I, the developer, hereby declare that:             │    │ │
+│  │  │                                                     │    │ │
+│  │  │  unsafe impl Send for SendStream {}                 │    │ │
+│  │  │  unsafe impl Sync for SendStream {}                 │    │ │
+│  │  │                                                     │    │ │
+│  │  │  I have verified that cpal::Stream:                 │    │ │
+│  │  │  - Can be safely moved between threads              │    │ │
+│  │  │  - Can be safely shared via &reference              │    │ │
+│  │  │                                                     │    │ │
+│  │  │  Signature: _Developer_Name_                        │    │ │
+│  │  └─────────────────────────────────────────────────────┘    │ │
+│  │                                                             │ │
+│  │  Safety Inspector: "Okay, you signed the waiver. ✓"         │ │
+│  │                    "But if something breaks, it's on you!"  │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WHY WE NEED THIS:                                               │
+│  ─────────────────────────────────────────────────────────────   │
+│                                                                  │
+│  Thread A (Main)              Thread B (Recording)               │
+│       │                             │                            │
+│       │   RecordingHandle {         │                            │
+│       │     stream: SendStream      │                            │
+│       │   }                         │                            │
+│       │         │                   │                            │
+│       │         └───── MOVE ───────►│  (Need Send!)              │
+│       │                             │                            │
+│       │                             │                            │
+│       └──── REFERENCE ─────────────►│  (Need Sync!)              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why this is necessary:**
+- `cpal::Stream` is from an external C library
+- Rust doesn't know if it's safe to share between threads
+- We (the developers) verified it's safe for our use case
+- `unsafe` = "Trust me, I know what I'm doing"
+
+---
+
+### 9. The Recording Thread Architecture - The Restaurant Kitchen
+
+**The Code (simplified):**
+```rust
+// Main thread sets up the kitchen
+let (order_tx, order_rx) = unbounded();  // Order system
+
+// Spawn chef thread
+std::thread::spawn(move || {
+    while let Ok(order) = order_rx.recv() {
+        cook(order);
+    }
+});
+
+// Waiter takes orders
+stream.on_data(|food| {
+    order_tx.send(food).ok();
+});
+```
+
+**The Analogy: A Busy Restaurant Kitchen**
+
+| Rust Concept | Restaurant Analogy |
+|--------------|-------------------|
+| Main thread | Restaurant manager |
+| Audio callback | Waiter taking orders |
+| File writer thread | Line cook #1 (saves to storage) |
+| Transcriber thread | Line cook #2 (processes orders) |
+| Channels | Order tickets on a rail |
+| `stream.play()` | Opening for business |
+| `drop(tx)` | Closing the kitchen |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    THE TAURSCRIBE RESTAURANT                     │
+│                      (Recording System)                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                      DINING ROOM                            │ │
+│  │                      (User's Voice)                         │ │
+│  │                                                             │ │
+│  │    🗣️ "Hello, I'd like to order..."                         │ │
+│  │         │                                                   │ │
+│  │         │ (Sound waves)                                     │ │
+│  │         ▼                                                   │ │
+│  │    ┌─────────┐                                              │ │
+│  │    │   🎤    │  WAITER (Audio Callback)                     │ │
+│  │    │Microphone│  - Listens constantly                       │ │
+│  │    │         │  - Writes orders on tickets                  │ │
+│  │    └────┬────┘                                              │ │
+│  │         │                                                   │ │
+│  └─────────┼───────────────────────────────────────────────────┘ │
+│            │                                                     │
+│            │  🎫 Order tickets (audio chunks)                    │
+│            │                                                     │
+│  ┌─────────┼───────────────────────────────────────────────────┐ │
+│  │         │              KITCHEN                              │ │
+│  │         │          (Background Threads)                     │ │
+│  │         │                                                   │ │
+│  │         ▼                                                   │ │
+│  │  ═══════════════════════════════════════════════════════    │ │
+│  │      🎫→🎫→🎫→🎫    ORDER RAIL (Channel)    🎫→🎫→🎫→🎫      │ │
+│  │  ═══════════════════════════════════════════════════════    │ │
+│  │         │                              │                    │ │
+│  │         │                              │                    │ │
+│  │         ▼                              ▼                    │ │
+│  │  ┌─────────────┐                ┌─────────────┐             │ │
+│  │  │  👨‍🍳 COOK #1 │                │  👨‍🍳 COOK #2 │             │ │
+│  │  │             │                │             │             │ │
+│  │  │ FILE WRITER │                │ TRANSCRIBER │             │ │
+│  │  │             │                │             │             │ │
+│  │  │ "I'll save  │                │ "I'll send  │             │ │
+│  │  │  this to    │                │  this to    │             │ │
+│  │  │  the walk-in│                │  Whisper"   │             │ │
+│  │  │  freezer"   │                │             │             │ │
+│  │  │             │                │             │             │ │
+│  │  │   📁 WAV    │                │   🧠 AI     │             │ │
+│  │  │   File      │                │  Whisper    │             │ │
+│  │  └─────────────┘                └──────┬──────┘             │ │
+│  │                                        │                    │ │
+│  └────────────────────────────────────────┼────────────────────┘ │
+│                                           │                      │
+│                                           ▼                      │
+│                                  ┌─────────────┐                 │
+│                                  │  📱 FRONTEND │                │
+│                                  │             │                 │
+│                                  │ "Your order │                 │
+│                                  │  is ready!" │                 │
+│                                  │             │                 │
+│                                  │ "Hello, I'd │                 │
+│                                  │  like to    │                 │ 
+│                                  │  order..."  │                 │
+│                                  └─────────────┘                 │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+TIMELINE:
+═════════════════════════════════════════════════════════════════►
+
+  t=0         t=1         t=2         t=3         t=4
+  │           │           │           │           │
+  │           │           │           │           │
+  ▼           ▼           ▼           ▼           ▼
+┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐    ┌─────┐
+│OPEN │    │Order│    │Order│    │Order│    │CLOSE│
+│DOORS│    │ #1  │    │ #2  │    │ #3  │    │DOORS│
+└─────┘    └─────┘    └─────┘    └─────┘    └─────┘
+           ║     ║    ║     ║    ║     ║
+           ║     ║    ║     ║    ║     ║
+           ▼     ▼    ▼     ▼    ▼     ▼
+        Cook #1    Cook #1    Cook #1    
+        saves      saves      saves     
+                                        
+        Cook #2    Cook #2    Cook #2    
+        transcribes           transcribes
+        (if speech)           (if speech)
+```
+
+**Why multiple threads?**
+- Waiter can't stop for chefs (audio callback must be fast)
+- Chefs work independently (file writing doesn't block AI)
+- Order rail prevents lost tickets (channel buffers data)
+- Closing doors signals kitchen to finish up (dropping tx)
+
+---
+
+### 10. Tauri Commands - The Drive-Through Window
+
+**The Code:**
+```rust
+#[tauri::command]
+pub fn start_recording(
+    app_handle: AppHandle,
+    state: State<AudioState>,
+) -> Result<String, String> {
+    // ... do stuff
+    Ok("Recording started".to_string())
+}
+```
+
+**The Analogy: A Fast Food Drive-Through**
+
+| Rust Concept | Drive-Through Analogy |
+|--------------|----------------------|
+| Frontend (React) | Customer in car |
+| Tauri Command | The ordering speaker/window |
+| `#[tauri::command]` | "This window accepts orders" |
+| `State<AudioState>` | Access to the kitchen equipment |
+| `AppHandle` | Walkie-talkie to communicate back |
+| `Result<String, String>` | Either food or "Sorry, we're out" |
+| `invoke("start_recording")` | Customer places order |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TAURSCRIBE DRIVE-THROUGH                      │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  CUSTOMER (Frontend - React/TypeScript)                          │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │     🚗 "I'd like to start_recording, please!"               │ │
+│  │                                                             │ │
+│  │     await invoke("start_recording")                         │ │
+│  │                                                             │ │
+│  └───────────────────────────┬─────────────────────────────────┘ │
+│                              │                                   │
+│                              │ Order                             │
+│                              ▼                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │     🎤 ORDERING SPEAKER (#[tauri::command])                 │ │
+│  │                                                             │ │
+│  │     "Welcome to Taurscribe!                                 │ │
+│  │      One start_recording coming right up..."                │ │
+│  │                                                             │ │
+│  │     MENU:                                                   │ │
+│  │     ┌───────────────────────────────────────────────┐       │ │
+│  │     │ start_recording  │ stop_recording            │       │ │
+│  │     │ list_models      │ switch_model              │       │ │
+│  │     │ init_parakeet    │ get_backend_info          │       │ │
+│  │     │ benchmark_test   │ correct_text              │       │ │
+│  │     └───────────────────────────────────────────────┘       │ │
+│  └───────────────────────────┬─────────────────────────────────┘ │
+│                              │                                   │
+│                              │ Forward to kitchen                │
+│                              ▼                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                    🏭 KITCHEN (Rust Backend)                │ │
+│  │                                                             │ │
+│  │     fn start_recording(state: State<AudioState>) {          │ │
+│  │         // Setup microphone                                 │ │
+│  │         // Create threads                                   │ │
+│  │         // Start recording                                  │ │
+│  │         Ok("Recording started: /path/to/file.wav")          │ │
+│  │     }                                                       │ │
+│  │                                                             │ │
+│  └───────────────────────────┬─────────────────────────────────┘ │
+│                              │                                   │
+│                              │ Result                            │
+│                              ▼                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │     🚗 CUSTOMER RECEIVES ORDER                              │ │
+│  │                                                             │ │
+│  │     const result = await invoke("start_recording");         │ │
+│  │     // result = "Recording started: /path/to/file.wav"      │ │
+│  │                                                             │ │
+│  │     OR if error:                                            │ │
+│  │     // catch(e) → "No microphone detected"                  │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+
+COMMUNICATION FLOW:
+════════════════════════════════════════════════════════════════════
+
+  Frontend                    Tauri                     Backend
+  (React)                    Bridge                     (Rust)
+     │                          │                          │
+     │   invoke("cmd", args)    │                          │
+     │─────────────────────────►│                          │
+     │                          │    #[tauri::command]     │
+     │                          │─────────────────────────►│
+     │                          │                          │
+     │                          │    Ok("result") or       │
+     │                          │◄─────────────────────────│
+     │                          │    Err("error")          │
+     │   Promise resolves       │                          │
+     │◄─────────────────────────│                          │
+     │                          │                          │
+```
+
+---
+
+## 📚 Analogy Quick Reference
+
+| Complex Concept | Simple Analogy |
+|-----------------|----------------|
+| `Arc<Mutex<T>>` | Shared notebook with a lock in a library |
+| Channels | Sushi conveyor belt |
+| Resampling | Currency exchange |
+| VAD | Bouncer at a VIP club |
+| GPU Backends | Transportation options (Ferrari → Walking) |
+| Whisper Context | Stenographer's notepad |
+| `Option<T>` | Mailbox (might be empty) |
+| `Result<T, E>` | Package delivery (success or failure) |
+| `unsafe Send/Sync` | Liability waiver at adventure park |
+| Thread Architecture | Restaurant kitchen with multiple cooks |
+| Tauri Commands | Fast food drive-through window |
+
+---
+
+## 🔬 Data Type Decisions: Why These Types?
+
+This section explains the reasoning behind every major data type choice in the codebase, including why alternatives were rejected.
+
+---
+
+### 1. `Arc<Mutex<T>>` for Shared State
+
+**What we chose:**
+```rust
+pub struct AudioState {
+    pub whisper: Arc<Mutex<WhisperManager>>,
+    pub vad: Arc<Mutex<VADManager>>,
+    pub parakeet: Arc<Mutex<ParakeetManager>>,
+    // ...
+}
+```
+
+**Why `Arc<Mutex<T>>`?**
+
+| Requirement | Why Arc<Mutex<T>> Satisfies It |
+|-------------|-------------------------------|
+| Multiple threads need access | `Arc` = Atomic Reference Counting (thread-safe sharing) |
+| Threads need to modify data | `Mutex` = Mutual Exclusion (one writer at a time) |
+| Owned by Tauri state system | `Arc` allows cloning handles without moving ownership |
+
+**Alternatives Considered:**
+
+| Alternative | Why NOT Used |
+|-------------|--------------|
+| `Rc<RefCell<T>>` | ❌ NOT thread-safe! `Rc` is single-threaded only. Would panic if used across threads. |
+| `Arc<RwLock<T>>` | ⚠️ Could work, but overkill. RwLock allows multiple readers OR one writer. Our access patterns are mostly exclusive writes (recording), so Mutex is simpler. |
+| `Arc<T>` (no Mutex) | ❌ Only allows read-only access. We need to modify WhisperManager's internal state. |
+| Pass by argument | ❌ Can't pass owned values to spawned threads that outlive the function. |
+| Global static | ❌ Rust makes global mutable state intentionally hard. Would need `lazy_static` + `Mutex` anyway. |
+| Channels only | ⚠️ Could work for some cases, but we need synchronous access (lock, use, unlock) not async message passing. |
+
+**Visual comparison:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SHARING DATA ACROSS THREADS                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ❌ Rc<RefCell<T>> - SINGLE THREAD ONLY                          │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  Thread A        Thread B                                │    │
+│  │     │               │                                    │    │
+│  │     │    clone()    │                                    │    │
+│  │     └───────────────┘                                    │    │
+│  │           💥 PANIC! Rc is not Send!                      │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                  │
+│  ⚠️ Arc<RwLock<T>> - WORKS BUT OVERKILL                          │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  Thread A (read)   Thread B (read)   Thread C (write)    │    │
+│  │     │                  │                  │              │    │
+│  │     └──────────────────┘                  │              │    │
+│  │            ✓ Both can read               │              │    │
+│  │            simultaneously                 │ ✗ Must wait  │    │
+│  │                                                          │    │
+│  │  Good for: Many readers, few writers                     │    │
+│  │  Our case: Mostly exclusive access → Mutex simpler       │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                  │
+│  ✅ Arc<Mutex<T>> - PERFECT FIT                                  │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  Thread A          Thread B          Thread C            │    │
+│  │     │                  │                  │              │    │
+│  │     │  lock()         │                  │              │    │
+│  │     ├──────────────────┤                  │              │    │
+│  │     │  USE DATA       │ (waiting)        │ (waiting)    │    │
+│  │     ├──────────────────┤                  │              │    │
+│  │     │  drop(guard)    │                  │              │    │
+│  │     │                 │  lock()          │              │    │
+│  │     │                 ├──────────────────┤              │    │
+│  │     │                 │  USE DATA        │ (waiting)    │    │
+│  │                                                          │    │
+│  │  Simple, correct, efficient for our use case             │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2. `Vec<f32>` for Audio Samples
+
+**What we chose:**
+```rust
+pub fn transcribe_chunk(&mut self, samples: &[f32], sample_rate: u32) -> Result<String, String>
+```
+
+**Why `f32` (not `f64`, `i16`, `i32`)?**
+
+| Type | Pros | Cons | Verdict |
+|------|------|------|---------|
+| `f32` | Whisper expects f32, GPU optimized for f32, half the memory of f64 | Slightly less precision | ✅ **CHOSEN** |
+| `f64` | More precision | Whisper doesn't need it, 2x memory, slower on GPU | ❌ Overkill |
+| `i16` | Native WAV format, compact | Need to convert to f32 anyway for Whisper | ❌ Extra conversion step |
+| `i32` | More range than i16 | Still need f32 conversion, uncommon format | ❌ No benefit |
+
+**Why `Vec<f32>` (not `&[f32]`, `Box<[f32]>`, `ArrayVec`)?**
+
+| Type | Pros | Cons | Verdict |
+|------|------|------|---------|
+| `Vec<f32>` | Growable, owned, can be moved between threads | Heap allocation | ✅ **CHOSEN** |
+| `&[f32]` | No allocation, fast | Can't own, can't send to thread, lifetime issues | ❌ Can't move to spawned threads |
+| `Box<[f32]>` | Owned, fixed size | Can't grow, awkward to create | ❌ Need growable for accumulation |
+| `ArrayVec<f32, N>` | Stack allocated, no heap | Fixed max size, can't handle variable audio lengths | ❌ Audio chunks vary in size |
+
+**Why f32 precision is enough:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    AUDIO PRECISION COMPARISON                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  HUMAN HEARING DYNAMIC RANGE:                                    │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  Threshold         Whisper         Pain threshold           │ │
+│  │  of hearing                        (120 dB)                 │ │
+│  │     │                                  │                    │ │
+│  │     0 dB ─────────────────────────── 120 dB                 │ │
+│  │     │◄─────────── ~120 dB range ─────►│                     │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  f32 PRECISION:                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  • 23 bits of mantissa = ~140 dB dynamic range              │ │
+│  │  • MORE than human hearing needs!                           │ │
+│  │  • Standard for audio processing industry                   │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  f64 PRECISION:                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  • 52 bits of mantissa = ~310 dB dynamic range              │ │
+│  │  • WAY more than needed                                     │ │
+│  │  • 2x memory, slower processing                             │ │
+│  │  • Used for scientific computing, not audio                 │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  CONCLUSION: f32 is perfect. f64 wastes resources.               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 3. `String` vs `&str` for Transcripts
+
+**What we chose:**
+```rust
+pub struct WhisperManager {
+    last_transcript: String,  // Owned string
+    // ...
+}
+
+pub fn transcribe_chunk(&mut self, ...) -> Result<String, String>  // Returns owned
+```
+
+**Why `String` (not `&str`)?**
+
+| Scenario | `String` | `&str` |
+|----------|----------|--------|
+| Store in struct | ✅ Owns the data | ❌ Needs lifetime parameter, can't outlive source |
+| Return from function | ✅ Caller owns result | ❌ What does it borrow from? Lifetime hell |
+| Modify (append) | ✅ `.push_str()` works | ❌ Immutable by nature |
+| Send to frontend | ✅ Serializes cleanly | ⚠️ Works but must clone anyway |
+| Accumulate context | ✅ Can grow | ❌ Fixed size slice |
+
+**The lifetime problem with `&str`:**
+```rust
+// ❌ THIS WON'T COMPILE
+pub struct WhisperManager {
+    last_transcript: &str,  // Error: missing lifetime specifier
+}
+
+// ❌ EVEN WITH LIFETIME, STILL BROKEN
+pub struct WhisperManager<'a> {
+    last_transcript: &'a str,  // But where does 'a come from?
+}
+
+// The string is CREATED inside transcribe_chunk(), so it can't
+// outlive the function. We'd be returning a reference to a local!
+
+// ✅ THIS WORKS
+pub struct WhisperManager {
+    last_transcript: String,  // Owns the data, no lifetime issues
+}
+```
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    STRING OWNERSHIP FLOW                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  INSIDE transcribe_chunk():                                      │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  let mut transcript = String::new();  // Created here       │ │
+│  │                                                             │ │
+│  │  for segment in segments {                                  │ │
+│  │      transcript.push_str(&segment);   // Accumulate         │ │
+│  │  }                                                          │ │
+│  │                                                             │ │
+│  │  self.last_transcript.push_str(&transcript);  // Store copy │ │
+│  │                                                             │ │
+│  │  Ok(transcript)  // MOVE ownership to caller                │ │
+│  │       │                                                     │ │
+│  └───────┼─────────────────────────────────────────────────────┘ │
+│          │                                                       │
+│          │ Ownership moves OUT                                   │
+│          ▼                                                       │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  CALLER:                                                    │ │
+│  │                                                             │ │
+│  │  let result = whisper.transcribe_chunk(&audio, 16000)?;     │ │
+│  │  //    ^^^^^^ Now OWNS the String                           │ │
+│  │                                                             │ │
+│  │  app.emit("transcription", result);  // Can move again      │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  If we used &str:                                                │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  let transcript = String::new();  // Created here           │ │
+│  │  // ...                                                     │ │
+│  │  Ok(&transcript)  // ❌ ERROR! Can't return reference to    │ │
+│  │                   //    local variable - it's about to die! │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 4. `Option<T>` vs Sentinel Values
+
+**What we chose:**
+```rust
+pub struct WhisperManager {
+    context: Option<WhisperContext>,  // None = not loaded
+    current_model: Option<String>,    // None = no model selected
+}
+```
+
+**Why `Option<T>` (not sentinel values)?**
+
+| Approach | Example | Pros | Cons |
+|----------|---------|------|------|
+| `Option<T>` | `context: Option<WhisperContext>` | Type-safe, compiler enforces handling | Extra enum wrapper |
+| Sentinel value | `model_name: String` with `""` meaning "none" | No wrapper | ❌ Easy to forget check, `""` might be valid |
+| Nullable pointer | `context: *mut WhisperContext` with `null` | C-compatible | ❌ Unsafe, no compiler help |
+| Boolean flag | `is_loaded: bool` + `context: WhisperContext` | Explicit | ❌ Can get out of sync, can't have uninitialized context |
+
+**The sentinel value trap:**
+```rust
+// ❌ BAD: Using empty string as "none"
+pub struct WhisperManager {
+    current_model: String,  // "" means no model
+}
+
+// Easy to forget the check:
+fn get_model_name(&self) -> &str {
+    &self.current_model  // Oops! Returns "" instead of indicating "none"
+}
+
+// What if "" is a valid model name? (unlikely but possible)
+// The compiler can't help you remember to check!
+
+// ✅ GOOD: Using Option
+pub struct WhisperManager {
+    current_model: Option<String>,
+}
+
+// Compiler FORCES you to handle both cases:
+fn get_model_name(&self) -> Option<&String> {
+    self.current_model.as_ref()  // Explicit: might be None
+}
+
+// Can't accidentally use a None value:
+let name = whisper.current_model;  // Type is Option<String>, not String
+// Must handle: name.unwrap(), name.expect(), match name { ... }, etc.
+```
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              OPTION<T> vs SENTINEL VALUES                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  SENTINEL VALUE (Bad):                                           │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  current_model: String                                      │ │
+│  │                                                             │ │
+│  │  Value: "tiny.en"    → Model is tiny.en                     │ │
+│  │  Value: "large-v3"   → Model is large-v3                    │ │
+│  │  Value: ""           → No model? Or bug? Or valid?          │ │
+│  │         ^^                                                  │ │
+│  │         🤔 Ambiguous! Is "" intentional or a mistake?       │ │
+│  │                                                             │ │
+│  │  COMPILER: "Looks fine to me! 🤷"                           │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  OPTION<T> (Good):                                               │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  current_model: Option<String>                              │ │
+│  │                                                             │ │
+│  │  Value: Some("tiny.en")  → Model is tiny.en                 │ │
+│  │  Value: Some("large-v3") → Model is large-v3                │ │
+│  │  Value: None             → EXPLICITLY no model              │ │
+│  │         ^^^^                                                │ │
+│  │         ✅ Crystal clear! Impossible to misinterpret.       │ │
+│  │                                                             │ │
+│  │  COMPILER: "You MUST handle the None case! 🛡️"              │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 5. `Result<T, String>` vs Custom Error Types
+
+**What we chose:**
+```rust
+pub fn transcribe_chunk(&mut self, ...) -> Result<String, String>
+pub fn initialize(&mut self, ...) -> Result<String, String>
+```
+
+**Why `Result<T, String>` (not custom error enum)?**
+
+| Approach | Example | Pros | Cons |
+|----------|---------|------|------|
+| `Result<T, String>` | `Result<String, String>` | Simple, human-readable errors, easy to serialize to frontend | Less structured, can't match on error types |
+| Custom error enum | `Result<String, WhisperError>` | Pattern matching, structured | More boilerplate, overkill for Tauri commands |
+| `anyhow::Error` | `Result<String, anyhow::Error>` | Ergonomic, chains errors | External dependency, less control |
+| `thiserror` | Custom error with derive macro | Best of both worlds | More code, more complexity |
+
+**Why `String` is fine for this project:**
+
+```rust
+// Our errors go directly to the frontend:
+#[tauri::command]
+pub fn start_recording(...) -> Result<String, String> {
+    // Error needs to be displayable to user anyway
+    let device = host.default_input_device()
+        .ok_or("No microphone detected")?;  // User-friendly message
+    
+    // ...
+}
+
+// In frontend (TypeScript):
+try {
+    await invoke("start_recording");
+} catch (error) {
+    showToast(error);  // Error is already a nice string!
+}
+```
+
+**When you WOULD use custom errors:**
+```rust
+// If we needed to handle errors differently based on type:
+enum WhisperError {
+    ModelNotFound(String),
+    GpuUnavailable,
+    AudioTooShort,
+    NetworkError(std::io::Error),
+}
+
+// Then we could do:
+match whisper.transcribe_chunk(&audio, 16000) {
+    Ok(text) => show_text(text),
+    Err(WhisperError::GpuUnavailable) => fallback_to_cpu(),  // Specific handling
+    Err(WhisperError::AudioTooShort) => wait_for_more_audio(),
+    Err(e) => show_error(e),
+}
+
+// But our app just shows errors to user, so String is simpler.
+```
+
+---
+
+### 6. `crossbeam_channel` vs `std::sync::mpsc`
+
+**What we chose:**
+```rust
+use crossbeam_channel::unbounded;
+
+let (file_tx, file_rx) = unbounded::<Vec<f32>>();
+```
+
+**Why `crossbeam_channel` (not `std::sync::mpsc`)?**
+
+| Feature | `std::sync::mpsc` | `crossbeam_channel` |
+|---------|-------------------|---------------------|
+| Multi-producer | ✅ Yes (mpsc) | ✅ Yes |
+| Multi-consumer | ❌ No (single consumer) | ✅ Yes (mpmc) |
+| Clone receiver | ❌ Can't clone Receiver | ✅ Can clone |
+| Select/try_recv | ⚠️ Limited | ✅ Full support |
+| Performance | Good | Better (lock-free) |
+| Bounded channels | ⚠️ sync_channel only | ✅ First-class |
+
+**Our specific need:**
+```rust
+// We clone the sender to give to multiple producers:
+let file_tx_clone = file_tx.clone();    // For audio callback
+let whisper_tx_clone = whisper_tx.clone();  // For audio callback
+
+// std::sync::mpsc can do this (clone sender is fine)
+// BUT crossbeam is faster and we might need multi-consumer later
+```
+
+**Visual comparison:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CHANNEL COMPARISON                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  std::sync::mpsc (Multi-Producer, Single-Consumer):              │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │   Producer 1 ──┐                                            │ │
+│  │                ├──► Channel ──► Consumer                    │ │
+│  │   Producer 2 ──┘              (only one!)                   │ │
+│  │                                                             │ │
+│  │   ❌ Can't have: Channel ──┬──► Consumer 1                  │ │
+│  │                            └──► Consumer 2                  │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  crossbeam_channel (Multi-Producer, Multi-Consumer):             │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │   Producer 1 ──┐              ┌──► Consumer 1               │ │
+│  │                ├──► Channel ──┤                             │ │
+│  │   Producer 2 ──┘              └──► Consumer 2               │ │
+│  │                                                             │ │
+│  │   ✅ Can clone both sender AND receiver                     │ │
+│  │   ✅ Lock-free implementation (faster)                      │ │
+│  │   ✅ Better select! macro support                           │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WHY WE CHOSE CROSSBEAM:                                         │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  1. Already a dependency (via other crates)                 │ │
+│  │  2. Better performance in high-throughput audio scenario    │ │
+│  │  3. Flexibility if we need multi-consumer later             │ │
+│  │  4. Cleaner API for bounded channels                        │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 7. `u32` for Sample Rate vs Other Integer Types
+
+**What we chose:**
+```rust
+pub fn transcribe_chunk(&mut self, samples: &[f32], input_sample_rate: u32) -> Result<String, String>
+```
+
+**Why `u32` (not `usize`, `u16`, `i32`)?**
+
+| Type | Range | Verdict |
+|------|-------|---------|
+| `u32` | 0 to 4,294,967,295 | ✅ Matches audio industry standard, can represent any sample rate |
+| `usize` | Platform-dependent (32 or 64 bit) | ❌ Overkill, inconsistent across platforms |
+| `u16` | 0 to 65,535 | ❌ Too small! 192kHz audio wouldn't fit |
+| `i32` | -2B to +2B | ❌ Negative sample rates make no sense |
+| `u64` | 0 to 18 quintillion | ❌ Massive overkill, wastes memory |
+
+**Real-world sample rates:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    COMMON SAMPLE RATES                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Sample Rate     Use Case                   Fits in u32?         │
+│  ───────────────────────────────────────────────────────────     │
+│  8,000 Hz        Telephone                  ✅ Yes               │
+│  16,000 Hz       Whisper AI input           ✅ Yes               │
+│  22,050 Hz       AM Radio                   ✅ Yes               │
+│  44,100 Hz       CD Audio                   ✅ Yes               │
+│  48,000 Hz       Standard microphone        ✅ Yes               │
+│  96,000 Hz       High-res audio             ✅ Yes               │
+│  192,000 Hz      Studio master              ✅ Yes               │
+│  384,000 Hz      Extreme audiophile         ✅ Yes               │
+│                                                                  │
+│  u32 max: 4,294,967,295 Hz = 4.3 GHz                             │
+│  That's 4.3 BILLION samples per second!                          │
+│  No audio needs anywhere near this.                              │
+│                                                                  │
+│  u16 max: 65,535 Hz                                              │
+│  ❌ Would NOT fit 96kHz or 192kHz!                               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 8. `PathBuf` vs `String` for File Paths
+
+**What we chose:**
+```rust
+fn get_models_dir() -> Result<std::path::PathBuf, String>
+let absolute_path = models_dir.join(&file_name);
+```
+
+**Why `PathBuf` (not `String`)?**
+
+| Feature | `String` | `PathBuf` |
+|---------|----------|-----------|
+| Cross-platform | ❌ `/` vs `\` issues | ✅ Handles automatically |
+| Path manipulation | ❌ Manual string concat | ✅ `.join()`, `.parent()`, `.extension()` |
+| Unicode handling | ⚠️ Assumes UTF-8 | ✅ Handles OS-native encoding |
+| Type safety | ❌ Any string is "valid" | ✅ Clearly indicates "this is a path" |
+
+**The cross-platform problem:**
+```rust
+// ❌ BAD: Using String for paths
+let models_dir = "taurscribe-runtime/models".to_string();
+let model_path = models_dir + "/" + &file_name;  // Only works on Unix!
+// On Windows: "taurscribe-runtime/models/ggml-tiny.bin"
+//             (forward slash might work, but inconsistent)
+
+// ✅ GOOD: Using PathBuf
+let models_dir = PathBuf::from("taurscribe-runtime/models");
+let model_path = models_dir.join(&file_name);  // Works everywhere!
+// On Windows: "taurscribe-runtime\models\ggml-tiny.bin"
+// On Unix:    "taurscribe-runtime/models/ggml-tiny.bin"
+```
+
+**PathBuf superpowers:**
+```rust
+let path = PathBuf::from("/home/user/models/ggml-tiny.en-q5_1.bin");
+
+path.file_name()      // Some("ggml-tiny.en-q5_1.bin")
+path.extension()      // Some("bin")
+path.parent()         // Some("/home/user/models")
+path.is_absolute()    // true
+path.exists()         // true/false (filesystem check)
+path.join("subdir")   // "/home/user/models/ggml-tiny.en-q5_1.bin/subdir"
+
+// With String, you'd have to implement all of this manually!
+```
+
+---
+
+### 9. Enum vs Struct for State Machines
+
+**What we chose:**
+```rust
+// For GPU backend (fixed set of options):
+pub enum GpuBackend {
+    Cuda,
+    Vulkan,
+    Cpu,
+}
+
+// For app state (fixed set of states):
+pub enum AppState {
+    Ready,
+    Recording,
+    Processing,
+}
+
+// For model info (multiple fields, not alternatives):
+pub struct ModelInfo {
+    pub id: String,
+    pub display_name: String,
+    pub file_name: String,
+    pub size_mb: f32,
+}
+```
+
+**When to use Enum vs Struct:**
+
+| Use Case | Enum | Struct |
+|----------|------|--------|
+| **One of many options** | ✅ `GpuBackend::Cuda` | ❌ |
+| **Multiple fields together** | ❌ | ✅ `ModelInfo { id, name, ... }` |
+| **State machine** | ✅ `AppState::Recording` | ❌ |
+| **Data container** | ❌ | ✅ `TranscriptionChunk { text, time }` |
+| **Pattern matching** | ✅ `match backend { ... }` | ⚠️ Possible but awkward |
+| **Can be in multiple states** | ❌ | ✅ (use multiple bools/fields) |
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    ENUM vs STRUCT                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ENUM: "I am ONE of these things"                                │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  enum GpuBackend {                                          │ │
+│  │      Cuda,      ──┐                                         │ │
+│  │      Vulkan,    ──┼── Can only be ONE at a time            │ │
+│  │      Cpu,       ──┘                                         │ │
+│  │  }                                                          │ │
+│  │                                                             │ │
+│  │  let backend = GpuBackend::Cuda;                            │ │
+│  │  // It's Cuda. Not Vulkan. Not Cpu. Just Cuda.              │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  STRUCT: "I have ALL of these things"                            │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  struct ModelInfo {                                         │ │
+│  │      id: String,           ──┐                              │ │
+│  │      display_name: String, ──┼── Has ALL of these           │ │
+│  │      file_name: String,    ──┤   simultaneously             │ │
+│  │      size_mb: f32,         ──┘                              │ │
+│  │  }                                                          │ │
+│  │                                                             │ │
+│  │  let model = ModelInfo {                                    │ │
+│  │      id: "tiny.en".into(),                                  │ │
+│  │      display_name: "Tiny English".into(),                   │ │
+│  │      file_name: "ggml-tiny.en.bin".into(),                  │ │
+│  │      size_mb: 42.3,                                         │ │
+│  │  };                                                         │ │
+│  │  // Has ALL four fields at once                             │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WRONG CHOICES:                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  // ❌ BAD: Struct for mutually exclusive options           │ │
+│  │  struct GpuBackend {                                        │ │
+│  │      is_cuda: bool,                                         │ │
+│  │      is_vulkan: bool,                                       │ │
+│  │      is_cpu: bool,                                          │ │
+│  │  }                                                          │ │
+│  │  // Problem: What if is_cuda AND is_vulkan are both true?   │ │
+│  │  // Enum makes this impossible by design!                   │ │
+│  │                                                             │ │
+│  │  // ❌ BAD: Enum for independent properties                 │ │
+│  │  enum ModelInfo {                                           │ │
+│  │      Id(String),                                            │ │
+│  │      DisplayName(String),                                   │ │
+│  │      FileName(String),                                      │ │
+│  │      SizeMb(f32),                                           │ │
+│  │  }                                                          │ │
+│  │  // Problem: A model has ALL of these, not just one!        │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 10. Tuple vs Named Struct for Resampler Cache
+
+**What we chose:**
+```rust
+pub struct WhisperManager {
+    resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>,
+    //                 ^^^  ^^^^^  ^^^^^^^^^^^^^^^^^^^^^^
+    //                 │    │      └─ The actual resampler
+    //                 │    └─ Expected input chunk size
+    //                 └─ Source sample rate
+}
+```
+
+**Why a tuple here (not a named struct)?**
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| Tuple `(u32, usize, Box<...>)` | Concise, private implementation detail | Less readable at call site |
+| Named struct | Self-documenting field names | More boilerplate for internal detail |
+
+**When tuples are okay:**
+```rust
+// ✅ GOOD: Tuple for private, simple grouping
+resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>
+
+// Usage is internal only:
+if let Some((rate, size, resampler)) = &mut self.resampler {
+    // Destructure gives names anyway
+}
+
+// ⚠️ WOULD USE STRUCT IF:
+// - It was part of the public API
+// - It had more than 3-4 fields
+// - The meaning wasn't obvious from context
+```
+
+**When to definitely use a named struct:**
+```rust
+// ❌ BAD: Tuple with too many elements
+let config: (u32, u32, f64, bool, String, usize) = ...;
+// What is each field?! 😱
+
+// ✅ GOOD: Named struct for clarity
+struct ResamplerConfig {
+    source_rate: u32,
+    target_rate: u32,
+    quality: f64,
+    preserve_length: bool,
+    algorithm: String,
+    chunk_size: usize,
+}
+```
+
+---
+
+### 11. `Box<T>` for Large Types
+
+**What we chose:**
+```rust
+resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>
+//                             ^^^^
+//                             Boxed!
+```
+
+**Why `Box<SincFixedIn<f32>>` (not just `SincFixedIn<f32>`)?**
+
+| Storage | `SincFixedIn<f32>` | `Box<SincFixedIn<f32>>` |
+|---------|-------------------|------------------------|
+| Location | Stack (inline in struct) | Heap (pointer in struct) |
+| Size | Large (internal buffers) | 8 bytes (just a pointer) |
+| Move cost | Expensive (copy all data) | Cheap (copy pointer) |
+
+**The problem with large stack types:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    STACK vs HEAP STORAGE                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  WITHOUT Box (everything on stack):                              │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  WhisperManager {                                           │ │
+│  │      context: Option<...>,        // ~100 bytes            │ │
+│  │      last_transcript: String,     // 24 bytes              │ │
+│  │      backend: GpuBackend,         // 1 byte                │ │
+│  │      current_model: Option<...>,  // 24 bytes              │ │
+│  │      resampler: Option<(                                   │ │
+│  │          u32,                     // 4 bytes               │ │
+│  │          usize,                   // 8 bytes               │ │
+│  │          SincFixedIn<f32>,        // ~50,000 bytes!! 😱    │ │
+│  │      )>,                          // (internal buffers)    │ │
+│  │  }                                                         │ │
+│  │                                                             │ │
+│  │  Total: ~50KB on stack! Stack overflow risk!                │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WITH Box (large data on heap):                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  WhisperManager (on stack) {                                │ │
+│  │      context: Option<...>,        // ~100 bytes            │ │
+│  │      last_transcript: String,     // 24 bytes              │ │
+│  │      backend: GpuBackend,         // 1 byte                │ │
+│  │      current_model: Option<...>,  // 24 bytes              │ │
+│  │      resampler: Option<(                                   │ │
+│  │          u32,                     // 4 bytes               │ │
+│  │          usize,                   // 8 bytes               │ │
+│  │          Box<SincFixedIn<f32>>,   // 8 bytes (pointer)     │ │
+│  │      )>,                          ──────────┐              │ │
+│  │  }                                          │              │ │
+│  │                                             │              │ │
+│  │  Total stack: ~170 bytes ✅                 │              │ │
+│  │                                             │              │ │
+│  │  ┌──────────────────────────────────────────┴────────┐     │ │
+│  │  │                HEAP                               │     │ │
+│  │  │                                                   │     │ │
+│  │  │  SincFixedIn<f32> {                               │     │ │
+│  │  │      internal_buffers: [...50KB of data...]       │     │ │
+│  │  │  }                                                │     │ │
+│  │  │                                                   │     │ │
+│  │  │  Heap is much larger than stack - no problem!     │     │ │
+│  │  └───────────────────────────────────────────────────┘     │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📊 Quick Reference: Type Decision Tree
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              WHICH TYPE SHOULD I USE?                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  SHARING DATA BETWEEN THREADS?                                   │
+│  ├─ Yes, need write access → Arc<Mutex<T>>                       │
+│  ├─ Yes, mostly read, rare write → Arc<RwLock<T>>                │
+│  └─ No, single thread → Rc<RefCell<T>> or just T                 │
+│                                                                  │
+│  RETURNING VALUE FROM FUNCTION?                                  │
+│  ├─ Might not exist → Option<T>                                  │
+│  ├─ Might fail → Result<T, E>                                    │
+│  └─ Always exists → T                                            │
+│                                                                  │
+│  STORING TEXT?                                                   │
+│  ├─ Need to own/modify → String                                  │
+│  └─ Just reading, no ownership → &str                            │
+│                                                                  │
+│  COLLECTION OF ITEMS?                                            │
+│  ├─ Unknown size, growable → Vec<T>                              │
+│  ├─ Fixed size at compile time → [T; N]                          │
+│  └─ Key-value lookup → HashMap<K, V>                             │
+│                                                                  │
+│  FILE PATH?                                                      │
+│  └─ Always use PathBuf (not String)                              │
+│                                                                  │
+│  MUTUALLY EXCLUSIVE OPTIONS?                                     │
+│  └─ Use Enum                                                     │
+│                                                                  │
+│  MULTIPLE PROPERTIES TOGETHER?                                   │
+│  └─ Use Struct                                                   │
+│                                                                  │
+│  LARGE DATA STRUCTURE?                                           │
+│  └─ Box<T> to put it on heap                                     │
+│                                                                  │
+│  THREAD COMMUNICATION?                                           │
+│  ├─ Async message passing → crossbeam_channel                    │
+│  └─ Sync shared access → Arc<Mutex<T>>                           │
+│                                                                  │
+│  NUMERIC TYPE?                                                   │
+│  ├─ Audio samples → f32                                          │
+│  ├─ Array index → usize                                          │
+│  ├─ Sample rate → u32                                            │
+│  └─ Can be negative → i32/i64                                    │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🦀 Rust Fundamentals for Beginners
+
+This section teaches core Rust concepts using real examples from this codebase. If you're new to Rust, read this before diving into the code!
+
+---
+
+### 1. Ownership: Rust's Superpower
+
+**The Golden Rule**: Every value in Rust has exactly ONE owner. When the owner goes out of scope, the value is dropped (freed).
+
+**From our codebase:**
+```rust
+// In recording.rs
+let filename = format!("recording_{}.wav", chrono::Utc::now().timestamp());
+//  ^^^^^^^^
+//  `filename` OWNS this String
+
+let path = recordings_dir.join(&filename);
+//                        ^^^^
+//                        BORROWING filename (not taking ownership)
+
+println!("Saving to: {}", filename);  // Still works! We only borrowed above
+```
+
+**What happens when ownership moves:**
+```rust
+// EXAMPLE: Ownership transfer
+let audio = vec![0.1, 0.2, 0.3];  // `audio` owns the Vec
+let processed = process(audio);    // Ownership MOVES to `process()`
+// println!("{:?}", audio);        // ❌ ERROR! `audio` no longer owns the data
+```
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    OWNERSHIP VISUALIZED                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  STEP 1: Create data                                             │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │  let audio = vec![0.1, 0.2, 0.3];                         │   │
+│  │                                                           │   │
+│  │  audio ─────────────► [0.1, 0.2, 0.3]                     │   │
+│  │  (owner)              (data on heap)                      │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│  STEP 2: Move ownership                                          │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │  let processed = process(audio);                          │   │
+│  │                                                           │   │
+│  │  audio ─ ─ ─ ─ ─ ─ ─ ─                                    │   │
+│  │  (invalid!)         ╲                                     │   │
+│  │                      ╲                                    │   │
+│  │                       ╲                                   │   │
+│  │  process() ───────────►[0.1, 0.2, 0.3]                    │   │
+│  │  (new owner)           (same data)                        │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│  STEP 3: Function returns, data cleaned up                       │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │  } // End of scope                                        │   │
+│  │                                                           │   │
+│  │  processed goes out of scope                              │   │
+│  │                    │                                      │   │
+│  │                    ▼                                      │   │
+│  │           [0.1, 0.2, 0.3] is FREED                        │   │
+│  │                                                           │   │
+│  │  No memory leaks! No double-free! Guaranteed by compiler! │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2. Borrowing: Using Without Owning
+
+**Two types of borrows:**
+- `&T` = Immutable borrow (can read, can't modify, many allowed)
+- `&mut T` = Mutable borrow (can modify, only ONE at a time)
+
+**From our codebase:**
+```rust
+// In whisper.rs - Immutable borrow
+pub fn transcribe_chunk(
+    &mut self,           // Mutable borrow of self (we'll modify internal state)
+    samples: &[f32],     // Immutable borrow of samples (just reading)
+    input_sample_rate: u32,
+) -> Result<String, String> {
+    // We can READ samples but not modify them
+    let sum: f32 = samples.iter().sum();  // ✅ Reading is fine
+    // samples[0] = 0.0;                   // ❌ ERROR! Can't modify
+    
+    // We CAN modify self because we have &mut self
+    self.last_transcript.push_str("text");  // ✅ Modifying is fine
+}
+```
+
+**The borrowing rules:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    BORROWING RULES                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  RULE 1: You can have EITHER:                                    │
+│     • One mutable reference (&mut T)                             │
+│     • OR any number of immutable references (&T)                 │
+│     • BUT NOT BOTH at the same time!                             │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  let mut data = vec![1, 2, 3];                              │ │
+│  │                                                             │ │
+│  │  // ✅ VALID: Multiple immutable borrows                    │ │
+│  │  let r1 = &data;                                            │ │
+│  │  let r2 = &data;                                            │ │
+│  │  println!("{:?} {:?}", r1, r2);  // Both reading - OK!      │ │
+│  │                                                             │ │
+│  │  // ✅ VALID: Single mutable borrow                         │ │
+│  │  let r3 = &mut data;                                        │ │
+│  │  r3.push(4);  // Modifying - OK!                            │ │
+│  │                                                             │ │
+│  │  // ❌ INVALID: Mutable + immutable at same time            │ │
+│  │  let r4 = &data;      // Immutable borrow                   │ │
+│  │  let r5 = &mut data;  // ERROR! Can't borrow mutably        │ │
+│  │                       // while immutably borrowed!          │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WHY THIS RULE?                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  Prevents data races at compile time!                       │ │
+│  │                                                             │ │
+│  │  Thread A: reading data    }                                │ │
+│  │  Thread B: modifying data  } = DATA RACE! 💥               │ │
+│  │                                                             │ │
+│  │  Rust: "You can't even COMPILE this code."                  │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 3. The `?` Operator: Error Handling Magic
+
+**What it does:** If the Result is `Err`, return early. If `Ok`, unwrap the value.
+
+**From our codebase:**
+```rust
+// In whisper.rs
+pub fn transcribe_file(&mut self, file_path: &str) -> Result<String, String> {
+    // Without ? operator (verbose):
+    let reader = match hound::WavReader::open(file_path) {
+        Ok(r) => r,
+        Err(e) => return Err(format!("Failed to open: {}", e)),
+    };
+    
+    // With ? operator (concise):
+    let reader = hound::WavReader::open(file_path)
+        .map_err(|e| format!("Failed to open: {}", e))?;
+    //                                              ^^
+    //                                              This does the same thing!
+    
+    // ... rest of function
+    Ok(transcript)
+}
+```
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    THE ? OPERATOR                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  some_function()?                                                │
+│         │                                                        │
+│         ▼                                                        │
+│  ┌─────────────────┐                                             │
+│  │ Returns Result  │                                             │
+│  └────────┬────────┘                                             │
+│           │                                                      │
+│     ┌─────┴─────┐                                                │
+│     │           │                                                │
+│     ▼           ▼                                                │
+│  ┌─────┐     ┌─────┐                                             │
+│  │ Ok  │     │ Err │                                             │
+│  └──┬──┘     └──┬──┘                                             │
+│     │           │                                                │
+│     │           │                                                │
+│     ▼           ▼                                                │
+│  Unwrap      RETURN EARLY                                        │
+│  value       from function                                       │
+│  and         with this error                                     │
+│  continue                                                        │
+│                                                                  │
+│                                                                  │
+│  EXAMPLE:                                                        │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  fn process() -> Result<String, String> {                   │ │
+│  │      let data = read_file()?;   // If Err, return Err       │ │
+│  │      let parsed = parse(data)?; // If Err, return Err       │ │
+│  │      let result = compute(parsed)?; // If Err, return Err   │ │
+│  │      Ok(result)  // All succeeded!                          │ │
+│  │  }                                                          │ │
+│  │                                                             │ │
+│  │  // Equivalent without ?:                                   │ │
+│  │  fn process() -> Result<String, String> {                   │ │
+│  │      let data = match read_file() {                         │ │
+│  │          Ok(d) => d,                                        │ │
+│  │          Err(e) => return Err(e),                           │ │
+│  │      };                                                     │ │
+│  │      let parsed = match parse(data) {                       │ │
+│  │          Ok(p) => p,                                        │ │
+│  │          Err(e) => return Err(e),                           │ │
+│  │      };                                                     │ │
+│  │      // ... you get the idea, MUCH more verbose!            │ │
+│  │  }                                                          │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 4. Closures: Anonymous Functions
+
+**Syntax:** `|parameters| body` or `|parameters| { body }`
+
+**From our codebase:**
+```rust
+// In recording.rs - Simple closure
+let mono_data: Vec<f32> = data.chunks(channels)
+    .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
+    //   ^^^^^^^ This is a closure!
+    //   |chunk| = takes one parameter called `chunk`
+    //   chunk.iter().sum::<f32>() / channels as f32 = returns this value
+    .collect();
+
+// In recording.rs - Closure with move
+std::thread::spawn(move || {
+//                 ^^^^
+//                 `move` means: take ownership of captured variables
+    let mut writer = writer;  // `writer` was moved into this closure
+    while let Ok(samples) = file_rx.recv() {
+        // ...
+    }
+});
+```
+
+**Understanding `move`:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CLOSURES AND MOVE                             │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  WITHOUT move (borrows by default):                              │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  let name = String::from("Alice");                          │ │
+│  │                                                             │ │
+│  │  let greet = || println!("Hello, {}", name);                │ │
+│  │              ^^                                             │ │
+│  │              Closure BORROWS `name`                         │ │
+│  │                                                             │ │
+│  │  greet();  // Works!                                        │ │
+│  │  println!("{}", name);  // Still works! name still valid    │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WITH move (takes ownership):                                    │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  let name = String::from("Alice");                          │ │
+│  │                                                             │ │
+│  │  let greet = move || println!("Hello, {}", name);           │ │
+│  │              ^^^^                                           │ │
+│  │              Closure TAKES OWNERSHIP of `name`              │ │
+│  │                                                             │ │
+│  │  greet();  // Works!                                        │ │
+│  │  // println!("{}", name);  // ❌ ERROR! name was moved      │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WHY USE move WITH THREADS?                                      │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  std::thread::spawn(move || {                               │ │
+│  │      // This closure might outlive the current function!    │ │
+│  │      // If we only borrowed, the data could be freed        │ │
+│  │      // while the thread is still using it!                 │ │
+│  │      //                                                     │ │
+│  │      // `move` ensures the thread OWNS the data,            │ │
+│  │      // so it will live as long as the thread needs it.     │ │
+│  │  });                                                        │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 5. Pattern Matching: The Swiss Army Knife
+
+**`match` is like `switch` on steroids.**
+
+**From our codebase:**
+```rust
+// In parakeet.rs - Matching on enum
+match model {
+    LoadedModel::Nemotron(m) => {
+        // m is the inner Nemotron value
+        m.transcribe_chunk(&chunk)
+    }
+    LoadedModel::Ctc(m) => {
+        m.transcribe_samples(audio, 16000, 1, None)
+    }
+    LoadedModel::Eou(m) => {
+        m.transcribe(&chunk, false)
+    }
+    LoadedModel::Tdt(m) => {
+        m.transcribe_samples(audio, 16000, 1, None)
+    }
+}
+
+// In whisper.rs - Matching on Result
+match WhisperContext::new_with_params(path, params) {
+    Ok(ctx) => {
+        // Success! ctx is the WhisperContext
+        Ok((ctx, GpuBackend::Cuda))
+    }
+    Err(e) => {
+        // Failure! e is the error
+        Err(format!("Failed: {:?}", e))
+    }
+}
+```
+
+**`if let` and `while let` - Shorthand for single-pattern matching:**
+```rust
+// In recording.rs
+// Instead of:
+match handle.take() {
+    Some(recording) => { /* use recording */ }
+    None => { /* do nothing */ }
+}
+
+// You can write:
+if let Some(recording) = handle.take() {
+    // Only runs if it's Some
+    // `recording` is the inner value
+}
+
+// while let - Loop while pattern matches
+while let Ok(samples) = file_rx.recv() {
+    // Loops as long as recv() returns Ok
+    // Stops when recv() returns Err (channel closed)
+}
+```
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    PATTERN MATCHING                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  match value {                                                   │
+│      Pattern1 => action1,                                        │
+│      Pattern2 => action2,                                        │
+│      _ => default_action,  // _ matches anything                 │
+│  }                                                               │
+│                                                                  │
+│  PATTERNS CAN:                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  // Destructure enums                                       │ │
+│  │  Some(value) => use(value),                                 │ │
+│  │  None => handle_none(),                                     │ │
+│  │                                                             │ │
+│  │  // Destructure tuples                                      │ │
+│  │  (x, y, z) => compute(x, y, z),                             │ │
+│  │                                                             │ │
+│  │  // Destructure structs                                     │ │
+│  │  Point { x, y } => draw(x, y),                              │ │
+│  │                                                             │ │
+│  │  // Match ranges                                            │ │
+│  │  0..=9 => println!("single digit"),                         │ │
+│  │  10..=99 => println!("double digit"),                       │ │
+│  │                                                             │ │
+│  │  // Match with guards                                       │ │
+│  │  n if n > 0 => println!("positive"),                        │ │
+│  │  n if n < 0 => println!("negative"),                        │ │
+│  │  _ => println!("zero"),                                     │ │
+│  │                                                             │ │
+│  │  // Match multiple patterns                                 │ │
+│  │  Key::Left | Key::Right => move_horizontal(),               │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  MUST BE EXHAUSTIVE:                                             │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  enum Color { Red, Green, Blue }                            │ │
+│  │                                                             │ │
+│  │  match color {                                              │ │
+│  │      Color::Red => "red",                                   │ │
+│  │      Color::Green => "green",                               │ │
+│  │      // ❌ ERROR! Missing Color::Blue case!                 │ │
+│  │  }                                                          │ │
+│  │                                                             │ │
+│  │  // Compiler: "You MUST handle all cases!"                  │ │
+│  │  // This prevents bugs when you add new enum variants.      │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 6. Iterators and Method Chaining
+
+**Iterators are lazy** - they don't do anything until consumed.
+
+**From our codebase:**
+```rust
+// In whisper.rs - Complex iterator chain
+let mono_samples = if spec.channels == 2 {
+    samples
+        .chunks(2)                              // Split into pairs [L,R]
+        .map(|chunk| (chunk[0] + chunk[1]) / 2.0)  // Average each pair
+        .collect::<Vec<f32>>()                  // Collect into Vec
+} else {
+    samples
+};
+
+// In vad.rs - RMS calculation
+let sum_squares: f32 = audio
+    .iter()                    // Create iterator over &f32
+    .map(|&x| x * x)          // Square each sample
+    .sum();                    // Sum them all
+
+// In whisper.rs - Finding models
+let entries = std::fs::read_dir(&models_dir)?
+    .filter_map(|e| e.ok())   // Keep only Ok values
+    .filter(|e| e.path().is_file())  // Keep only files
+    .filter(|e| {
+        e.file_name()
+            .to_str()
+            .map(|n| n.starts_with("ggml-"))
+            .unwrap_or(false)
+    });
+```
+
+**Common iterator methods:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    ITERATOR CHEAT SHEET                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  CREATING ITERATORS:                                             │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  vec.iter()       // Iterator of &T (borrowing)             │ │
+│  │  vec.iter_mut()   // Iterator of &mut T (mutable borrow)    │ │
+│  │  vec.into_iter()  // Iterator of T (takes ownership)        │ │
+│  │  (0..10)          // Range iterator                         │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  TRANSFORMING:                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  .map(|x| x * 2)       // Transform each element            │ │
+│  │  .filter(|x| x > 5)    // Keep elements matching condition  │ │
+│  │  .filter_map(|x| ...)  // Map + filter out None values      │ │
+│  │  .flat_map(|x| ...)    // Map then flatten nested iterators │ │
+│  │  .take(5)              // Take first 5 elements             │ │
+│  │  .skip(3)              // Skip first 3 elements             │ │
+│  │  .enumerate()          // Add index: (0, val), (1, val)...  │ │
+│  │  .zip(other)           // Pair with another iterator        │ │
+│  │  .chain(other)         // Concatenate iterators             │ │
+│  │  .flatten()            // Flatten nested iterators          │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  CONSUMING (these actually run the iterator):                    │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  .collect::<Vec<_>>()  // Collect into a collection         │ │
+│  │  .sum()                // Sum all elements                  │ │
+│  │  .product()            // Multiply all elements             │ │
+│  │  .count()              // Count elements                    │ │
+│  │  .find(|x| ...)        // Find first matching element       │ │
+│  │  .any(|x| ...)         // True if any element matches       │ │
+│  │  .all(|x| ...)         // True if all elements match        │ │
+│  │  .for_each(|x| ...)    // Run side effect on each           │ │
+│  │  .fold(init, |acc, x| ...)  // Reduce to single value       │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  EXAMPLE CHAIN:                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  let result = (0..100)          // 0, 1, 2, ..., 99         │ │
+│  │      .filter(|n| n % 2 == 0)    // 0, 2, 4, ..., 98         │ │
+│  │      .map(|n| n * n)            // 0, 4, 16, ..., 9604      │ │
+│  │      .take(5)                   // 0, 4, 16, 36, 64         │ │
+│  │      .sum::<i32>();             // 120                      │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 7. Derive Macros: Auto-Implementing Traits
+
+**`#[derive(...)]` automatically implements traits for your types.**
+
+**From our codebase:**
+```rust
+// In types.rs
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ASREngine {
+    Whisper,
+    Parakeet,
+}
+```
+
+**What each derive does:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    COMMON DERIVES                                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  DERIVE          WHAT IT ENABLES                                 │
+│  ──────────────────────────────────────────────────────────────  │
+│                                                                  │
+│  Debug           println!("{:?}", value)  // Debug formatting   │
+│                  Prints struct/enum internals                    │
+│                                                                  │
+│  Clone           value.clone()  // Deep copy                     │
+│                  Creates a duplicate of the value                │
+│                                                                  │
+│  Copy            Implicit copy on assignment                     │
+│                  let x = y;  // x is a copy, y still valid       │
+│                  Only for small, stack-only types                │
+│                                                                  │
+│  PartialEq       value1 == value2  // Equality comparison        │
+│                  Enables == and != operators                     │
+│                                                                  │
+│  Eq              Marker that equality is total                   │
+│                  (NaN != NaN, so f32 can't be Eq)               │
+│                                                                  │
+│  PartialOrd      value1 < value2  // Ordering                   │
+│                  Enables <, >, <=, >= operators                  │
+│                                                                  │
+│  Ord             Marker that ordering is total                   │
+│                  Enables sorting                                 │
+│                                                                  │
+│  Hash            Can be used as HashMap key                      │
+│                  Enables use in HashSet                          │
+│                                                                  │
+│  Default         Type::default()  // Default value               │
+│                  Creates a "zero" or "empty" instance            │
+│                                                                  │
+│  serde::Serialize    Convert to JSON/bytes                       │
+│                      Enables sending to frontend via Tauri       │
+│                                                                  │
+│  serde::Deserialize  Convert from JSON/bytes                     │
+│                      Enables receiving from frontend             │
+│                                                                  │
+│  ──────────────────────────────────────────────────────────────  │
+│                                                                  │
+│  WHICH TO USE WHEN:                                              │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  Almost always:  #[derive(Debug)]                           │ │
+│  │                  (makes debugging much easier)              │ │
+│  │                                                             │ │
+│  │  For enums:      #[derive(Debug, Clone, Copy, PartialEq)]   │ │
+│  │                  (enums are usually small, copyable)        │ │
+│  │                                                             │ │
+│  │  For Tauri:      #[derive(Debug, Clone, serde::Serialize)]  │ │
+│  │                  (to send to frontend)                      │ │
+│  │                                                             │ │
+│  │  For state:      #[derive(Debug, Default)]                  │ │
+│  │                  (makes initialization easier)              │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 8. The Module System: Organizing Code
+
+**Keywords:**
+- `mod` = Declare a module
+- `pub` = Make something public
+- `use` = Bring something into scope
+
+**From our codebase:**
+```rust
+// In lib.rs - Declaring modules
+mod audio;       // Loads from audio.rs
+mod commands;    // Loads from commands/mod.rs (it's a folder!)
+mod whisper;
+mod parakeet;
+
+// In commands/mod.rs - Re-exporting
+pub mod llm;
+pub mod models;
+pub mod recording;
+// Now commands::recording::start_recording is accessible
+
+// In lib.rs - Using items
+use crate::commands::*;  // Import everything from commands
+use crate::whisper::WhisperManager;  // Import specific item
+```
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    MODULE STRUCTURE                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  FILE SYSTEM:                    RUST MODULE TREE:               │
+│                                                                  │
+│  src-tauri/src/                  crate (lib.rs)                  │
+│  ├── lib.rs          ────────►   ├── audio                       │
+│  ├── audio.rs        ────────►   ├── whisper                     │
+│  ├── whisper.rs      ────────►   ├── parakeet                    │
+│  ├── parakeet.rs     ────────►   ├── vad                         │
+│  ├── vad.rs          ────────►   ├── llm                         │
+│  ├── llm.rs          ────────►   ├── state                       │
+│  ├── state.rs        ────────►   ├── types                       │
+│  ├── types.rs        ────────►   ├── utils                       │
+│  ├── utils.rs        ────────►   │                               │
+│  │                               │                               │
+│  ├── commands/       ────────►   ├── commands                    │
+│  │   ├── mod.rs                  │   ├── llm                     │
+│  │   ├── llm.rs                  │   ├── models                  │
+│  │   ├── models.rs               │   ├── recording               │
+│  │   └── ...                     │   └── ...                     │
+│  │                               │                               │
+│  ├── tray/           ────────►   ├── tray                        │
+│  │   ├── mod.rs                  │   └── icons                   │
+│  │   └── icons.rs                │                               │
+│  │                               │                               │
+│  └── hotkeys/        ────────►   └── hotkeys                     │
+│      ├── mod.rs                      └── listener                │
+│      └── listener.rs                                             │
+│                                                                  │
+│  VISIBILITY:                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  (nothing)    = private to this module                      │ │
+│  │  pub          = public (visible outside module)             │ │
+│  │  pub(crate)   = public within this crate only               │ │
+│  │  pub(super)   = public to parent module only                │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  PATH TYPES:                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  crate::whisper::WhisperManager  // Absolute from crate root│ │
+│  │  super::something                // Parent module           │ │
+│  │  self::something                 // Current module          │ │
+│  │  something                       // Relative (in scope)     │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 9. Lifetimes: The Borrow Checker's Memory
+
+**Lifetimes tell the compiler how long references are valid.**
+
+**You'll see them as `'a`, `'static`, etc.**
+
+**From our codebase:**
+```rust
+// In commands - Lifetime in function signature
+#[tauri::command]
+pub async fn correct_text(
+    state: State<'_, AudioState>,  // '_ = "infer the lifetime"
+    text: String,
+) -> Result<String, String>
+
+// What the lifetime means:
+// The State reference is valid for the duration of this function call
+// Tauri manages this automatically
+```
+
+**When you need explicit lifetimes:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    LIFETIMES EXPLAINED                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  MOST OF THE TIME: You don't need to write lifetimes!            │
+│  The compiler infers them (lifetime elision).                    │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  // Compiler infers lifetimes here:                         │ │
+│  │  fn first_word(s: &str) -> &str { ... }                     │ │
+│  │                                                             │ │
+│  │  // What compiler actually sees:                            │ │
+│  │  fn first_word<'a>(s: &'a str) -> &'a str { ... }           │ │
+│  │  //           ^^     ^^          ^^                         │ │
+│  │  //           │      │           │                          │ │
+│  │  //           │      │           └─ Output lives as long    │ │
+│  │  //           │      │              as input                │ │
+│  │  //           │      └─ Input has lifetime 'a               │ │
+│  │  //           └─ Declare lifetime parameter                 │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WHEN YOU NEED EXPLICIT LIFETIMES:                               │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  // Multiple references - which one does output come from?  │ │
+│  │  fn longer<'a>(s1: &'a str, s2: &'a str) -> &'a str {       │ │
+│  │      if s1.len() > s2.len() { s1 } else { s2 }              │ │
+│  │  }                                                          │ │
+│  │                                                             │ │
+│  │  // Storing references in structs                           │ │
+│  │  struct Excerpt<'a> {                                       │ │
+│  │      text: &'a str,  // This reference must outlive struct  │ │
+│  │  }                                                          │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  'static LIFETIME:                                               │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  // 'static = lives for entire program duration             │ │
+│  │                                                             │ │
+│  │  let s: &'static str = "Hello";  // String literals         │ │
+│  │  // String literals are baked into the binary,              │ │
+│  │  // so they live forever!                                   │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  VISUAL:                                                         │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  fn example() {                                             │ │
+│  │      let s1 = String::from("hello");  ──┐                   │ │
+│  │                                         │ 'a                │ │
+│  │      {                                  │                   │ │
+│  │          let s2 = String::from("hi");  ─┼─┐                 │ │
+│  │                                         │ │ 'b              │ │
+│  │          let r = longer(&s1, &s2);      │ │                 │ │
+│  │          //      ^^^^^^^^^^^^^^         │ │                 │ │
+│  │          // r's lifetime = shorter of   │ │                 │ │
+│  │          // s1 and s2 = 'b              │ │                 │ │
+│  │                                         │ │                 │ │
+│  │          println!("{}", r);  // OK      │ │                 │ │
+│  │      }  // s2 dropped here ─────────────┼─┘                 │ │
+│  │                                         │                   │ │
+│  │      // Can't use r here - s2 is gone!  │                   │ │
+│  │  }  // s1 dropped here ─────────────────┘                   │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 10. `impl` Blocks: Adding Methods
+
+**Two types of functions in `impl`:**
+- **Methods**: Take `self` as first parameter (called on instance)
+- **Associated functions**: No `self` (called on type, like constructors)
+
+**From our codebase:**
+```rust
+impl WhisperManager {
+    // Associated function (no self) - called as WhisperManager::new()
+    pub fn new() -> Self {
+        Self {
+            context: None,
+            // ...
+        }
+    }
+    
+    // Method (takes &self) - called as manager.get_backend()
+    pub fn get_backend(&self) -> &GpuBackend {
+        &self.backend
+    }
+    
+    // Method (takes &mut self) - called as manager.initialize()
+    pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
+        // Can modify self
+        self.context = Some(ctx);
+        // ...
+    }
+    
+    // Associated function (no self) - called as WhisperManager::list_available_models()
+    pub fn list_available_models() -> Result<Vec<ModelInfo>, String> {
+        // Note: No self parameter!
+        // ...
+    }
+}
+```
+
+**Visual:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    METHODS vs ASSOCIATED FUNCTIONS               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  impl MyType {                                                   │
+│      // ASSOCIATED FUNCTION (no self)                            │
+│      // Called: MyType::new()                                    │
+│      pub fn new() -> Self { ... }                                │
+│      //         ^^                                               │
+│      //         No self parameter!                               │
+│                                                                  │
+│      // METHOD - Immutable borrow                                │
+│      // Called: instance.read_data()                             │
+│      pub fn read_data(&self) -> Data { ... }                     │
+│      //               ^^^^^                                      │
+│      //               Borrows self, can't modify                 │
+│                                                                  │
+│      // METHOD - Mutable borrow                                  │
+│      // Called: instance.modify_data()                           │
+│      pub fn modify_data(&mut self) { ... }                       │
+│      //                 ^^^^^^^^^                                │
+│      //                 Borrows self mutably, can modify         │
+│                                                                  │
+│      // METHOD - Takes ownership                                 │
+│      // Called: instance.consume()                               │
+│      pub fn consume(self) { ... }                                │
+│      //             ^^^^                                         │
+│      //             Takes ownership, instance unusable after     │
+│  }                                                               │
+│                                                                  │
+│  CALLING THEM:                                                   │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  // Associated function - use :: syntax                     │ │
+│  │  let manager = WhisperManager::new();                       │ │
+│  │  //                         ^^                              │ │
+│  │                                                             │ │
+│  │  // Methods - use . syntax                                  │ │
+│  │  let backend = manager.get_backend();                       │ │
+│  │  //                   ^                                     │ │
+│  │                                                             │ │
+│  │  // Mutable method needs mut variable                       │ │
+│  │  let mut manager = WhisperManager::new();                   │ │
+│  │  manager.initialize(None)?;  // Needs &mut self             │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 11. Conditional Compilation: `#[cfg(...)]`
+
+**Compile different code for different platforms/features.**
+
+**From our codebase:**
+```rust
+// In whisper.rs - Different code for macOS vs others
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn null_log_callback(_level: u32, ...) { }
+//                                     ^^^
+//                                     macOS uses u32
+
+#[cfg(not(target_os = "macos"))]
+unsafe extern "C" fn null_log_callback(_level: i32, ...) { }
+//                                     ^^^
+//                                     Other OSes use i32
+
+// In parakeet.rs - Feature-gated code
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+{
+    // CUDA code - only on Linux or Windows x64
+}
+
+#[cfg(not(any(...)))]
+{
+    // Fallback code for other platforms
+}
+```
+
+**Common `cfg` conditions:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    CONDITIONAL COMPILATION                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  PLATFORM DETECTION:                                             │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  #[cfg(target_os = "windows")]                              │ │
+│  │  #[cfg(target_os = "macos")]                                │ │
+│  │  #[cfg(target_os = "linux")]                                │ │
+│  │                                                             │ │
+│  │  #[cfg(target_arch = "x86_64")]   // Intel/AMD 64-bit       │ │
+│  │  #[cfg(target_arch = "aarch64")]  // ARM 64-bit (M1/M2)     │ │
+│  │                                                             │ │
+│  │  #[cfg(windows)]  // Shorthand for target_os = "windows"    │ │
+│  │  #[cfg(unix)]     // Linux, macOS, BSD, etc.                │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  COMBINING CONDITIONS:                                           │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  #[cfg(not(windows))]           // NOT Windows              │ │
+│  │  #[cfg(any(linux, macos))]      // Linux OR macOS           │ │
+│  │  #[cfg(all(windows, x86_64))]   // Windows AND x86_64       │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  FEATURE FLAGS:                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  #[cfg(feature = "cuda")]       // If "cuda" feature on     │ │
+│  │  #[cfg(debug_assertions)]       // Debug mode               │ │
+│  │  #[cfg(test)]                   // Running tests            │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  VISUAL:                                                         │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  SOURCE CODE:                                               │ │
+│  │  ┌───────────────────────────────────┐                      │ │
+│  │  │ #[cfg(windows)]                   │                      │ │
+│  │  │ fn do_thing() { windows_code(); } │                      │ │
+│  │  │                                   │                      │ │
+│  │  │ #[cfg(not(windows))]              │                      │ │
+│  │  │ fn do_thing() { unix_code(); }    │                      │ │
+│  │  └───────────────────────────────────┘                      │ │
+│  │                  │                                          │ │
+│  │        ┌─────────┴─────────┐                                │ │
+│  │        │                   │                                │ │
+│  │        ▼                   ▼                                │ │
+│  │  COMPILE FOR          COMPILE FOR                           │ │
+│  │  WINDOWS:             LINUX:                                │ │
+│  │  ┌─────────────┐      ┌─────────────┐                       │ │
+│  │  │ fn do_thing │      │ fn do_thing │                       │ │
+│  │  │ windows_code│      │ unix_code() │                       │ │
+│  │  └─────────────┘      └─────────────┘                       │ │
+│  │                                                             │ │
+│  │  The OTHER version doesn't even exist in the binary!        │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 12. Common Rust Idioms in This Codebase
+
+**Patterns you'll see repeatedly:**
+
+```rust
+// 1. UNWRAP_OR - Default value if None/Err
+let model = model_id.unwrap_or("tiny.en-q5_1");
+// If model_id is None, use "tiny.en-q5_1"
+
+// 2. OK_OR - Convert Option to Result
+let device = host.default_input_device()
+    .ok_or("No input device")?;
+// If None, return Err("No input device")
+
+// 3. MAP_ERR - Transform error type
+let reader = hound::WavReader::open(file_path)
+    .map_err(|e| format!("Failed to open: {}", e))?;
+// Transform hound::Error into String
+
+// 4. AS_REF - Convert Option<T> to Option<&T>
+pub fn get_current_model(&self) -> Option<&String> {
+    self.current_model.as_ref()
+}
+// Don't move out of self, just borrow
+
+// 5. CLONED - Convert Option<&T> to Option<T>
+let model_name = whisper.get_current_model().cloned();
+// Get owned String from &String
+
+// 6. INTO - Convert types
+let config: StreamConfig = device.default_input_config()?.into();
+// Convert SupportedStreamConfig into StreamConfig
+
+// 7. TO_STRING / TO_OWNED - Create owned String from &str
+let id = file_name.trim_start_matches("ggml-").to_string();
+
+// 8. FORMAT! - String interpolation
+let message = format!("Processing {} files", count);
+
+// 9. COLLECT - Turn iterator into collection
+let models: Vec<ModelInfo> = entries.collect();
+
+// 10. CLONE - Explicit deep copy
+let whisper = state.whisper.clone();  // Clone the Arc (cheap)
+```
+
+**Visual cheat sheet:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    RUST IDIOM CHEAT SHEET                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  OPTION METHODS:                                                 │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  .unwrap()           → T or PANIC!                          │ │
+│  │  .expect("msg")      → T or PANIC with message              │ │
+│  │  .unwrap_or(default) → T or default value                   │ │
+│  │  .unwrap_or_else(f)  → T or compute default with closure    │ │
+│  │  .ok_or(err)         → Result<T, E>                         │ │
+│  │  .map(f)             → Option<U> (transform inner value)    │ │
+│  │  .and_then(f)        → Option<U> (chain Option operations)  │ │
+│  │  .as_ref()           → Option<&T>                           │ │
+│  │  .as_mut()           → Option<&mut T>                       │ │
+│  │  .cloned()           → Option<T> (clone inner value)        │ │
+│  │  .is_some()          → bool                                 │ │
+│  │  .is_none()          → bool                                 │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  RESULT METHODS:                                                 │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  .unwrap()           → T or PANIC with error                │ │
+│  │  .expect("msg")      → T or PANIC with message              │ │
+│  │  .unwrap_or(default) → T or default value                   │ │
+│  │  .ok()               → Option<T> (discard error)            │ │
+│  │  .err()              → Option<E> (discard success)          │ │
+│  │  .map(f)             → Result<U, E>                         │ │
+│  │  .map_err(f)         → Result<T, F> (transform error)       │ │
+│  │  .and_then(f)        → Result<U, E>                         │ │
+│  │  .is_ok()            → bool                                 │ │
+│  │  .is_err()           → bool                                 │ │
+│  │  ?                   → Early return on Err                  │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  STRING CONVERSIONS:                                             │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  &str → String:                                             │ │
+│  │    "hello".to_string()                                      │ │
+│  │    "hello".to_owned()                                       │ │
+│  │    String::from("hello")                                    │ │
+│  │    "hello".into()                                           │ │
+│  │                                                             │ │
+│  │  String → &str:                                             │ │
+│  │    &my_string                                               │ │
+│  │    my_string.as_str()                                       │ │
+│  │                                                             │ │
+│  │  PathBuf → &Path:                                           │ │
+│  │    path_buf.as_path()                                       │ │
+│  │    &path_buf                                                │ │
+│  │                                                             │ │
+│  │  &Path → PathBuf:                                           │ │
+│  │    path.to_path_buf()                                       │ │
+│  │    PathBuf::from(path)                                      │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 13. Common Beginner Gotchas
+
+**Mistakes you'll make (and how to fix them):**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    COMMON MISTAKES                               │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  GOTCHA #1: "Cannot move out of borrowed content"                │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  // ❌ WRONG                                                │ │
+│  │  fn get_name(&self) -> String {                             │ │
+│  │      self.name  // Error! Can't move out of &self           │ │
+│  │  }                                                          │ │
+│  │                                                             │ │
+│  │  // ✅ FIX: Clone or return reference                       │ │
+│  │  fn get_name(&self) -> String {                             │ │
+│  │      self.name.clone()  // Clone it                         │ │
+│  │  }                                                          │ │
+│  │  // OR                                                      │ │
+│  │  fn get_name(&self) -> &String {                            │ │
+│  │      &self.name  // Return reference                        │ │
+│  │  }                                                          │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  GOTCHA #2: "Value borrowed here after move"                     │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  // ❌ WRONG                                                │ │
+│  │  let data = vec![1, 2, 3];                                  │ │
+│  │  process(data);           // data moved here                │ │
+│  │  println!("{:?}", data);  // Error! data was moved          │ │
+│  │                                                             │ │
+│  │  // ✅ FIX: Borrow instead of move                          │ │
+│  │  let data = vec![1, 2, 3];                                  │ │
+│  │  process(&data);          // Borrow, don't move             │ │
+│  │  println!("{:?}", data);  // Works!                         │ │
+│  │                                                             │ │
+│  │  // OR clone if you need to give ownership                  │ │
+│  │  process(data.clone());                                     │ │
+│  │  println!("{:?}", data);  // Works!                         │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  GOTCHA #3: "Cannot borrow as mutable more than once"            │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  // ❌ WRONG                                                │ │
+│  │  let mut data = vec![1, 2, 3];                              │ │
+│  │  let r1 = &mut data;                                        │ │
+│  │  let r2 = &mut data;  // Error! Already borrowed mutably    │ │
+│  │  r1.push(4);                                                │ │
+│  │  r2.push(5);                                                │ │
+│  │                                                             │ │
+│  │  // ✅ FIX: Scope the borrows                               │ │
+│  │  let mut data = vec![1, 2, 3];                              │ │
+│  │  {                                                          │ │
+│  │      let r1 = &mut data;                                    │ │
+│  │      r1.push(4);                                            │ │
+│  │  }  // r1 goes out of scope                                 │ │
+│  │  {                                                          │ │
+│  │      let r2 = &mut data;                                    │ │
+│  │      r2.push(5);                                            │ │
+│  │  }                                                          │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  GOTCHA #4: "Mutex poisoned"                                     │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  // Happens when a thread panics while holding the lock     │ │
+│  │                                                             │ │
+│  │  // ❌ Can crash                                            │ │
+│  │  let data = mutex.lock().unwrap();                          │ │
+│  │                                                             │ │
+│  │  // ✅ Handle poison error                                  │ │
+│  │  let data = mutex.lock().unwrap_or_else(|e| e.into_inner());│ │
+│  │  // OR just use unwrap if panic = unrecoverable anyway      │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  GOTCHA #5: "Expected (), found String"                          │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  // ❌ WRONG - Last expression has ;                        │ │
+│  │  fn get_message() -> String {                               │ │
+│  │      "hello".to_string();  // Semicolon makes it statement  │ │
+│  │  }                         // Returns () not String!        │ │
+│  │                                                             │ │
+│  │  // ✅ FIX - Remove semicolon for implicit return           │ │
+│  │  fn get_message() -> String {                               │ │
+│  │      "hello".to_string()   // No semicolon = return this    │ │
+│  │  }                                                          │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  GOTCHA #6: "Use of moved value in closure"                      │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  // ❌ WRONG                                                │ │
+│  │  let data = vec![1, 2, 3];                                  │ │
+│  │  std::thread::spawn(|| {                                    │ │
+│  │      println!("{:?}", data);  // Error! May outlive data    │ │
+│  │  });                                                        │ │
+│  │                                                             │ │
+│  │  // ✅ FIX - Use move closure                               │ │
+│  │  let data = vec![1, 2, 3];                                  │ │
+│  │  std::thread::spawn(move || {                               │ │
+│  │      println!("{:?}", data);  // data moved into closure    │ │
+│  │  });                                                        │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 14. Memory Layout: Stack vs Heap
+
+**Understanding where data lives:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    STACK vs HEAP                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  THE STACK (Fast, Fixed-Size, Automatic):                        │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  let x: i32 = 42;           // 4 bytes on stack             │ │
+│  │  let y: f64 = 3.14;         // 8 bytes on stack             │ │
+│  │  let arr: [i32; 3] = [1,2,3]; // 12 bytes on stack          │ │
+│  │  let tuple: (i32, bool) = (5, true); // 5 bytes on stack    │ │
+│  │                                                             │ │
+│  │  ┌────────────────────┐                                     │ │
+│  │  │     STACK          │                                     │ │
+│  │  ├────────────────────┤                                     │ │
+│  │  │ x: 42              │ ← Fast access                       │ │
+│  │  │ y: 3.14            │ ← Known size at compile time        │ │
+│  │  │ arr: [1, 2, 3]     │ ← Automatically freed               │ │
+│  │  │ tuple: (5, true)   │                                     │ │
+│  │  └────────────────────┘                                     │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  THE HEAP (Flexible, Dynamic, Manual-ish):                       │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  let s: String = String::from("hello");                     │ │
+│  │  let v: Vec<i32> = vec![1, 2, 3, 4, 5];                     │ │
+│  │  let b: Box<i32> = Box::new(42);                            │ │
+│  │                                                             │ │
+│  │  ┌────────────────────┐     ┌────────────────────────────┐  │ │
+│  │  │     STACK          │     │         HEAP               │  │ │
+│  │  ├────────────────────┤     ├────────────────────────────┤  │ │
+│  │  │ s: {ptr, len, cap} │────►│ "hello"                    │  │ │
+│  │  │    (24 bytes)      │     │                            │  │ │
+│  │  │                    │     │                            │  │ │
+│  │  │ v: {ptr, len, cap} │────►│ [1, 2, 3, 4, 5]            │  │ │
+│  │  │    (24 bytes)      │     │                            │  │ │
+│  │  │                    │     │                            │  │ │
+│  │  │ b: ptr             │────►│ 42                         │  │ │
+│  │  │    (8 bytes)       │     │                            │  │ │
+│  │  └────────────────────┘     └────────────────────────────┘  │ │
+│  │                                                             │ │
+│  │  ↑ Stack has POINTERS       ↑ Heap has ACTUAL DATA          │ │
+│  │    to heap data               (can grow/shrink)             │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WHEN DATA IS DROPPED:                                           │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  fn example() {                                             │ │
+│  │      let s = String::from("hello");                         │ │
+│  │      // s is on stack, "hello" is on heap                   │ │
+│  │  }   // s goes out of scope:                                │ │
+│  │      // 1. Rust calls drop(s)                               │ │
+│  │      // 2. Heap memory for "hello" is freed                 │ │
+│  │      // 3. Stack memory for s is reclaimed                  │ │
+│  │                                                             │ │
+│  │  // No memory leaks! No manual free()!                      │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  WHY THIS MATTERS FOR OUR CODE:                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  // Audio data is BIG - must be on heap                     │ │
+│  │  let audio: Vec<f32> = vec![0.0; 480000];  // ~2MB!         │ │
+│  │                                                             │ │
+│  │  // WhisperContext is BIG - Box it for cheaper moves        │ │
+│  │  let resampler: Box<SincFixedIn<f32>> = Box::new(...);      │ │
+│  │                                                             │ │
+│  │  // Arc means multiple owners of SAME heap data             │ │
+│  │  let whisper: Arc<Mutex<WhisperManager>> = Arc::new(...);   │ │
+│  │  let whisper2 = whisper.clone();  // Same heap data!        │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 15. Reading Rust Error Messages
+
+**Rust errors are verbose but helpful. Learn to read them!**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    READING ERROR MESSAGES                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  EXAMPLE ERROR:                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  error[E0382]: borrow of moved value: `data`                │ │
+│  │     --> src/main.rs:5:20                                    │ │
+│  │      |                                                      │ │
+│  │  3   |     let data = vec![1, 2, 3];                        │ │
+│  │      |         ---- move occurs because `data` has type     │ │
+│  │      |              `Vec<i32>`, which does not implement    │ │
+│  │      |              the `Copy` trait                        │ │
+│  │  4   |     process(data);                                   │ │
+│  │      |             ---- value moved here                    │ │
+│  │  5   |     println!("{:?}", data);                          │ │
+│  │      |                      ^^^^ value borrowed here        │ │
+│  │      |                           after move                 │ │
+│  │                                                             │ │
+│  │  For more information about this error, try `rustc --explain│ │
+│  │  E0382`.                                                    │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  HOW TO READ IT:                                                 │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                                                             │ │
+│  │  1. ERROR CODE: E0382                                       │ │
+│  │     Run `rustc --explain E0382` for detailed explanation    │ │
+│  │                                                             │ │
+│  │  2. WHAT HAPPENED: "borrow of moved value"                  │ │
+│  │     You tried to use something after giving it away         │ │
+│  │                                                             │ │
+│  │  3. WHERE: src/main.rs:5:20                                 │ │
+│  │     File, line 5, column 20                                 │ │
+│  │                                                             │ │
+│  │  4. THE STORY (read the ---- arrows):                       │ │
+│  │     Line 3: data created                                    │ │
+│  │     Line 4: data MOVED into process()                       │ │
+│  │     Line 5: tried to use data (ERROR!)                      │ │
+│  │                                                             │ │
+│  │  5. WHY: Vec<i32> doesn't implement Copy                    │ │
+│  │     So passing it moves ownership                           │ │
+│  │                                                             │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  COMMON ERROR CODES:                                             │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │  E0382 - Use of moved value                                 │ │
+│  │  E0502 - Cannot borrow as mutable (already borrowed)        │ │
+│  │  E0499 - Cannot borrow mutably more than once               │ │
+│  │  E0597 - Borrowed value does not live long enough           │ │
+│  │  E0106 - Missing lifetime specifier                         │ │
+│  │  E0308 - Mismatched types                                   │ │
+│  │  E0425 - Cannot find value in scope                         │ │
+│  │  E0433 - Failed to resolve (module/type not found)          │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📚 Quick Reference Card
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    RUST QUICK REFERENCE                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  OWNERSHIP:                                                      │
+│    let x = value;      // x owns value                           │
+│    let y = x;          // ownership moves to y, x invalid        │
+│    let z = x.clone();  // z gets a copy, x still valid           │
+│                                                                  │
+│  BORROWING:                                                      │
+│    &value              // immutable borrow (can read)            │
+│    &mut value          // mutable borrow (can modify)            │
+│                                                                  │
+│  ERROR HANDLING:                                                 │
+│    Option<T>           // Some(value) or None                    │
+│    Result<T, E>        // Ok(value) or Err(error)                │
+│    value?              // return early if Err/None               │
+│    value.unwrap()      // get value or panic                     │
+│                                                                  │
+│  PATTERN MATCHING:                                               │
+│    match value { ... }     // exhaustive matching                │
+│    if let Some(x) = opt    // match single pattern               │
+│    while let Ok(x) = iter  // loop while pattern matches         │
+│                                                                  │
+│  CLOSURES:                                                       │
+│    |x| x + 1               // simple closure                     │
+│    |x, y| { ... }          // multi-line closure                 │
+│    move |x| ...            // take ownership of captures         │
+│                                                                  │
+│  SMART POINTERS:                                                 │
+│    Box<T>                  // heap allocation                    │
+│    Rc<T>                   // reference counting (single-thread) │
+│    Arc<T>                  // atomic ref counting (multi-thread) │
+│    Mutex<T>                // mutual exclusion lock              │
+│                                                                  │
+│  COMMON TRAITS:                                                  │
+│    Debug                   // {:?} formatting                    │
+│    Clone                   // .clone() method                    │
+│    Copy                    // implicit copying                   │
+│    Send                    // can send between threads           │
+│    Sync                    // can share between threads          │
+│                                                                  │
+│  MODULES:                                                        │
+│    mod name;               // declare module                     │
+│    pub                     // make public                        │
+│    use crate::path::Item;  // bring into scope                   │
+│                                                                  │
+│  USEFUL METHODS:                                                 │
+│    .to_string()            // &str → String                      │
+│    .as_str()               // String → &str                      │
+│    .clone()                // deep copy                          │
+│    .into()                 // convert types                      │
+│    .as_ref()               // Option<T> → Option<&T>             │
+│    .map()                  // transform inner value              │
+│    .map_err()              // transform error                    │
+│    .ok_or()                // Option → Result                    │
+│    .collect()              // iterator → collection              │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔊 Audio Flow Diagrams
+
+This section shows how audio data flows through the entire system, from microphone to final transcript.
+
+---
+
+### Complete Recording Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    COMPLETE AUDIO FLOW DIAGRAM                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         PHASE 1: CAPTURE                                │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│     🎤 MICROPHONE                                                            │
+│        │                                                                     │
+│        │ Raw analog sound waves                                              │
+│        ▼                                                                     │
+│     ┌─────────────────────┐                                                  │
+│     │   SOUND CARD        │                                                  │
+│     │   (Hardware ADC)    │                                                  │
+│     │                     │                                                  │
+│     │ Converts analog →   │                                                  │
+│     │ digital samples     │                                                  │
+│     │ @ 48000 Hz          │                                                  │
+│     └──────────┬──────────┘                                                  │
+│                │                                                             │
+│                │ Digital audio stream                                        │
+│                │ f32 samples, 48kHz, stereo                                  │
+│                ▼                                                             │
+│     ┌─────────────────────┐                                                  │
+│     │   CPAL LIBRARY      │  (recording.rs)                                  │
+│     │   (Audio API)       │                                                  │
+│     │                     │                                                  │
+│     │ Buffers audio into  │                                                  │
+│     │ chunks (~10ms each) │                                                  │
+│     └──────────┬──────────┘                                                  │
+│                │                                                             │
+│                │ Vec<f32> chunks                                             │
+│                ▼                                                             │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         PHASE 2: DISTRIBUTION                           │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│     ┌─────────────────────┐                                                  │
+│     │   AUDIO CALLBACK    │  (in build_input_stream)                         │
+│     │                     │                                                  │
+│     │ For each chunk:     │                                                  │
+│     │ 1. Clone to file_tx │                                                  │
+│     │ 2. Convert to mono  │                                                  │
+│     │ 3. Send to whisper_tx│                                                 │
+│     └──────────┬──────────┘                                                  │
+│                │                                                             │
+│       ┌────────┴────────┐                                                    │
+│       │                 │                                                    │
+│       ▼                 ▼                                                    │
+│  ┌─────────┐      ┌─────────┐                                                │
+│  │ file_tx │      │whisper_tx│                                               │
+│  │(channel)│      │(channel) │                                               │
+│  └────┬────┘      └────┬────┘                                                │
+│       │                │                                                     │
+│       │                │                                                     │
+│       ▼                ▼                                                     │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         PHASE 3: PROCESSING                             │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  ┌─────────────────────┐      ┌─────────────────────────────────────────────┐│
+│  │   FILE WRITER       │      │         TRANSCRIBER THREAD                  ││
+│  │   THREAD            │      │                                             ││
+│  │                     │      │  ┌─────────────────────────────────────────┐││
+│  │ while recv():       │      │  │ ACCUMULATION BUFFER                     │││
+│  │   writer.write()    │      │  │                                         │││
+│  │                     │      │  │ Collects chunks until 6 seconds         │││
+│  │ Output:             │      │  │ (288,000 samples at 48kHz)              │││
+│  │ recording_XXX.wav   │      │  └──────────────┬──────────────────────────┘││
+│  │                     │      │                 │                           ││
+│  └─────────────────────┘      │                 ▼                           ││
+│                               │  ┌─────────────────────────────────────────┐││
+│                               │  │ VAD CHECK (Whisper only)                │││
+│                               │  │                                         │││
+│                               │  │ is_speech() > 0.5?                      │││
+│                               │  │  ├─ YES → Continue to AI                │││
+│                               │  │  └─ NO  → Skip (save GPU)               │││
+│                               │  └──────────────┬──────────────────────────┘││
+│                               │                 │                           ││
+│                               │                 ▼                           ││
+│                               │  ┌─────────────────────────────────────────┐││
+│                               │  │ ENGINE SELECTION                        │││
+│                               │  │                                         │││
+│                               │  │ ASREngine::Whisper?                     │││
+│                               │  │  ├─ YES → WhisperManager                │││
+│                               │  │  └─ NO  → ParakeetManager               │││
+│                               │  └──────────────┬──────────────────────────┘││
+│                               │                 │                           ││
+│                               └─────────────────┼───────────────────────────┘│
+│                                                 │                            │
+│                                                 ▼                            │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         PHASE 4: TRANSCRIPTION                          │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  ┌───────────────────────────────┐  ┌───────────────────────────────────────┐│
+│  │      WHISPER PATH             │  │        PARAKEET PATH                  ││
+│  │                               │  │                                       ││
+│  │  ┌─────────────────────────┐  │  │  ┌─────────────────────────────────┐  ││
+│  │  │ RESAMPLER               │  │  │  │ RESAMPLER                       │  ││
+│  │  │ 48kHz → 16kHz           │  │  │  │ 48kHz → 16kHz                   │  ││
+│  │  │ (rubato SincFixedIn)    │  │  │  │ (rubato SincFixedIn)            │  ││
+│  │  └───────────┬─────────────┘  │  │  └───────────────┬─────────────────┘  ││
+│  │              │                │  │                  │                    ││
+│  │              ▼                │  │                  ▼                    ││
+│  │  ┌─────────────────────────┐  │  │  ┌─────────────────────────────────┐  ││
+│  │  │ WHISPER CONTEXT         │  │  │  │ PARAKEET MODEL                  │  ││
+│  │  │                         │  │  │  │                                 │  ││
+│  │  │ • Load previous context │  │  │  │ • Nemotron (streaming)          │  ││
+│  │  │ • Run GGML inference    │  │  │  │ • OR CTC (batch)                │  ││
+│  │  │ • GPU: CUDA/Vulkan      │  │  │  │ • OR TDT (batch)                │  ││
+│  │  │ • Extract segments      │  │  │  │ • GPU: CUDA/DirectML            │  ││
+│  │  └───────────┬─────────────┘  │  │  └───────────────┬─────────────────┘  ││
+│  │              │                │  │                  │                    ││
+│  │              ▼                │  │                  ▼                    ││
+│  │  ┌─────────────────────────┐  │  │  ┌─────────────────────────────────┐  ││
+│  │  │ UPDATE CONTEXT          │  │  │  │ ACCUMULATE TRANSCRIPT           │  ││
+│  │  │                         │  │  │  │                                 │  ││
+│  │  │ last_transcript +=      │  │  │  │ session_transcript +=           │  ││
+│  │  │   new_text              │  │  │  │   new_text                      │  ││
+│  │  └───────────┬─────────────┘  │  │  └───────────────┬─────────────────┘  ││
+│  │              │                │  │                  │                    ││
+│  └──────────────┼────────────────┘  └──────────────────┼────────────────────┘│
+│                 │                                      │                     │
+│                 └──────────────┬───────────────────────┘                     │
+│                                │                                             │
+│                                ▼                                             │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         PHASE 5: OUTPUT                                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│     ┌─────────────────────┐                                                  │
+│     │   TAURI EVENT       │                                                  │
+│     │                     │                                                  │
+│     │ app.emit(           │                                                  │
+│     │   "transcription-   │                                                  │
+│     │    chunk",          │                                                  │
+│     │   TranscriptionChunk│                                                  │
+│     │ )                   │                                                  │
+│     └──────────┬──────────┘                                                  │
+│                │                                                             │
+│                │ JSON over IPC                                               │
+│                ▼                                                             │
+│     ┌─────────────────────┐                                                  │
+│     │   FRONTEND (React)  │                                                  │
+│     │                     │                                                  │
+│     │ listen(             │                                                  │
+│     │   "transcription-   │                                                  │
+│     │    chunk",          │                                                  │
+│     │   (event) => {      │                                                  │
+│     │     updateUI(event) │                                                  │
+│     │   }                 │                                                  │
+│     │ )                   │                                                  │
+│     └──────────┬──────────┘                                                  │
+│                │                                                             │
+│                ▼                                                             │
+│     ┌─────────────────────┐                                                  │
+│     │   USER SEES TEXT    │                                                  │
+│     │                     │                                                  │
+│     │   "Hello, this is   │                                                  │
+│     │    a test..."       │                                                  │
+│     └─────────────────────┘                                                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Stop Recording Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    STOP RECORDING FLOW                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  User clicks STOP                                                            │
+│        │                                                                     │
+│        ▼                                                                     │
+│  ┌─────────────────────┐                                                     │
+│  │ stop_recording()    │                                                     │
+│  │ command called      │                                                     │
+│  └──────────┬──────────┘                                                     │
+│             │                                                                │
+│             ▼                                                                │
+│  ┌─────────────────────┐                                                     │
+│  │ DROP RecordingHandle│                                                     │
+│  │                     │                                                     │
+│  │ • drop(stream)      │ ← Stops microphone                                  │
+│  │ • drop(file_tx)     │ ← Signals file writer to finish                     │
+│  │ • drop(whisper_tx)  │ ← Signals transcriber to finish                     │
+│  └──────────┬──────────┘                                                     │
+│             │                                                                │
+│             │ Channels close, threads see Err on recv()                      │
+│             │                                                                │
+│       ┌─────┴─────┐                                                          │
+│       │           │                                                          │
+│       ▼           ▼                                                          │
+│  ┌─────────┐  ┌─────────────────────────────────────────────────────────┐    │
+│  │ FILE    │  │ TRANSCRIBER FINISHES                                    │    │
+│  │ WRITER  │  │                                                         │    │
+│  │         │  │ • Processes remaining buffer                            │    │
+│  │finalize()│ │ • Handles partial chunks                                │    │
+│  │         │  │                                                         │    │
+│  │ WAV     │  └─────────────────────────────────────────────────────────┘    │
+│  │ saved   │                                                                 │
+│  └─────────┘                                                                 │
+│             │                                                                │
+│             ▼                                                                │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                    ENGINE-SPECIFIC FINAL PASS                           │ │
+│  ├─────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                         │ │
+│  │  IF PARAKEET:                     IF WHISPER:                           │ │
+│  │  ┌───────────────────────┐        ┌───────────────────────────────────┐ │ │
+│  │  │ Return accumulated    │        │ HIGH-QUALITY FINAL PASS           │ │ │
+│  │  │ session_transcript    │        │                                   │ │ │
+│  │  │                       │        │ 1. Load saved WAV file            │ │ │
+│  │  │ (Streaming was        │        │ 2. Run VAD to find speech         │ │ │
+│  │  │  sufficient)          │        │ 3. Extract only speech segments   │ │ │
+│  │  │                       │        │ 4. Transcribe cleaned audio       │ │ │
+│  │  │                       │        │ 5. Return final transcript        │ │ │
+│  │  └───────────────────────┘        │                                   │ │ │
+│  │                                   │ (Better quality than real-time)   │ │ │
+│  │                                   └───────────────────────────────────┘ │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│             │                                                                │
+│             ▼                                                                │
+│  ┌─────────────────────┐                                                     │
+│  │ RETURN TRANSCRIPT   │                                                     │
+│  │                     │                                                     │
+│  │ Ok("Final cleaned   │                                                     │
+│  │    transcript...")  │                                                     │
+│  └─────────────────────┘                                                     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Audio Sample Format Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SAMPLE FORMAT TRANSFORMATIONS                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  MICROPHONE OUTPUT:                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Format: f32 (32-bit float)                                             │ │
+│  │  Range: -1.0 to +1.0                                                    │ │
+│  │  Sample Rate: 48,000 Hz (typical)                                       │ │
+│  │  Channels: 2 (stereo)                                                   │ │
+│  │                                                                         │ │
+│  │  Data: [L₀, R₀, L₁, R₁, L₂, R₂, ...]                                   │ │
+│  │         ▲   ▲   ▲   ▲                                                   │ │
+│  │         │   │   │   └── Right channel, sample 1                         │ │
+│  │         │   │   └────── Left channel, sample 1                          │ │
+│  │         │   └────────── Right channel, sample 0                         │ │
+│  │         └────────────── Left channel, sample 0                          │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                              │                                               │
+│                              ▼                                               │
+│  STEREO → MONO CONVERSION:                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Formula: mono[i] = (left[i] + right[i]) / 2.0                          │ │
+│  │                                                                         │ │
+│  │  Before: [L₀, R₀, L₁, R₁, L₂, R₂]  (6 samples, stereo)                 │ │
+│  │  After:  [M₀, M₁, M₂]              (3 samples, mono)                    │ │
+│  │                                                                         │ │
+│  │  Where: M₀ = (L₀ + R₀) / 2                                              │ │
+│  │         M₁ = (L₁ + R₁) / 2                                              │ │
+│  │         M₂ = (L₂ + R₂) / 2                                              │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                              │                                               │
+│                              ▼                                               │
+│  RESAMPLING (48kHz → 16kHz):                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Algorithm: Sinc Interpolation (high quality)                           │ │
+│  │  Ratio: 16000 / 48000 = 0.333...                                        │ │
+│  │                                                                         │ │
+│  │  Before: [■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■ ■]  (48,000 samples/sec)               │ │
+│  │           │     │     │     │                                           │ │
+│  │           ▼     ▼     ▼     ▼                                           │ │
+│  │  After:  [■     ■     ■     ■    ]  (16,000 samples/sec)                │ │
+│  │                                                                         │ │
+│  │  Note: Not just dropping samples! Sinc filter preserves audio quality.  │ │
+│  │        It's like resizing an image with anti-aliasing.                  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                              │                                               │
+│                              ▼                                               │
+│  WHISPER/PARAKEET INPUT:                                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Format: f32 (32-bit float)                                             │ │
+│  │  Range: -1.0 to +1.0                                                    │ │
+│  │  Sample Rate: 16,000 Hz (required!)                                     │ │
+│  │  Channels: 1 (mono)                                                     │ │
+│  │                                                                         │ │
+│  │  This is what the AI models were trained on.                            │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  NUMBERS:                                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  1 second of audio:                                                     │ │
+│  │                                                                         │ │
+│  │  Stage              Samples    Bytes (f32)    Bytes (i16)               │ │
+│  │  ───────────────────────────────────────────────────────                │ │
+│  │  Mic (48kHz stereo)  96,000    384,000        192,000                   │ │
+│  │  Mono (48kHz)        48,000    192,000         96,000                   │ │
+│  │  Resampled (16kHz)   16,000     64,000         32,000                   │ │
+│  │                                                                         │ │
+│  │  6 second chunk (what we process):                                      │ │
+│  │  ───────────────────────────────────────────────────────                │ │
+│  │  Mic (48kHz stereo) 576,000  2,304,000 bytes (~2.2 MB)                  │ │
+│  │  Final (16kHz mono)  96,000    384,000 bytes (~375 KB)                  │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### VAD (Voice Activity Detection) Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    VAD DECISION FLOW                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  INPUT: 6 seconds of audio (96,000 samples at 16kHz)                         │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  STEP 1: Calculate Energy (RMS)                                         │ │
+│  │                                                                         │ │
+│  │  RMS = √(Σ(sample²) / n)                                                │ │
+│  │                                                                         │ │
+│  │  Example:                                                               │ │
+│  │  samples = [0.1, -0.2, 0.15, -0.1]                                      │ │
+│  │  squares = [0.01, 0.04, 0.0225, 0.01]                                   │ │
+│  │  mean = 0.0825 / 4 = 0.020625                                           │ │
+│  │  RMS = √0.020625 = 0.1436                                               │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                              │                                               │
+│                              ▼                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  STEP 2: Compare to Threshold                                           │ │
+│  │                                                                         │ │
+│  │  threshold = 0.005                                                      │ │
+│  │                                                                         │ │
+│  │  ┌───────────────────────────────────────────────────────────────────┐  │ │
+│  │  │                                                                   │  │ │
+│  │  │  0.000    0.005    0.010    0.015    0.020    0.025    0.030      │  │ │
+│  │  │    │        │        │        │        │        │        │        │  │ │
+│  │  │    ├────────┼────────┼────────┼────────┼────────┼────────┤        │  │ │
+│  │  │    │        │                                   │        │        │  │ │
+│  │  │    │ SILENCE│         TRANSITION ZONE           │ SPEECH │        │  │ │
+│  │  │    │        │                                   │        │        │  │ │
+│  │  │    │ prob=0 │  prob = (rms - 0.005) / 0.020    │ prob=1 │        │  │ │
+│  │  │    │        │                                   │        │        │  │ │
+│  │  │            threshold                    5x threshold              │  │ │
+│  │  │            (0.005)                        (0.025)                 │  │ │
+│  │  │                                                                   │  │ │
+│  │  └───────────────────────────────────────────────────────────────────┘  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                              │                                               │
+│                              ▼                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  STEP 3: Make Decision                                                  │ │
+│  │                                                                         │ │
+│  │  if probability > 0.5:                                                  │ │
+│  │      → PROCESS with Whisper AI (expensive)                              │ │
+│  │  else:                                                                  │ │
+│  │      → SKIP this chunk (save GPU cycles)                                │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  TYPICAL RECORDING:                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  Time:    0s    6s    12s   18s   24s   30s   36s   42s   48s   54s    │ │
+│  │           │     │     │     │     │     │     │     │     │     │      │ │
+│  │  Audio:   ░░░░░ █████ █████ ░░░░░ ░░░░░ █████ ░░░░░ █████ █████ ░░░░░  │ │
+│  │           │     │     │     │     │     │     │     │     │     │      │ │
+│  │  VAD:     SKIP  PROC  PROC  SKIP  SKIP  PROC  SKIP  PROC  PROC  SKIP   │ │
+│  │                                                                         │ │
+│  │  Result: Only 5 out of 10 chunks processed!                             │ │
+│  │          50% GPU savings!                                               │ │
+│  │                                                                         │ │
+│  │  ░░░░░ = Silence (background noise, pauses)                             │ │
+│  │  █████ = Speech (actual talking)                                        │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📡 Tauri Command API Reference
+
+Every command exposed to the frontend, with types and examples.
+
+---
+
+### Recording Commands
+
+#### `start_recording`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/recording.rs` |
+| **Purpose** | Initialize microphone and begin recording |
+| **Frontend Call** | `await invoke("start_recording")` |
+
+**Signature:**
+```rust
+#[tauri::command]
+pub fn start_recording(
+    app_handle: AppHandle,  // Injected by Tauri
+    state: State<AudioState>,  // Injected by Tauri
+) -> Result<String, String>
+```
+
+**Returns:**
+- `Ok("Recording started: /path/to/recording_1234567890.wav")`
+- `Err("No input device")` - No microphone found
+- `Err("Failed to create stream: ...")` - Audio system error
+
+**Frontend Example:**
+```typescript
+import { invoke } from "@tauri-apps/api/core";
+
+async function startRecording() {
+    try {
+        const result = await invoke<string>("start_recording");
+        console.log(result);  // "Recording started: ..."
+    } catch (error) {
+        console.error("Failed to start:", error);
+    }
+}
+```
+
+---
+
+#### `stop_recording`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/recording.rs` |
+| **Purpose** | Stop recording and get final transcript |
+| **Frontend Call** | `await invoke("stop_recording")` |
+
+**Signature:**
+```rust
+#[tauri::command]
+pub fn stop_recording(
+    state: State<AudioState>,
+) -> Result<String, String>
+```
+
+**Returns:**
+- `Ok("Final transcript text here...")` - Success with transcript
+- `Ok("[silence]")` - Recording contained no speech
+- `Ok("Recording saved.")` - Saved but no transcript (error during processing)
+- `Err("Not recording")` - Wasn't recording
+
+**Frontend Example:**
+```typescript
+async function stopRecording() {
+    try {
+        const transcript = await invoke<string>("stop_recording");
+        console.log("Transcript:", transcript);
+    } catch (error) {
+        console.error("Not recording:", error);
+    }
+}
+```
+
+---
+
+### Model Commands
+
+#### `list_models`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/models.rs` |
+| **Purpose** | Get available Whisper models |
+| **Frontend Call** | `await invoke("list_models")` |
+
+**Signature:**
+```rust
+#[tauri::command]
+pub fn list_models() -> Result<Vec<ModelInfo>, String>
+```
+
+**Returns:**
+```typescript
+// Success:
+[
+    {
+        id: "tiny.en-q5_1",
+        display_name: "Tiny English (Q5_1)",
+        file_name: "ggml-tiny.en-q5_1.bin",
+        size_mb: 42.3
+    },
+    {
+        id: "base.en-q5_1",
+        display_name: "Base English (Q5_1)",
+        file_name: "ggml-base.en-q5_1.bin",
+        size_mb: 78.5
+    }
+    // ...
+]
+
+// Error:
+"Could not find models directory containing ggml models"
+```
+
+**Frontend Example:**
+```typescript
+interface ModelInfo {
+    id: string;
+    display_name: string;
+    file_name: string;
+    size_mb: number;
+}
+
+async function getModels() {
+    const models = await invoke<ModelInfo[]>("list_models");
+    models.forEach(m => console.log(`${m.display_name} (${m.size_mb}MB)`));
+}
+```
+
+---
+
+#### `switch_model`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/models.rs` |
+| **Purpose** | Change the active Whisper model |
+| **Frontend Call** | `await invoke("switch_model", { modelId: "..." })` |
+
+**Signature:**
+```rust
+#[tauri::command]
+pub fn switch_model(
+    state: State<AudioState>,
+    model_id: String,
+) -> Result<String, String>
+```
+
+**Returns:**
+- `Ok("Backend: CUDA")` - Model loaded with GPU
+- `Ok("Backend: CPU")` - Model loaded with CPU fallback
+- `Err("Cannot switch models while recording")` - Stop recording first
+- `Err("Model file not found: ...")` - Model doesn't exist
+
+**Frontend Example:**
+```typescript
+async function switchToLargeModel() {
+    try {
+        const backend = await invoke<string>("switch_model", {
+            modelId: "large-v3-turbo-q5_1"
+        });
+        console.log("Loaded with:", backend);
+    } catch (error) {
+        console.error("Switch failed:", error);
+    }
+}
+```
+
+---
+
+#### `list_parakeet_models`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/models.rs` |
+| **Purpose** | Get available Parakeet/Nemotron models |
+| **Frontend Call** | `await invoke("list_parakeet_models")` |
+
+**Returns:**
+```typescript
+[
+    {
+        id: "nemotron:parakeet-tdt-0.6b-v2",
+        display_name: "Parakeet TDT - parakeet-tdt-0.6b-v2",
+        model_type: "TDT",
+        size_mb: 245.7
+    }
+    // ...
+]
+```
+
+---
+
+#### `init_parakeet`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/models.rs` |
+| **Purpose** | Initialize a Parakeet model |
+| **Frontend Call** | `await invoke("init_parakeet", { modelId?: "..." })` |
+
+**Signature:**
+```rust
+#[tauri::command]
+pub fn init_parakeet(
+    state: State<AudioState>,
+    model_id: Option<String>,  // Optional - defaults to first available
+) -> Result<String, String>
+```
+
+**Returns:**
+- `Ok("Loaded Parakeet TDT - ... (CUDA)")` - Success
+- `Err("No Parakeet/Nemotron models found.")` - No models installed
+
+---
+
+#### `get_parakeet_status`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/models.rs` |
+| **Purpose** | Check Parakeet engine status |
+| **Frontend Call** | `await invoke("get_parakeet_status")` |
+
+**Returns:**
+```typescript
+{
+    loaded: true,
+    model_id: "tdt:parakeet-tdt-0.6b-v2",
+    model_type: "TDT",
+    backend: "CUDA"
+}
+```
+
+---
+
+### Settings Commands
+
+#### `get_backend_info`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/settings.rs` |
+| **Purpose** | Get current Whisper GPU backend |
+| **Frontend Call** | `await invoke("get_backend_info")` |
+
+**Returns:** `"CUDA"`, `"Vulkan"`, or `"CPU"`
+
+---
+
+#### `set_active_engine`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/settings.rs` |
+| **Purpose** | Switch between Whisper and Parakeet |
+| **Frontend Call** | `await invoke("set_active_engine", { engine: "whisper" })` |
+
+**Parameters:**
+- `engine: "whisper"` - Use Whisper AI
+- `engine: "parakeet"` - Use Parakeet ASR
+
+**Returns:**
+- `Ok("Engine switched to Whisper")`
+- `Ok("Engine switched to Parakeet")`
+- `Err("Unknown engine: xyz")`
+
+---
+
+#### `get_active_engine`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/settings.rs` |
+| **Purpose** | Get currently active ASR engine |
+| **Frontend Call** | `await invoke("get_active_engine")` |
+
+**Returns:** `"Whisper"` or `"Parakeet"`
+
+---
+
+#### `set_tray_state`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/settings.rs` |
+| **Purpose** | Update system tray icon |
+| **Frontend Call** | `await invoke("set_tray_state", { newState: "recording" })` |
+
+**Parameters:**
+- `newState: "ready"` - Green icon
+- `newState: "recording"` - Red icon
+- `newState: "processing"` - Yellow icon
+
+---
+
+### LLM Commands
+
+#### `init_llm`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/llm.rs` |
+| **Purpose** | Load Gemma grammar correction model |
+| **Frontend Call** | `await invoke("init_llm")` |
+
+**Returns:**
+- `Ok("Gemma LLM initialized successfully")`
+- `Ok("LLM already initialized")`
+- `Err("Failed to load LLM: ...")` - Model file not found or GPU error
+
+---
+
+#### `correct_text`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/llm.rs` |
+| **Purpose** | Fix grammar in transcribed text |
+| **Frontend Call** | `await invoke("correct_text", { text: "..." })` |
+
+**Signature:**
+```rust
+#[tauri::command]
+pub async fn correct_text(
+    state: State<'_, AudioState>,
+    text: String,
+) -> Result<String, String>
+```
+
+**Example:**
+```typescript
+const corrected = await invoke<string>("correct_text", {
+    text: "i went too the store and buyed some milk"
+});
+// Returns: "I went to the store and bought some milk."
+```
+
+---
+
+#### `check_llm_status`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/llm.rs` |
+| **Purpose** | Check if LLM is loaded |
+| **Frontend Call** | `await invoke("check_llm_status")` |
+
+**Returns:** `true` or `false`
+
+---
+
+### Transcription Commands
+
+#### `list_sample_files`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/transcription.rs` |
+| **Purpose** | Get available test audio files |
+| **Frontend Call** | `await invoke("list_sample_files")` |
+
+**Returns:**
+```typescript
+[
+    { name: "test_audio_1.wav", path: "/full/path/to/test_audio_1.wav" },
+    { name: "test_audio_2.wav", path: "/full/path/to/test_audio_2.wav" }
+]
+```
+
+---
+
+#### `benchmark_test`
+
+| Property | Value |
+|----------|-------|
+| **File** | `commands/transcription.rs` |
+| **Purpose** | Compare Whisper vs Parakeet performance |
+| **Frontend Call** | `await invoke("benchmark_test", { filePath: "..." })` |
+
+**Returns:** Formatted benchmark report string
+
+---
+
+### Events (Backend → Frontend)
+
+#### `transcription-chunk`
+
+| Property | Value |
+|----------|-------|
+| **Emitted By** | Recording thread |
+| **Purpose** | Send real-time transcription to UI |
+
+**Payload:**
+```typescript
+interface TranscriptionChunk {
+    text: string;           // The transcribed text
+    processing_time_ms: number;  // How long it took
+    method: string;         // "Whisper" or "Parakeet"
+}
+```
+
+**Frontend Listener:**
+```typescript
+import { listen } from "@tauri-apps/api/event";
+
+await listen<TranscriptionChunk>("transcription-chunk", (event) => {
+    console.log("New text:", event.payload.text);
+    console.log("Took:", event.payload.processing_time_ms, "ms");
+});
+```
+
+---
+
+#### `hotkey-start-recording` / `hotkey-stop-recording`
+
+| Property | Value |
+|----------|-------|
+| **Emitted By** | Hotkey listener thread |
+| **Purpose** | Notify frontend of global hotkey press |
+
+**Frontend Listener:**
+```typescript
+await listen("hotkey-start-recording", () => {
+    console.log("User pressed Ctrl+Win, starting...");
+    invoke("start_recording");
+});
+
+await listen("hotkey-stop-recording", () => {
+    console.log("User released Ctrl+Win, stopping...");
+    invoke("stop_recording");
+});
+```
+
+---
+
+## 🌉 Frontend-Backend Bridge
+
+How Tauri connects React (frontend) to Rust (backend).
+
+---
+
+### The Big Picture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    TAURI ARCHITECTURE                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                         FRONTEND                                     │   │
+│   │                   (React + TypeScript)                               │   │
+│   │                                                                      │   │
+│   │   ┌─────────────┐    ┌─────────────┐    ┌─────────────┐             │   │
+│   │   │   App.tsx   │    │ Components  │    │   Hooks     │             │   │
+│   │   └──────┬──────┘    └──────┬──────┘    └──────┬──────┘             │   │
+│   │          │                  │                  │                     │   │
+│   │          └──────────────────┼──────────────────┘                     │   │
+│   │                             │                                        │   │
+│   │                             ▼                                        │   │
+│   │   ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │   │              @tauri-apps/api                                │   │   │
+│   │   │                                                             │   │   │
+│   │   │   invoke()     listen()     emit()     window.*             │   │   │
+│   │   └────────────────────────────┬────────────────────────────────┘   │   │
+│   │                                │                                     │   │
+│   └────────────────────────────────┼─────────────────────────────────────┘   │
+│                                    │                                         │
+│                                    │  IPC (Inter-Process Communication)      │
+│                                    │  JSON serialization                     │
+│                                    │                                         │
+│   ┌────────────────────────────────┼─────────────────────────────────────┐   │
+│   │                                ▼                                     │   │
+│   │   ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │   │              TAURI RUNTIME                                  │   │   │
+│   │   │                                                             │   │   │
+│   │   │   Command Router    Event System    State Manager           │   │   │
+│   │   └────────────────────────────┬────────────────────────────────┘   │   │
+│   │                                │                                     │   │
+│   │                                │                                     │   │
+│   │                                ▼                                     │   │
+│   │   ┌─────────────────────────────────────────────────────────────┐   │   │
+│   │   │              YOUR RUST CODE                                 │   │   │
+│   │   │                                                             │   │   │
+│   │   │   #[tauri::command]     State<T>     AppHandle              │   │   │
+│   │   │   fn start_recording()  .lock()      .emit()                │   │   │
+│   │   └─────────────────────────────────────────────────────────────┘   │   │
+│   │                                                                      │   │
+│   │                         BACKEND                                      │   │
+│   │                        (Rust)                                        │   │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### How `invoke()` Works
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    INVOKE() DEEP DIVE                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  FRONTEND (TypeScript):                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  const result = await invoke("switch_model", { modelId: "tiny.en" });   │ │
+│  │                        ▲              ▲                                 │ │
+│  │                        │              │                                 │ │
+│  │                   Command name    Arguments object                      │ │
+│  │                                                                         │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 ▼                                            │
+│  STEP 1: SERIALIZE TO JSON                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  {                                                                      │ │
+│  │    "cmd": "switch_model",                                               │ │
+│  │    "args": {                                                            │ │
+│  │      "modelId": "tiny.en"                                               │ │
+│  │    }                                                                    │ │
+│  │  }                                                                      │ │
+│  │                                                                         │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 │  Send via IPC                              │
+│                                 ▼                                            │
+│  STEP 2: TAURI ROUTES TO HANDLER                                             │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  // In lib.rs:                                                          │ │
+│  │  .invoke_handler(tauri::generate_handler![                              │ │
+│  │      commands::recording::start_recording,                              │ │
+│  │      commands::recording::stop_recording,                               │ │
+│  │      commands::models::switch_model,  // ← Matches "switch_model"       │ │
+│  │      // ...                                                             │ │
+│  │  ])                                                                     │ │
+│  │                                                                         │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 ▼                                            │
+│  STEP 3: DESERIALIZE ARGUMENTS                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  #[tauri::command]                                                      │ │
+│  │  pub fn switch_model(                                                   │ │
+│  │      state: State<AudioState>,  // Injected by Tauri                    │ │
+│  │      model_id: String,          // ← Deserialized from "modelId"        │ │
+│  │  ) -> Result<String, String>                                            │ │
+│  │                                                                         │ │
+│  │  Note: camelCase in JS → snake_case in Rust (automatic!)                │ │
+│  │        "modelId" → model_id                                             │ │
+│  │                                                                         │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 ▼                                            │
+│  STEP 4: EXECUTE RUST CODE                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  // Your actual logic runs here                                         │ │
+│  │  let mut whisper = state.whisper.lock().unwrap();                       │ │
+│  │  whisper.initialize(Some(&model_id))?;                                  │ │
+│  │  Ok(format!("Backend: {}", whisper.get_backend()))                      │ │
+│  │                                                                         │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 ▼                                            │
+│  STEP 5: SERIALIZE RESULT                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  Ok("Backend: CUDA")  →  { "Ok": "Backend: CUDA" }                      │ │
+│  │  Err("Not found")     →  { "Err": "Not found" }                         │ │
+│  │                                                                         │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 │  Send via IPC                              │
+│                                 ▼                                            │
+│  STEP 6: PROMISE RESOLVES/REJECTS                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  // Back in TypeScript:                                                 │ │
+│  │  const result = await invoke("switch_model", { modelId: "tiny.en" });   │ │
+│  │  // result = "Backend: CUDA"                                            │ │
+│  │                                                                         │ │
+│  │  // If Err was returned:                                                │ │
+│  │  // Promise rejects, caught by try/catch                                │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### How Events Work (Backend → Frontend)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    EVENT SYSTEM                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  BACKEND EMITS EVENT:                                                        │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  // In recording.rs:                                                    │ │
+│  │  app_handle.emit(                                                       │ │
+│  │      "transcription-chunk",     // Event name                           │ │
+│  │      TranscriptionChunk {       // Payload (must be Serialize)          │ │
+│  │          text: "Hello world".to_string(),                               │ │
+│  │          processing_time_ms: 150,                                       │ │
+│  │          method: "Whisper".to_string(),                                 │ │
+│  │      }                                                                  │ │
+│  │  );                                                                     │ │
+│  │                                                                         │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 │  Serialized to JSON                        │
+│                                 │  Sent via IPC                              │
+│                                 ▼                                            │
+│  FRONTEND RECEIVES EVENT:                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  import { listen } from "@tauri-apps/api/event";                        │ │
+│  │                                                                         │ │
+│  │  // Set up listener (usually in useEffect):                             │ │
+│  │  const unlisten = await listen<TranscriptionChunk>(                     │ │
+│  │      "transcription-chunk",                                             │ │
+│  │      (event) => {                                                       │ │
+│  │          console.log("Received:", event.payload);                       │ │
+│  │          // event.payload = {                                           │ │
+│  │          //     text: "Hello world",                                    │ │
+│  │          //     processing_time_ms: 150,                                │ │
+│  │          //     method: "Whisper"                                       │ │
+│  │          // }                                                           │ │
+│  │          setTranscript(prev => prev + " " + event.payload.text);        │ │
+│  │      }                                                                  │ │
+│  │  );                                                                     │ │
+│  │                                                                         │ │
+│  │  // Clean up when component unmounts:                                   │ │
+│  │  return () => { unlisten(); };                                          │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  INVOKE vs EMIT:                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  INVOKE (Request/Response):                                             │ │
+│  │  ┌──────────────┐         ┌──────────────┐                              │ │
+│  │  │   Frontend   │ ──────► │   Backend    │                              │ │
+│  │  │              │ ◄────── │              │                              │ │
+│  │  └──────────────┘         └──────────────┘                              │ │
+│  │   "I need data"           "Here's the data"                             │ │
+│  │                                                                         │ │
+│  │  EMIT (Push/Subscribe):                                                 │ │
+│  │  ┌──────────────┐         ┌──────────────┐                              │ │
+│  │  │   Frontend   │ ◄────── │   Backend    │                              │ │
+│  │  │  (listener)  │         │  (emitter)   │                              │ │
+│  │  └──────────────┘         └──────────────┘                              │ │
+│  │   "Tell me when          "Something happened!"                          │ │
+│  │    something happens"                                                   │ │
+│  │                                                                         │ │
+│  │  Use INVOKE for: User actions, fetching data, one-time operations       │ │
+│  │  Use EMIT for: Real-time updates, progress, streaming data              │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### State Management
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    TAURI STATE MANAGEMENT                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SETUP (in lib.rs):                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  // Create the shared state                                             │ │
+│  │  let audio_state = AudioState::new();                                   │ │
+│  │                                                                         │ │
+│  │  tauri::Builder::default()                                              │ │
+│  │      .manage(audio_state)  // ← Register state with Tauri               │ │
+│  │      .invoke_handler(...)                                               │ │
+│  │      .run(...)                                                          │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  ACCESS IN COMMANDS:                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  #[tauri::command]                                                      │ │
+│  │  pub fn start_recording(                                                │ │
+│  │      state: State<AudioState>,  // Tauri injects this automatically!    │ │
+│  │  ) -> Result<String, String> {                                          │ │
+│  │                                                                         │ │
+│  │      // Access inner fields (need to lock the Mutex):                   │ │
+│  │      let mut whisper = state.whisper.lock().unwrap();                   │ │
+│  │      whisper.clear_context();                                           │ │
+│  │                                                                         │ │
+│  │      // Or just read:                                                   │ │
+│  │      let engine = *state.active_engine.lock().unwrap();                 │ │
+│  │                                                                         │ │
+│  │      Ok("Started".to_string())                                          │ │
+│  │  }                                                                      │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  WHY THIS PATTERN?                                                           │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  Problem: Multiple commands need access to the same data                │ │
+│  │                                                                         │ │
+│  │  ❌ Global variables:                                                   │ │
+│  │     static mut WHISPER: WhisperManager = ...;  // Unsafe!               │ │
+│  │                                                                         │ │
+│  │  ❌ Pass through invoke:                                                │ │
+│  │     Can't send WhisperManager from frontend!                            │ │
+│  │                                                                         │ │
+│  │  ✅ Tauri State:                                                        │ │
+│  │     - Lives for lifetime of app                                         │ │
+│  │     - Automatically injected into commands                              │ │
+│  │     - Thread-safe via Arc<Mutex<T>>                                     │ │
+│  │     - Type-safe access                                                  │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  STATE STRUCTURE:                                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  AudioState {                                                           │ │
+│  │      whisper: Arc<Mutex<WhisperManager>>                                │ │
+│  │               ├── context: Option<WhisperContext>                       │ │
+│  │               ├── last_transcript: String                               │ │
+│  │               └── ...                                                   │ │
+│  │                                                                         │ │
+│  │      parakeet: Arc<Mutex<ParakeetManager>>                              │ │
+│  │               └── model: Option<LoadedModel>                            │ │
+│  │                                                                         │ │
+│  │      vad: Arc<Mutex<VADManager>>                                        │ │
+│  │               └── threshold: f32                                        │ │
+│  │                                                                         │ │
+│  │      recording_handle: Arc<Mutex<Option<RecordingHandle>>>              │ │
+│  │               └── None when not recording, Some(...) when recording     │ │
+│  │                                                                         │ │
+│  │      active_engine: Arc<Mutex<ASREngine>>                               │ │
+│  │               └── Whisper or Parakeet                                   │ │
+│  │  }                                                                      │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Serialization Rules
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SERIALIZATION (Rust ↔ JavaScript)                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  RUST TYPE                    JSON                      TYPESCRIPT           │
+│  ─────────────────────────────────────────────────────────────────────────   │
+│                                                                              │
+│  String                       "hello"                   string               │
+│  &str                         "hello"                   string               │
+│  i32, u32, i64, u64          123                       number               │
+│  f32, f64                     3.14                      number               │
+│  bool                         true/false                boolean              │
+│  ()                           null                      null                 │
+│  Option<T>::Some(v)          v                         T | null             │
+│  Option<T>::None             null                      T | null             │
+│  Vec<T>                       [...]                     T[]                  │
+│  HashMap<K,V>                {...}                     Record<K, V>         │
+│  Result<T,E>::Ok(v)          v                         T (success)          │
+│  Result<T,E>::Err(e)         throws                    catch (e)            │
+│                                                                              │
+│  NAMING CONVERSION:                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  Rust (snake_case)         JavaScript (camelCase)                       │ │
+│  │  ─────────────────         ──────────────────────                       │ │
+│  │  model_id                  modelId                                      │ │
+│  │  processing_time_ms        processingTimeMs                             │ │
+│  │  file_name                 fileName                                     │ │
+│  │                                                                         │ │
+│  │  This happens automatically with serde + Tauri!                         │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  STRUCT EXAMPLE:                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  // Rust:                                                               │ │
+│  │  #[derive(serde::Serialize)]                                            │ │
+│  │  pub struct TranscriptionChunk {                                        │ │
+│  │      pub text: String,                                                  │ │
+│  │      pub processing_time_ms: u32,                                       │ │
+│  │      pub method: String,                                                │ │
+│  │  }                                                                      │ │
+│  │                                                                         │ │
+│  │  // JSON:                                                               │ │
+│  │  {                                                                      │ │
+│  │      "text": "Hello world",                                             │ │
+│  │      "processingTimeMs": 150,                                           │ │
+│  │      "method": "Whisper"                                                │ │
+│  │  }                                                                      │ │
+│  │                                                                         │ │
+│  │  // TypeScript:                                                         │ │
+│  │  interface TranscriptionChunk {                                         │ │
+│  │      text: string;                                                      │ │
+│  │      processingTimeMs: number;                                          │ │
+│  │      method: string;                                                    │ │
+│  │  }                                                                      │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  ENUM EXAMPLE:                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                                                                         │ │
+│  │  // Rust:                                                               │ │
+│  │  #[derive(serde::Serialize)]                                            │ │
+│  │  pub enum ASREngine {                                                   │ │
+│  │      Whisper,                                                           │ │
+│  │      Parakeet,                                                          │ │
+│  │  }                                                                      │ │
+│  │                                                                         │ │
+│  │  // JSON:                                                               │ │
+│  │  "Whisper"  or  "Parakeet"                                              │ │
+│  │                                                                         │ │
+│  │  // TypeScript:                                                         │ │
+│  │  type ASREngine = "Whisper" | "Parakeet";                               │ │
+│  │                                                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📖 Glossary
+
+Technical terms used in this codebase, explained.
+
+---
+
+### A
+
+**ADC (Analog-to-Digital Converter)**
+Hardware that converts analog sound waves from a microphone into digital numbers (samples). Your sound card does this.
+
+**Arc (Atomic Reference Counting)**
+A Rust smart pointer that allows multiple owners of the same data across threads. The "Atomic" means it's thread-safe. See: `Arc<Mutex<WhisperManager>>`
+
+**ASR (Automatic Speech Recognition)**
+The technology of converting spoken audio into text. Whisper and Parakeet are both ASR systems.
+
+---
+
+### B
+
+**Backend**
+In this app: The Rust code that handles AI processing. In Whisper context: The hardware running inference (CUDA/Vulkan/CPU).
+
+**Borrow**
+Rust's way of temporarily using data without taking ownership. `&T` is an immutable borrow, `&mut T` is a mutable borrow.
+
+---
+
+### C
+
+**Channel**
+A communication pipe between threads. One end sends data (`tx`), the other receives (`rx`). Like a conveyor belt.
+
+**Closure**
+An anonymous function that can capture variables from its environment. Syntax: `|args| body`
+
+**Context (Whisper)**
+The "memory" of previous transcriptions. Helps Whisper understand ambiguous words by knowing what came before.
+
+**cpal**
+Cross-Platform Audio Library. The Rust crate that handles microphone input across Windows/Mac/Linux.
+
+**CTC (Connectionist Temporal Classification)**
+A type of neural network architecture for sequence-to-sequence tasks like speech recognition. Used by Parakeet CTC models.
+
+**CUDA**
+NVIDIA's GPU computing platform. Allows running AI models on NVIDIA graphics cards for massive speedup.
+
+---
+
+### D
+
+**Derive**
+Rust macro that auto-implements traits. `#[derive(Debug, Clone)]` gives your type `debug` formatting and `.clone()`.
+
+**DirectML**
+Microsoft's machine learning API for Windows. Allows running AI on AMD/Intel/Qualcomm GPUs on Windows.
+
+---
+
+### E
+
+**Enum**
+A type that can be one of several variants. Like `GpuBackend::Cuda | GpuBackend::Vulkan | GpuBackend::Cpu`.
+
+---
+
+### F
+
+**f32 / f64**
+32-bit and 64-bit floating point numbers. Audio samples are typically f32 (range -1.0 to 1.0).
+
+**Frontend**
+The user interface part of the app. In Taurscribe: React + TypeScript running in a webview.
+
+---
+
+### G
+
+**GGML / GGUF**
+File formats for quantized AI models created by Georgi Gerganov. GGUF is the newer format. Whisper models use these.
+
+**GPU (Graphics Processing Unit)**
+The graphics card. Can run AI models 10-50x faster than CPU because of parallel processing.
+
+**Greedy Decoding**
+A simple AI text generation strategy: always pick the most likely next word. Fast but not always optimal.
+
+---
+
+### H
+
+**Hz (Hertz)**
+Samples per second. Human speech needs at least 8000 Hz to be understandable. Whisper uses 16000 Hz.
+
+**hound**
+Rust crate for reading and writing WAV audio files.
+
+---
+
+### I
+
+**Inference**
+Running a trained AI model on new data. "Running inference" = using the model to transcribe audio.
+
+**invoke()**
+Tauri's function for calling Rust code from JavaScript. Returns a Promise.
+
+**IPC (Inter-Process Communication)**
+How the frontend (webview) and backend (Rust) talk to each other in Tauri.
+
+---
+
+### L
+
+**Lifetime**
+Rust's way of tracking how long references are valid. Written as `'a`. The compiler uses these to prevent dangling references.
+
+**LLM (Large Language Model)**
+AI models trained on text that can generate or modify text. Gemma is the LLM used for grammar correction.
+
+---
+
+### M
+
+**Mono**
+Single-channel audio. Speech recognition requires mono (not stereo).
+
+**Mutex (Mutual Exclusion)**
+A lock that ensures only one thread can access data at a time. Prevents data races.
+
+---
+
+### N
+
+**Nemotron**
+NVIDIA's streaming ASR model. Can transcribe in real-time as audio comes in, unlike batch models.
+
+**Nyquist Theorem**
+To capture a frequency, you need at least 2x the sample rate. Human speech is ~4000 Hz, so 8000+ Hz is needed. 16000 Hz gives headroom.
+
+---
+
+### O
+
+**ONNX (Open Neural Network Exchange)**
+A standard format for AI models. Parakeet uses ONNX models.
+
+**Option<T>**
+Rust's way of representing "maybe a value, maybe nothing". `Some(value)` or `None`.
+
+**Ownership**
+Rust's core concept: every value has exactly one owner. When the owner goes out of scope, the value is dropped.
+
+---
+
+### P
+
+**Parakeet**
+NVIDIA's ASR engine. Includes several model types: Nemotron (streaming), CTC (batch), TDT (batch).
+
+---
+
+### Q
+
+**Quantization**
+Compressing AI models by reducing number precision. Q5_1 means 5-bit quantization. Smaller but slightly less accurate.
+
+---
+
+### R
+
+**Resampling**
+Converting audio from one sample rate to another. 48000 Hz → 16000 Hz. Uses interpolation to maintain quality.
+
+**Result<T, E>**
+Rust's way of representing "either success or failure". `Ok(value)` or `Err(error)`.
+
+**RMS (Root Mean Square)**
+A way to measure audio loudness. Square all samples, average them, take square root.
+
+**rubato**
+Rust crate for high-quality audio resampling using sinc interpolation.
+
+---
+
+### S
+
+**Sample**
+A single measurement of audio amplitude at a point in time. Audio is a stream of samples.
+
+**Sample Rate**
+How many samples per second. 48000 Hz means 48,000 samples every second.
+
+**serde**
+Rust crate for **ser**ializing and **de**serializing data. Converts Rust structs to/from JSON.
+
+**Sinc Interpolation**
+A high-quality resampling algorithm that uses the sinc function. Better than simple linear interpolation.
+
+**Spawn**
+Creating a new thread. `std::thread::spawn(|| { ... })`.
+
+**State (Tauri)**
+Shared data that persists across command calls. Registered with `.manage()` and accessed via `State<T>`.
+
+**Stereo**
+Two-channel audio (left and right). Must be converted to mono for speech recognition.
+
+---
+
+### T
+
+**Tauri**
+Framework for building desktop apps with web frontend (HTML/JS/CSS) and Rust backend.
+
+**TDT (Token-and-Duration Transducer)**
+A Parakeet model architecture that predicts both tokens and their durations.
+
+**Thread**
+An independent execution path in a program. Multiple threads can run code simultaneously.
+
+**Trait**
+Rust's version of interfaces. Defines behavior that types can implement. `Debug`, `Clone`, `Send` are traits.
+
+**Transcript**
+The text output of speech recognition.
+
+**tx / rx**
+Transmitter and Receiver ends of a channel. `tx.send()` puts data in, `rx.recv()` takes data out.
+
+---
+
+### U
+
+**unsafe**
+Rust keyword that disables some safety checks. Required for certain operations like FFI or raw pointers.
+
+**unwrap()**
+Extract the value from `Option` or `Result`. Panics if `None` or `Err`. Use carefully!
+
+---
+
+### V
+
+**VAD (Voice Activity Detection)**
+Detecting whether audio contains speech or silence. Used to skip processing silent chunks.
+
+**Vec<T>**
+Rust's growable array type. `Vec<f32>` is a vector of floating-point numbers.
+
+**Vulkan**
+Cross-platform GPU API. Works with AMD, Intel, and some NVIDIA GPUs. Used when CUDA isn't available.
+
+---
+
+### W
+
+**WAV**
+Uncompressed audio file format. Stores raw samples. Easy to read/write but large files.
+
+**Whisper**
+OpenAI's speech recognition model. Very accurate, supports many languages.
+
+**whisper_rs**
+Rust bindings for whisper.cpp, which runs Whisper models efficiently.
+
+---
+
+### Quick Reference Table
+
+| Abbreviation | Full Name | What It Does |
+|--------------|-----------|--------------|
+| ASR | Automatic Speech Recognition | Speech → Text |
+| VAD | Voice Activity Detection | Detect speech vs silence |
+| CUDA | Compute Unified Device Architecture | NVIDIA GPU computing |
+| ONNX | Open Neural Network Exchange | AI model format |
+| GGUF | GPT-Generated Unified Format | Quantized model format |
+| RMS | Root Mean Square | Audio loudness measure |
+| IPC | Inter-Process Communication | Frontend ↔ Backend |
+| LLM | Large Language Model | Text AI (Gemma) |
+| CTC | Connectionist Temporal Classification | ASR architecture |
+| TDT | Token-and-Duration Transducer | ASR architecture |
+| Hz | Hertz | Samples per second |
+| kHz | Kilohertz | Thousands of samples/sec |
+
+---
+
+## 🎨 Frontend Documentation (React + TypeScript)
+
+Complete documentation of how the frontend makes calls to the Rust backend.
+
+---
+
+### Frontend File Structure
+
+```
+src/
+├── main.tsx          # React entry point (10 lines)
+├── App.tsx           # Main application component (667 lines)
+├── App.css           # Styling (674 lines)
+├── vite-env.d.ts     # Vite type declarations
+└── assets/
+    └── react.svg     # React logo
+```
+
+---
+
+### `main.tsx` - Entry Point
+
+```typescript
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);
+```
+
+**What it does:**
+1. Imports React and ReactDOM
+2. Finds the `#root` element in `index.html`
+3. Renders the `<App />` component inside it
+4. `StrictMode` enables additional development checks
+
+---
+
+### `App.tsx` - Main Component
+
+#### TypeScript Interfaces (Lines 8-40)
+
+These interfaces match the Rust structs exactly:
+
+```typescript
+// Matches whisper::ModelInfo in Rust
+interface ModelInfo {
+  id: string;              // e.g., "tiny.en-q5_1"
+  display_name: string;    // e.g., "Tiny English (Q5_1)"
+  file_name: string;       // e.g., "ggml-tiny.en-q5_1.bin"
+  size_mb: number;         // e.g., 42.3
+}
+
+// Matches types::SampleFile in Rust
+interface SampleFile {
+  name: string;            // e.g., "test_audio.wav"
+  path: string;            // e.g., "/full/path/to/test_audio.wav"
+}
+
+// Matches parakeet::ParakeetModelInfo in Rust
+interface ParakeetModelInfo {
+  id: string;              // e.g., "tdt:parakeet-tdt-0.6b-v2"
+  display_name: string;    // e.g., "Parakeet TDT - parakeet-tdt-0.6b-v2"
+  model_type: string;      // e.g., "TDT", "CTC", "Nemotron"
+  size_mb: number;
+}
+
+// Matches parakeet::ParakeetStatus in Rust
+interface ParakeetStatus {
+  loaded: boolean;
+  model_id: string | null;
+  model_type: string | null;
+  backend: string;         // e.g., "CUDA", "DirectML", "CPU"
+}
+
+// Matches types::TranscriptionChunk in Rust
+interface LiveTranscriptionPayload {
+  text: string;
+  processing_time_ms: number;
+  method: string;          // "Whisper" or "Parakeet"
+}
+
+// Frontend-only type for engine selection
+type ASREngine = "whisper" | "parakeet";
+```
+
+**Type Mapping (Rust → TypeScript):**
+
+| Rust Type | TypeScript Type |
+|-----------|-----------------|
+| `String` | `string` |
+| `f32`, `f64` | `number` |
+| `u32`, `i32` | `number` |
+| `bool` | `boolean` |
+| `Option<T>` | `T \| null` |
+| `Vec<T>` | `T[]` |
+
+---
+
+#### State Variables (Lines 43-67)
+
+```typescript
+function App() {
+  // Persistent store reference (for saving settings)
+  const storeRef = useRef<Store | null>(null);
+  
+  // UI State
+  const [greetMsg, setGreetMsg] = useState("");           // Benchmark results
+  const [liveTranscript, setLiveTranscript] = useState(""); // Real-time text
+  const [latestLatency, setLatestLatency] = useState<number | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [loadingMessage, setLoadingMessage] = useState("");
+  
+  // Backend State (synced from Rust)
+  const [backendInfo, setBackendInfo] = useState("Loading..."); // "CUDA"/"CPU"
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [currentModel, setCurrentModel] = useState<string | null>(null);
+  const [sampleFiles, setSampleFiles] = useState<SampleFile[]>([]);
+  const [selectedSample, setSelectedSample] = useState<string>("");
+  
+  // Parakeet-specific state
+  const [parakeetModels, setParakeetModels] = useState<ParakeetModelInfo[]>([]);
+  const [currentParakeetModel, setCurrentParakeetModel] = useState<string | null>(null);
+  const [, setParakeetStatus] = useState<ParakeetStatus | null>(null);
+  
+  // Engine selection
+  const [activeEngine, setActiveEngine] = useState<ASREngine>("whisper");
+  
+  // LLM (Grammar correction) state
+  const [isCorrecting, setIsCorrecting] = useState(false);
+  const [llmStatus, setLlmStatus] = useState("Not Loaded");
+  const [enableGrammarLM, setEnableGrammarLM] = useState(false);
+  
+  // Refs for hotkey state (avoid stale closures in async callbacks)
+  const isRecordingRef = useRef(false);
+  const startingRecordingRef = useRef(false);
+  const pendingStopRef = useRef(false);
+}
+```
+
+**Why `useRef` for hotkey state?**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    useState vs useRef FOR ASYNC CALLBACKS                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  PROBLEM: useState creates "stale closures" in event listeners               │
+│                                                                              │
+│  ❌ BAD: Using useState in event listener                                    │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  const [isRecording, setIsRecording] = useState(false);                 │ │
+│  │                                                                         │ │
+│  │  useEffect(() => {                                                      │ │
+│  │    listen("hotkey-stop", () => {                                        │ │
+│  │      if (isRecording) {  // ❌ STALE! Always sees initial value (false) │ │
+│  │        stopRecording();                                                 │ │
+│  │      }                                                                  │ │
+│  │    });                                                                  │ │
+│  │  }, []);  // Empty deps = listener created once with initial state      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  ✅ GOOD: Using useRef for mutable value                                     │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  const isRecordingRef = useRef(false);                                  │ │
+│  │                                                                         │ │
+│  │  // Update ref whenever state changes                                   │ │
+│  │  const [isRecording, setIsRecording] = useState(false);                 │ │
+│  │  isRecordingRef.current = isRecording;                                  │ │
+│  │                                                                         │ │
+│  │  useEffect(() => {                                                      │ │
+│  │    listen("hotkey-stop", () => {                                        │ │
+│  │      if (isRecordingRef.current) {  // ✅ Always sees latest value!     │ │
+│  │        stopRecording();                                                 │ │
+│  │      }                                                                  │ │
+│  │    });                                                                  │ │
+│  │  }, []);                                                                │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  WHY IT WORKS:                                                               │
+│  - useState: Each render creates new value, closure captures ONE of them     │
+│  - useRef: Same object across all renders, .current always up-to-date        │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### How invoke() Calls Work
+
+#### Pattern 1: Simple Call (Get Data)
+
+```typescript
+// Get backend info (CUDA/Vulkan/CPU)
+const backend = await invoke("get_backend_info");
+setBackendInfo(backend as string);
+```
+
+**Flow:**
+```
+┌─────────────────┐     invoke()      ┌─────────────────┐
+│    Frontend     │ ────────────────► │     Backend     │
+│                 │                   │                 │
+│ invoke(         │                   │ #[tauri::command]
+│  "get_backend_  │                   │ fn get_backend_ │
+│   info"         │                   │   info()        │
+│ )               │                   │   -> String     │
+│                 │ ◄──────────────── │                 │
+│ "CUDA"          │     "CUDA"        │ Ok("CUDA")      │
+└─────────────────┘                   └─────────────────┘
+```
+
+---
+
+#### Pattern 2: Call with Parameters
+
+```typescript
+// Switch Whisper model
+const result = await invoke("switch_model", { modelId: "large-v3-turbo-q5_1" });
+//                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//                                          Object with named parameters
+```
+
+**Parameter Naming:**
+```
+TypeScript (camelCase)  →  Rust (snake_case)
+─────────────────────────────────────────────
+{ modelId: "tiny.en" }  →  model_id: String
+{ filePath: "/path" }   →  file_path: String
+{ newState: "ready" }   →  new_state: String
+```
+
+**Flow:**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    INVOKE WITH PARAMETERS                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  FRONTEND:                                                                   │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  await invoke("switch_model", { modelId: "tiny.en-q5_1" });             │ │
+│  └──────────────────────────────────┬──────────────────────────────────────┘ │
+│                                     │                                        │
+│                                     │  Serialized to JSON:                   │
+│                                     │  {                                     │
+│                                     │    "cmd": "switch_model",              │
+│                                     │    "modelId": "tiny.en-q5_1"           │
+│                                     │  }                                     │
+│                                     │                                        │
+│                                     ▼                                        │
+│  BACKEND:                                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  #[tauri::command]                                                      │ │
+│  │  pub fn switch_model(                                                   │ │
+│  │      state: State<AudioState>,  // Injected by Tauri                    │ │
+│  │      model_id: String,          // ← Deserialized from "modelId"        │ │
+│  │  ) -> Result<String, String>                                            │ │
+│  └──────────────────────────────────┬──────────────────────────────────────┘ │
+│                                     │                                        │
+│                                     │  Returns: Ok("Backend: CUDA")          │
+│                                     │                                        │
+│                                     ▼                                        │
+│  FRONTEND RECEIVES:                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  const result = "Backend: CUDA";                                        │ │
+│  │  toast.success(`✅ ${result}`);                                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Pattern 3: Call with Error Handling
+
+```typescript
+const handleModelChange = async (modelId: string) => {
+  setIsLoading(true);
+  setLoadingMessage(`Loading ${modelId}...`);
+  
+  try {
+    await setTrayState("processing");                    // Update tray icon
+    const result = await invoke("switch_model", { modelId });
+    setCurrentModel(modelId);
+    toast.success(`✅ ${result}`);
+    
+    // Refresh related state
+    const backend = await invoke("get_backend_info");
+    setBackendInfo(backend as string);
+  } catch (e) {
+    toast.error(`❌ Error switching model: ${e}`);       // e is the Err string
+  } finally {
+    setIsLoading(false);
+    setLoadingMessage("");
+    await setTrayState("ready");
+  }
+};
+```
+
+**Error Flow:**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ERROR HANDLING FLOW                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  SUCCESS PATH:                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Rust: Ok("Backend: CUDA")                                              │ │
+│  │           │                                                             │ │
+│  │           ▼                                                             │ │
+│  │  TypeScript: Promise resolves                                           │ │
+│  │           │                                                             │ │
+│  │           ▼                                                             │ │
+│  │  const result = await invoke(...);  // result = "Backend: CUDA"         │ │
+│  │  toast.success(result);                                                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  ERROR PATH:                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Rust: Err("Model file not found")                                      │ │
+│  │           │                                                             │ │
+│  │           ▼                                                             │ │
+│  │  TypeScript: Promise REJECTS                                            │ │
+│  │           │                                                             │ │
+│  │           ▼                                                             │ │
+│  │  catch (e) {                                                            │ │
+│  │    // e = "Model file not found"                                        │ │
+│  │    toast.error(`Error: ${e}`);                                          │ │
+│  │  }                                                                      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### How listen() Events Work
+
+#### Setting Up Event Listeners
+
+```typescript
+useEffect(() => {
+  let unlistenStart: (() => void) | undefined;
+  let unlistenStop: (() => void) | undefined;
+  let unlistenChunk: (() => void) | undefined;
+
+  const setupListeners = async () => {
+    // Listen for hotkey events from Rust
+    unlistenStart = await listen("hotkey-start-recording", async () => {
+      console.log("[HOTKEY] Ctrl+Win pressed - starting recording");
+      await handleStartRecording();
+    });
+
+    unlistenStop = await listen("hotkey-stop-recording", async () => {
+      console.log("[HOTKEY] Ctrl+Win released - stopping recording");
+      await handleStopRecording();
+    });
+
+    // Listen for real-time transcription chunks
+    unlistenChunk = await listen("transcription-chunk", (event) => {
+      const payload = event.payload as LiveTranscriptionPayload;
+      setLiveTranscript((prev) => prev + (prev ? " " : "") + payload.text);
+      setLatestLatency(payload.processing_time_ms);
+    });
+  };
+
+  setupListeners();
+
+  // Cleanup: Remove listeners when component unmounts
+  return () => {
+    if (unlistenStart) unlistenStart();
+    if (unlistenStop) unlistenStop();
+    if (unlistenChunk) unlistenChunk();
+  };
+}, []);  // Empty deps = run once on mount
+```
+
+**Event Flow:**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    EVENT SYSTEM FLOW                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  BACKEND EMITS EVENT:                                                        │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  // In recording.rs (transcriber thread)                                │ │
+│  │  app_handle.emit(                                                       │ │
+│  │      "transcription-chunk",                                             │ │
+│  │      TranscriptionChunk {                                               │ │
+│  │          text: "Hello world".to_string(),                               │ │
+│  │          processing_time_ms: 150,                                       │ │
+│  │          method: "Whisper".to_string(),                                 │ │
+│  │      }                                                                  │ │
+│  │  );                                                                     │ │
+│  └──────────────────────────────────┬──────────────────────────────────────┘ │
+│                                     │                                        │
+│                                     │  Serialized JSON over IPC              │
+│                                     │                                        │
+│                                     ▼                                        │
+│  FRONTEND RECEIVES:                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  listen("transcription-chunk", (event) => {                             │ │
+│  │      // event.payload = {                                               │ │
+│  │      //     text: "Hello world",                                        │ │
+│  │      //     processing_time_ms: 150,                                    │ │
+│  │      //     method: "Whisper"                                           │ │
+│  │      // }                                                               │ │
+│  │                                                                         │ │
+│  │      const payload = event.payload as LiveTranscriptionPayload;         │ │
+│  │      setLiveTranscript(prev => prev + " " + payload.text);              │ │
+│  │      setLatestLatency(payload.processing_time_ms);                      │ │
+│  │  });                                                                    │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  TIMELINE:                                                                   │
+│  ════════════════════════════════════════════════════════════════════════►   │
+│                                                                              │
+│  t=0      t=6s       t=12s      t=18s      t=24s                             │
+│  │        │          │          │          │                                 │
+│  ▼        ▼          ▼          ▼          ▼                                 │
+│  START    EMIT       EMIT       EMIT       STOP                              │
+│  record   chunk1     chunk2     chunk3     record                            │
+│           │          │          │                                            │
+│           ▼          ▼          ▼                                            │
+│        "Hello"   "world this" "is a test"                                    │
+│           │          │          │                                            │
+│           └──────────┴──────────┘                                            │
+│                      │                                                       │
+│                      ▼                                                       │
+│           UI shows: "Hello world this is a test"                             │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### All Frontend → Backend Calls
+
+| Location | invoke() Call | When Triggered |
+|----------|---------------|----------------|
+| **Initial Load (useEffect)** |
+| Line 74 | `invoke("get_backend_info")` | Component mounts |
+| Line 78 | `invoke("list_models")` | Component mounts |
+| Line 82 | `invoke("get_current_model")` | Component mounts |
+| Line 86 | `invoke("list_sample_files")` | Component mounts |
+| Line 95 | `invoke("list_parakeet_models")` | Component mounts |
+| Line 98 | `invoke("get_parakeet_status")` | Component mounts |
+| **Engine Sync (useEffect)** |
+| Line 143 | `invoke("set_active_engine", { engine })` | Engine changes |
+| **Recording Controls** |
+| Line 168 | `invoke("start_recording")` | Start button / hotkey |
+| Line 189 | `invoke("stop_recording")` | Stop button / hotkey |
+| Line 197 | `invoke("correct_text", { text })` | After stop (if LLM enabled) |
+| **Model Switching** |
+| Line 316 | `invoke("switch_model", { modelId })` | Whisper dropdown change |
+| Line 328 | `invoke("get_backend_info")` | After model switch |
+| Line 347 | `invoke("init_parakeet", { modelId })` | Parakeet dropdown change |
+| Line 358 | `invoke("get_parakeet_status")` | After Parakeet init |
+| **Tray Icon** |
+| Line 404 | `invoke("set_tray_state", { newState })` | State changes |
+| **LLM** |
+| Line 434 | `invoke("init_llm")` | Toggle LLM on |
+| Line 591 | `invoke("init_llm")` | Load LLM button |
+| Line 642 | `invoke("correct_text", { text })` | Correct Grammar button |
+| **Benchmark** |
+| Line 569 | `invoke("benchmark_test", { filePath })` | Run Benchmark button |
+
+---
+
+### All Backend → Frontend Events
+
+| Event Name | Emitted From | Payload | Handler |
+|------------|--------------|---------|---------|
+| `hotkey-start-recording` | `hotkeys/listener.rs` | None | Calls `handleStartRecording()` |
+| `hotkey-stop-recording` | `hotkeys/listener.rs` | None | Calls `handleStopRecording()` |
+| `transcription-chunk` | `commands/recording.rs` | `LiveTranscriptionPayload` | Updates `liveTranscript` state |
+
+---
+
+### User Action Flow Diagrams
+
+#### Flow 1: Click "Start Recording"
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    START RECORDING FLOW                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  USER CLICKS:  ⏺️ Start Recording                                            │
+│       │                                                                      │
+│       ▼                                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  handleStartRecording()                                                 │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│       ┌─────────────────────────┼─────────────────────────────┐              │
+│       │                         │                             │              │
+│       ▼                         ▼                             ▼              │
+│  ┌─────────────┐         ┌─────────────┐              ┌─────────────┐        │
+│  │ setTrayState│         │ setLive     │              │ invoke()    │        │
+│  │ ("recording")│        │ Transcript  │              │ "start_     │        │
+│  │             │         │ ("")        │              │  recording" │        │
+│  └─────────────┘         └─────────────┘              └──────┬──────┘        │
+│       │                                                      │               │
+│       ▼                                                      ▼               │
+│  ┌─────────────┐                                     ┌─────────────┐         │
+│  │ Tray icon   │                                     │ Rust backend│         │
+│  │ turns 🔴    │                                     │ starts      │         │
+│  └─────────────┘                                     │ microphone  │         │
+│                                                      └──────┬──────┘         │
+│                                                             │                │
+│       ┌─────────────────────────────────────────────────────┘                │
+│       │                                                                      │
+│       ▼                                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  ON SUCCESS:                                                            │ │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                      │ │
+│  │  │ toast       │  │ setIs       │  │ isRecording │                      │ │
+│  │  │ .success()  │  │ Recording   │  │ Ref.current │                      │ │
+│  │  │             │  │ (true)      │  │ = true      │                      │ │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘                      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  THEN: Backend starts emitting "transcription-chunk" events                  │
+│        Frontend listener updates liveTranscript in real-time                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Flow 2: Real-Time Transcription Update
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    REAL-TIME TRANSCRIPTION FLOW                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  BACKEND (every 6 seconds):                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  // In recording.rs, transcriber thread                                 │ │
+│  │  app_clone.emit("transcription-chunk", TranscriptionChunk {             │ │
+│  │      text: "Hello how are you",                                         │ │
+│  │      processing_time_ms: 150,                                           │ │
+│  │      method: "Whisper",                                                 │ │
+│  │  });                                                                    │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 │  IPC Event                                 │
+│                                 ▼                                            │
+│  FRONTEND (listener):                                                        │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  listen("transcription-chunk", (event) => {                             │ │
+│  │      const payload = event.payload as LiveTranscriptionPayload;         │ │
+│  │                                                                         │ │
+│  │      // Append new text to existing transcript                          │ │
+│  │      setLiveTranscript((prev) =>                                        │ │
+│  │          prev + (prev ? " " : "") + payload.text                        │ │
+│  │      );                                                                 │ │
+│  │      //  ""        →  "Hello how are you"                               │ │
+│  │      //  "Hello how are you"  →  "Hello how are you I am fine"          │ │
+│  │                                                                         │ │
+│  │      // Update latency display                                          │ │
+│  │      setLatestLatency(payload.processing_time_ms);                      │ │
+│  │      // Shows: ⚡ 150ms                                                  │ │
+│  │  });                                                                    │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 │  React re-renders                          │
+│                                 ▼                                            │
+│  UI UPDATE:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  ┌───────────────────────────────────────────────────────────────────┐  │ │
+│  │  │  🔴 LIVE                                          ⚡ 150ms       │  │ │
+│  │  │                                                                   │  │ │
+│  │  │  Hello how are you I am fine thanks for asking                    │  │ │
+│  │  │                                                                   │  │ │
+│  │  └───────────────────────────────────────────────────────────────────┘  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Flow 3: Switch Model
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    MODEL SWITCH FLOW                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  USER SELECTS:  [Large V3 Turbo (Q5_1) ▼]                                    │
+│       │                                                                      │
+│       ▼                                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  onChange={(e) => handleModelChange(e.target.value)}                    │ │
+│  │  handleModelChange("large-v3-turbo-q5_1")                               │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│       ┌─────────────────────────┼─────────────────────────────┐              │
+│       │                         │                             │              │
+│       ▼                         ▼                             ▼              │
+│  ┌─────────────┐         ┌─────────────┐              ┌─────────────┐        │
+│  │ setIsLoading│         │ setLoading  │              │ setTrayState│        │
+│  │ (true)      │         │ Message     │              │("processing")│       │
+│  │             │         │ ("Loading   │              │             │        │
+│  │ Shows       │         │  Large...")│              │ Tray turns  │        │
+│  │ spinner     │         │             │              │ 🟡          │        │
+│  └─────────────┘         └─────────────┘              └─────────────┘        │
+│                                 │                                            │
+│                                 ▼                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  await invoke("switch_model", { modelId: "large-v3-turbo-q5_1" });      │ │
+│  │                                                                         │ │
+│  │  // Backend: Unloads old model, loads new model from disk               │ │
+│  │  // Takes 2-10 seconds depending on model size                          │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│       ┌─────────────────────────┴─────────────────────────────┐              │
+│       │                                                       │              │
+│       ▼                                                       ▼              │
+│  ON SUCCESS:                                            ON ERROR:            │
+│  ┌─────────────────────────┐                     ┌─────────────────────────┐ │
+│  │ setCurrentModel(id)    │                     │ toast.error(e)          │ │
+│  │ setActiveEngine        │                     │                         │ │
+│  │   ("whisper")          │                     │ Model stays unchanged   │ │
+│  │ store.set("whisper_   │                     │                         │ │
+│  │   model", id)          │                     │                         │ │
+│  │ toast.success("✅ ...")│                     │                         │ │
+│  │ invoke("get_backend_  │                     │                         │ │
+│  │   info") → update      │                     │                         │ │
+│  └─────────────────────────┘                     └─────────────────────────┘ │
+│       │                                                                      │
+│       ▼                                                                      │
+│  FINALLY:                                                                    │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  setIsLoading(false)   // Hide spinner                                  │ │
+│  │  setLoadingMessage("") // Clear message                                 │ │
+│  │  setTrayState("ready") // Tray turns 🟢                                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Flow 4: Hotkey (Ctrl+Win)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    GLOBAL HOTKEY FLOW                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  USER PRESSES: Ctrl + Win (anywhere on system)                               │
+│       │                                                                      │
+│       ▼                                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  RUST: hotkeys/listener.rs                                              │ │
+│  │                                                                         │ │
+│  │  rdev::listen(|event| {                                                 │ │
+│  │      if ctrl_held && meta_held && !recording_active {                   │ │
+│  │          recording_active = true;                                       │ │
+│  │          app_handle.emit("hotkey-start-recording", ());                 │ │
+│  │      }                                                                  │ │
+│  │  });                                                                    │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 │  Event emitted                             │
+│                                 ▼                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  FRONTEND: App.tsx listener                                             │ │
+│  │                                                                         │ │
+│  │  listen("hotkey-start-recording", async () => {                         │ │
+│  │      // Debounce check                                                  │ │
+│  │      if (Date.now() - lastStartTime < 500) return;                      │ │
+│  │                                                                         │ │
+│  │      // State check via ref (not stale state)                           │ │
+│  │      if (!isRecordingRef.current && !startingRecordingRef.current) {    │ │
+│  │          startingRecordingRef.current = true;                           │ │
+│  │          await handleStartRecording();  // Same as button click!        │ │
+│  │          startingRecordingRef.current = false;                          │ │
+│  │      }                                                                  │ │
+│  │  });                                                                    │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  USER RELEASES: Ctrl or Win                                                  │
+│       │                                                                      │
+│       ▼                                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  RUST: hotkeys/listener.rs                                              │ │
+│  │                                                                         │ │
+│  │  if recording_active && (!ctrl_held || !meta_held) {                    │ │
+│  │      recording_active = false;                                          │ │
+│  │      app_handle.emit("hotkey-stop-recording", ());                      │ │
+│  │  }                                                                      │ │
+│  └──────────────────────────────┬──────────────────────────────────────────┘ │
+│                                 │                                            │
+│                                 ▼                                            │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  FRONTEND: listener                                                     │ │
+│  │                                                                         │ │
+│  │  listen("hotkey-stop-recording", async () => {                          │ │
+│  │      if (isRecordingRef.current) {                                      │ │
+│  │          await handleStopRecording();  // Same as button click!         │ │
+│  │      }                                                                  │ │
+│  │  });                                                                    │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  RESULT: Hold Ctrl+Win to record, release to stop.                           │
+│          Works from ANY application on the system!                           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Frontend State Machine
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    APP STATE MACHINE                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│                        ┌─────────────┐                                       │
+│                        │   INITIAL   │                                       │
+│                        │   LOADING   │                                       │
+│                        │             │                                       │
+│                        │ isInitial   │                                       │
+│                        │ Loading=true│                                       │
+│                        └──────┬──────┘                                       │
+│                               │                                              │
+│                               │ All invoke() calls complete                  │
+│                               ▼                                              │
+│                        ┌─────────────┐                                       │
+│            ┌──────────►│    READY    │◄──────────┐                           │
+│            │           │             │           │                           │
+│            │           │ isRecording │           │                           │
+│            │           │ = false     │           │                           │
+│            │           │ isLoading   │           │                           │
+│            │           │ = false     │           │                           │
+│            │           └──────┬──────┘           │                           │
+│            │                  │                  │                           │
+│            │    ┌─────────────┼─────────────┐    │                           │
+│            │    │             │             │    │                           │
+│            │    │ Start       │ Switch      │    │                           │
+│            │    │ Recording   │ Model       │    │                           │
+│            │    ▼             ▼             │    │                           │
+│            │ ┌─────────┐  ┌─────────┐       │    │                           │
+│            │ │RECORDING│  │ LOADING │       │    │                           │
+│            │ │         │  │         │       │    │                           │
+│            │ │isRecord │  │isLoading│       │    │                           │
+│            │ │ing=true │  │= true   │       │    │                           │
+│            │ └────┬────┘  └────┬────┘       │    │                           │
+│            │      │            │            │    │                           │
+│            │      │ Stop       │ Done       │    │                           │
+│            │      │ Recording  │            │    │                           │
+│            │      ▼            │            │    │                           │
+│            │ ┌─────────┐       │            │    │                           │
+│            │ │PROCESSING│      │            │    │                           │
+│            │ │         │       │            │    │                           │
+│            │ │ (Final  │       │            │    │                           │
+│            │ │  pass)  │       │            │    │                           │
+│            │ └────┬────┘       │            │    │                           │
+│            │      │            │            │    │                           │
+│            └──────┴────────────┴────────────┘    │                           │
+│                                                  │                           │
+│                         Error ───────────────────┘                           │
+│                                                                              │
+│  TRAY ICON STATES:                                                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                           │
+│  │   🟢 READY  │  │ 🔴 RECORDING │  │🟡 PROCESSING│                           │
+│  │             │  │             │  │             │                           │
+│  │ Waiting for │  │ Mic active, │  │ Loading     │                           │
+│  │ user input  │  │ transcribing│  │ model or    │                           │
+│  │             │  │             │  │ final pass  │                           │
+│  └─────────────┘  └─────────────┘  └─────────────┘                           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### CSS Architecture
+
+```
+App.css Structure:
+├── :root (CSS Variables)
+│   ├── Color palette (--bg-primary, --accent-primary, etc.)
+│   ├── Typography settings
+│   └── Common values (--border-color, --shadow-color)
+│
+├── Base styles (body, *, .container)
+│
+├── Component styles
+│   ├── .status-bar-container, .status-card (Engine cards)
+│   ├── .engine-badge (Whisper/Parakeet labels)
+│   ├── .model-section, .model-select (Dropdown)
+│   ├── .controls, .btn, .btn-start, .btn-stop (Buttons)
+│   ├── .output-area, .live-transcript (Results)
+│   ├── .loading-overlay, .loading-spinner (Loading state)
+│   └── .switch, .slider (Toggle switch)
+│
+├── Animations (@keyframes)
+│   ├── spin (Loading spinner)
+│   ├── fadeIn (Component entrance)
+│   └── pulse (Live indicator)
+│
+└── Responsive design (@media queries)
+```
+
+---
+
+### Quick Reference: Frontend → Backend
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FRONTEND-BACKEND CHEAT SHEET                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  CALL BACKEND FUNCTION:                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  import { invoke } from "@tauri-apps/api/core";                         │ │
+│  │                                                                         │ │
+│  │  // No parameters                                                       │ │
+│  │  const result = await invoke("command_name");                           │ │
+│  │                                                                         │ │
+│  │  // With parameters (camelCase → snake_case automatic)                  │ │
+│  │  const result = await invoke("command_name", { paramName: value });     │ │
+│  │                                                                         │ │
+│  │  // With error handling                                                 │ │
+│  │  try {                                                                  │ │
+│  │    const result = await invoke("command_name");                         │ │
+│  │  } catch (error) {                                                      │ │
+│  │    console.error(error);  // error is the Err(...) string from Rust     │ │
+│  │  }                                                                      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  LISTEN FOR BACKEND EVENTS:                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  import { listen } from "@tauri-apps/api/event";                        │ │
+│  │                                                                         │ │
+│  │  useEffect(() => {                                                      │ │
+│  │    let unlisten: (() => void) | undefined;                              │ │
+│  │                                                                         │ │
+│  │    const setup = async () => {                                          │ │
+│  │      unlisten = await listen("event-name", (event) => {                 │ │
+│  │        const payload = event.payload as MyType;                         │ │
+│  │        // Handle event...                                               │ │
+│  │      });                                                                │ │
+│  │    };                                                                   │ │
+│  │    setup();                                                             │ │
+│  │                                                                         │ │
+│  │    return () => { if (unlisten) unlisten(); };  // Cleanup!             │ │
+│  │  }, []);                                                                │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  TYPE MAPPING:                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Rust                    TypeScript                                     │ │
+│  │  ────────────────────────────────────────────────                       │ │
+│  │  String                  string                                         │ │
+│  │  i32, u32, f32, f64      number                                         │ │
+│  │  bool                    boolean                                        │ │
+│  │  Option<T>               T | null                                       │ │
+│  │  Vec<T>                  T[]                                            │ │
+│  │  Result<T, E>            T (or throws E)                                │ │
+│  │  ()                      void / null                                    │ │
+│  │                                                                         │ │
+│  │  Field names: snake_case → camelCase                                    │ │
+│  │  processing_time_ms → processingTimeMs                                  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📦 Rust Crates & Dependencies Guide
+
+Complete documentation of every crate used in this project, what it does, and how it's used.
+
+---
+
+### Cargo.toml Structure Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CARGO.TOML DEPENDENCY STRUCTURE                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  [build-dependencies]          # Used during compilation                     │
+│  └── tauri-build               # Compiles Tauri app resources                │
+│                                                                              │
+│  [dependencies]                # Used on ALL platforms                       │
+│  ├── tauri                     # App framework (window, IPC, tray)           │
+│  ├── serde/serde_json          # JSON serialization                          │
+│  ├── cpal                      # Audio capture                               │
+│  ├── crossbeam-channel         # Thread communication                        │
+│  ├── hound                     # WAV file I/O                                │
+│  ├── chrono                    # Date/time handling                          │
+│  ├── rubato                    # Audio resampling                            │
+│  ├── dirs                      # OS directories (AppData, etc.)              │
+│  ├── rdev                      # Global hotkeys                              │
+│  ├── regex                     # Text pattern matching                       │
+│  ├── candle-*                  # ML framework (Gemma LLM)                    │
+│  ├── tokenizers                # LLM tokenization                            │
+│  └── anyhow                    # Error handling                              │
+│                                                                              │
+│  [target.'cfg(...)'.dependencies]  # Platform-specific                       │
+│  ├── whisper-rs                # Speech-to-text (Whisper)                    │
+│  ├── parakeet-rs               # Speech-to-text (Parakeet)                   │
+│  └── ort                       # ONNX Runtime                                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Core Framework Crates
+
+#### 1. `tauri` - Application Framework
+
+```toml
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+```
+
+**What it is:** The core Tauri framework that creates desktop applications with a web frontend and Rust backend.
+
+**Features enabled:**
+- `tray-icon`: System tray support (the colored circles 🟢🔴🟡)
+- `image-png`: PNG image loading for tray icons
+
+**How it's used:**
+
+```rust
+// In lib.rs - App builder
+tauri::Builder::default()
+    .plugin(tauri_plugin_opener::init())    // Plugin registration
+    .plugin(tauri_plugin_store::Builder::default().build())
+    .plugin(tauri_plugin_fs::init())
+    .manage(audio_state)                    // State management
+    .invoke_handler(tauri::generate_handler![...])  // Command registration
+    .setup(|app| { ... })                   // App initialization
+    .run(tauri::generate_context!())        // Run the app
+
+// In commands - Accessing Tauri features
+use tauri::{AppHandle, State, Emitter, Manager};
+
+#[tauri::command]
+pub fn my_command(
+    app: AppHandle,           // Access to app methods
+    state: State<AudioState>, // Managed state
+) -> Result<String, String> {
+    app.emit("event-name", payload)?;  // Emit to frontend
+    Ok("Success".to_string())
+}
+```
+
+**Analogy:** Tauri is like the **skeleton and nervous system** of your app - it provides the structure (windows, menus) and communication pathways (IPC between frontend and backend).
+
+---
+
+#### 2. `tauri-plugin-store` - Persistent Settings
+
+```toml
+tauri-plugin-store = "2.4.2"
+```
+
+**What it is:** A plugin for persisting user settings as JSON files.
+
+**How it's used:**
+
+```rust
+// In lib.rs - Register plugin
+.plugin(tauri_plugin_store::Builder::default().build())
+```
+
+```typescript
+// In App.tsx - Frontend usage
+import { Store } from "@tauri-apps/plugin-store";
+
+const store = await Store.load("settings.json");
+await store.set("active_engine", "whisper");
+await store.save();
+
+const engine = await store.get<string>("active_engine");
+```
+
+**Where data is stored:** `%APPDATA%/com.taurscribe.app/settings.json` (Windows)
+
+---
+
+#### 3. `tauri-plugin-fs` - File System Access
+
+```toml
+tauri-plugin-fs = "2"
+```
+
+**What it is:** Provides access to file system operations with security permissions.
+
+**How it's used:** Allows the app to read/write files in allowed directories (AppData, etc.).
+
+---
+
+#### 4. `tauri-plugin-opener` - External Links
+
+```toml
+tauri-plugin-opener = "2"
+```
+
+**What it is:** Opens URLs in the default browser or files with their associated applications.
+
+---
+
+### Serialization Crates
+
+#### 5. `serde` - Serialization Framework
+
+```toml
+serde = { version = "1", features = ["derive"] }
+```
+
+**What it is:** The de-facto Rust serialization framework. Converts Rust structs to/from other formats (JSON, TOML, etc.).
+
+**The `derive` feature:** Auto-generates serialization code via `#[derive(Serialize, Deserialize)]`.
+
+**How it's used:**
+
+```rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub display_name: String,
+    pub size_mb: f64,
+}
+// Serde auto-generates the code to convert this to/from JSON:
+// { "id": "tiny.en", "display_name": "Tiny English", "size_mb": 42.3 }
+```
+
+**Why it matters:** Every struct that crosses the frontend-backend boundary MUST be Serialize/Deserialize.
+
+---
+
+#### 6. `serde_json` - JSON Handling
+
+```toml
+serde_json = "1"
+```
+
+**What it is:** JSON-specific serialization using Serde.
+
+**How it's used:**
+
+```rust
+use serde_json;
+
+let json_string = serde_json::to_string(&my_struct)?;
+let my_struct: MyStruct = serde_json::from_str(&json_string)?;
+```
+
+---
+
+### Audio Processing Crates
+
+#### 7. `cpal` - Cross-Platform Audio Library
+
+```toml
+cpal = "0.15"
+```
+
+**What it is:** Low-level cross-platform audio I/O. Interfaces with OS audio APIs (WASAPI on Windows, CoreAudio on macOS, ALSA on Linux).
+
+**How it's used:**
+
+```rust
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+// Get the default audio host (WASAPI/CoreAudio/ALSA)
+let host = cpal::default_host();
+
+// Get the default input device (microphone)
+let device = host.default_input_device()
+    .ok_or("No input device found")?;
+
+// Get supported audio format
+let config = device.default_input_config()?;
+// e.g., 48000 Hz, 2 channels, f32 samples
+
+// Build audio stream with callback
+let stream = device.build_input_stream(
+    &config.into(),
+    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+        // This runs every ~10ms with new audio samples
+        sender.send(data.to_vec()).ok();
+    },
+    |err| eprintln!("Stream error: {}", err),
+    None,
+)?;
+
+stream.play()?;  // Start capturing
+```
+
+**Diagram:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CPAL AUDIO FLOW                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   MICROPHONE                                                                 │
+│       │                                                                      │
+│       ▼                                                                      │
+│   ┌───────────────┐                                                          │
+│   │   OS DRIVER   │  ← WASAPI (Win) / CoreAudio (Mac) / ALSA (Linux)         │
+│   │               │                                                          │
+│   │  Samples at   │                                                          │
+│   │  48000 Hz     │                                                          │
+│   └───────┬───────┘                                                          │
+│           │                                                                  │
+│           ▼                                                                  │
+│   ┌───────────────┐                                                          │
+│   │     CPAL      │  ← Abstracts OS differences                              │
+│   │               │                                                          │
+│   │ Provides:     │                                                          │
+│   │ - &[f32]      │  Audio samples (-1.0 to +1.0)                            │
+│   │ - Sample rate │  48000, 44100, etc.                                      │
+│   │ - Channels    │  Mono=1, Stereo=2                                        │
+│   └───────┬───────┘                                                          │
+│           │                                                                  │
+│           │  Callback every ~10ms                                            │
+│           ▼                                                                  │
+│   ┌───────────────┐                                                          │
+│   │  YOUR CODE    │                                                          │
+│   │               │                                                          │
+│   │ sender.send(  │                                                          │
+│   │   data.to_vec │                                                          │
+│   │ )             │                                                          │
+│   └───────────────┘                                                          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### 8. `crossbeam-channel` - Thread Communication
+
+```toml
+crossbeam-channel = "0.5"
+```
+
+**What it is:** High-performance multi-producer multi-consumer channels for thread communication. Faster and more feature-rich than `std::sync::mpsc`.
+
+**How it's used:**
+
+```rust
+use crossbeam_channel::{unbounded, Sender, Receiver};
+
+// Create channel pair
+let (sender, receiver): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
+
+// Audio thread sends samples
+std::thread::spawn(move || {
+    let samples = vec![0.1, 0.2, 0.3];
+    sender.send(samples).ok();
+});
+
+// Processing thread receives samples
+std::thread::spawn(move || {
+    while let Ok(samples) = receiver.recv() {
+        // Process audio...
+    }
+});
+```
+
+**Why crossbeam over std::sync::mpsc?**
+
+| Feature | std::sync::mpsc | crossbeam-channel |
+|---------|-----------------|-------------------|
+| Multi-producer | ✅ | ✅ |
+| Multi-consumer | ❌ | ✅ |
+| Select (wait on multiple) | ❌ | ✅ |
+| Bounded channels | ❌ | ✅ |
+| Performance | Good | Better |
+
+---
+
+#### 9. `hound` - WAV File I/O
+
+```toml
+hound = "3.5"
+```
+
+**What it is:** Read and write WAV audio files.
+
+**How it's used:**
+
+```rust
+use hound::{WavSpec, WavWriter, SampleFormat};
+
+// Create WAV file
+let spec = WavSpec {
+    channels: 1,           // Mono
+    sample_rate: 16000,    // 16kHz (Whisper's expected rate)
+    bits_per_sample: 32,   // 32-bit float
+    sample_format: SampleFormat::Float,
+};
+
+let mut writer = WavWriter::create(path, spec)?;
+
+// Write samples
+for sample in audio_samples {
+    writer.write_sample(sample)?;
+}
+writer.finalize()?;  // Important! Writes header with correct length
+```
+
+**Reading WAV:**
+
+```rust
+use hound::WavReader;
+
+let mut reader = WavReader::open(path)?;
+let samples: Vec<f32> = reader.samples::<f32>()
+    .filter_map(Result::ok)
+    .collect();
+```
+
+---
+
+#### 10. `rubato` - Audio Resampling
+
+```toml
+rubato = "0.14"
+```
+
+**What it is:** High-quality audio sample rate conversion. Converts between sample rates (e.g., 48000Hz → 16000Hz) while preserving audio quality.
+
+**Why it's needed:** Whisper requires exactly 16000Hz audio. Microphones typically provide 44100Hz or 48000Hz.
+
+**How it's used:**
+
+```rust
+use rubato::{FftFixedIn, Resampler};
+
+// Create resampler: 48000Hz → 16000Hz
+let mut resampler = FftFixedIn::<f32>::new(
+    48000,   // Input sample rate
+    16000,   // Output sample rate (Whisper requires this)
+    1024,    // Chunk size
+    2,       // Sub-chunks (quality vs speed tradeoff)
+    1,       // Number of channels
+)?;
+
+// Resample audio
+let input_frames = vec![audio_samples];  // Vec<Vec<f32>>
+let output_frames = resampler.process(&input_frames, None)?;
+let resampled: Vec<f32> = output_frames.into_iter().flatten().collect();
+```
+
+**Diagram:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    RESAMPLING VISUALIZATION                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  INPUT: 48000 Hz (3x more samples)                                           │
+│  ═══════════════════════════════════════════════════════════════════════     │
+│  │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │ │     │
+│  └─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┴─┘     │
+│                              │                                               │
+│                              │  rubato (FFT-based resampling)                │
+│                              ▼                                               │
+│  OUTPUT: 16000 Hz (1/3 samples, same duration)                               │
+│  ═════════════════════════════                                               │
+│  │   │   │   │   │   │   │   │   │   │   │   │                               │
+│  └───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘                           │
+│                                                                              │
+│  KEY: Same audio duration, different sample density                          │
+│       Rubato uses FFT to preserve frequencies during conversion              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### AI/ML Crates
+
+#### 11. `whisper-rs` - Speech-to-Text (Whisper)
+
+```toml
+# Base (CPU)
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+
+# Windows/Linux x86_64 (GPU)
+whisper-rs = { git = "...", features = ["cuda", "vulkan"] }
+```
+
+**What it is:** Rust bindings for OpenAI's Whisper speech recognition model via whisper.cpp (C++ implementation).
+
+**Features:**
+- `cuda`: NVIDIA GPU acceleration
+- `vulkan`: Cross-vendor GPU acceleration (NVIDIA, AMD, Intel)
+
+**How it's used:**
+
+```rust
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+};
+
+// Load model (once at startup)
+let ctx = WhisperContext::new_with_params(
+    "/path/to/ggml-large-v3-turbo-q5_1.bin",
+    WhisperContextParameters::default()
+        .use_gpu(true),  // Enable GPU if available
+)?;
+
+// Create transcription parameters
+let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+params.set_language(Some("en"));
+params.set_print_progress(false);
+params.set_single_segment(true);    // Real-time mode
+
+// Create state and run inference
+let mut state = ctx.create_state()?;
+state.full(params, &audio_16khz)?;  // Must be 16kHz mono f32!
+
+// Extract result
+let text = state.full_get_segment_text(0)?;
+```
+
+---
+
+#### 12. `parakeet-rs` - Speech-to-Text (Parakeet)
+
+```toml
+# Base
+parakeet-rs = { version = "=0.3.0" }
+
+# With GPU
+parakeet-rs = { version = "=0.3.0", features = ["cuda", "directml"] }
+```
+
+**What it is:** Rust bindings for NVIDIA's Parakeet ASR models. Uses ONNX Runtime for inference.
+
+**Model types:**
+- `Nemotron`: NVIDIA's Nemotron architecture
+- `ParakeetTDT`: Token-and-Duration Transducer (fastest, most accurate)
+- `Parakeet` (CTC): Connectionist Temporal Classification
+- `ParakeetEOU`: End-of-Utterance detection
+
+**How it's used:**
+
+```rust
+use parakeet_rs::{ParakeetTDT, Transcriber, TimestampMode};
+
+// Load model
+let model = ParakeetTDT::from_files(
+    "/path/to/encoder.onnx",
+    "/path/to/decoder.onnx",
+    "/path/to/joiner.onnx",
+    "/path/to/tokenizer.model",
+)?;
+
+// Transcribe (expects 16kHz mono)
+let text = model.transcribe(&audio_16khz, TimestampMode::None)?;
+```
+
+---
+
+#### 13. `ort` - ONNX Runtime
+
+```toml
+ort = { version = "2.0.0-rc.11", features = [
+    "download-binaries",  # Auto-download ONNX Runtime
+    "cuda",               # NVIDIA GPU
+    "directml",           # Windows GPU (AMD/Intel)
+    "tensorrt",           # NVIDIA optimized inference
+    "xnnpack",            # CPU optimization
+] }
+```
+
+**What it is:** Rust bindings for Microsoft's ONNX Runtime - a high-performance inference engine for ONNX models.
+
+**Why it's used:** Parakeet models are in ONNX format. ORT provides hardware acceleration across different GPUs.
+
+**Feature breakdown:**
+
+| Feature | What it does | Platform |
+|---------|--------------|----------|
+| `cuda` | NVIDIA GPU acceleration | Windows, Linux |
+| `directml` | DirectX 12 GPU acceleration | Windows only |
+| `tensorrt` | NVIDIA optimized inference | Windows, Linux |
+| `xnnpack` | ARM/x86 CPU optimization | All |
+| `coreml` | Apple Neural Engine | macOS only |
+
+---
+
+#### 14. `candle-*` - ML Framework (Gemma LLM)
+
+```toml
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.9.2" }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.9.2" }
+candle-transformers = { git = "https://github.com/huggingface/candle.git", version = "0.9.2" }
+```
+
+**What it is:** Hugging Face's pure-Rust ML framework. Like PyTorch, but in Rust.
+
+**Crate breakdown:**
+- `candle-core`: Tensor operations, device management, quantization
+- `candle-nn`: Neural network layers
+- `candle-transformers`: Pre-built transformer models (Gemma, Llama, etc.)
+
+**How it's used (Gemma LLM for grammar correction):**
+
+```rust
+use candle_core::{Device, Tensor};
+use candle_core::quantized::gguf_file;
+use candle_transformers::models::quantized_gemma3 as model;
+use candle_transformers::generation::LogitsProcessor;
+
+// Load quantized GGUF model
+let mut file = std::fs::File::open("/path/to/gemma-3-1b-it-q4_k_m.gguf")?;
+let model_data = gguf_file::Content::read(&mut file)?;
+let model = model::ModelWeights::from_gguf(model_data, &mut file, &Device::Cpu)?;
+
+// Tokenize input
+let tokens = tokenizer.encode(prompt, true)?;
+let input_ids = Tensor::new(tokens.get_ids(), &Device::Cpu)?;
+
+// Generate response
+let logits = model.forward(&input_ids, 0)?;
+let next_token = logits_processor.sample(&logits)?;
+```
+
+---
+
+#### 15. `tokenizers` - LLM Tokenization
+
+```toml
+tokenizers = "0.21.0"
+```
+
+**What it is:** Hugging Face's tokenizer library. Converts text ↔ token IDs for language models.
+
+**How it's used:**
+
+```rust
+use tokenizers::Tokenizer;
+
+// Load tokenizer from model config
+let tokenizer = Tokenizer::from_file("/path/to/tokenizer.json")?;
+
+// Encode text → tokens
+let encoding = tokenizer.encode("Hello world", true)?;
+let token_ids: Vec<u32> = encoding.get_ids().to_vec();
+// [1, 15043, 2088]  (example token IDs)
+
+// Decode tokens → text
+let text = tokenizer.decode(&token_ids, true)?;
+// "Hello world"
+```
+
+---
+
+#### 16. `hf-hub` - Hugging Face Model Hub
+
+```toml
+hf-hub = "0.4"
+```
+
+**What it is:** Download models from Hugging Face Hub.
+
+**How it's used:**
+
+```rust
+use hf_hub::api::sync::Api;
+
+let api = Api::new()?;
+let repo = api.model("google/gemma-3-1b-it-qat-q4_0-gguf".to_string());
+let model_path = repo.get("gemma-3-1b-it-q4_0.gguf")?;
+```
+
+---
+
+### Utility Crates
+
+#### 17. `chrono` - Date/Time
+
+```toml
+chrono = "0.4"
+```
+
+**What it is:** Date and time library for Rust.
+
+**How it's used:**
+
+```rust
+use chrono::Local;
+
+// Generate timestamp for file names
+let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+let filename = format!("recording_{}.wav", timestamp);
+// "recording_20260201_143052.wav"
+```
+
+---
+
+#### 18. `dirs` - OS Directories
+
+```toml
+dirs = "6.0.0"
+```
+
+**What it is:** Provides paths to standard OS directories.
+
+**How it's used:**
+
+```rust
+use dirs;
+
+// Get AppData directory (cross-platform)
+let data_dir = dirs::data_dir();  
+// Windows: C:\Users\<user>\AppData\Roaming
+// macOS:   /Users/<user>/Library/Application Support
+// Linux:   /home/<user>/.local/share
+
+// Get home directory
+let home = dirs::home_dir();
+// Windows: C:\Users\<user>
+// macOS/Linux: /home/<user>
+```
+
+---
+
+#### 19. `rdev` - Global Hotkeys
+
+```toml
+rdev = "0.5"
+```
+
+**What it is:** Raw device events - captures keyboard/mouse events system-wide (even when app isn't focused).
+
+**How it's used:**
+
+```rust
+use rdev::{listen, Event, EventType, Key};
+
+// Listen for ALL keyboard events on the system
+std::thread::spawn(|| {
+    listen(|event| {
+        match event.event_type {
+            EventType::KeyPress(Key::ControlLeft) => {
+                ctrl_held = true;
+            }
+            EventType::KeyPress(Key::MetaLeft) => {
+                // Win key pressed
+                if ctrl_held {
+                    app_handle.emit("hotkey-start-recording", ());
+                }
+            }
+            EventType::KeyRelease(Key::ControlLeft) => {
+                ctrl_held = false;
+                if was_recording {
+                    app_handle.emit("hotkey-stop-recording", ());
+                }
+            }
+            _ => {}
+        }
+    }).expect("Failed to listen for events");
+});
+```
+
+**Security note:** Requires elevated permissions on some Linux systems.
+
+---
+
+#### 20. `regex` - Regular Expressions
+
+```toml
+regex = "1.12.2"
+```
+
+**What it is:** Regular expression library for pattern matching in text.
+
+**How it's used:**
+
+```rust
+use regex::Regex;
+
+// Clean transcript text
+let re = Regex::new(r"\s+").unwrap();
+let cleaned = re.replace_all(transcript, " ");
+
+// Remove [BLANK_AUDIO] artifacts
+let re = Regex::new(r"\[BLANK_AUDIO\]").unwrap();
+let cleaned = re.replace_all(&cleaned, "");
+```
+
+---
+
+#### 21. `anyhow` - Error Handling
+
+```toml
+anyhow = "1.0"
+```
+
+**What it is:** Easy error handling with automatic error context and conversion.
+
+**How it's used:**
+
+```rust
+use anyhow::{Result, Context, bail};
+
+fn load_model(path: &str) -> Result<Model> {
+    let file = std::fs::File::open(path)
+        .context("Failed to open model file")?;  // Adds context to error
+    
+    if file.metadata()?.len() == 0 {
+        bail!("Model file is empty");  // Create error and return early
+    }
+    
+    Ok(Model::from_file(file)?)
+}
+```
+
+**Why use anyhow?**
+- `?` works with any error type
+- `.context()` adds human-readable messages
+- `bail!()` macro for early returns
+- Better error messages in logs
+
+---
+
+### Platform-Specific Dependencies
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PLATFORM-SPECIFIC DEPENDENCY MATRIX                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────┬────────────┬────────────┬────────────┬────────────┐    │
+│  │                 │ Windows    │ Windows    │ macOS      │ Linux      │    │
+│  │                 │ x86_64     │ ARM64      │ (All)      │ x86_64     │    │
+│  ├─────────────────┼────────────┼────────────┼────────────┼────────────┤    │
+│  │ whisper-rs      │ cuda,      │ (base)     │ (base)     │ cuda,      │    │
+│  │                 │ vulkan     │            │            │ vulkan     │    │
+│  ├─────────────────┼────────────┼────────────┼────────────┼────────────┤    │
+│  │ parakeet-rs     │ cuda,      │ directml   │ (base)     │ cuda       │    │
+│  │                 │ directml   │            │            │            │    │
+│  ├─────────────────┼────────────┼────────────┼────────────┼────────────┤    │
+│  │ ort features    │ cuda,      │ directml,  │ xnnpack    │ cuda,      │    │
+│  │                 │ directml,  │ xnnpack    │            │ tensorrt,  │    │
+│  │                 │ tensorrt,  │            │            │ xnnpack    │    │
+│  │                 │ xnnpack    │            │            │            │    │
+│  └─────────────────┴────────────┴────────────┴────────────┴────────────┘    │
+│                                                                              │
+│  LEGEND:                                                                     │
+│  cuda     = NVIDIA GPU (requires CUDA Toolkit)                               │
+│  vulkan   = Cross-vendor GPU (requires Vulkan SDK)                           │
+│  directml = Windows GPU via DirectX 12 (built into Windows)                  │
+│  tensorrt = NVIDIA optimized inference (requires TensorRT)                   │
+│  xnnpack  = CPU optimization (no extra requirements)                         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🖥️ OS Dependencies & Requirements
+
+### Windows Requirements
+
+#### 1. Visual Studio Build Tools (Required)
+
+```
+Download: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+
+Required components:
+├── MSVC v143 (or later) - C++ Build Tools
+├── Windows 11 SDK (or Windows 10 SDK)
+└── C++ CMake tools for Windows
+```
+
+**Why needed:** whisper-rs and parakeet-rs compile C++ code during build.
+
+---
+
+#### 2. CUDA Toolkit (Optional - For NVIDIA GPU)
+
+```
+Download: https://developer.nvidia.com/cuda-toolkit
+
+Required version: 12.x (tested with 12.9)
+
+Sets environment variable:
+CUDA_PATH = C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9
+```
+
+**Why needed:** GPU acceleration for Whisper and Parakeet on NVIDIA cards.
+
+**build.rs handles this:**
+```rust
+// Automatically finds CUDA libraries
+if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+    let lib_path = cuda_path.join("lib").join("x64");
+    println!("cargo:rustc-link-search=native={}", lib_path.display());
+}
+```
+
+---
+
+#### 3. Vulkan SDK (Optional - For AMD/Intel GPU with Whisper)
+
+```
+Download: https://vulkan.lunarg.com/sdk/home
+
+Sets environment variable:
+VULKAN_SDK = C:\VulkanSDK\1.3.xxx
+```
+
+**Why needed:** Alternative GPU acceleration for Whisper (works with AMD, Intel, NVIDIA).
+
+---
+
+#### 4. LLVM/Clang (Required for ARM64 Windows only)
+
+```
+Download: https://releases.llvm.org/
+
+Required for: Windows ARM64 (Snapdragon laptops)
+```
+
+**Why needed:** whisper.cpp doesn't support MSVC on ARM64.
+
+**build.rs handles this:**
+```rust
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+{
+    std::env::set_var("CC", "clang-cl");
+    std::env::set_var("CXX", "clang-cl");
+}
+```
+
+---
+
+### macOS Requirements
+
+#### 1. Xcode Command Line Tools (Required)
+
+```bash
+xcode-select --install
+```
+
+**Why needed:** Provides C/C++ compiler (clang) and build tools.
+
+---
+
+#### 2. Minimum macOS Version
+
+```
+Required: macOS 13.4+ (Ventura or later)
+
+Why: ONNX Runtime requires macOS 13.4+ on Apple Silicon
+     whisper.cpp requires C++17 std::filesystem (macOS 10.15+)
+```
+
+**build.rs handles this:**
+```rust
+#[cfg(target_os = "macos")]
+{
+    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
+    std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "13.4");
+}
+```
+
+---
+
+### Linux Requirements
+
+#### 1. Build Essentials (Required)
+
+```bash
+# Debian/Ubuntu
+sudo apt install build-essential cmake pkg-config
+
+# Fedora
+sudo dnf install @development-tools cmake
+
+# Arch
+sudo pacman -S base-devel cmake
+```
+
+---
+
+#### 2. ALSA Development Libraries (Required for audio)
+
+```bash
+# Debian/Ubuntu
+sudo apt install libasound2-dev
+
+# Fedora
+sudo dnf install alsa-lib-devel
+
+# Arch
+sudo pacman -S alsa-lib
+```
+
+**Why needed:** cpal uses ALSA for audio capture on Linux.
+
+---
+
+#### 3. X11 Development Libraries (Required for rdev hotkeys)
+
+```bash
+# Debian/Ubuntu
+sudo apt install libx11-dev libxtst-dev
+
+# Fedora
+sudo dnf install libX11-devel libXtst-devel
+
+# Arch
+sudo pacman -S libx11 libxtst
+```
+
+**Why needed:** rdev uses X11 for capturing keyboard events.
+
+---
+
+#### 4. CUDA Toolkit (Optional - For NVIDIA GPU)
+
+```bash
+# Follow NVIDIA's official guide:
+# https://developer.nvidia.com/cuda-downloads
+
+# Verify installation:
+nvcc --version
+nvidia-smi
+```
+
+---
+
+### Dependency Installation Summary
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    INSTALLATION CHECKLIST                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WINDOWS:                                                                    │
+│  ☐ Visual Studio Build Tools (required)                                     │
+│  ☐ CUDA Toolkit 12.x (optional, for NVIDIA GPU)                             │
+│  ☐ Vulkan SDK (optional, for Whisper GPU on AMD/Intel)                      │
+│  ☐ LLVM/Clang (only for ARM64 Windows)                                      │
+│                                                                              │
+│  MACOS:                                                                      │
+│  ☐ Xcode Command Line Tools (required)                                      │
+│  ☐ macOS 13.4+ (required)                                                   │
+│                                                                              │
+│  LINUX:                                                                      │
+│  ☐ build-essential, cmake (required)                                        │
+│  ☐ libasound2-dev (required for audio)                                      │
+│  ☐ libx11-dev, libxtst-dev (required for hotkeys)                           │
+│  ☐ CUDA Toolkit (optional, for NVIDIA GPU)                                  │
+│                                                                              │
+│  ALL PLATFORMS:                                                              │
+│  ☐ Rust (via rustup): https://rustup.rs                                     │
+│  ☐ Node.js 18+ (for frontend): https://nodejs.org                           │
+│  ☐ Bun (faster npm alternative): https://bun.sh                             │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### How Crates Map to Features
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    FEATURE → CRATE MAPPING                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  FEATURE                          CRATES INVOLVED                            │
+│  ────────────────────────────────────────────────────────────────────────    │
+│                                                                              │
+│  🎙️ Audio Capture                 cpal, crossbeam-channel                    │
+│  📁 Save Recordings               hound, dirs, chrono                        │
+│  🔊 Audio Preprocessing           rubato (resample to 16kHz)                 │
+│  🗣️ Speech Recognition           whisper-rs OR parakeet-rs + ort            │
+│  ✨ Grammar Correction            candle-*, tokenizers, hf-hub               │
+│  ⌨️ Global Hotkeys                rdev                                       │
+│  💾 Persistent Settings           tauri-plugin-store, serde                  │
+│  🖥️ System Tray                   tauri (tray-icon feature)                  │
+│  🌐 Frontend ↔ Backend            tauri, serde, serde_json                   │
+│  📝 Text Processing               regex                                      │
+│  ⚠️ Error Handling                anyhow                                     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Import Patterns in Source Files
+
+```rust
+// ═══════════════════════════════════════════════════════════════════════════
+// COMMON IMPORT PATTERNS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tauri imports (commands, state, events)
+// ─────────────────────────────────────────────────────────────────────────────
+use tauri::{AppHandle, State, Emitter, Manager};
+use tauri::tray::TrayIconBuilder;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Audio imports
+// ─────────────────────────────────────────────────────────────────────────────
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use crossbeam_channel::{unbounded, Sender, Receiver};
+use hound::{WavSpec, WavWriter, WavReader, SampleFormat};
+use rubato::{FftFixedIn, Resampler};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI/ML imports (Whisper)
+// ─────────────────────────────────────────────────────────────────────────────
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI/ML imports (Parakeet)
+// ─────────────────────────────────────────────────────────────────────────────
+use parakeet_rs::{Nemotron, Parakeet, ParakeetEOU, ParakeetTDT, TimestampMode, Transcriber};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI/ML imports (Candle for Gemma LLM)
+// ─────────────────────────────────────────────────────────────────────────────
+use candle_core::{Device, Tensor};
+use candle_core::quantized::gguf_file;
+use candle_transformers::generation::LogitsProcessor;
+use candle_transformers::models::quantized_gemma3 as model;
+use tokenizers::Tokenizer;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Utility imports
+// ─────────────────────────────────────────────────────────────────────────────
+use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use serde::{Serialize, Deserialize};
+use chrono::Local;
+use dirs;
+use regex::Regex;
+use rdev::{listen, Event, EventType, Key};
+use anyhow::{Result, Context};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal module imports
+// ─────────────────────────────────────────────────────────────────────────────
+use crate::state::AudioState;
+use crate::types::{ASREngine, AppState, TranscriptionChunk};
+use crate::whisper::WhisperManager;
+use crate::parakeet::ParakeetManager;
+```
+
+---
+
+## ⚙️ Configuration Files Deep Dive
+
+Complete breakdown of every configuration file and what each setting does for each platform.
+
+---
+
+### Configuration File Map
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PROJECT CONFIGURATION FILES                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ROOT/                                                                       │
+│  ├── package.json           # Frontend dependencies & npm scripts            │
+│  ├── tsconfig.json          # TypeScript compiler settings                   │
+│  ├── vite.config.ts         # Vite dev server & bundler settings             │
+│  │                                                                           │
+│  └── src-tauri/                                                              │
+│      ├── Cargo.toml         # Rust dependencies & platform configs           │
+│      ├── tauri.conf.json    # Tauri app settings (window, bundle, build)     │
+│      ├── build.rs           # Build-time Rust code (CUDA paths, etc.)        │
+│      └── capabilities/                                                       │
+│          └── default.json   # Security permissions for frontend              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📄 tauri.conf.json - Tauri Application Configuration
+
+```json
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "taurscribe",
+  "version": "0.1.0",
+  "identifier": "abdul",
+  "build": { ... },
+  "app": { ... },
+  "bundle": { ... }
+}
+```
+
+### Line-by-Line Breakdown
+
+#### Schema & Metadata (Lines 2-5)
+
+```json
+"$schema": "https://schema.tauri.app/config/2",
+```
+**What it does:** Enables IDE autocompletion and validation for Tauri 2.x config format.
+
+```json
+"productName": "taurscribe",
+```
+**What it does:** 
+- **Windows:** Creates `taurscribe.exe`, shown in Task Manager
+- **macOS:** Creates `Taurscribe.app` bundle name
+- **Linux:** Creates `taurscribe` binary name
+
+```json
+"version": "0.1.0",
+```
+**What it does:** Application version shown in:
+- **Windows:** File Properties → Details → Product Version
+- **macOS:** About dialog, App Store
+- **Linux:** Package metadata
+
+```json
+"identifier": "abdul",
+```
+**What it does:** Unique app identifier (should be reverse domain like `com.yourname.taurscribe`).
+- **Windows:** Used for registry keys, app data paths
+- **macOS:** Bundle identifier (required for App Store)
+- **Linux:** Desktop entry identifier
+
+---
+
+#### Build Configuration (Lines 6-11)
+
+```json
+"build": {
+  "beforeDevCommand": "bun run dev",
+  "devUrl": "http://localhost:1420",
+  "beforeBuildCommand": "bun run build",
+  "frontendDist": "../dist"
+}
+```
+
+| Setting | What it does | When it runs |
+|---------|--------------|--------------|
+| `beforeDevCommand` | Runs `bun run dev` → starts Vite dev server | `bun tauri dev` |
+| `devUrl` | Tells Tauri to load frontend from this URL | Development only |
+| `beforeBuildCommand` | Runs `bun run build` → creates production bundle | `bun tauri build` |
+| `frontendDist` | Where to find built frontend files | Production build |
+
+**Development Flow:**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    bun tauri dev                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. beforeDevCommand: "bun run dev"                                          │
+│     └── Starts Vite at http://localhost:1420                                 │
+│                                                                              │
+│  2. Tauri compiles Rust backend                                              │
+│     └── cargo build --features ...                                           │
+│                                                                              │
+│  3. Opens window pointing to devUrl                                          │
+│     └── WebView loads http://localhost:1420                                  │
+│                                                                              │
+│  4. Hot Module Replacement (HMR) active                                      │
+│     └── Edit React → instant update (no restart)                             │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Production Build Flow:**
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    bun tauri build                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. beforeBuildCommand: "bun run build"                                      │
+│     └── Vite creates optimized bundle in ../dist                             │
+│                                                                              │
+│  2. Tauri compiles Rust in release mode                                      │
+│     └── cargo build --release --features ...                                 │
+│                                                                              │
+│  3. Bundles frontend from frontendDist                                       │
+│     └── Embeds ../dist/* into the binary                                     │
+│                                                                              │
+│  4. Creates platform installers                                              │
+│     └── Windows: .msi, .exe                                                  │
+│     └── macOS:   .app, .dmg                                                  │
+│     └── Linux:   .deb, .AppImage                                             │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### App Configuration (Lines 12-23)
+
+```json
+"app": {
+  "windows": [
+    {
+      "title": "Taurscribe",
+      "width": 600,
+      "height": 600
+    }
+  ],
+  "security": {
+    "csp": null
+  }
+}
+```
+
+| Setting | What it does |
+|---------|--------------|
+| `windows` | Array of window configurations |
+| `title` | Window title bar text |
+| `width` | Initial window width in pixels |
+| `height` | Initial window height in pixels |
+| `csp: null` | Disables Content Security Policy (allows all resources) |
+
+**Additional Window Options (not used but available):**
+```json
+{
+  "title": "Taurscribe",
+  "width": 600,
+  "height": 600,
+  "resizable": true,        // Allow resize
+  "fullscreen": false,      // Start fullscreen
+  "center": true,           // Center on screen
+  "decorations": true,      // Show title bar
+  "transparent": false,     // Transparent background
+  "alwaysOnTop": false,     // Stay on top
+  "minWidth": 400,          // Minimum width
+  "minHeight": 300          // Minimum height
+}
+```
+
+**CSP (Content Security Policy):**
+```json
+"csp": null  // Current: Allow everything (development convenience)
+
+// Production recommendation:
+"csp": "default-src 'self'; script-src 'self'"
+```
+Setting `csp: null` is **unsafe for production** but convenient for development.
+
+---
+
+#### Bundle Configuration (Lines 24-34)
+
+```json
+"bundle": {
+  "active": true,
+  "targets": "all",
+  "icon": [
+    "icons/32x32.png",
+    "icons/128x128.png",
+    "icons/128x128@2x.png",
+    "icons/icon.icns",
+    "icons/icon.ico"
+  ]
+}
+```
+
+| Setting | What it does |
+|---------|--------------|
+| `active` | Enable bundling (create installers) |
+| `targets` | Which installer formats to create |
+| `icon` | App icons for different platforms/sizes |
+
+**Icon Usage by Platform:**
+
+| File | Used On | Purpose |
+|------|---------|---------|
+| `icon.ico` | Windows | Executable icon, taskbar |
+| `icon.icns` | macOS | App bundle icon, Dock |
+| `32x32.png` | Linux | Small icon (menus) |
+| `128x128.png` | Linux | Application icon |
+| `128x128@2x.png` | macOS | Retina display icon |
+
+**Bundle Targets by Platform:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    BUNDLE OUTPUTS (targets: "all")                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WINDOWS:                                                                    │
+│  └── target/release/bundle/                                                  │
+│      ├── msi/taurscribe_0.1.0_x64_en-US.msi    # MSI installer              │
+│      └── nsis/taurscribe_0.1.0_x64-setup.exe   # NSIS installer             │
+│                                                                              │
+│  MACOS:                                                                      │
+│  └── target/release/bundle/                                                  │
+│      ├── macos/Taurscribe.app                  # App bundle                  │
+│      └── dmg/Taurscribe_0.1.0_x64.dmg          # Disk image                  │
+│                                                                              │
+│  LINUX:                                                                      │
+│  └── target/release/bundle/                                                  │
+│      ├── deb/taurscribe_0.1.0_amd64.deb        # Debian package              │
+│      ├── rpm/taurscribe-0.1.0.x86_64.rpm       # RPM package                 │
+│      └── appimage/taurscribe_0.1.0_amd64.AppImage  # Portable                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📦 Cargo.toml - Rust Dependencies & Platform Configuration
+
+### File Structure Overview
+
+```toml
+[package]           # Package metadata
+[lib]               # Library output settings
+[build-dependencies]# Compile-time dependencies
+[dependencies]      # Runtime dependencies (ALL platforms)
+[target.'cfg(...)'.dependencies]  # Platform-specific deps
+[profile.dev]       # Development build settings
+```
+
+---
+
+### Package Section (Lines 1-6)
+
+```toml
+[package]
+name = "taurscribe"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+```
+
+| Field | What it does |
+|-------|--------------|
+| `name` | Crate name (used in `use taurscribe::...`) |
+| `version` | Crate version (for dependency resolution) |
+| `description` | Shows in `cargo search`, crates.io |
+| `authors` | Package authors |
+| `edition` | Rust edition (2021 = latest stable features) |
+
+**Rust Editions:**
+- `2015`: Original Rust
+- `2018`: Module system improvements, `async/await`
+- `2021`: Disjoint closure captures, `IntoIterator` for arrays
+
+---
+
+### Library Section (Lines 10-15)
+
+```toml
+[lib]
+name = "taurscribe_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+```
+
+| Setting | What it does |
+|---------|--------------|
+| `name` | Output library name (different from package to avoid Windows conflict) |
+| `crate-type` | What kinds of libraries to produce |
+
+**Crate Types Explained:**
+
+| Type | Output | Used For |
+|------|--------|----------|
+| `rlib` | `libtaurscribe_lib.rlib` | Rust-to-Rust linking |
+| `cdylib` | `taurscribe_lib.dll` (Win) / `.so` (Linux) / `.dylib` (Mac) | C/FFI dynamic linking |
+| `staticlib` | `taurscribe_lib.lib` (Win) / `.a` (Unix) | C/FFI static linking |
+
+**Why all three?** Tauri needs different link types for different build scenarios.
+
+---
+
+### Dependencies Section (Lines 20-46)
+
+These dependencies are used on **ALL platforms**:
+
+```toml
+[dependencies]
+# ═══════════════════════════════════════════════════════════════════════════
+# FRAMEWORK
+# ═══════════════════════════════════════════════════════════════════════════
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"    # Open URLs/files with default app
+tauri-plugin-fs = "2"        # File system access
+tauri-plugin-store = "2.4.2" # Persistent JSON settings
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SERIALIZATION
+# ═══════════════════════════════════════════════════════════════════════════
+serde = { version = "1", features = ["derive"] }  # Derive Serialize/Deserialize
+serde_json = "1"                                   # JSON parsing
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AUDIO
+# ═══════════════════════════════════════════════════════════════════════════
+cpal = "0.15"              # Cross-platform audio capture
+crossbeam-channel = "0.5"  # Thread communication
+hound = "3.5"              # WAV file I/O
+rubato = "0.14"            # Audio resampling
+
+# ═══════════════════════════════════════════════════════════════════════════
+# UTILITIES
+# ═══════════════════════════════════════════════════════════════════════════
+chrono = "0.4"             # Date/time
+dirs = "6.0.0"             # OS directories
+rdev = "0.5"               # Global hotkeys
+regex = "1.12.2"           # Text patterns
+anyhow = "1.0"             # Error handling
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LLM (GRAMMAR CORRECTION)
+# ═══════════════════════════════════════════════════════════════════════════
+candle-core = { git = "...", version = "0.9.2" }
+candle-nn = { git = "...", version = "0.9.2" }
+candle-transformers = { git = "...", version = "0.9.2" }
+tokenizers = "0.21.0"
+hf-hub = "0.4"
+```
+
+---
+
+### Platform-Specific Dependencies
+
+This is where Cargo.toml gets interesting - different platforms get different dependencies!
+
+#### How `cfg()` Works
+
+```toml
+[target.'cfg(CONDITION)'.dependencies]
+```
+
+| Condition | Matches |
+|-----------|---------|
+| `target_os = "windows"` | Any Windows |
+| `target_os = "macos"` | Any macOS |
+| `target_os = "linux"` | Any Linux |
+| `target_arch = "x86_64"` | 64-bit Intel/AMD |
+| `target_arch = "aarch64"` | 64-bit ARM |
+| `all(A, B)` | Both A AND B |
+| `any(A, B)` | Either A OR B |
+
+---
+
+#### Base Dependencies (Lines 51-55) - Fallback for All Platforms
+
+```toml
+# 1. Base / CPU Fallback
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+parakeet-rs = { version = "=0.3.0" }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
+```
+
+**No GPU features** - pure CPU. Used when no platform-specific override matches.
+
+---
+
+#### macOS (Lines 66-68) - Apple Silicon & Intel
+
+```toml
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack"] }
+```
+
+| Feature | What it does |
+|---------|--------------|
+| `xnnpack` | Optimized CPU inference (works on both Intel and Apple Silicon) |
+
+**Note:** No `cuda` or `vulkan` - Macs don't have NVIDIA GPUs. Apple Silicon uses Metal via CoreML internally.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    macOS ACCELERATION STACK                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  APPLE SILICON (M1/M2/M3/M4):                                                │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  App → ONNX Runtime → CoreML Provider → Apple Neural Engine (ANE)       │ │
+│  │                                                                         │ │
+│  │  Whisper: CPU (whisper.cpp uses Accelerate framework)                   │ │
+│  │  Parakeet: CoreML via ONNX Runtime                                      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  INTEL MAC:                                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  App → ONNX Runtime → XNNPACK Provider → CPU (optimized SIMD)           │ │
+│  │                                                                         │ │
+│  │  Whisper: CPU (whisper.cpp)                                             │ │
+│  │  Parakeet: XNNPACK (CPU optimized)                                      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Windows x86_64 (Lines 77-91) - Full GPU Support
+
+```toml
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+
+whisper-rs = { git = "...", features = ["cuda", "vulkan"] }
+parakeet-rs = { version = "=0.3.0", features = ["cuda", "directml"] }
+ort = { version = "2.0.0-rc.11", features = [
+    "download-binaries",
+    "cuda",
+    "directml",
+    "tensorrt",
+    "xnnpack",
+] }
+```
+
+| Feature | GPU Vendor | What it does |
+|---------|------------|--------------|
+| `cuda` | NVIDIA | Direct GPU compute via CUDA |
+| `vulkan` | NVIDIA, AMD, Intel | Cross-vendor GPU via Vulkan API |
+| `directml` | AMD, Intel, NVIDIA | DirectX 12 GPU acceleration |
+| `tensorrt` | NVIDIA | Optimized inference engine |
+| `xnnpack` | CPU | Fallback if no GPU |
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    WINDOWS x86_64 ACCELERATION STACK                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  NVIDIA GPU (RTX/GTX):                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Whisper:  whisper.cpp → CUDA → NVIDIA GPU                              │ │
+│  │  Parakeet: ONNX Runtime → CUDA Provider → NVIDIA GPU                    │ │
+│  │            OR: ONNX Runtime → TensorRT Provider → NVIDIA GPU            │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  AMD GPU (RX/Radeon):                                                        │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Whisper:  whisper.cpp → Vulkan → AMD GPU                               │ │
+│  │  Parakeet: ONNX Runtime → DirectML Provider → AMD GPU                   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  INTEL GPU (Arc/Iris):                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Whisper:  whisper.cpp → Vulkan → Intel GPU                             │ │
+│  │  Parakeet: ONNX Runtime → DirectML Provider → Intel GPU                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  NO GPU / FALLBACK:                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Whisper:  whisper.cpp → CPU                                            │ │
+│  │  Parakeet: ONNX Runtime → XNNPACK Provider → CPU                        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Linux x86_64 (Lines 98-111) - NVIDIA Focus
+
+```toml
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+
+whisper-rs = { git = "...", features = ["cuda", "vulkan"] }
+parakeet-rs = { version = "=0.3.0", features = ["cuda"] }
+ort = { version = "2.0.0-rc.11", features = [
+    "download-binaries",
+    "cuda",
+    "tensorrt",
+    "xnnpack",
+] }
+```
+
+**Note:** No `directml` - that's Windows-only (DirectX).
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    LINUX x86_64 ACCELERATION STACK                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  NVIDIA GPU:                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Whisper:  whisper.cpp → CUDA → NVIDIA GPU                              │ │
+│  │  Parakeet: ONNX Runtime → CUDA/TensorRT Provider → NVIDIA GPU           │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  AMD/INTEL GPU:                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Whisper:  whisper.cpp → Vulkan → AMD/Intel GPU                         │ │
+│  │  Parakeet: ONNX Runtime → XNNPACK (CPU fallback, no DirectML on Linux)  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Windows ARM64 (Lines 116-122) - Snapdragon/Qualcomm
+
+```toml
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+ort = { version = "2.0.0-rc.11", features = [
+    "download-binaries",
+    "directml",
+    "xnnpack",
+] }
+parakeet-rs = { version = "=0.3.0", features = ["directml"] }
+```
+
+**Note:** No `cuda` or `vulkan` - ARM Windows devices (Surface Pro X, Snapdragon laptops) don't have NVIDIA GPUs.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    WINDOWS ARM64 ACCELERATION STACK                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  QUALCOMM SNAPDRAGON (Adreno GPU):                                           │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Whisper:  whisper.cpp → CPU (no ARM CUDA)                              │ │
+│  │  Parakeet: ONNX Runtime → DirectML Provider → Adreno GPU                │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  DirectML automatically uses the integrated GPU on ARM Windows devices       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+#### Linux ARM64 (Lines 127-130) - Raspberry Pi, etc.
+
+```toml
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+parakeet-rs = { version = "=0.3.0" }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack"] }
+```
+
+**CPU only** - no GPU acceleration. XNNPACK provides ARM-optimized CPU inference.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    LINUX ARM64 ACCELERATION STACK                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  RASPBERRY PI / ARM SERVER:                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  Whisper:  whisper.cpp → CPU (NEON SIMD if available)                   │ │
+│  │  Parakeet: ONNX Runtime → XNNPACK Provider → CPU (ARM optimized)        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Profile Section (Lines 133-141)
+
+```toml
+[profile.dev]
+opt-level = 0            # Don't optimize YOUR code (fast compile)
+
+[profile.dev.package."*"]
+opt-level = 1            # Lightly optimize dependencies (faster runtime)
+```
+
+**What this does:**
+
+| Profile | Your Code | Dependencies | Result |
+|---------|-----------|--------------|--------|
+| Default dev | opt-level = 0 | opt-level = 0 | Fast compile, slow runtime |
+| **This config** | opt-level = 0 | opt-level = 1 | Fast compile, OK runtime |
+| Release | opt-level = 3 | opt-level = 3 | Slow compile, fast runtime |
+
+**Optimization Levels:**
+- `0`: No optimization (fastest compile)
+- `1`: Basic optimization (small speedup)
+- `2`: Standard optimization
+- `3`: Aggressive optimization (slowest compile)
+- `"s"`: Optimize for size
+- `"z"`: Optimize for size more aggressively
+
+---
+
+## 🔨 build.rs - Build-Time Configuration
+
+This file runs **before** compilation and configures platform-specific settings.
+
+```rust
+fn main() {
+    tauri_build::build();  // Standard Tauri build
+
+    // Platform-specific configurations below...
+}
+```
+
+### macOS Configuration
+
+```rust
+#[cfg(target_os = "macos")]
+{
+    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
+    std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "13.4");
+    std::env::set_var("CMAKE_OSX_DEPLOYMENT_TARGET", "13.4");
+}
+```
+
+**What it does:**
+- Sets minimum macOS version to 13.4 (Ventura)
+- Required because ONNX Runtime needs macOS 13.4+ on Apple Silicon
+- `CMAKE_OSX_DEPLOYMENT_TARGET` ensures CMake-based deps (whisper-rs) also target 13.4
+
+---
+
+### Windows ARM64 Configuration
+
+```rust
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+{
+    std::env::set_var("CC", "clang-cl");
+    std::env::set_var("CXX", "clang-cl");
+    std::env::set_var("CMAKE_GENERATOR_TOOLSET", "ClangCL");
+}
+```
+
+**What it does:**
+- Forces Clang compiler instead of MSVC
+- Required because whisper.cpp doesn't compile with MSVC on ARM64
+- User must install LLVM/Clang for Windows ARM64
+
+---
+
+### Windows CUDA Configuration
+
+```rust
+#[cfg(windows)]
+{
+    // Try CUDA_PATH environment variable
+    if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+        let lib_path = cuda_path.join("lib").join("x64");
+        if lib_path.exists() {
+            println!("cargo:rustc-link-search=native={}", lib_path.display());
+        }
+    }
+    
+    // Fallback: Check standard installation path
+    let fallback = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\lib\x64";
+    // ...
+}
+```
+
+**What it does:**
+- Tells the Rust linker where to find CUDA libraries (cublas.lib, etc.)
+- First checks `CUDA_PATH` environment variable (set by CUDA installer)
+- Falls back to standard installation path if not found
+- Without this, you get `LNK1181: cannot open input file 'cublas.lib'`
+
+---
+
+## 🔐 capabilities/default.json - Security Permissions
+
+```json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "store:default"
+  ]
+}
+```
+
+**What it does:** Defines what the frontend JavaScript can do.
+
+| Permission | What it allows |
+|------------|----------------|
+| `core:default` | Basic Tauri operations (invoke commands, listen to events) |
+| `opener:default` | Open URLs in browser, files with default app |
+| `store:default` | Read/write to persistent store (settings.json) |
+
+**Without these permissions:**
+```typescript
+// This would FAIL without core:default
+await invoke("start_recording");
+
+// This would FAIL without store:default
+const store = await Store.load("settings.json");
+```
+
+---
+
+## 📦 package.json - Frontend Configuration
+
+```json
+{
+  "name": "taurscribe",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { ... },
+  "dependencies": { ... },
+  "devDependencies": { ... }
+}
+```
+
+### Scripts Section
+
+```json
+"scripts": {
+  "dev": "vite",
+  "build": "tsc && vite build",
+  "preview": "vite preview",
+  "tauri": "tauri",
+  "check": "cd src-tauri && cargo check"
+}
+```
+
+| Script | Command | What it does |
+|--------|---------|--------------|
+| `dev` | `bun run dev` | Start Vite dev server (port 1420) |
+| `build` | `bun run build` | Type-check then build production bundle |
+| `preview` | `bun run preview` | Preview production build locally |
+| `tauri` | `bun tauri ...` | Run Tauri CLI commands |
+| `check` | `bun run check` | Type-check Rust code only |
+
+### Dependencies Section
+
+```json
+"dependencies": {
+  "@tauri-apps/api": "^2",           // Core Tauri API (invoke, listen)
+  "@tauri-apps/plugin-opener": "^2", // Open URLs/files
+  "@tauri-apps/plugin-store": "^2.4.2", // Persistent settings
+  "react": "^19.1.0",                // React UI library
+  "react-dom": "^19.1.0",            // React DOM renderer
+  "sonner": "^2.0.7"                 // Toast notifications
+}
+```
+
+### DevDependencies Section
+
+```json
+"devDependencies": {
+  "@types/react": "^19.1.8",       // React TypeScript types
+  "@types/react-dom": "^19.1.6",   // ReactDOM TypeScript types
+  "@vitejs/plugin-react": "^4.6.0", // Vite React plugin (JSX, HMR)
+  "typescript": "~5.8.3",          // TypeScript compiler
+  "vite": "^7.0.4",                // Build tool & dev server
+  "@tauri-apps/cli": "^2"          // Tauri command-line tools
+}
+```
+
+---
+
+## ⚡ vite.config.ts - Vite Configuration
+
+```typescript
+export default defineConfig(async () => ({
+  plugins: [react()],        // Enable React JSX/TSX support
+  clearScreen: false,        // Don't clear terminal (show Rust errors)
+  server: {
+    port: 1420,              // Fixed port (Tauri expects this)
+    strictPort: true,        // Fail if port busy (don't auto-pick another)
+    host: host || false,     // Bind to TAURI_DEV_HOST if set
+    hmr: host ? {            // Hot Module Replacement config
+      protocol: "ws",
+      host,
+      port: 1421,
+    } : undefined,
+    watch: {
+      ignored: ["**/src-tauri/**"],  // Don't watch Rust files
+    },
+  },
+}));
+```
+
+| Setting | Why it matters for Tauri |
+|---------|--------------------------|
+| `port: 1420` | Must match `devUrl` in tauri.conf.json |
+| `strictPort: true` | Prevents Vite from using 1421 if 1420 is busy |
+| `clearScreen: false` | Shows Rust compile errors in terminal |
+| `ignored: src-tauri` | Prevents Vite restart when Rust files change |
+
+---
+
+## 📝 tsconfig.json - TypeScript Configuration
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",              // Output JS version
+    "lib": ["ES2020", "DOM"],        // Available APIs
+    "module": "ESNext",              // Module system
+    "moduleResolution": "bundler",   // How to find modules
+    "jsx": "react-jsx",              // JSX transform (React 17+)
+    "strict": true,                  // Enable all strict checks
+    "noUnusedLocals": true,          // Error on unused variables
+    "noEmit": true                   // Don't emit (Vite handles this)
+  },
+  "include": ["src"]                 // Only check src/ folder
+}
+```
+
+---
+
+## 🗺️ Platform Support Summary
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PLATFORM SUPPORT MATRIX                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌───────────────┬──────────────┬──────────────┬──────────────────────────┐ │
+│  │ Platform      │ Architecture │ GPU Support  │ Output Format            │ │
+│  ├───────────────┼──────────────┼──────────────┼──────────────────────────┤ │
+│  │ Windows       │ x86_64       │ CUDA         │ .msi, .exe (NSIS)        │ │
+│  │               │              │ Vulkan       │                          │ │
+│  │               │              │ DirectML     │                          │ │
+│  │               │              │ TensorRT     │                          │ │
+│  ├───────────────┼──────────────┼──────────────┼──────────────────────────┤ │
+│  │ Windows       │ ARM64        │ DirectML     │ .msi, .exe (NSIS)        │ │
+│  │               │              │ XNNPACK      │                          │ │
+│  ├───────────────┼──────────────┼──────────────┼──────────────────────────┤ │
+│  │ macOS         │ x86_64       │ XNNPACK      │ .app, .dmg               │ │
+│  │               │ (Intel)      │              │                          │ │
+│  ├───────────────┼──────────────┼──────────────┼──────────────────────────┤ │
+│  │ macOS         │ ARM64        │ CoreML       │ .app, .dmg               │ │
+│  │               │ (Apple Si)   │ XNNPACK      │                          │ │
+│  ├───────────────┼──────────────┼──────────────┼──────────────────────────┤ │
+│  │ Linux         │ x86_64       │ CUDA         │ .deb, .rpm, .AppImage    │ │
+│  │               │              │ Vulkan       │                          │ │
+│  │               │              │ TensorRT     │                          │ │
+│  ├───────────────┼──────────────┼──────────────┼──────────────────────────┤ │
+│  │ Linux         │ ARM64        │ XNNPACK      │ .deb, .rpm, .AppImage    │ │
+│  │               │ (RPi, etc.)  │              │                          │ │
+│  └───────────────┴──────────────┴──────────────┴──────────────────────────┘ │
+│                                                                              │
+│  GPU ACCELERATION PRIORITY (runtime selection):                              │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │  1. CUDA (NVIDIA)                                                       │ │
+│  │  2. TensorRT (NVIDIA optimized)                                         │ │
+│  │  3. DirectML (Windows any GPU)                                          │ │
+│  │  4. Vulkan (Cross-platform GPU)                                         │ │
+│  │  5. CoreML (Apple Silicon)                                              │ │
+│  │  6. XNNPACK (CPU optimized)                                             │ │
+│  │  7. CPU (fallback)                                                      │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 

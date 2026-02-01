@@ -63,6 +63,10 @@ function App() {
   const [llmStatus, setLlmStatus] = useState("Not Loaded");
   const [enableGrammarLM, setEnableGrammarLM] = useState(false);
 
+  // SymSpell spell check state
+  const [enableSpellCheck, setEnableSpellCheck] = useState(false);
+  const [spellCheckStatus, setSpellCheckStatus] = useState("Not Loaded");
+
   // Ref to track recording state for hotkey handlers (avoids stale closure)
   const isRecordingRef = useRef(false);
 
@@ -153,11 +157,16 @@ function App() {
   const listenersSetupRef = useRef(false);  // Prevent duplicate listeners from HMR
   const lastStartTime = useRef(0);  // Debounce start events
   const enableGrammarLMRef = useRef(enableGrammarLM);
+  const enableSpellCheckRef = useRef(enableSpellCheck);
 
-  // Sync ref
+  // Sync refs
   useEffect(() => {
     enableGrammarLMRef.current = enableGrammarLM;
   }, [enableGrammarLM]);
+
+  useEffect(() => {
+    enableSpellCheckRef.current = enableSpellCheck;
+  }, [enableSpellCheck]);
 
   // --- Unified Handlers ---
   const handleStartRecording = async () => {
@@ -181,28 +190,44 @@ function App() {
   };
 
   const handleStopRecording = async () => {
-    console.log("[STOP] handleStopRecording called. GrammarLM Enabled:", enableGrammarLMRef.current);
+    console.log("[STOP] handleStopRecording called. GrammarLM:", enableGrammarLMRef.current, "SpellCheck:", enableSpellCheckRef.current);
     try {
       await setTrayState("processing");
       if (activeEngine === "whisper") toast.loading("Processing transcription...");
 
       let finalTrans = await invoke("stop_recording") as string;
 
-      // Check Grammar LM via Ref (works for both Hotkey & Button)
-      if (enableGrammarLMRef.current) {
+      // Step 1: SymSpell spell check (fast, runs first if enabled)
+      if (enableSpellCheckRef.current) {
         setIsCorrecting(true);
         toast.dismiss();
-        toast.loading("✨ Correcting with Gemma...");
+        toast.loading("🔤 Fixing spelling...");
+        try {
+          finalTrans = await invoke("correct_spelling", { text: finalTrans });
+          toast.dismiss();
+          if (!enableGrammarLMRef.current) {
+            toast.success("Spelling corrected!");
+          }
+        } catch (e) {
+          toast.error("Spell check failed: " + e);
+        }
+      }
+
+      // Step 2: Grammar LM correction (slower, runs after spell check if enabled)
+      if (enableGrammarLMRef.current) {
+        toast.dismiss();
+        toast.loading("✨ Correcting grammar...");
         try {
           finalTrans = await invoke("correct_text", { text: finalTrans });
           toast.dismiss();
           toast.success("Transcribed & Corrected!");
         } catch (e) {
-          toast.error("Correction Failed: " + e);
-        } finally {
-          setIsCorrecting(false);
+          toast.error("Grammar correction failed: " + e);
         }
-      } else {
+      }
+      
+      setIsCorrecting(false);
+      if (!enableSpellCheckRef.current && !enableGrammarLMRef.current) {
         toast.dismiss();
       }
 
@@ -220,6 +245,7 @@ function App() {
       }
       setIsRecording(false);
       isRecordingRef.current = false;
+      setIsCorrecting(false);
       await setTrayState("ready");
     }
   };
@@ -412,35 +438,72 @@ function App() {
       <Toaster position="top-center" richColors theme="dark" />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h1 style={{ margin: 0 }}>🎙️ Taurscribe</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div
-            className="status-dot"
-            style={{
-              backgroundColor: !enableGrammarLM ? "#ef4444" : (llmStatus === "Loading..." || isCorrecting ? "#f59e0b" : (llmStatus === "Loaded" ? "#22c55e" : "#ef4444")),
-              color: !enableGrammarLM ? "#ef4444" : (llmStatus === "Loading..." || isCorrecting ? "#f59e0b" : (llmStatus === "Loaded" ? "#22c55e" : "#ef4444"))
-            }}
-          />
-          <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Grammar LM</span>
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={enableGrammarLM}
-              onChange={(e) => {
-                const checked = e.target.checked;
-                setEnableGrammarLM(checked);
-                if (checked && llmStatus === "Not Loaded") {
-                  // Auto-trigger load if enabled
-                  toast("Auto-loading Gemma LLM...");
-                  invoke("init_llm").then((res) => {
-                    setLlmStatus("Loaded");
-                    toast.success(res as string);
-                  }).catch(() => setLlmStatus("Error"));
-                  setLlmStatus("Loading...");
-                }
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* Grammar LM Toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div
+              className="status-dot"
+              style={{
+                backgroundColor: !enableGrammarLM ? "#ef4444" : (llmStatus === "Loading..." || isCorrecting ? "#f59e0b" : (llmStatus === "Loaded" ? "#22c55e" : "#ef4444")),
+                color: !enableGrammarLM ? "#ef4444" : (llmStatus === "Loading..." || isCorrecting ? "#f59e0b" : (llmStatus === "Loaded" ? "#22c55e" : "#ef4444"))
               }}
             />
-            <span className="slider round"></span>
-          </label>
+            <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', minWidth: '80px' }}>Grammar LM</span>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={enableGrammarLM}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setEnableGrammarLM(checked);
+                  if (checked && llmStatus === "Not Loaded") {
+                    // Auto-trigger load if enabled
+                    toast("Auto-loading Gemma LLM...");
+                    invoke("init_llm").then((res) => {
+                      setLlmStatus("Loaded");
+                      toast.success(res as string);
+                    }).catch(() => setLlmStatus("Error"));
+                    setLlmStatus("Loading...");
+                  }
+                }}
+              />
+              <span className="slider round"></span>
+            </label>
+          </div>
+          {/* SymSpell Toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div
+              className="status-dot"
+              style={{
+                backgroundColor: !enableSpellCheck ? "#ef4444" : (spellCheckStatus === "Loading..." ? "#f59e0b" : (spellCheckStatus === "Loaded" ? "#22c55e" : "#ef4444")),
+                color: !enableSpellCheck ? "#ef4444" : (spellCheckStatus === "Loading..." ? "#f59e0b" : (spellCheckStatus === "Loaded" ? "#22c55e" : "#ef4444"))
+              }}
+            />
+            <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)', minWidth: '80px' }}>Spell Check</span>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={enableSpellCheck}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setEnableSpellCheck(checked);
+                  if (checked && spellCheckStatus === "Not Loaded") {
+                    // Auto-trigger load if enabled
+                    toast("Loading SymSpell dictionary...");
+                    invoke("init_spellcheck").then((res) => {
+                      setSpellCheckStatus("Loaded");
+                      toast.success(res as string);
+                    }).catch((err) => {
+                      setSpellCheckStatus("Error");
+                      toast.error("SymSpell failed: " + err);
+                    });
+                    setSpellCheckStatus("Loading...");
+                  }
+                }}
+              />
+              <span className="slider round"></span>
+            </label>
+          </div>
         </div>
       </div>
 
@@ -633,7 +696,34 @@ function App() {
             <>
               <pre>{greetMsg}</pre>
               {!isRecording && liveTranscript && (
-                <div className="correction-container">
+                <div className="correction-container" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={async () => {
+                      setIsCorrecting(true);
+                      toast.loading("Fixing spelling...");
+                      try {
+                        // Auto-init if needed
+                        if (spellCheckStatus !== "Loaded") {
+                          await invoke("init_spellcheck");
+                          setSpellCheckStatus("Loaded");
+                        }
+                        const corrected = await invoke("correct_spelling", { text: liveTranscript });
+                        setLiveTranscript(corrected as string);
+                        toast.dismiss();
+                        toast.success("Spelling fixed!");
+                      } catch (e) {
+                        toast.dismiss();
+                        toast.error("Spell check failed: " + e);
+                      } finally {
+                        setIsCorrecting(false);
+                      }
+                    }}
+                    disabled={isCorrecting}
+                    className="btn btn-correct"
+                    style={{ backgroundColor: '#3b82f6' }}
+                  >
+                    {isCorrecting ? "🔤 Checking..." : "🔤 Fix Spelling"}
+                  </button>
                   <button
                     onClick={async () => {
                       setIsCorrecting(true);
@@ -641,8 +731,10 @@ function App() {
                       try {
                         const corrected = await invoke("correct_text", { text: liveTranscript });
                         setLiveTranscript(corrected as string);
+                        toast.dismiss();
                         toast.success("Grammar corrected!");
                       } catch (e) {
+                        toast.dismiss();
                         toast.error("Correction failed: " + e);
                       } finally {
                         setIsCorrecting(false);

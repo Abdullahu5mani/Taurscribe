@@ -4,6 +4,7 @@ mod commands;
 mod hotkeys;
 mod llm;
 mod parakeet;
+mod spellcheck;
 mod state;
 mod tray;
 mod types;
@@ -111,7 +112,10 @@ pub fn run() {
             commands::init_llm,
             commands::run_llm_inference,
             commands::check_llm_status,
-            commands::correct_text
+            commands::correct_text,
+            commands::init_spellcheck,
+            commands::check_spellcheck_status,
+            commands::correct_spelling
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

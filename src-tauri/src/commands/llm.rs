@@ -83,7 +83,11 @@ pub async fn correct_text(state: State<'_, AudioState>, text: String) -> Result<
         let mut llm_guard = llm_handle.lock().unwrap();
         if let Some(engine) = llm_guard.as_mut() {
             println!("[LLM] Running inference on text: '{}'", prompt.trim());
-            engine.run(&prompt).map_err(|e| e.to_string())
+            let res = engine.run(&prompt).map_err(|e| e.to_string());
+            if let Err(ref e) = res {
+                eprintln!("[LLM] Inference FAILED: {}", e);
+            }
+            res
         } else {
             eprintln!("[LLM] Error: Engine not initialized");
             Err("LLM not initialized. Please load Gemma first.".to_string())

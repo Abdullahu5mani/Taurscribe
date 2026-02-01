@@ -10,10 +10,7 @@ use crate::utils::{clean_transcript, get_recordings_dir};
 /// COMMAND: START RECORDING
 /// This initializes the microphone, files, and processing threads.
 #[tauri::command]
-pub fn start_recording(
-    app_handle: AppHandle,
-    state: State<AudioState>,
-) -> Result<String, String> {
+pub fn start_recording(app_handle: AppHandle, state: State<AudioState>) -> Result<String, String> {
     // 1. Setup Microphone
     let host = cpal::default_host();
     let device = host.default_input_device().ok_or("No input device")?;
@@ -117,7 +114,10 @@ pub fn start_recording(
                             Ok(transcript) => {
                                 if !transcript.trim().is_empty() {
                                     let elapsed = start_time.elapsed().as_millis() as u32;
-                                    println!("[TRANSCRIPT] \"{}\" (took {}ms)", transcript, elapsed);
+                                    println!(
+                                        "[TRANSCRIPT] \"{}\" (took {}ms)",
+                                        transcript, elapsed
+                                    );
                                     let _ = app_clone.emit(
                                         "transcription-chunk",
                                         TranscriptionChunk {
@@ -157,23 +157,24 @@ pub fn start_recording(
                         .transcribe_chunk(&chunk, sample_rate)
                     {
                         Ok(transcript) => {
-                            if !transcript.trim().is_empty() {
+                            if !transcript.is_empty() {
                                 let elapsed = start_time.elapsed().as_millis() as u32;
-                                println!("[TRANSCRIPT] 🦜 \"{}\" (took {}ms)", transcript.trim(), elapsed);
+                                println!(
+                                    "[TRANSCRIPT] 🦜 \"{}\" (took {}ms)",
+                                    transcript.trim(),
+                                    elapsed
+                                );
                                 let _ = app_clone.emit(
                                     "transcription-chunk",
                                     TranscriptionChunk {
-                                        text: transcript.trim().to_string(),
+                                        text: transcript.clone(),
                                         processing_time_ms: elapsed,
                                         method: "Parakeet".to_string(),
                                     },
                                 );
 
                                 let mut session = session_transcript.lock().unwrap();
-                                if !session.is_empty() {
-                                    session.push(' ');
-                                }
-                                session.push_str(transcript.trim());
+                                session.push_str(&transcript);
                             }
                         }
                         Err(e) => eprintln!("[ERROR] Parakeet error: {}", e),
@@ -194,13 +195,10 @@ pub fn start_recording(
             } else {
                 let mut p_manager = parakeet_manager.lock().unwrap();
                 if let Ok(transcript) = p_manager.transcribe_chunk(&chunk, sample_rate) {
-                    if !transcript.trim().is_empty() {
+                    if !transcript.is_empty() {
                         let mut session = session_transcript.lock().unwrap();
-                        if !session.is_empty() {
-                            session.push(' ');
-                        }
-                        session.push_str(transcript.trim());
-                        println!("[TRANSCRIPT] 🦜 (Final) \"{}\"", transcript.trim());
+                        session.push_str(&transcript);
+                        println!("[TRANSCRIPT] 🦜 (Final) \"{}\"", transcript);
                     }
                 }
             }
@@ -218,13 +216,10 @@ pub fn start_recording(
                 } else {
                     let mut p_manager = parakeet_manager.lock().unwrap();
                     if let Ok(transcript) = p_manager.transcribe_chunk(&buffer, sample_rate) {
-                        if !transcript.trim().is_empty() {
+                        if !transcript.is_empty() {
                             let mut session = session_transcript.lock().unwrap();
-                            if !session.is_empty() {
-                                session.push(' ');
-                            }
-                            session.push_str(transcript.trim());
-                            println!("[TRANSCRIPT] 🦜 (Final Partial) \"{}\"", transcript.trim());
+                            session.push_str(&transcript);
+                            println!("[TRANSCRIPT] 🦜 (Final Partial) \"{}\"", transcript);
                         }
                     }
                 }
