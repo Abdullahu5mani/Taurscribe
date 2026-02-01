@@ -72,19 +72,26 @@ pub fn check_llm_status(state: State<'_, AudioState>) -> bool {
 
 #[tauri::command]
 pub async fn correct_text(state: State<'_, AudioState>, text: String) -> Result<String, String> {
+    println!(
+        "[LLM] correct_text request received. Input length: {}",
+        text.len()
+    );
     let llm_handle = state.llm.clone();
     let prompt = text.clone();
 
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut llm_guard = llm_handle.lock().unwrap();
         if let Some(engine) = llm_guard.as_mut() {
+            println!("[LLM] Running inference on text: '{}'", prompt.trim());
             engine.run(&prompt).map_err(|e| e.to_string())
         } else {
+            eprintln!("[LLM] Error: Engine not initialized");
             Err("LLM not initialized. Please load Gemma first.".to_string())
         }
     })
     .await
     .map_err(|e| format!("Join Error: {}", e))??;
 
+    println!("[LLM] Inference finished. Output length: {}", output.len());
     Ok(output)
 }
