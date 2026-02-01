@@ -60,6 +60,8 @@ function App() {
   const [, setParakeetStatus] = useState<ParakeetStatus | null>(null);
   const [activeEngine, setActiveEngine] = useState<ASREngine>("whisper");
   const [isCorrecting, setIsCorrecting] = useState(false);
+  const [llmStatus, setLlmStatus] = useState("Not Loaded");
+  const [enableGrammarLM, setEnableGrammarLM] = useState(false);
 
   // Ref to track recording state for hotkey handlers (avoids stale closure)
   const isRecordingRef = useRef(false);
@@ -150,6 +152,77 @@ function App() {
   const pendingStopRef = useRef(false);
   const listenersSetupRef = useRef(false);  // Prevent duplicate listeners from HMR
   const lastStartTime = useRef(0);  // Debounce start events
+  const enableGrammarLMRef = useRef(enableGrammarLM);
+
+  // Sync ref
+  useEffect(() => {
+    enableGrammarLMRef.current = enableGrammarLM;
+  }, [enableGrammarLM]);
+
+  // --- Unified Handlers ---
+  const handleStartRecording = async () => {
+    try {
+      await setTrayState("recording");
+      setLiveTranscript("");
+      setLatestLatency(null);
+      const res = await invoke("start_recording");
+      toast.success(res as string);
+
+      setIsRecording(true);
+      isRecordingRef.current = true;
+    } catch (e) {
+      console.error("Start recording failed:", e);
+      toast.error("Error: " + e);
+      await setTrayState("ready");
+      // Ensure state is reset if start failed
+      setIsRecording(false);
+      isRecordingRef.current = false;
+    }
+  };
+
+  const handleStopRecording = async () => {
+    console.log("[STOP] handleStopRecording called. GrammarLM Enabled:", enableGrammarLMRef.current);
+    try {
+      await setTrayState("processing");
+      if (activeEngine === "whisper") toast.loading("Processing transcription...");
+
+      let finalTrans = await invoke("stop_recording") as string;
+
+      // Check Grammar LM via Ref (works for both Hotkey & Button)
+      if (enableGrammarLMRef.current) {
+        setIsCorrecting(true);
+        toast.dismiss();
+        toast.loading("✨ Correcting with Gemma...");
+        try {
+          finalTrans = await invoke("correct_text", { text: finalTrans });
+          toast.dismiss();
+          toast.success("Transcribed & Corrected!");
+        } catch (e) {
+          toast.error("Correction Failed: " + e);
+        } finally {
+          setIsCorrecting(false);
+        }
+      } else {
+        toast.dismiss();
+      }
+
+      setLiveTranscript(finalTrans);
+
+      setIsRecording(false);
+      isRecordingRef.current = false;
+      await setTrayState("ready");
+    } catch (e) {
+      console.error("Stop recording failed:", e);
+      // Ignore "Not recording" errors which can happen in race conditions
+      const errStr = String(e);
+      if (!errStr.includes("Not recording")) {
+        toast.error("Error: " + e);
+      }
+      setIsRecording(false);
+      isRecordingRef.current = false;
+      await setTrayState("ready");
+    }
+  };
 
   // Listen for hotkey events from Rust backend
   useEffect(() => {
@@ -180,47 +253,17 @@ function App() {
           startingRecordingRef.current = true;
           pendingStopRef.current = false;
 
-          try {
-            await setTrayState("recording");
-            const res = await invoke("start_recording");
-            toast.success(res as string);
-            setIsRecording(true);
-            isRecordingRef.current = true;
+          await handleStartRecording();
+          startingRecordingRef.current = false;
 
-            // If stop was requested while we were starting, handle it now
-            if (pendingStopRef.current) {
-              console.log("[HOTKEY] Processing pending stop request");
-              pendingStopRef.current = false;
-              // Small delay to ensure recording has time to capture something
-              setTimeout(async () => {
-                try {
-                  await setTrayState("processing");
-                  toast.info("Processing transcription...");
-                  const stopRes = await invoke("stop_recording");
-                  // Check if it's the specific Parakeet response
-                  if ((stopRes as string).startsWith("[FINAL_TRANSCRIPT]")) {
-                    // Already printed? No, invoke returns just the string.
-                  }
-                  toast.success("Recording saved.");
-                  setIsRecording(false);
-                  isRecordingRef.current = false;
-                  await setTrayState("ready");
-                } catch (e) {
-                  console.error("Pending stop failed:", e);
-                  const errStr = String(e);
-                  if (!errStr.includes("Not recording")) {
-                    toast.error("Error: " + e);
-                  }
-                  await setTrayState("ready");
-                }
-              }, 200);
-            }
-          } catch (e) {
-            console.error("Hotkey start recording failed:", e);
-            toast.error("Error: " + e);
-            await setTrayState("ready");
-          } finally {
-            startingRecordingRef.current = false;
+          // If stop was requested while we were starting, handle it now
+          if (pendingStopRef.current) {
+            console.log("[HOTKEY] Processing pending stop request");
+            pendingStopRef.current = false;
+            // Small delay to ensure recording has time to capture something
+            setTimeout(async () => {
+              await handleStopRecording();
+            }, 200);
           }
         }
       });
@@ -236,27 +279,7 @@ function App() {
 
         if (isRecordingRef.current) {
           console.log("[HOTKEY] Stopping recording via Ctrl+Win release");
-          try {
-            await setTrayState("processing");
-            if (activeEngine === "whisper") toast.loading("Processing transcription..."); // Only show loading for Whisper
-            await invoke("stop_recording");
-            toast.dismiss(); // Dismiss loading
-            // toast.success(res as string); // Don't toast the transcript, just "Saved"
-
-            setIsRecording(false);
-            isRecordingRef.current = false;
-            await setTrayState("ready");
-          } catch (e) {
-            console.error("Hotkey stop recording failed:", e);
-            // Ignore "Not recording" errors silently - they happen during race conditions
-            const errStr = String(e);
-            if (!errStr.includes("Not recording")) {
-              toast.error("Error: " + e);
-            }
-            setIsRecording(false);
-            isRecordingRef.current = false;
-            await setTrayState("ready");
-          }
+          await handleStopRecording();
         } else {
           // Silently ignore - stop was called but nothing was recording
           console.log("[HOTKEY] Stop requested but not recording - ignoring");
@@ -387,7 +410,39 @@ function App() {
   return (
     <main className="container">
       <Toaster position="top-center" richColors theme="dark" />
-      <h1>🎙️ Taurscribe</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <h1 style={{ margin: 0 }}>🎙️ Taurscribe</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div
+            className="status-dot"
+            style={{
+              backgroundColor: !enableGrammarLM ? "#ef4444" : (llmStatus === "Loading..." || isCorrecting ? "#f59e0b" : (llmStatus === "Loaded" ? "#22c55e" : "#ef4444")),
+              color: !enableGrammarLM ? "#ef4444" : (llmStatus === "Loading..." || isCorrecting ? "#f59e0b" : (llmStatus === "Loaded" ? "#22c55e" : "#ef4444"))
+            }}
+          />
+          <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Grammar LM</span>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={enableGrammarLM}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setEnableGrammarLM(checked);
+                if (checked && llmStatus === "Not Loaded") {
+                  // Auto-trigger load if enabled
+                  toast("Auto-loading Gemma LLM...");
+                  invoke("init_llm").then((res) => {
+                    setLlmStatus("Loaded");
+                    toast.success(res as string);
+                  }).catch(() => setLlmStatus("Error"));
+                  setLlmStatus("Loading...");
+                }
+              }}
+            />
+            <span className="slider round"></span>
+          </label>
+        </div>
+      </div>
 
       {/* Status Bar & Engine Selection */}
       <div className="status-bar-container">
@@ -475,19 +530,7 @@ function App() {
       {/* Recording Controls */}
       <div className="controls">
         <button
-          onClick={async () => {
-            try {
-              await setTrayState("recording");
-              setLiveTranscript("");
-              setLatestLatency(null);
-              const res = await invoke("start_recording");
-              toast.success(res as string);
-              setIsRecording(true);
-            } catch (e) {
-              await setTrayState("ready");
-              toast.error("Error: " + e);
-            }
-          }}
+          onClick={handleStartRecording}
           disabled={isRecording || isLoading}
           className="btn btn-start"
         >
@@ -495,20 +538,7 @@ function App() {
         </button>
 
         <button
-          onClick={async () => {
-            try {
-              await setTrayState("processing");
-              if (activeEngine === "whisper") toast.loading("Processing transcription...");
-              await invoke("stop_recording");
-              toast.dismiss();
-              // toast.success(res as string);
-              setIsRecording(false);
-              await setTrayState("ready");
-            } catch (e) {
-              toast.error("Error: " + e);
-              await setTrayState("ready");
-            }
-          }}
+          onClick={handleStopRecording}
           disabled={!isRecording || isLoading}
           className="btn btn-stop"
         >
@@ -551,6 +581,32 @@ function App() {
             🚀 Run Benchmark
           </button>
         </div>
+
+        {/* LLM Loader */}
+        <button
+          onClick={async () => {
+            setLlmStatus("Loading...");
+            toast.loading("Loading Gemma LLM... (This may take a moment)");
+            try {
+              const res = await invoke("init_llm");
+              setLlmStatus("Loaded");
+              toast.dismiss();
+              toast.success(res as string);
+            } catch (e) {
+              setLlmStatus("Error");
+              toast.dismiss();
+              toast.error("LLM Load Failed: " + e);
+            }
+          }}
+          disabled={llmStatus === "Loading..." || llmStatus === "Loaded"}
+          className="btn btn-benchmark" // Reuse existing style for now
+          style={{ backgroundColor: llmStatus === "Loaded" ? "#4CAF50" : "#673AB7" }}
+        >
+          {llmStatus === "Not Loaded" && "🧠 Load Gemma LLM"}
+          {llmStatus === "Loading..." && "⏳ Loading..."}
+          {llmStatus === "Loaded" && "✅ Gemma Ready"}
+          {llmStatus === "Error" && "❌ Retry Load"}
+        </button>
       </div>
 
       {/* Output Area */}
