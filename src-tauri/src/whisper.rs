@@ -227,7 +227,7 @@ impl WhisperManager {
     pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
         // Disable noisy C++ logs
         unsafe {
-            set_log_callback(None, std::ptr::null_mut());
+            set_log_callback(Some(null_log_callback), std::ptr::null_mut());
         }
 
         // Find the folder

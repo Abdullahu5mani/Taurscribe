@@ -6,6 +6,7 @@ use crate::audio::{RecordingHandle, SendStream};
 use crate::state::AudioState;
 use crate::types::{ASREngine, TranscriptionChunk};
 use crate::utils::{clean_transcript, get_recordings_dir};
+use enigo::{Enigo, Keyboard, Settings};
 
 /// COMMAND: START RECORDING
 /// This initializes the microphone, files, and processing threads.
@@ -266,6 +267,29 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>) -> Resul
     Ok(format!("Recording started: {}", path.display()))
 }
 
+/// Helper function to type text
+fn type_out_text(text: &str) {
+    if text.trim().is_empty() || text.trim() == "[silence]" {
+        return;
+    }
+
+    println!("[ENIGO] Typing out text: \"{}\"", text);
+
+    // Run in a separate thread so we don't block the command return if it's slow
+    let text_to_type = text.to_string();
+    std::thread::spawn(move || {
+        // Enigo v0.6 usage
+        match Enigo::new(&Settings::default()) {
+            Ok(mut enigo) => {
+                if let Err(e) = enigo.text(&text_to_type) {
+                    eprintln!("[ERROR] Enigo failed to type text: {:?}", e);
+                }
+            }
+            Err(e) => eprintln!("[ERROR] Failed to initialize Enigo: {:?}", e),
+        }
+    });
+}
+
 /// COMMAND: STOP RECORDING
 #[tauri::command]
 pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
@@ -288,6 +312,7 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
                 clean_transcript(&transcript)
             };
             println!("[FINAL_TRANSCRIPT] (Cleaned)\n{}", final_text);
+            type_out_text(&final_text);
             return Ok(final_text);
         }
 
@@ -323,6 +348,7 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
             match result {
                 Ok(text) => {
                     println!("[FINAL_TRANSCRIPT]\n{}", text);
+                    type_out_text(&text);
                     Ok(text)
                 }
                 Err(e) => {
