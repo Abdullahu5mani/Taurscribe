@@ -42,7 +42,10 @@ candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.
 candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.9.2" }
 candle-transformers = { git = "https://github.com/huggingface/candle.git", version = "0.9.2" }
 tokenizers = "0.21.0"
-hf-hub = "0.4"
+hf-hub = { version = "0.4", default-features = false, features = [
+    "native-tls",
+    "tokio",
+] }
 anyhow = "1.0"
 
 # SymSpell - Fast spell checking
@@ -56,10 +59,17 @@ symspell = "0.4"
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 parakeet-rs = { version = "=0.3.0" }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
-reqwest = { version = "0.13.1", features = ["stream"] }
+# Downloader & Verification
 futures-util = "0.3.31"
+reqwest = { version = "0.13.1", default-features = false, features = [
+    "native-tls",
+    "stream",
+    "json",
+    "multipart",
+] }
 sha2 = "0.10.9"
 hex = "0.4.3"
+sha1 = "0.10.6"
 # Candle (Hugging Face) - Machine Learning Framework
 
 

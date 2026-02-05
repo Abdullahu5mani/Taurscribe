@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
 import { Toaster, toast } from "sonner";
+import { SettingsModal } from "./components/SettingsModal";
 import "./App.css";
 
 interface ModelInfo {
@@ -66,6 +67,7 @@ function App() {
   // SymSpell spell check state
   const [enableSpellCheck, setEnableSpellCheck] = useState(false);
   const [spellCheckStatus, setSpellCheckStatus] = useState("Not Loaded");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Ref to track recording state for hotkey handlers (avoids stale closure)
   const isRecordingRef = useRef(false);
@@ -437,7 +439,23 @@ function App() {
     <main className="container">
       <Toaster position="top-center" richColors theme="dark" />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h1 style={{ margin: 0 }}>🎙️ Taurscribe</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <h1 style={{ margin: 0 }}>🎙️ Taurscribe</h1>
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            style={{
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              padding: '8px',
+              cursor: 'pointer',
+              color: 'var(--text-secondary)'
+            }}
+            title="Settings"
+          >
+            ⚙️
+          </button>
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {/* Grammar LM Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -754,6 +772,7 @@ function App() {
           )}
         </div>
       )}
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
     </main>
   );
 }

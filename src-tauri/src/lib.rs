@@ -115,7 +115,11 @@ pub fn run() {
             commands::correct_text,
             commands::init_spellcheck,
             commands::check_spellcheck_status,
-            commands::correct_spelling
+            commands::correct_spelling,
+            commands::download_model,
+            commands::get_download_status,
+            commands::delete_model,
+            commands::verify_model_hash
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
