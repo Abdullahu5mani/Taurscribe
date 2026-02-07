@@ -10,6 +10,7 @@ mod tray;
 mod types;
 mod utils;
 mod vad;
+mod watcher;
 mod whisper;
 
 // Imports
@@ -43,7 +44,8 @@ pub fn run() {
         }
         Err(e) => {
             eprintln!("[ERROR] Failed to initialize Whisper: {}", e);
-            eprintln!("   Transcription will be disabled.");
+            eprintln!("   ⚠️  No models found. Please download the Base model from Settings > Download Manager.");
+            eprintln!("   Transcription will be disabled until a model is downloaded.");
         }
     }
 
@@ -57,16 +59,10 @@ pub fn run() {
 
     // 3. Initialize Parakeet & Load Model
     println!("[INFO] Initializing Parakeet ASR manager...");
-    let mut parakeet = ParakeetManager::new();
+    let parakeet = ParakeetManager::new();
 
-    println!("[INFO] Attempting to auto-load Parakeet model...");
-    match parakeet.initialize(Some("nemotron:nemotron")) {
-        Ok(msg) => println!("[SUCCESS] {}", msg),
-        Err(_) => match parakeet.initialize(None) {
-            Ok(msg) => println!("[SUCCESS] Fallback load: {}", msg),
-            Err(e) => eprintln!("[WARN] No Parakeet models loaded: {}", e),
-        },
-    }
+    // NOTE: Parakeet is NOT lazy-loaded at startup anymore to save VRAM.
+    // It will be loaded on demand when the user switches to it.
 
     // 4. Build the Tauri App
     tauri::Builder::default()
@@ -84,6 +80,13 @@ pub fn run() {
             });
 
             println!("[INFO] Global hotkey listener started (Ctrl+Win to record)");
+
+            // Start File Watcher for Models Directory
+            let watcher_handle = app.handle().clone();
+            if let Err(e) = watcher::start_models_watcher(watcher_handle) {
+                eprintln!("[WARN] Failed to start models watcher: {}", e);
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -98,8 +101,6 @@ pub fn run() {
             commands::start_recording,
             commands::stop_recording,
             commands::get_backend_info,
-            commands::benchmark_test,
-            commands::list_sample_files,
             commands::list_models,
             commands::get_current_model,
             commands::switch_model,
@@ -110,10 +111,12 @@ pub fn run() {
             commands::get_active_engine,
             commands::set_tray_state,
             commands::init_llm,
+            commands::unload_llm,
             commands::run_llm_inference,
             commands::check_llm_status,
             commands::correct_text,
             commands::init_spellcheck,
+            commands::unload_spellcheck,
             commands::check_spellcheck_status,
             commands::correct_spelling,
             commands::download_model,

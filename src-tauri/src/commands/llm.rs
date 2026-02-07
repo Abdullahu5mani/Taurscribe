@@ -99,3 +99,14 @@ pub async fn correct_text(state: State<'_, AudioState>, text: String) -> Result<
     println!("[LLM] Inference finished. Output length: {}", output.len());
     Ok(output)
 }
+
+#[tauri::command]
+pub fn unload_llm(state: State<'_, AudioState>) -> Result<String, String> {
+    let mut llm_guard = state.llm.lock().unwrap();
+    if llm_guard.is_none() {
+        return Ok("LLM was not loaded".to_string());
+    }
+    *llm_guard = None;
+    println!("[INFO] Gemma LLM unloaded.");
+    Ok("LLM unloaded successfully".to_string())
+}

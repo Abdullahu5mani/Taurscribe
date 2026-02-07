@@ -41,16 +41,21 @@ impl LLMEngine {
 
         // Get special token IDs
         let vocab = tokenizer.get_vocab(true);
-        
+
         // For Gemma 3, EOS is typically token ID 1 or <end_of_turn> (107)
-        let eos_token_id = vocab.get("<eos>").copied()
+        let eos_token_id = vocab
+            .get("<eos>")
+            .copied()
             .or_else(|| vocab.get("<end_of_turn>").copied())
             .unwrap_or(1);
-        
+
         // Get newline token for stopping (grammar output should be single line)
         let newline_token_id = vocab.get("\n").copied().unwrap_or(108);
-        
-        println!("[LLM] EOS token ID: {}, Newline token ID: {}", eos_token_id, newline_token_id);
+
+        println!(
+            "[LLM] EOS token ID: {}, Newline token ID: {}",
+            eos_token_id, newline_token_id
+        );
 
         // Load Model (GGUF)
         let mut file = std::fs::File::open(&model_path)?;
@@ -85,7 +90,7 @@ impl LLMEngine {
             .map_err(Error::msg)?
             .get_ids()
             .to_vec();
-        
+
         let prompt_tokens = tokens.len();
 
         let mut generated_tokens = Vec::new();
@@ -122,11 +127,14 @@ impl LLMEngine {
         let max_gen_tokens = 512; // Allow enough for longer texts
         let mut pos = tokens.len();
 
-        println!("[LLM] Prefill: {} tokens in {:?}", prompt_tokens, prefill_time);
+        println!(
+            "[LLM] Prefill: {} tokens in {:?}",
+            prompt_tokens, prefill_time
+        );
         print!("[LLM] Generating: ");
         use std::io::Write;
         std::io::stdout().flush().ok();
-        
+
         let gen_start = Instant::now();
 
         for i in 0..max_gen_tokens {
@@ -184,7 +192,7 @@ impl LLMEngine {
         } else {
             0.0
         };
-        
+
         println!(
             "[LLM] Done: {} tokens generated in {:.0}ms ({:.1} tok/s) | Total: {:.0}ms",
             gen_tokens,

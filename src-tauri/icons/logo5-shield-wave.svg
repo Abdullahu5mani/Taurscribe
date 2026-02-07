@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="g5a" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e09f3e"/>
+      <stop offset="100%" stop-color="#c48a2f"/>
+    </linearGradient>
+    <linearGradient id="g5b" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6895d2"/>
+      <stop offset="100%" stop-color="#3ecfa5"/>
+    </linearGradient>
+    <filter id="glow5">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="shieldClip">
+      <path d="M256,50 L430,120 C430,120 440,320 256,460 C72,320 82,120 82,120 Z"/>
+    </clipPath>
+  </defs>
+  <!-- Background -->
+  <circle cx="256" cy="256" r="250" fill="#09090b"/>
+  <!-- Shield outline -->
+  <g filter="url(#glow5)">
+    <path d="M256,50 L430,120 C430,120 440,320 256,460 C72,320 82,120 82,120 Z"
+          fill="none" stroke="url(#g5a)" stroke-width="4" stroke-linejoin="round"/>
+  </g>
+  <!-- Inner shield fill (very subtle) -->
+  <path d="M256,50 L430,120 C430,120 440,320 256,460 C72,320 82,120 82,120 Z"
+        fill="#131316" opacity="0.6"/>
+  <!-- Audio waveform inside shield -->
+  <g clip-path="url(#shieldClip)" filter="url(#glow5)">
+    <!-- Center waveform path -->
+    <path d="M120,256 
+             Q140,256 150,220 
+             Q160,184 170,256 
+             Q180,328 190,256 
+             Q200,200 210,180 
+             Q220,160 230,256 
+             Q240,352 250,256 
+             Q260,140 270,256 
+             Q280,372 290,256 
+             Q300,180 310,200 
+             Q320,220 330,256 
+             Q340,292 350,256 
+             Q360,220 370,240 
+             Q380,256 390,256"
+          fill="none" stroke="url(#g5b)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Subtle mirror wave -->
+    <path d="M120,256 
+             Q140,256 150,220 
+             Q160,184 170,256 
+             Q180,328 190,256 
+             Q200,200 210,180 
+             Q220,160 230,256 
+             Q240,352 250,256 
+             Q260,140 270,256 
+             Q280,372 290,256 
+             Q300,180 310,200 
+             Q320,220 330,256 
+             Q340,292 350,256 
+             Q360,220 370,240 
+             Q380,256 390,256"
+          fill="none" stroke="url(#g5b)" stroke-width="2" stroke-linecap="round" opacity="0.2" transform="translate(0,4)"/>
+  </g>
+  <!-- Lock icon at top of shield -->
+  <g transform="translate(256,130)">
+    <rect x="-12" y="-2" width="24" height="18" rx="3" fill="none" stroke="#e09f3e" stroke-width="2.5" opacity="0.6"/>
+    <path d="M-7,-2 C-7,-14 7,-14 7,-2" fill="none" stroke="#e09f3e" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/>
+    <circle cx="0" cy="8" r="2.5" fill="#e09f3e" opacity="0.6"/>
+  </g>
+  <!-- Bottom text -->
+  <text x="256" y="400" text-anchor="middle" font-family="'Syne',sans-serif" font-weight="800" font-size="18" letter-spacing="5" fill="#6b6b76" opacity="0.6">PRIVATE</text>
+</svg>

@@ -21,10 +21,3 @@ pub struct TranscriptionChunk {
     pub processing_time_ms: u32,
     pub method: String,
 }
-
-/// Structure to describe a sample audio file
-#[derive(serde::Serialize)]
-pub struct SampleFile {
-    pub name: String, // e.g. "Space.wav"
-    pub path: String, // Full path on disk
-}

@@ -11,6 +11,8 @@ pub struct DownloadProgressPayload {
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
     pub status: String, // "downloading", "verifying", "done", "error"
+    pub current_file: u32,  // Current file being downloaded (1-indexed)
+    pub total_files: u32,   // Total number of files to download
 }
 
 #[derive(Serialize)]
@@ -219,6 +221,30 @@ fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             subdirectory: Some("parakeet-nemotron"),
         }),
 
+        // --- Spellcheck ---
+        "symspell-en-82k" => Some(ModelConfig {
+            repo: "github:wolfgarbe/SymSpell",
+            branch: "master",
+            files: vec![ModelFile {
+                filename: "frequency_dictionary_en_82_765.txt",
+                remote_path: "SymSpell/frequency_dictionary_en_82_765.txt",
+                sha1: "",
+            }],
+            subdirectory: Some("spellcheck"),
+        }),
+
+        // --- LLM ---
+        "grmr-v3-1b" => Some(ModelConfig {
+            repo: "qingy2024/GRMR-V3-G1B-GGUF",
+            branch: "main",
+            files: vec![ModelFile {
+                filename: "GRMR-V3-G1B-Q4_K_M.gguf",
+                remote_path: "GRMR-V3-G1B-Q4_K_M.gguf",
+                sha1: "",
+            }],
+            subdirectory: Some("llm"),
+        }),
+
         "parakeet-ctc" => Some(single_file_whisper("parakeet-ctc.onnx", "")), // Placeholder for now
 
         _ => None,
@@ -286,6 +312,8 @@ pub async fn verify_model_hash(app: AppHandle, model_id: String) -> Result<bool,
                 total_bytes: 0,
                 downloaded_bytes: 0,
                 status: "verifying".to_string(),
+                current_file: (i + 1) as u32,
+                total_files: total_files as u32,
             },
         );
 
@@ -337,6 +365,8 @@ pub async fn verify_model_hash(app: AppHandle, model_id: String) -> Result<bool,
             total_bytes: 100,
             downloaded_bytes: 100,
             status: "done".to_string(),
+            current_file: total_files as u32,
+            total_files: total_files as u32,
         },
     );
 
@@ -463,10 +493,18 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
     // To keep it simple, we will sequence them.
 
     for (i, file_spec) in config.files.iter().enumerate() {
-        let url = format!(
-            "https://huggingface.co/{}/resolve/{}/{}",
-            config.repo, config.branch, file_spec.remote_path
-        );
+        let url = if config.repo.starts_with("github:") {
+            let repo_path = config.repo.trim_start_matches("github:");
+            format!(
+                "https://raw.githubusercontent.com/{}/{}/{}",
+                repo_path, config.branch, file_spec.remote_path
+            )
+        } else {
+            format!(
+                "https://huggingface.co/{}/resolve/{}/{}",
+                config.repo, config.branch, file_spec.remote_path
+            )
+        };
         let target_path = base_dir.join(file_spec.filename);
 
         println!(
@@ -515,6 +553,8 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                         total_bytes: total_size,
                         downloaded_bytes: downloaded,
                         status: "downloading".to_string(), // Frontend just shows % based on these two numbers
+                        current_file: (i + 1) as u32,
+                        total_files: files_count as u32,
                     },
                 );
             }
@@ -530,6 +570,8 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
             total_bytes: 100,
             downloaded_bytes: 100,
             status: "done".to_string(),
+            current_file: files_count as u32,
+            total_files: files_count as u32,
         },
     );
 

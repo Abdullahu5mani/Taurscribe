@@ -1,23 +1,43 @@
-/* Settings Modal Styles */
+/* Settings Modal — Dark Studio Hardware theme (matches App.css) */
+
+/* Overlay always in DOM; visibility toggled to avoid mount/unmount double animation */
 .settings-overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(2, 6, 23, 0.85);
-  backdrop-filter: blur(8px);
   display: flex;
   justify-content: center;
   align-items: center;
   z-index: 1000;
-  animation: fadeIn 0.2s ease-out;
+  transition: visibility 0s, opacity 0.2s ease-out;
+}
+
+.settings-overlay--closed {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: visibility 0s 0.2s, opacity 0.2s ease-out;
+}
+
+.settings-overlay--open {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  background-color: rgba(9, 9, 11, 0.88);
+  backdrop-filter: blur(10px);
+  animation: settingsFadeIn 0.2s ease-out;
+}
+
+.settings-overlay--open .settings-modal {
+  animation: settingsScaleIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .settings-modal {
-  background: #0f172a; /* bg-secondary */
-  border: 1px solid rgba(148, 163, 184, 0.1);
-  border-radius: 20px;
+  background: #131316;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
   width: 90%;
   max-width: 800px;
   height: 85vh;
@@ -25,36 +45,35 @@
   flex-direction: column;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
   overflow: hidden;
-  animation: scaleIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .settings-header {
   padding: 24px 32px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: rgba(15, 23, 42, 0.95);
+  background: #1a1a1f;
 }
 
 .settings-header h2 {
   margin: 0;
-  font-size: 1.5rem;
+  font-family: 'Syne', sans-serif;
+  font-size: 1.35rem;
   font-weight: 700;
-  background: linear-gradient(to right, #fff, #94a3b8);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ededef;
 }
 
 .close-btn {
   background: transparent;
-  border: none;
-  color: #64748b; /* text-muted */
-  font-size: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: #6b6b76;
+  font-size: 1.25rem;
   cursor: pointer;
   padding: 8px;
-  border-radius: 8px;
+  border-radius: 10px;
   transition: all 0.2s;
   display: flex;
   align-items: center;
@@ -65,10 +84,10 @@
 
 .close-btn:hover {
   background: rgba(255, 255, 255, 0.05);
-  color: #fff;
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #ededef;
 }
 
-/* Layout: Sidebar + Content */
 .settings-body {
   display: flex;
   flex: 1;
@@ -77,12 +96,12 @@
 
 .settings-sidebar {
   width: 240px;
-  background: rgba(2, 6, 23, 0.3);
-  border-right: 1px solid rgba(148, 163, 184, 0.1);
+  background: #09090b;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
   padding: 24px 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .settings-nav-item {
@@ -90,37 +109,40 @@
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-radius: 12px;
-  color: #94a3b8;
+  border-radius: 10px;
+  color: #6b6b76;
   cursor: pointer;
   transition: all 0.2s;
+  font-family: 'Outfit', sans-serif;
   font-weight: 500;
   font-size: 0.95rem;
 }
 
 .settings-nav-item:hover {
   background: rgba(255, 255, 255, 0.03);
-  color: #f8fafc;
+  color: #ededef;
 }
 
 .settings-nav-item.active {
-  background: rgba(6, 182, 212, 0.1); /* accent-primary low opacity */
-  color: #06b6d4; /* accent-primary */
-  border: 1px solid rgba(6, 182, 212, 0.2);
+  background: rgba(224, 159, 62, 0.08);
+  color: #e09f3e;
+  border: 1px solid rgba(224, 159, 62, 0.2);
 }
 
 .settings-content {
   flex: 1;
   padding: 32px;
   overflow-y: auto;
-  background: radial-gradient(circle at 50% 0%, rgba(6, 182, 212, 0.03) 0%, transparent 50%);
+  background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(224, 159, 62, 0.03) 0%, transparent 50%),
+    #131316;
 }
 
 .settings-section-title {
-  font-size: 1.25rem;
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.2rem;
   font-weight: 600;
   margin-bottom: 24px;
-  color: #f8fafc;
+  color: #ededef;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -130,19 +152,18 @@
   content: '';
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, rgba(148, 163, 184, 0.1), transparent);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.06), transparent);
 }
 
-/* Download Manager Styles */
 .model-list {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .model-item {
-  background: rgba(30, 41, 59, 0.4);
-  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(35, 35, 41, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 12px;
   padding: 20px;
   display: flex;
@@ -152,37 +173,42 @@
 }
 
 .model-item:hover {
-  border-color: rgba(148, 163, 184, 0.2);
-  background: rgba(30, 41, 59, 0.6);
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(35, 35, 41, 0.9);
 }
 
 .model-info h3 {
   margin: 0 0 6px 0;
+  font-family: 'Outfit', sans-serif;
   font-size: 1rem;
   font-weight: 600;
+  color: #ededef;
 }
 
 .model-meta {
-  color: #64748b;
+  color: #6b6b76;
   font-size: 0.85rem;
   display: flex;
   gap: 12px;
+  font-family: 'Outfit', sans-serif;
 }
 
 .model-tag {
-  background: rgba(148, 163, 184, 0.1);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-family: monospace;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: #6b6b76;
 }
 
 .download-btn {
-  background: #0f172a;
-  border: 1px solid #06b6d4;
-  color: #06b6d4;
+  background: #1a1a1f;
+  border: 1px solid #e09f3e;
+  color: #e09f3e;
   padding: 8px 16px;
   border-radius: 8px;
+  font-family: 'Outfit', sans-serif;
   font-weight: 600;
   font-size: 0.9rem;
   cursor: pointer;
@@ -193,45 +219,114 @@
 }
 
 .download-btn:hover {
-  background: #06b6d4;
-  color: #fff;
-  box-shadow: 0 0 15px rgba(6, 182, 212, 0.3);
+  background: #e09f3e;
+  color: #09090b;
+  box-shadow: 0 0 18px rgba(224, 159, 62, 0.35);
 }
 
 .download-btn.downloaded {
-  border-color: #10b981; /* success */
-  color: #10b981;
-  background: rgba(16, 185, 129, 0.05);
+  border-color: #3ecfa5;
+  color: #3ecfa5;
+  background: rgba(62, 207, 165, 0.06);
   cursor: default;
 }
 
 .download-btn.downloaded:hover {
-  background: rgba(16, 185, 129, 0.05);
-  color: #10b981;
+  background: rgba(62, 207, 165, 0.06);
+  color: #3ecfa5;
   box-shadow: none;
 }
 
-@keyframes fadeIn {
+@keyframes settingsFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
-@keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.95); }
+@keyframes settingsScaleIn {
+  from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: scale(1); }
 }
 
-/* Scrollbar for content */
 .settings-content::-webkit-scrollbar {
   width: 8px;
 }
+
 .settings-content::-webkit-scrollbar-track {
   background: transparent;
 }
+
 .settings-content::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 4px;
 }
+
 .settings-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.4);
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* Toggle switch (General settings) */
+.settings-content .switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.settings-content .switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.settings-content .slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: 0.25s ease;
+}
+
+.settings-content .slider.round {
+  border-radius: 24px;
+}
+
+.settings-content .slider::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background: #6b6b76;
+  transition: 0.25s ease;
+  border-radius: 50%;
+}
+
+.settings-content .switch input:checked + .slider {
+  background: rgba(224, 159, 62, 0.25);
+  border-color: #e09f3e;
+}
+
+.settings-content .switch input:checked + .slider::before {
+  background: #e09f3e;
+  transform: translateX(20px);
+}
+
+.settings-content .switch input:focus-visible + .slider {
+  box-shadow: 0 0 0 2px rgba(224, 159, 62, 0.3);
+}
+
+/* Disabled: loading/unloading — prevent spam */
+.settings-content .switch--disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.settings-content .switch--disabled .slider {
+  cursor: not-allowed;
 }

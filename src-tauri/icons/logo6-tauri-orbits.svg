@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- App gold gradient -->
+    <linearGradient id="orbGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e09f3e"/>
+      <stop offset="100%" stop-color="#c48a2f"/>
+    </linearGradient>
+    <!-- Tauri-style cyan/green gradient (parakeet) -->
+    <linearGradient id="orbCyan" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3ecfa5"/>
+      <stop offset="100%" stop-color="#6895d2"/>
+    </linearGradient>
+    <!-- Soft glow -->
+    <filter id="orbGlow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="orbGlowStrong">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <!-- Radial glow for center -->
+    <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e09f3e" stop-opacity="0.25"/>
+      <stop offset="60%" stop-color="#3ecfa5" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="transparent" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Dark background -->
+  <circle cx="256" cy="256" r="250" fill="#09090b"/>
+
+  <!-- Very subtle cosmic dust / nebula glow at center -->
+  <circle cx="256" cy="256" r="160" fill="url(#centerGlow)"/>
+
+  <!-- Scattered stars (tiny dots) -->
+  <g opacity="0.3">
+    <circle cx="120" cy="100" r="1.2" fill="#ededef"/>
+    <circle cx="380" cy="90" r="1" fill="#ededef"/>
+    <circle cx="90" cy="300" r="0.8" fill="#ededef"/>
+    <circle cx="420" cy="350" r="1.1" fill="#ededef"/>
+    <circle cx="160" cy="420" r="0.9" fill="#ededef"/>
+    <circle cx="350" cy="430" r="1" fill="#ededef"/>
+    <circle cx="430" cy="170" r="0.7" fill="#ededef"/>
+    <circle cx="80" cy="200" r="1" fill="#ededef"/>
+    <circle cx="300" cy="70" r="0.8" fill="#ededef"/>
+    <circle cx="200" cy="80" r="1.1" fill="#ededef"/>
+    <circle cx="440" cy="260" r="0.9" fill="#ededef"/>
+    <circle cx="70" cy="380" r="1" fill="#ededef"/>
+    <circle cx="330" cy="160" r="0.6" fill="#ededef"/>
+    <circle cx="180" cy="350" r="0.7" fill="#ededef"/>
+  </g>
+
+  <!-- Orbital ring 1  gold (tilted ellipse) -->
+  <g filter="url(#orbGlow)">
+    <ellipse cx="256" cy="256" rx="180" ry="70"
+      transform="rotate(-30 256 256)"
+      fill="none" stroke="url(#orbGold)" stroke-width="3.5" opacity="0.85"/>
+    <!-- Thinner ghost ring -->
+    <ellipse cx="256" cy="256" rx="180" ry="70"
+      transform="rotate(-30 256 256)"
+      fill="none" stroke="#e09f3e" stroke-width="1" opacity="0.2"/>
+  </g>
+
+  <!-- Orbital ring 2  cyan/green (tilted opposite) -->
+  <g filter="url(#orbGlow)">
+    <ellipse cx="256" cy="256" rx="180" ry="70"
+      transform="rotate(30 256 256)"
+      fill="none" stroke="url(#orbCyan)" stroke-width="3.5" opacity="0.85"/>
+    <!-- Thinner ghost ring -->
+    <ellipse cx="256" cy="256" rx="180" ry="70"
+      transform="rotate(30 256 256)"
+      fill="none" stroke="#3ecfa5" stroke-width="1" opacity="0.2"/>
+  </g>
+
+  <!-- Third subtle orbit  whisper blue, nearly horizontal -->
+  <ellipse cx="256" cy="256" rx="175" ry="55"
+    transform="rotate(0 256 256)"
+    fill="none" stroke="#6895d2" stroke-width="1.5" opacity="0.2"/>
+
+  <!-- Center core  bright glowing dot -->
+  <g filter="url(#orbGlowStrong)">
+    <circle cx="256" cy="256" r="18" fill="#e09f3e" opacity="0.9"/>
+  </g>
+  <circle cx="256" cy="256" r="10" fill="#ededef" opacity="0.95"/>
+  <circle cx="256" cy="256" r="5" fill="#fff"/>
+
+  <!-- Small orbiting dots on each ring -->
+  <!-- Gold orbit dot (at ~45� on the gold ellipse) -->
+  <g filter="url(#orbGlow)">
+    <circle cx="370" cy="150" r="5" fill="#e09f3e" opacity="0.9"/>
+    <circle cx="370" cy="150" r="2.5" fill="#fff" opacity="0.8"/>
+  </g>
+  <!-- Cyan orbit dot -->
+  <g filter="url(#orbGlow)">
+    <circle cx="142" cy="150" r="5" fill="#3ecfa5" opacity="0.9"/>
+    <circle cx="142" cy="150" r="2.5" fill="#fff" opacity="0.8"/>
+  </g>
+  <!-- Blue orbit dot -->
+  <g filter="url(#orbGlow)">
+    <circle cx="420" cy="270" r="4" fill="#6895d2" opacity="0.7"/>
+    <circle cx="420" cy="270" r="2" fill="#fff" opacity="0.6"/>
+  </g>
+
+  <!-- Outer ring border -->
+  <circle cx="256" cy="256" r="248" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="2"/>
+</svg>

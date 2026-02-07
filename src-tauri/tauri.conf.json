@@ -13,8 +13,11 @@
     "windows": [
       {
         "title": "Taurscribe",
-        "width": 600,
-        "height": 600
+        "width": 900,
+        "height": 819,
+        "minWidth": 886,
+        "minHeight": 819,
+        "decorations": false
       }
     ],
     "security": {

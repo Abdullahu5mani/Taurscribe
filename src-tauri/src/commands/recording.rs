@@ -58,7 +58,7 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>) -> Resul
     let sample_rate = config.sample_rate.0;
 
     // 6. SPAWN THREAD 1: THE FILE SAVER
-    std::thread::spawn(move || {
+    let writer_thread = std::thread::spawn(move || {
         let mut writer = writer;
         while let Ok(samples) = file_rx.recv() {
             for sample in samples {
@@ -78,11 +78,10 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>) -> Resul
 
     // 7. SPAWN THREAD 2: THE REAL-TIME TRANSCRIBER
     let app_clone = app_handle.clone();
-    std::thread::spawn(move || {
+    let transcriber_thread = std::thread::spawn(move || {
         let mut buffer = Vec::new();
         let chunk_size = (sample_rate * 6) as usize;
         let max_buffer_size = chunk_size * 2;
-
         println!(
             "[INFO] Runtime Transcriber thread started (Engine: {:?})",
             active_engine
@@ -262,6 +261,8 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>) -> Resul
         stream: SendStream(stream),
         file_tx,
         whisper_tx,
+        writer_thread,
+        transcriber_thread,
     });
 
     Ok(format!("Recording started: {}", path.display()))
@@ -299,7 +300,16 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
         drop(recording.file_tx);
         drop(recording.whisper_tx);
 
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Join the threads to ensure they finish processing before we proceed.
+        // This is CRITICAL for Parakeet which relies on the transcript built by the thread.
+        println!("[INFO] Waiting for worker threads to finish...");
+        if let Err(e) = recording.writer_thread.join() {
+            eprintln!("[ERROR] Writer thread panicked: {:?}", e);
+        }
+        if let Err(e) = recording.transcriber_thread.join() {
+            eprintln!("[ERROR] Transcriber thread panicked: {:?}", e);
+        }
+        println!("[INFO] Worker threads finished.");
 
         let active_engine = *state.active_engine.lock().unwrap();
 

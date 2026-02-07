@@ -4,10 +4,21 @@ use crate::tray;
 use crate::types::{AppState, ASREngine};
 
 /// Ask the backend what hardware is running the AI (CPU vs GPU)
+/// Returns the backend of whichever engine is currently active
 #[tauri::command]
 pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
-    let whisper = state.whisper.lock().unwrap();
-    Ok(format!("{}", whisper.get_backend()))
+    let active = *state.active_engine.lock().unwrap();
+    match active {
+        ASREngine::Parakeet => {
+            let parakeet = state.parakeet.lock().unwrap();
+            let status = parakeet.get_status();
+            Ok(status.backend)
+        }
+        ASREngine::Whisper => {
+            let whisper = state.whisper.lock().unwrap();
+            Ok(format!("{}", whisper.get_backend()))
+        }
+    }
 }
 
 /// Change the active ASR engine

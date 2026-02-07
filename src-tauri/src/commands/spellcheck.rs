@@ -63,3 +63,14 @@ pub async fn correct_spelling(state: State<'_, AudioState>, text: String) -> Res
     println!("[SPELL] Correction finished. Output length: {}", output.len());
     Ok(output)
 }
+
+#[tauri::command]
+pub fn unload_spellcheck(state: State<'_, AudioState>) -> Result<String, String> {
+    let mut sc_guard = state.spellcheck.lock().unwrap();
+    if sc_guard.is_none() {
+        return Ok("SymSpell was not loaded".to_string());
+    }
+    *sc_guard = None;
+    println!("[INFO] SymSpell unloaded.");
+    Ok("SymSpell unloaded successfully".to_string())
+}

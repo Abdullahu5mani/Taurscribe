@@ -51,6 +51,9 @@ anyhow = "1.0"
 # SymSpell - Fast spell checking
 symspell = "0.4"
 
+# File system watcher - Detect model changes
+notify = "6.1"
+
 # --- Platform-Specific AI Backends ---
 
 

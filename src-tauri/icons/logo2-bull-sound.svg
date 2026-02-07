@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="g2a" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e09f3e"/>
+      <stop offset="100%" stop-color="#c48a2f"/>
+    </linearGradient>
+    <linearGradient id="g2b" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#3ecfa5"/>
+      <stop offset="100%" stop-color="#6895d2"/>
+    </linearGradient>
+    <filter id="glow2">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#09090b"/>
+  <rect x="2" y="2" width="508" height="508" rx="94" fill="none" stroke="#1a1a1f" stroke-width="3"/>
+  <!-- Stylised bull head / Taurus horns -->
+  <g transform="translate(256,270)" filter="url(#glow2)">
+    <!-- Left horn -->
+    <path d="M-20,-30 C-60,-90 -130,-130 -150,-80 C-140,-60 -100,-50 -50,-30"
+          fill="none" stroke="url(#g2a)" stroke-width="10" stroke-linecap="round"/>
+    <!-- Right horn -->
+    <path d="M20,-30 C60,-90 130,-130 150,-80 C140,-60 100,-50 50,-30"
+          fill="none" stroke="url(#g2a)" stroke-width="10" stroke-linecap="round"/>
+    <!-- Head shape -->
+    <ellipse cx="0" cy="20" rx="60" ry="50" fill="none" stroke="#ededef" stroke-width="4" opacity="0.25"/>
+    <!-- Nose ring (accent) -->
+    <circle cx="0" cy="50" r="14" fill="none" stroke="#e09f3e" stroke-width="3" opacity="0.7"/>
+    <!-- Eyes -->
+    <circle cx="-22" cy="5" r="4" fill="#ededef" opacity="0.5"/>
+    <circle cx="22" cy="5" r="4" fill="#ededef" opacity="0.5"/>
+  </g>
+  <!-- Sound waves emanating from bull -->
+  <g transform="translate(256,240)" filter="url(#glow2)">
+    <path d="M80,-50 C100,-30 100,30 80,50" fill="none" stroke="url(#g2b)" stroke-width="3" stroke-linecap="round" opacity="0.4"/>
+    <path d="M100,-70 C130,-40 130,40 100,70" fill="none" stroke="url(#g2b)" stroke-width="3" stroke-linecap="round" opacity="0.3"/>
+    <path d="M120,-90 C160,-50 160,50 120,90" fill="none" stroke="url(#g2b)" stroke-width="2.5" stroke-linecap="round" opacity="0.2"/>
+    <path d="M-80,-50 C-100,-30 -100,30 -80,50" fill="none" stroke="url(#g2b)" stroke-width="3" stroke-linecap="round" opacity="0.4"/>
+    <path d="M-100,-70 C-130,-40 -130,40 -100,70" fill="none" stroke="url(#g2b)" stroke-width="3" stroke-linecap="round" opacity="0.3"/>
+    <path d="M-120,-90 C-160,-50 -160,50 -120,90" fill="none" stroke="url(#g2b)" stroke-width="2.5" stroke-linecap="round" opacity="0.2"/>
+  </g>
+  <!-- "TS" text at bottom -->
+  <text x="256" y="430" text-anchor="middle" font-family="'Syne',sans-serif" font-weight="800" font-size="28" letter-spacing="6" fill="#6b6b76">TAURSCRIBE</text>
+</svg>

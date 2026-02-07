@@ -1,10 +1,7 @@
-use std::path::PathBuf; // Import PathBuf for handling file system paths safely across different OSs
-
 /// VAD (Voice Activity Detection) Manager
 ///
 /// NOTE: This is currently a simple version (stub) that we will improve later.
 /// Right now, it works by checking how "loud" the audio is (energy).
-/// In the future, we will use an AI model (Silero) for better accuracy.
 pub struct VADManager {
     threshold: f32, // The volume level that counts as "speech". 0.005 is a good default.
 }
@@ -12,63 +9,13 @@ pub struct VADManager {
 impl VADManager {
     /// Create a new VAD manager (Constructor)
     pub fn new() -> Result<Self, String> {
-        // Try to find where the AI models are stored (for future use)
-        if let Ok(models_dir) = Self::get_models_dir() {
-            // Check if the Silero VAD model file exists in that directory
-            let vad_model_path = models_dir.join("silero_vad.onnx");
-
-            if vad_model_path.exists() {
-                // We found the model! (Success case)
-                println!(
-                    "[VAD] Found Silero VAD model at: {}",
-                    vad_model_path.display()
-                );
-            } else {
-                // Model is missing, but that's okay for now
-                println!(
-                    "[VAD] Silero model not found at: {} (continuing with energy-based VAD)",
-                    vad_model_path.display()
-                );
-            }
-        } else {
-            // Couldn't even find the model folder
-            println!("[VAD] Models directory not accessible (using energy-based VAD)");
-        }
-
         // Announce that we are using the simple energy method
-        println!("[VAD] Using simple energy-based VAD (Silero integration pending)");
+        println!("[VAD] Using energy-based VAD (Threshold: 0.005)");
 
         // Return the new VADManager object initialized with our threshold
         Ok(Self {
             threshold: 0.005, // Set threshold to 0.005. Lowered this to catch quieter speech.
         })
-    }
-
-    /// Helper function to find the 'models' directory
-    fn get_models_dir() -> Result<PathBuf, String> {
-        // List of places where the models might be hiding relative to our app
-        let possible_paths = [
-            "taurscribe-runtime/models",       // Check current folder
-            "../taurscribe-runtime/models",    // Check one level up
-            "../../taurscribe-runtime/models", // Check two levels up
-        ];
-
-        // Loop through each possible path to see if it exists
-        for path in possible_paths {
-            // Try to convert relative path to absolute path (canonicalize)
-            if let Ok(canonical) = std::fs::canonicalize(path) {
-                // If the path is valid and is a directory...
-                if canonical.is_dir() {
-                    // Check if it looks like the right folder (contains silero model)
-                    if canonical.join("silero_vad.onnx").exists() {
-                        return Ok(canonical); // Found it! Return the full path.
-                    }
-                }
-            }
-        }
-
-        // If we checked everywhere and found nothing, return an error
-        Err("Could not find models directory".to_string())
     }
 
     /// The Main Function: Check if a chunk of audio is speech

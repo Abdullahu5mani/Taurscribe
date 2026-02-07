@@ -29,9 +29,17 @@ pub fn switch_model(state: State<AudioState>, model_id: String) -> Result<String
 
     println!("[INFO] Switching to model: {}", model_id);
 
-    // 2. Initialize the new model
+    // 2. Unload Parakeet if loaded (Exclusive Mode)
+    state.parakeet.lock().unwrap().unload();
+
+    // 3. Initialize the new model
     let mut whisper = state.whisper.lock().unwrap();
-    whisper.initialize(Some(&model_id))
+    let res = whisper.initialize(Some(&model_id));
+
+    // Update active engine
+    *state.active_engine.lock().unwrap() = ASREngine::Whisper;
+
+    res
 }
 
 /// List Parakeet models
@@ -43,6 +51,10 @@ pub fn list_parakeet_models() -> Result<Vec<parakeet::ParakeetModelInfo>, String
 /// Initialize Parakeet
 #[tauri::command]
 pub fn init_parakeet(state: State<AudioState>, model_id: Option<String>) -> Result<String, String> {
+    // 1. Unload Whisper if loaded (Exclusive Mode)
+    state.whisper.lock().unwrap().unload();
+
+    // 2. Load Parakeet
     let mut parakeet = state.parakeet.lock().unwrap();
     let result = parakeet.initialize(model_id.as_deref())?;
 

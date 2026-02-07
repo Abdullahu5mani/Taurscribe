@@ -67,33 +67,9 @@ impl ParakeetManager {
         }
     }
 
-    /// Helper: Find the folder where Parakeet models are stored
+    /// Helper: Find the folder where Parakeet models are stored (AppData/Local/Taurscribe/models)
     fn get_models_dir() -> Result<PathBuf, String> {
-        let possible_paths = [
-            "taurscribe-runtime/models",
-            "../taurscribe-runtime/models",
-            "../../taurscribe-runtime/models",
-        ];
-
-        for path in possible_paths {
-            if let Ok(canonical) = std::fs::canonicalize(path) {
-                if canonical.is_dir() {
-                    return Ok(canonical);
-                }
-            }
-        }
-
-        // Fallback to checking exe location if relative paths fail
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let runtime_dir = exe_dir.join("taurscribe-runtime");
-                if runtime_dir.exists() {
-                    return Ok(runtime_dir.join("models"));
-                }
-            }
-        }
-
-        Err("Could not find taurscribe-runtime/models directory".to_string())
+        crate::utils::get_models_dir()
     }
 
     /// List all the models found in the models folder
@@ -194,6 +170,17 @@ impl ParakeetManager {
             model_id: self.model_name.clone(),
             model_type,
             backend: self.backend.to_string(),
+        }
+    }
+
+    /// Unload the model to free memory
+    pub fn unload(&mut self) {
+        if self.model.is_some() {
+            println!("[INFO] Unloading Parakeet model...");
+            self.model = None;
+            self.model_name = None;
+            self.resampler = None;
+            println!("[SUCCESS] Parakeet model unloaded");
         }
     }
 
