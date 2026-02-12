@@ -1,17 +1,23 @@
 //! LLM engine for transcript grammar correction.
-//! Loads from taurscribe-runtime/models/qwen_finetuned_gguf (GGUF Q4_K_M). Uses CUDA when available.
+//! Loads from taurscribe-runtime/models/qwen_finetuned_gguf (GGUF Q4_K_M).
+//! n_gpu_layers=0 forces CPU; change to -1 or layer count for GPU.
 
 use anyhow::{Error, Result};
-use candle_core::{DType, Device, IndexOp, Tensor};
-use candle_core::quantized::gguf_file;
-use candle_transformers::generation::LogitsProcessor;
-use candle_transformers::models::quantized_qwen2::ModelWeights;
-use tokenizers::Tokenizer;
+use llama_cpp_2::llama_backend::LlamaBackend;
+use llama_cpp_2::llama_batch::LlamaBatch;
+use llama_cpp_2::model::params::LlamaModelParams;
+use llama_cpp_2::model::{AddBos, LlamaModel};
+use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::token::LlamaToken;
+use std::sync::{Arc, Mutex, OnceLock};
 
 const GGUF_FILENAME: &str = "model_q4_k_m.gguf";
 
 /// Hardcoded path for the GGUF grammar model.
 const GRAMMAR_LLM_PATH: &str = r"C:\Users\abdul\OneDrive\Desktop\Taurscribe\taurscribe-runtime\models\qwen_finetuned_gguf";
+
+/// Global backend instance (initialized once)
+static BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 
 /// Grammar LLM model path: hardcoded path, or GRAMMAR_LLM_DIR env override, or AppData fallback.
 pub fn get_grammar_llm_dir() -> Result<std::path::PathBuf, String> {
@@ -32,75 +38,26 @@ pub fn get_grammar_llm_dir() -> Result<std::path::PathBuf, String> {
     Ok(models_dir.join("qwen_finetuned_gguf"))
 }
 
-/// Build a tokenizer from GGUF embedded metadata (tokenizer.ggml.tokens + tokenizer.ggml.merges).
-/// Falls back to tokenizer.json in the same folder if metadata is absent.
-fn build_tokenizer(
-    base_path: &std::path::Path,
-    content: &gguf_file::Content,
-) -> Result<Tokenizer> {
-    use gguf_file::Value;
-    use tokenizers::models::bpe::BPE;
-
-    // Try GGUF metadata: tokenizer.ggml.tokens + tokenizer.ggml.merges (self-contained GGUF)
-    if let (Some(Value::Array(tokens_arr)), Some(Value::Array(merges_arr))) = (
-        content.metadata.get("tokenizer.ggml.tokens"),
-        content.metadata.get("tokenizer.ggml.merges"),
-    ) {
-        // Collect vocab: token string -> token id
-        let vocab: tokenizers::models::bpe::Vocab = tokens_arr
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| match v {
-                Value::String(s) => Some((s.clone(), i as u32)),
-                _ => None,
-            })
-            .collect();
-        // Collect merges: pairs of strings
-        let merges: tokenizers::models::bpe::Merges = merges_arr
-            .iter()
-            .filter_map(|v| match v {
-                Value::String(s) => {
-                    let mut parts = s.splitn(2, ' ');
-                    match (parts.next(), parts.next()) {
-                        (Some(a), Some(b)) => Some((a.to_string(), b.to_string())),
-                        _ => None,
-                    }
-                }
-                _ => None,
-            })
-            .collect();
-        if !vocab.is_empty() && !merges.is_empty() {
-            println!(
-                "[LLM] Building tokenizer from GGUF metadata ({} tokens, {} merges)",
-                vocab.len(),
-                merges.len()
-            );
-            let bpe = BPE::new(vocab, merges);
-            let tokenizer = Tokenizer::new(bpe);
-            return Ok(tokenizer);
-        }
-    }
-
-    // Fallback: tokenizer.json in same folder as the GGUF
-    let tokenizer_path = base_path.join("tokenizer.json");
-    println!(
-        "[LLM] No tokenizer in GGUF metadata, loading from {:?}",
-        tokenizer_path
-    );
-    Tokenizer::from_file(&tokenizer_path).map_err(Error::msg)
+// Internal structure that holds model and context together
+struct ModelContext {
+    model: LlamaModel,
+    context: llama_cpp_2::context::LlamaContext<'static>,
 }
 
+unsafe impl Send for ModelContext {}
+unsafe impl Sync for ModelContext {}
+
 pub struct LLMEngine {
-    model: ModelWeights,
-    tokenizer: Tokenizer,
-    device: Device,
-    eos_token_id: u32,
-    eos_im_end_id: u32,
+    #[allow(dead_code)] // kept alive so backend outlives model/context
+    backend: Arc<LlamaBackend>,
+    model_context: Mutex<ModelContext>,
+    eos_token_id: LlamaToken,
+    eos_im_end_id: LlamaToken,
 }
 
 impl LLMEngine {
     /// Create LLM from taurscribe-runtime/models/qwen_finetuned_gguf (or AppData fallback).
-    /// Uses CPU (quantized GGUF tensors are CPU-only in candle today).
+    /// Uses CUDA when available (via llama-cpp-2 features).
     pub fn new() -> Result<Self> {
         let base_path = get_grammar_llm_dir().map_err(Error::msg)?;
         let model_path = base_path.join(GGUF_FILENAME);
@@ -114,31 +71,61 @@ impl LLMEngine {
 
         println!("[LLM] Loading grammar model from: {:?}", model_path);
 
-        // Quantized GGUF tensors are CPU-only in candle
-        let device = Device::Cpu;
-        println!("[LLM] Using device: {:?}", device);
+        // Initialize backend (once, shared across instances)
+        let backend = BACKEND.get_or_init(|| {
+            Arc::new(LlamaBackend::init().expect("Failed to initialize llama backend"))
+        });
+        let backend = Arc::clone(backend);
 
-        let mut file = std::fs::File::open(&model_path)?;
-        let content = gguf_file::Content::read(&mut file)
-            .map_err(|e| Error::msg(format!("Failed to read GGUF: {}", e)))?;
+        // Load model (n_gpu_layers=0 → CPU only; set to -1 for full GPU offload)
+        let model_params = LlamaModelParams::default().with_n_gpu_layers(0);
+        let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
+            .map_err(|e| Error::msg(format!("Failed to load GGUF model: {}", e)))?;
 
-        let tokenizer = build_tokenizer(&base_path, &content)?;
-        let vocab = tokenizer.get_vocab(true);
-        let eos_token_id = vocab.get("<|endoftext|>").copied().unwrap_or(151643);
-        let eos_im_end_id = vocab.get("<|im_end|>").copied().unwrap_or(151645);
+        println!("[LLM] Model loaded successfully");
 
-        let model = ModelWeights::from_gguf(content, &mut file, &device)
-            .map_err(|e| Error::msg(format!("Failed to load quantized Qwen2: {}", e)))?;
+        // Get EOS tokens
+        let eos_token_id = model.token_eos();
+        
+        // Try to find <|im_end|> token by searching through tokens
+        let eos_im_end_id = model
+            .str_to_token("<|im_end|>", AddBos::Never)
+            .ok()
+            .and_then(|tokens| tokens.first().copied())
+            .unwrap_or_else(|| {
+                // Fallback: try to find it via token search
+                model
+                    .tokens(true)
+                    .find_map(|(token, result)| {
+                        result.ok().and_then(|s| {
+                            if s == "<|im_end|>" {
+                                Some(token)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .unwrap_or(eos_token_id)
+            });
 
         println!(
-            "[LLM] Model loaded. EOS tokens: <|endoftext|>={}, <|im_end|>={}",
+            "[LLM] EOS tokens: <|endoftext|>={:?}, <|im_end|>={:?}",
             eos_token_id, eos_im_end_id
         );
 
+        // Create context with default params
+        let context_params = llama_cpp_2::context::params::LlamaContextParams::default();
+        let context = model
+            .new_context(&backend, context_params)
+            .map_err(|e| Error::msg(format!("Failed to create context: {}", e)))?;
+
+        // Transmute lifetime to 'static - safe because model lives as long as the struct
+        let context = unsafe { std::mem::transmute(context) };
+        let model_context = ModelContext { model, context };
+
         Ok(Self {
-            model,
-            tokenizer,
-            device,
+            backend,
+            model_context: Mutex::new(model_context),
             eos_token_id,
             eos_im_end_id,
         })
@@ -156,42 +143,55 @@ impl LLMEngine {
 
         let total_start = std::time::Instant::now();
 
-        let tokens = self
-            .tokenizer
-            .encode(prompt, true)
-            .map_err(Error::msg)?
-            .get_ids()
-            .to_vec();
-        let prompt_tokens = tokens.len();
+        let mut mc = self.model_context.lock().unwrap();
+        
+        // Encode prompt using model's built-in tokenizer
+        let prompt_tokens = mc
+            .model
+            .str_to_token(prompt, AddBos::Never)
+            .map_err(|e| Error::msg(format!("Failed to tokenize prompt: {}", e)))?;
+        let prompt_tokens_len = prompt_tokens.len();
 
-        let mut logits_processor = LogitsProcessor::new(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            Some(temperature),
-            Some(0.95),
-        );
+        println!("[LLM] Prompt tokens: {}", prompt_tokens_len);
+
+        // Create sampler chain: temperature -> top_p -> greedy
+        let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::temp(temperature as f32),
+            LlamaSampler::top_p(0.95, 1),
+            LlamaSampler::greedy(),
+        ]);
+
+        // UTF-8 decoder for token_to_piece
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
 
         // Prefill: process all prompt tokens at once
         let prefill_start = std::time::Instant::now();
-        let input = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
-        let logits = self.model.forward(&input, 0)?;
-        let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
-        // quantized_qwen2::forward returns shape [vocab] for single-token or [seq, vocab]
-        let last_logits = if logits.dims().len() == 1 {
-            logits
-        } else {
-            logits.i(logits.dim(0)? - 1)?
-        };
-        let mut next_token = logits_processor.sample(&last_logits)?;
+        let mut batch = LlamaBatch::new(prompt_tokens_len.max(512), 1);
+        
+        // Add all prompt tokens to batch (pos is i32)
+        let last_index = prompt_tokens_len as i32 - 1;
+        for (i, &token) in (0_i32..).zip(prompt_tokens.iter()) {
+            batch
+                .add(token, i, &[0], i == last_index)
+                .map_err(|e| Error::msg(format!("Failed to add token to batch: {:?}", e)))?;
+        }
+
+        // Decode the prompt
+        mc.context
+            .decode(&mut batch)
+            .map_err(|e| Error::msg(format!("Failed to decode prompt: {}", e)))?;
+
+        // Sample first token
+        let mut next_token = sampler.sample(&mc.context, batch.n_tokens() - 1);
+        sampler.accept(next_token);
+
         let mut generated_tokens = vec![next_token];
         let prefill_time = prefill_start.elapsed();
-        let mut pos = tokens.len();
+        let mut n_cur = batch.n_tokens();
 
         println!(
             "[LLM] Prefill: {} tokens in {:?}",
-            prompt_tokens, prefill_time
+            prompt_tokens_len, prefill_time
         );
         print!("[LLM] Generating: ");
         std::io::stdout().flush().ok();
@@ -199,7 +199,10 @@ impl LLMEngine {
         // Decode loop: generate one token at a time
         let gen_start = std::time::Instant::now();
         for i in 0..max_gen_tokens {
-            if next_token == self.eos_token_id || next_token == self.eos_im_end_id {
+            if next_token == self.eos_token_id
+                || next_token == self.eos_im_end_id
+                || mc.model.is_eog_token(next_token)
+            {
                 println!(" [EOS at token {}]", i);
                 break;
             }
@@ -208,25 +211,36 @@ impl LLMEngine {
                 std::io::stdout().flush().ok();
             }
 
-            let input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, pos)?;
-            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
-            let last_logits = if logits.dims().len() == 1 {
-                logits
-            } else {
-                logits.i(logits.dim(0)? - 1)?
-            };
-            next_token = logits_processor.sample(&last_logits)?;
+            // Create batch with single token
+            batch.clear();
+            batch
+                .add(next_token, n_cur, &[0], true)
+                .map_err(|e| Error::msg(format!("Failed to add token to batch: {:?}", e)))?;
+
+            // Decode
+            mc.context
+                .decode(&mut batch)
+                .map_err(|e| Error::msg(format!("Failed to decode: {}", e)))?;
+
+            // Sample next token
+            next_token = sampler.sample(&mc.context, batch.n_tokens() - 1);
+            sampler.accept(next_token);
+
             generated_tokens.push(next_token);
-            pos += 1;
+            n_cur += 1;
         }
         let gen_time = gen_start.elapsed();
         println!();
 
-        let decoded = self
-            .tokenizer
-            .decode(&generated_tokens, true)
-            .map_err(Error::msg)?;
+        // Decode tokens back to string using token_to_piece (non-deprecated API)
+        let mut decoded = String::new();
+        for &tok in &generated_tokens {
+            match mc.model.token_to_piece(tok, &mut decoder, true, None) {
+                Ok(piece) => decoded.push_str(&piece),
+                Err(_) => {} // skip undecodable tokens
+            }
+        }
+        
         let cleaned = decoded
             .replace("<|endoftext|>", "")
             .replace("<|im_end|>", "")
