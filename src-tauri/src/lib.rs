@@ -115,6 +115,7 @@ pub fn run() {
             commands::run_llm_inference,
             commands::check_llm_status,
             commands::correct_text,
+            commands::type_text,
             commands::init_spellcheck,
             commands::unload_spellcheck,
             commands::check_spellcheck_status,

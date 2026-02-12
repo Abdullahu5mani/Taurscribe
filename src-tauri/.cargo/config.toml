@@ -1,5 +1,7 @@
 [target.x86_64-pc-windows-msvc]
 rustflags = [
+    "-C",
+    "target-cpu=native",
     "-L",
     "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin",
     "-C",
@@ -27,10 +29,14 @@ rustflags = [
 [env]
 MACOSX_DEPLOYMENT_TARGET = "13.4"
 WHISPER_LIB_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin"
+GRAMMAR_LLM_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/models/qwen_finetuned_gguf"
 VULKAN_SDK = "C:/VulkanSDK/1.4.335.0"
 LIBCLANG_PATH = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
 CFLAGS = "/MD"
 CXXFLAGS = "/MD"
+# Force MSVC (and nvcc's host compiler) to use dynamic CRT so candle-kernels libmoe.a
+# matches whisper_rs (MD). Without this, nvcc builds with /MT and link fails with LNK2038.
+CL = "/MD"
 
 [target.x86_64-pc-windows-gnu]
 linker = "C:\\msys64\\ucrt64\\bin\\gcc.exe"

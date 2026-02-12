@@ -10,9 +10,9 @@ pub struct DownloadProgressPayload {
     pub model_id: String,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
-    pub status: String, // "downloading", "verifying", "done", "error"
-    pub current_file: u32,  // Current file being downloaded (1-indexed)
-    pub total_files: u32,   // Total number of files to download
+    pub status: String,    // "downloading", "verifying", "done", "error"
+    pub current_file: u32, // Current file being downloaded (1-indexed)
+    pub total_files: u32,  // Total number of files to download
 }
 
 #[derive(Serialize)]
@@ -234,15 +234,87 @@ fn get_model_config(model_id: &str) -> Option<ModelConfig> {
         }),
 
         // --- LLM ---
-        "grmr-v3-1b" => Some(ModelConfig {
-            repo: "qingy2024/GRMR-V3-G1B-GGUF",
+        "qwen2.5-0.5b-instruct" => Some(ModelConfig {
+            repo: "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
             branch: "main",
             files: vec![ModelFile {
-                filename: "GRMR-V3-G1B-Q4_K_M.gguf",
-                remote_path: "GRMR-V3-G1B-Q4_K_M.gguf",
-                sha1: "",
+                filename: "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+                remote_path: "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+                sha1: "", // GGUF files don't have published hashes, skip verification
             }],
-            subdirectory: Some("llm"),
+            subdirectory: Some("Qwen2.5-0.5B-Instruct"),
+        }),
+        // Tokenizer files for Qwen (from the non-GGUF repo)
+        "qwen2.5-0.5b-instruct-tokenizer" => Some(ModelConfig {
+            repo: "Qwen/Qwen2.5-0.5B-Instruct",
+            branch: "main",
+            files: vec![
+                ModelFile {
+                    filename: "tokenizer.json",
+                    remote_path: "tokenizer.json",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "tokenizer_config.json",
+                    remote_path: "tokenizer_config.json",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "vocab.json",
+                    remote_path: "vocab.json",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "merges.txt",
+                    remote_path: "merges.txt",
+                    sha1: "",
+                },
+            ],
+            subdirectory: Some("Qwen2.5-0.5B-Instruct"),
+        }),
+        // SafeTensors model for NVIDIA GPU users (full precision, CUDA-compatible)
+        // This downloads the full 988 MB model.safetensors for optimal GPU performance
+        "qwen2.5-0.5b-safetensors" => Some(ModelConfig {
+            repo: "Qwen/Qwen2.5-0.5B",
+            branch: "main",
+            files: vec![
+                ModelFile {
+                    filename: "model.safetensors",
+                    remote_path: "model.safetensors",
+                    sha1: "", // 988 MB - full precision model for GPU
+                },
+                ModelFile {
+                    filename: "config.json",
+                    remote_path: "config.json",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "generation_config.json",
+                    remote_path: "generation_config.json",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "tokenizer.json",
+                    remote_path: "tokenizer.json",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "tokenizer_config.json",
+                    remote_path: "tokenizer_config.json",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "vocab.json",
+                    remote_path: "vocab.json",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "merges.txt",
+                    remote_path: "merges.txt",
+                    sha1: "",
+                },
+            ],
+            subdirectory: Some("Qwen2.5-0.5B-GPU"),
         }),
 
         "parakeet-ctc" => Some(single_file_whisper("parakeet-ctc.onnx", "")), // Placeholder for now

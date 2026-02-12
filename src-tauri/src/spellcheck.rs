@@ -1,5 +1,4 @@
 use anyhow::{Error, Result};
-use std::path::PathBuf;
 use std::time::Instant;
 use symspell::{SymSpell, Verbosity, UnicodeStringStrategy};
 
@@ -12,10 +11,11 @@ impl SpellChecker {
         let start = Instant::now();
         println!("[SPELL] Initializing SymSpell spell checker...");
 
-        // Look for dictionary in runtime models folder
-        let dict_path = PathBuf::from(
-            r"c:\Users\abdul\OneDrive\Desktop\Taurscribe\taurscribe-runtime\models\frequency_dictionary_en_82_765.txt"
-        );
+        // Get the models directory dynamically (same location as downloader)
+        let models_dir = crate::utils::get_models_dir()
+            .map_err(|e| Error::msg(format!("Failed to get models directory: {}", e)))?;
+        
+        let dict_path = models_dir.join("frequency_dictionary_en_82_765.txt");
 
         let mut symspell: SymSpell<UnicodeStringStrategy> = SymSpell::default();
 
@@ -30,9 +30,9 @@ impl SpellChecker {
             println!("[SPELL] Dictionary loaded in {:?}", start.elapsed());
         } else {
             println!("[SPELL] Warning: Dictionary not found at {:?}", dict_path);
-            println!("[SPELL] Download from: https://github.com/wolfgarbe/SymSpell/blob/master/SymSpell/frequency_dictionary_en_82_765.txt");
+            println!("[SPELL] Download from Settings > Download Manager");
             return Err(Error::msg(format!(
-                "Dictionary not found. Please download frequency_dictionary_en_82_765.txt to {:?}",
+                "Dictionary not found. Please download 'English Dictionary (SymSpell)' from Settings > Download Manager.\nExpected location: {:?}",
                 dict_path
             )));
         }

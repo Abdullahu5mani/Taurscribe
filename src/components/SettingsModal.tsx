@@ -64,7 +64,9 @@ const MOCK_MODELS: DownloadableModel[] = [
     { id: 'parakeet-nemotron', name: 'Nemotron Streaming', type: 'Parakeet', size: '1.2 GB', description: 'Ultra-low latency streaming. English only.', downloaded: true },
 
     // --- LLM ---
-    { id: 'grmr-v3-1b', name: 'Gemma 3 (Grammar)', type: 'LLM', size: '806 MB', description: 'Grammar correction (Q4_K_M). English only.', downloaded: false },
+    { id: 'qwen2.5-0.5b-safetensors', name: 'Qwen 2.5 0.5B (GPU)', type: 'LLM', size: '~1 GB', description: 'Safetensors model for CUDA/CPU. Best for grammar correction.', downloaded: false },
+    { id: 'qwen2.5-0.5b-instruct', name: 'Qwen 2.5 0.5B (Instruct, GGUF)', type: 'LLM', size: '429 MB', description: 'Quantized Q4_K_M. Use if you prefer smaller size.', downloaded: false },
+    { id: 'qwen2.5-0.5b-instruct-tokenizer', name: 'Qwen 2.5 Tokenizer Files', type: 'LLM', size: '11.5 MB', description: 'Required for GGUF Instruct model only.', downloaded: false },
 
     // --- Utility ---
     { id: 'symspell-en-82k', name: 'English Dictionary (SymSpell)', type: 'Utility', size: '1 MB', description: 'Fast spelling correction (82k words). English only.', downloaded: false },
@@ -258,7 +260,7 @@ export function SettingsModal({
                                 </label>
                             </div>
                             <p style={{ margin: 0, fontSize: '0.9rem', color: '#94a3b8' }}>
-                                Uses local Gemma-2B LLM to correct grammar and punctuation of transcripts.
+                                Uses local Qwen 2.5 0.5B (GPU safetensors or GGUF) to format and clean up transcripts.
                             </p>
                             <div className="status-badge" style={{ marginTop: '12px', display: 'inline-block', padding: '4px 8px', borderRadius: '4px', background: 'rgba(255,255,255,0.05)', fontSize: '0.8rem' }}>
                                 Status: <span style={{ color: llmStatus === "Loaded" ? "#22c55e" : (llmStatus === "Loading..." ? "#f59e0b" : "#f43f5e") }}>{llmStatus}</span>
@@ -562,16 +564,16 @@ export function SettingsModal({
 
                         <div className="model-item" style={{ marginBottom: '16px' }}>
                             <div className="model-info">
-                                <h3>Gemma 2B (Instruction Tuned)</h3>
+                                <h3>Qwen 2.5 0.5B (GPU / Safetensors)</h3>
                                 <div className="model-meta">
-                                    <span className="model-tag" style={{ color: '#f472b6', background: 'rgba(236, 72, 153, 0.15)' }}>Active</span>
-                                    <span>Google DeepMind</span>
+                                    <span className="model-tag" style={{ color: '#f472b6', background: 'rgba(236, 72, 153, 0.15)' }}>Recommended</span>
+                                    <span>Hugging Face · Qwen/Qwen2.5-0.5B</span>
                                 </div>
                                 <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: '#94a3b8' }}>
-                                    Optimized for grammar correction and formatting instruction.
+                                    Download in <strong>Download Manager</strong> → &quot;Qwen 2.5 0.5B (GPU)&quot;. Uses CUDA when available.
                                 </p>
                             </div>
-                            <button className="download-btn downloaded" disabled>Built-in Support</button>
+                            <button className="download-btn downloaded" disabled>Download in Download Manager</button>
                         </div>
 
                         <div style={{ background: 'rgba(30, 41, 59, 0.4)', padding: '20px', borderRadius: '12px', border: '1px solid rgba(148, 163, 184, 0.1)' }}>
@@ -596,51 +598,51 @@ export function SettingsModal({
             aria-hidden={!isOpen}
         >
             {isOpen && (
-            <div className="settings-modal" onClick={e => e.stopPropagation()}>
-                <div className="settings-header">
-                    <h2>Settings</h2>
-                    <button className="close-btn" onClick={onClose}>✕</button>
-                </div>
-
-                <div className="settings-body">
-                    <div className="settings-sidebar">
-                        <div
-                            className={`settings-nav-item ${activeTab === 'general' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('general')}
-                        >
-                            ⚙️ General
-                        </div>
-                        <div
-                            className={`settings-nav-item ${activeTab === 'downloads' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('downloads')}
-                        >
-                            ⬇ Download Manager
-                        </div>
-                        <div
-                            className={`settings-nav-item ${activeTab === 'audio' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('audio')}
-                        >
-                            🎙️ Audio
-                        </div>
-                        <div
-                            className={`settings-nav-item ${activeTab === 'vad' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('vad')}
-                        >
-                            🌊 VAD
-                        </div>
-                        <div
-                            className={`settings-nav-item ${activeTab === 'llm' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('llm')}
-                        >
-                            🧠 Grammar / LLM
-                        </div>
+                <div className="settings-modal" onClick={e => e.stopPropagation()}>
+                    <div className="settings-header">
+                        <h2>Settings</h2>
+                        <button className="close-btn" onClick={onClose}>✕</button>
                     </div>
 
-                    <div className="settings-content">
-                        {renderContent()}
+                    <div className="settings-body">
+                        <div className="settings-sidebar">
+                            <div
+                                className={`settings-nav-item ${activeTab === 'general' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('general')}
+                            >
+                                ⚙️ General
+                            </div>
+                            <div
+                                className={`settings-nav-item ${activeTab === 'downloads' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('downloads')}
+                            >
+                                ⬇ Download Manager
+                            </div>
+                            <div
+                                className={`settings-nav-item ${activeTab === 'audio' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('audio')}
+                            >
+                                🎙️ Audio
+                            </div>
+                            <div
+                                className={`settings-nav-item ${activeTab === 'vad' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('vad')}
+                            >
+                                🌊 VAD
+                            </div>
+                            <div
+                                className={`settings-nav-item ${activeTab === 'llm' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('llm')}
+                            >
+                                🧠 Grammar / LLM
+                            </div>
+                        </div>
+
+                        <div className="settings-content">
+                            {renderContent()}
+                        </div>
                     </div>
                 </div>
-            </div>
             )}
         </div>
     );

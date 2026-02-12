@@ -28,11 +28,7 @@ interface ParakeetStatus {
   backend: string;
 }
 
-interface LiveTranscriptionPayload {
-  text: string;
-  processing_time_ms: number;
-  method: string;
-}
+
 
 type ASREngine = "whisper" | "parakeet";
 
@@ -326,7 +322,7 @@ function App() {
   // Auto-init/Unload LLM when enabled/disabled
   useEffect(() => {
     if (enableGrammarLM && llmStatus === "Not Loaded") {
-      setHeaderStatus("Auto-loading Gemma LLM...", 60_000);
+      setHeaderStatus("Auto-loading Qwen LLM...", 60_000);
       setLlmStatus("Loading...");
       invoke("init_llm").then((res) => {
         setLlmStatus("Loaded");
@@ -336,7 +332,7 @@ function App() {
       setLlmStatus("Loading..."); // Unloading uses loading status temporarily or I could add "Unloading..."
       invoke("unload_llm").then(() => {
         setLlmStatus("Not Loaded");
-        setHeaderStatus("Gemma LLM unloaded");
+        setHeaderStatus("Qwen LLM unloaded");
       }).catch((e) => {
         setLlmStatus("Error");
         setHeaderStatus(`Failed to unload: ${e}`, 5000);
@@ -545,6 +541,9 @@ function App() {
       const totalMs = Date.now() - processingStartMs;
       setLatestLatency(totalMs);
       setLiveTranscript(finalTrans);
+
+      // Type out the final transcript once (after optional spell/grammar steps)
+      await invoke("type_text", { text: finalTrans });
 
       setIsRecording(false);
       isRecordingRef.current = false;

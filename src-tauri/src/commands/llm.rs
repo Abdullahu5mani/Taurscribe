@@ -23,8 +23,8 @@ pub async fn init_llm(state: State<'_, AudioState>) -> Result<String, String> {
         Ok(engine) => {
             let mut llm_guard = state.llm.lock().unwrap();
             *llm_guard = Some(engine);
-            println!("[SUCCESS] Gemma LLM initialized!");
-            Ok("Gemma LLM initialized successfully".to_string())
+            println!("[SUCCESS] Grammar LLM initialized!");
+            Ok("Grammar LLM initialized successfully".to_string())
         }
         Err(e) => {
             eprintln!("[ERROR] Failed to load LLM: {}", e);
@@ -70,33 +70,40 @@ pub fn check_llm_status(state: State<'_, AudioState>) -> bool {
     llm_guard.is_some()
 }
 
+/// Grammar correction: fix punctuation and grammar. Uses same prompt as format_transcript.
 #[tauri::command]
 pub async fn correct_text(state: State<'_, AudioState>, text: String) -> Result<String, String> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Ok(String::new());
+    }
     println!(
         "[LLM] correct_text request received. Input length: {}",
         text.len()
     );
     let llm_handle = state.llm.clone();
-    let prompt = text.clone();
 
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut llm_guard = llm_handle.lock().unwrap();
         if let Some(engine) = llm_guard.as_mut() {
-            println!("[LLM] Running inference on text: '{}'", prompt.trim());
-            let res = engine.run(&prompt).map_err(|e| e.to_string());
-            if let Err(ref e) = res {
-                eprintln!("[LLM] Inference FAILED: {}", e);
+            println!("[LLM] Running grammar correction...");
+            match engine.format_transcript(&text) {
+                Ok(formatted) => {
+                    println!("[LLM] Correction finished. Output length: {}", formatted.len());
+                    Ok(formatted)
+                }
+                Err(e) => {
+                    eprintln!("[LLM] Correction failed: {}", e);
+                    Ok(text)
+                }
             }
-            res
         } else {
-            eprintln!("[LLM] Error: Engine not initialized");
-            Err("LLM not initialized. Please load Gemma first.".to_string())
+            Err("LLM not initialized. Place the grammar model (model_q4_k_m.gguf) in taurscribe-runtime/models/qwen_finetuned_gguf.".to_string())
         }
     })
     .await
     .map_err(|e| format!("Join Error: {}", e))??;
 
-    println!("[LLM] Inference finished. Output length: {}", output.len());
     Ok(output)
 }
 
@@ -107,6 +114,6 @@ pub fn unload_llm(state: State<'_, AudioState>) -> Result<String, String> {
         return Ok("LLM was not loaded".to_string());
     }
     *llm_guard = None;
-    println!("[INFO] Gemma LLM unloaded.");
+    println!("[INFO] Qwen LLM unloaded.");
     Ok("LLM unloaded successfully".to_string())
 }

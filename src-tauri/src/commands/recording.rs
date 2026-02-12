@@ -268,18 +268,15 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>) -> Resul
     Ok(format!("Recording started: {}", path.display()))
 }
 
-/// Helper function to type text
-fn type_out_text(text: &str) {
+/// COMMAND: Type text with Enigo (called by frontend once after spell/grammar processing).
+#[tauri::command]
+pub fn type_text(text: String) {
     if text.trim().is_empty() || text.trim() == "[silence]" {
         return;
     }
-
-    println!("[ENIGO] Typing out text: \"{}\"", text);
-
-    // Run in a separate thread so we don't block the command return if it's slow
-    let text_to_type = text.to_string();
+    println!("[ENIGO] Typing out text: \"{}\"", text.trim());
+    let text_to_type = text.trim().to_string();
     std::thread::spawn(move || {
-        // Enigo v0.6 usage
         match Enigo::new(&Settings::default()) {
             Ok(mut enigo) => {
                 if let Err(e) = enigo.text(&text_to_type) {
@@ -321,8 +318,7 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
             } else {
                 clean_transcript(&transcript)
             };
-            println!("[FINAL_TRANSCRIPT] (Cleaned)\n{}", final_text);
-            type_out_text(&final_text);
+            println!("[FINAL_TRANSCRIPT] (Raw)\n{}", final_text);
             return Ok(final_text);
         }
 
@@ -333,7 +329,7 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
                 path
             );
 
-            let mut whisper = state.whisper.lock().unwrap();
+            let whisper = state.whisper.lock().unwrap();
             let audio_data = whisper.load_audio(&path)?;
 
             println!("[PROCESSING] Applying VAD filtering for Whisper...");
@@ -353,13 +349,20 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
                 );
             }
 
-            let result = whisper.transcribe_audio_data(&clean);
+            // Release locks before LLM processing to avoid deadlock
+            drop(whisper);
+            drop(vad);
+
+            let result = {
+                let mut whisper = state.whisper.lock().unwrap();
+                whisper.transcribe_audio_data(&clean)
+            };
 
             match result {
-                Ok(text) => {
-                    println!("[FINAL_TRANSCRIPT]\n{}", text);
-                    type_out_text(&text);
-                    Ok(text)
+                Ok(raw_text) => {
+                    println!("[FINAL_TRANSCRIPT] (Raw)\n{}", raw_text);
+                    let final_text = clean_transcript(&raw_text);
+                    Ok(final_text)
                 }
                 Err(e) => {
                     eprintln!("[ERROR] Final transcription failed: {}", e);
