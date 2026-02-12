@@ -1,11 +1,10 @@
 [target.x86_64-pc-windows-msvc]
 rustflags = [
-    "-C",
-    "target-cpu=native",
-    "-L",
-    "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin",
-    "-C",
-    "link-arg=/NODEFAULTLIB:LIBCMT",
+    # Force dynamic CRT (MD) cleanly.
+    # This replaces all the /NODEFAULTLIB and /DEFAULTLIB hacks.
+    "-C", "target-feature=-crt-static",
+    # Add your library search path if strictly necessary (usually handled by PATH, but keeping it is fine)
+    "-L", "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin",
 ]
 
 [target.x86_64-apple-darwin]

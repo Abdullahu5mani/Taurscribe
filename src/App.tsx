@@ -56,6 +56,7 @@ function App() {
   // Tracks which engine is actually loaded in GPU/memory (only one at a time)
   const [loadedEngine, setLoadedEngine] = useState<ASREngine | null>(null);
   const [isCorrecting, setIsCorrecting] = useState(false);
+  const [isProcessingTranscript, setIsProcessingTranscript] = useState(false);
   const [llmStatus, setLlmStatus] = useState("Not Loaded");
   const [enableGrammarLM, setEnableGrammarLM] = useState(false);
 
@@ -94,6 +95,7 @@ function App() {
 
   // Header status: shows message temporarily, then reverts to scrolling idle text
   const [headerStatusMessage, setHeaderStatusMessage] = useState<string | null>(null);
+  const [headerStatusIsProcessing, setHeaderStatusIsProcessing] = useState(false);
   const headerStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   type TickerHighlight = "accent" | "whisper" | "parakeet";
@@ -161,11 +163,13 @@ function App() {
     </>
   );
 
-  const setHeaderStatus = (message: string, durationMs = 3200) => {
+  const setHeaderStatus = (message: string, durationMs = 3200, isProcessing = false) => {
     if (headerStatusTimeoutRef.current) clearTimeout(headerStatusTimeoutRef.current);
     setHeaderStatusMessage(message);
+    setHeaderStatusIsProcessing(isProcessing);
     headerStatusTimeoutRef.current = setTimeout(() => {
       setHeaderStatusMessage(null);
+      setHeaderStatusIsProcessing(false);
       headerStatusTimeoutRef.current = null;
     }, durationMs);
   };
@@ -495,9 +499,12 @@ function App() {
     const currentEngine = activeEngineRef.current;
     const processingStartMs = Date.now();
     console.log("[STOP] handleStopRecording called. GrammarLM:", enableGrammarLMRef.current, "SpellCheck:", enableSpellCheckRef.current);
+    setIsRecording(false);
+    isRecordingRef.current = false;
+    setIsProcessingTranscript(true);
     try {
       await setTrayState("processing");
-      if (currentEngine === "whisper") setHeaderStatus("Processing transcription...", 60_000);
+      if (currentEngine === "whisper") setHeaderStatus("Processing transcription...", 60_000, true);
 
       let finalTrans = await invoke("stop_recording") as string;
 
@@ -505,8 +512,7 @@ function App() {
       if (recordingDurationMs < MIN_RECORDING_MS) {
         setHeaderStatus("Recording too short — try at least 1.5 seconds", 5000);
         setLiveTranscript("");
-        setIsRecording(false);
-        isRecordingRef.current = false;
+        setIsProcessingTranscript(false);
         await setTrayState("ready");
         return;
       }
@@ -514,7 +520,7 @@ function App() {
       // Step 1: SymSpell spell check (fast, runs first if enabled)
       if (enableSpellCheckRef.current) {
         setIsCorrecting(true);
-        setHeaderStatus("Fixing spelling...", 60_000);
+        setHeaderStatus("Fixing spelling...", 60_000, true);
         try {
           finalTrans = await invoke("correct_spelling", { text: finalTrans });
           if (!enableGrammarLMRef.current) {
@@ -527,7 +533,7 @@ function App() {
 
       // Step 2: Grammar LM correction (slower, runs after spell check if enabled)
       if (enableGrammarLMRef.current) {
-        setHeaderStatus("Correcting grammar...", 60_000);
+        setHeaderStatus("Correcting grammar...", 60_000, true);
         try {
           finalTrans = await invoke("correct_text", { text: finalTrans });
           setHeaderStatus("Transcribed & Corrected!");
@@ -545,8 +551,7 @@ function App() {
       // Type out the final transcript once (after optional spell/grammar steps)
       await invoke("type_text", { text: finalTrans });
 
-      setIsRecording(false);
-      isRecordingRef.current = false;
+      setIsProcessingTranscript(false);
       await setTrayState("ready");
     } catch (e) {
       console.error("Stop recording failed:", e);
@@ -555,9 +560,9 @@ function App() {
       if (!errStr.includes("Not recording")) {
         setHeaderStatus("Error: " + e, 5000);
       }
-      setIsRecording(false);
       isRecordingRef.current = false;
       setIsCorrecting(false);
+      setIsProcessingTranscript(false);
       await setTrayState("ready");
     }
   };
@@ -824,7 +829,7 @@ function App() {
   };
 
   const noModel = (activeEngine === "whisper" && models.length === 0) || (activeEngine === "parakeet" && parakeetModels.length === 0);
-  const recordBtnBusy = isLoading || isCorrecting; /* model loading or post-processing */
+  const recordBtnBusy = isLoading || isCorrecting || isProcessingTranscript; /* model loading, post-processing, or transcribing */
   const recordBtnClass =
     noModel ? "record-btn disabled" :
       isRecording ? "record-btn recording" :
@@ -834,7 +839,7 @@ function App() {
     noModel ? "NO MODEL" :
       isRecording ? "STOP" :
         recordBtnBusy ? "..." : "REC";
-  const recordBtnDisabled = (isLoading && !isRecording) || isCorrecting; /* allow Stop while recording only */
+  const recordBtnDisabled = (isLoading && !isRecording) || isCorrecting || isProcessingTranscript; /* allow Stop while recording only */
   const onRecordClick = () => {
     if (noModel) {
       setIsSettingsOpen(true);
@@ -853,7 +858,10 @@ function App() {
             <h1 className="app-title">TAURSCRIBE</h1>
             <div className="header-status">
               {headerStatusMessage !== null ? (
-                <span className="header-status-message" key={headerStatusMessage}>
+                <span
+                  className={`header-status-message ${headerStatusIsProcessing ? "header-status-message--processing" : ""}`}
+                  key={headerStatusMessage}
+                >
                   {headerStatusMessage}
                 </span>
               ) : (
