@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 /// GPU Backend Type
 #[derive(Debug, Clone, serde::Serialize)]
+#[allow(dead_code)] // Cuda/DirectML used only on non-macOS builds
 pub enum GpuBackend {
     Cuda,     // NVIDIA GPUs (Very Fast)
     DirectML, // Windows GPUs/NPUs (ARM64/AMD/Intel)
@@ -301,16 +302,16 @@ impl ParakeetManager {
 
     // --- GPU/CPU Loaders ---
 
-    fn try_gpu_nemotron(path: &str) -> Result<Nemotron, String> {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-
+    #[allow(dead_code)] // used on Linux/Windows, not on macOS
+    fn try_gpu_nemotron(_path: &str) -> Result<Nemotron, String> {
         #[cfg(any(
             target_os = "linux",
             all(target_os = "windows", target_arch = "x86_64")
         ))]
         {
+            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
             let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-            Nemotron::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+            Nemotron::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
         }
         #[cfg(not(any(
             target_os = "linux",
@@ -321,6 +322,7 @@ impl ParakeetManager {
         }
     }
 
+    #[allow(dead_code)] // used on Windows only
     fn try_directml_nemotron(_path: &str) -> Result<Nemotron, String> {
         #[cfg(target_os = "windows")]
         {
@@ -339,16 +341,16 @@ impl ParakeetManager {
         Nemotron::from_pretrained(path, None).map_err(|e| format!("{}", e))
     }
 
-    fn try_gpu_ctc(path: &str) -> Result<Parakeet, String> {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-
+    #[allow(dead_code)] // used on Linux/Windows, not on macOS
+    fn try_gpu_ctc(_path: &str) -> Result<Parakeet, String> {
         #[cfg(any(
             target_os = "linux",
             all(target_os = "windows", target_arch = "x86_64")
         ))]
         {
+            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
             let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-            Parakeet::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+            Parakeet::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
         }
         #[cfg(not(any(
             target_os = "linux",
@@ -359,6 +361,7 @@ impl ParakeetManager {
         }
     }
 
+    #[allow(dead_code)] // used on Windows only
     fn try_directml_ctc(_path: &str) -> Result<Parakeet, String> {
         #[cfg(target_os = "windows")]
         {
@@ -398,16 +401,16 @@ impl ParakeetManager {
         }
     }
 
-    fn try_gpu_eou(path: &str) -> Result<ParakeetEOU, String> {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-
+    #[allow(dead_code)] // used on Linux/Windows, not on macOS
+    fn try_gpu_eou(_path: &str) -> Result<ParakeetEOU, String> {
         #[cfg(any(
             target_os = "linux",
             all(target_os = "windows", target_arch = "x86_64")
         ))]
         {
+            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
             let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-            ParakeetEOU::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+            ParakeetEOU::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
         }
         #[cfg(not(any(
             target_os = "linux",
@@ -418,6 +421,7 @@ impl ParakeetManager {
         }
     }
 
+    #[allow(dead_code)] // used on Windows only
     fn try_directml_eou(_path: &str) -> Result<ParakeetEOU, String> {
         #[cfg(target_os = "windows")]
         {
@@ -457,16 +461,16 @@ impl ParakeetManager {
         }
     }
 
-    fn try_gpu_tdt(path: &str) -> Result<ParakeetTDT, String> {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-
+    #[allow(dead_code)] // used on Linux/Windows, not on macOS
+    fn try_gpu_tdt(_path: &str) -> Result<ParakeetTDT, String> {
         #[cfg(any(
             target_os = "linux",
             all(target_os = "windows", target_arch = "x86_64")
         ))]
         {
+            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
             let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-            ParakeetTDT::from_pretrained(path, Some(config)).map_err(|e| format!("{}", e))
+            ParakeetTDT::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
         }
         #[cfg(not(any(
             target_os = "linux",
@@ -477,6 +481,7 @@ impl ParakeetManager {
         }
     }
 
+    #[allow(dead_code)] // used on Windows only
     fn try_directml_tdt(_path: &str) -> Result<ParakeetTDT, String> {
         #[cfg(target_os = "windows")]
         {
