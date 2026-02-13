@@ -80,6 +80,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Allow Cargo to clone private git deps (e.g. utilityai/llama-cpp-2).
+      # Add repo secret LLAMA_GITHUB_TOKEN (PAT with repo scope) if that repo is private.
+      - name: Configure Git for private llama-cpp-2 clone
+        if: secrets.LLAMA_GITHUB_TOKEN != ''
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.LLAMA_GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        env:
+          LLAMA_GITHUB_TOKEN: ${{ secrets.LLAMA_GITHUB_TOKEN }}
+
       # --- CUDA Setup (Windows/Linux x86 Only) ---
       # This block installs the NVIDIA CUDA Toolkit.
       # It is ONLY run if 'cuda: true' in the matrix matches the platform.
