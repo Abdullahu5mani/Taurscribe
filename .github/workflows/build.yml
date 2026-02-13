@@ -302,12 +302,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
+          TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
           CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
-          # Windows: use MSBuild (Visual Studio). macOS: use Unix Makefiles. Linux: leave empty for default.
-          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || (contains(matrix.platform, 'macos') && 'Unix Makefiles' || '') }}
+          # Windows: use MSBuild (Visual Studio). macOS/Linux: use Unix Makefiles.
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || 'Unix Makefiles' }}
           CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && 'x64' || '' }}
           
           # Disable AVX instructions for Whisper:
@@ -361,12 +362,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
+          TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
           CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
-          # Windows: use MSBuild (Visual Studio). macOS: use Unix Makefiles. Linux: leave empty for default.
-          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || (contains(matrix.platform, 'macos') && 'Unix Makefiles' || '') }}
+          # Windows: use MSBuild (Visual Studio). macOS/Linux: use Unix Makefiles.
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || 'Unix Makefiles' }}
           CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && 'x64' || '' }}
           
           # Disable AVX instructions for Whisper:
