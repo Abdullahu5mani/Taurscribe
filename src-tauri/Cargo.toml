@@ -51,7 +51,7 @@ symspell = "0.4"
 # File system watcher - Detect model changes
 notify = "6.1"
 
-# --- Platform-Specific AI Backends ---
+# --- Platform-Specific AI Backends ---n
 
 
 # 1. Base / CPU Fallback (ARM Windows/Linux)
