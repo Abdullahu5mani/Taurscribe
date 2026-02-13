@@ -40,8 +40,8 @@ enigo = "0.6.1"
 # llama-cpp-2: llama.cpp bindings for Rust (replaces Candle)
 # dynamic-link builds ggml/llama as shared libs (DLLs) to avoid LNK2005
 # diamond-dependency with whisper-rs which also statically links ggml.
-# Replace the old line with this:
-llama-cpp-2 = { git = "https://github.com/utilityai/llama-cpp-2", default-features = false, features = ["dynamic-link"] }
+# Use crates.io so CI can build without private repo access.
+llama-cpp-2 = { version = "0.1.133", default-features = false, features = ["dynamic-link"] }
 encoding_rs = "0.8"
 anyhow = "1.0"
 
@@ -84,8 +84,7 @@ sha1 = "0.10.6"
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack"] }
 # llama-cpp-2: Uses Metal automatically on macOS (no special feature needed)
-# Replace the old line with this:
-llama-cpp-2 = { git = "https://github.com/utilityai/llama-cpp-2", default-features = false, features = ["dynamic-link"] }
+llama-cpp-2 = { version = "0.1.133", default-features = false, features = ["dynamic-link"] }
 # 3. Windows (x86_64) -> CUDA + DirectML + TensorRT
 # CUDA: NVIDIA GPU acceleration (primary)
 # DirectML: Universal Windows GPU acceleration (AMD/Intel fallback)
@@ -109,8 +108,7 @@ ort = { version = "2.0.0-rc.11", features = [
     "xnnpack",
 ] }
 # llama-cpp-2 with CUDA + dynamic-link for LLM GPU acceleration
-# llama-cpp-2 with CUDA + dynamic-link for LLM GPU acceleration
-llama-cpp-2 = { git = "https://github.com/utilityai/llama-cpp-2", default-features = false, features = ["dynamic-link", "cuda"] }
+llama-cpp-2 = { version = "0.1.133", default-features = false, features = ["dynamic-link", "cuda"] }
 # 3b. Linux (x86_64) -> CUDA + TensorRT
 # CUDA: NVIDIA GPU acceleration (primary)
 # TensorRT: NVIDIA optimized inference
@@ -132,8 +130,7 @@ ort = { version = "2.0.0-rc.11", features = [
     "xnnpack",
 ] }
 # llama-cpp-2 with CUDA + dynamic-link for LLM GPU acceleration
-# Replace the old line with this:
-llama-cpp-2 = { git = "https://github.com/utilityai/llama-cpp-2", default-features = false, features = ["dynamic-link", "cuda"] }
+llama-cpp-2 = { version = "0.1.133", default-features = false, features = ["dynamic-link", "cuda"] }
 # 4. Windows (ARM64) -> DirectML + XNNPACK# DirectML: Hardware-accelerated on Qualcomm Snapdragon X ARM processors
 # XNNPACK: Cross-platform CPU optimization
 # -------------------------------------------------------------------------
