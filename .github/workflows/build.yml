@@ -119,13 +119,21 @@ jobs:
       
       # macOS Dependencies
       # macOS runners come with Xcode, but we verify tools and set deployment targets.
+      - name: Install Xcode Command Line Tools
+        if: contains(matrix.platform, 'macos')
+        run: xcode-select --install || true
+
+      - name: Install CMake (macOS)
+        if: contains(matrix.platform, 'macos')
+        run: brew install cmake
+
       - name: Verify macOS Build Tools
         if: contains(matrix.platform, 'macos')
         run: |
           echo "=== macOS Build Environment ==="
           sw_vers
-          xcodebuild -version || echo "Xcode command line tools not found"
-          cmake --version || { echo "ERROR: CMake not found!"; brew install cmake; }
+          xcodebuild -version
+          cmake --version
           # Set deployment target to ensure compatibility with recent macOS versions
           echo "MACOSX_DEPLOYMENT_TARGET will be set to: 13.4"
       
@@ -296,8 +304,8 @@ jobs:
           CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
-          # Windows only: use MSBuild (Visual Studio). Leave empty on macOS/Linux so CMake uses default generator.
-          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || '' }}
+          # Windows: use MSBuild (Visual Studio). macOS: use Unix Makefiles. Linux: leave empty for default.
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || (contains(matrix.platform, 'macos') && 'Unix Makefiles' || '') }}
           CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && 'x64' || '' }}
           
           # Disable AVX instructions for Whisper:
