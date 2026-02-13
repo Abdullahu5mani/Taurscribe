@@ -293,8 +293,69 @@ jobs:
           # Also clean the workspace target if rust-cache restored it
           if (Test-Path src-tauri/target/debug/build) { Remove-Item -Recurse -Force src-tauri/target/debug/build }
 
-      # Run the full app build (frontend + Rust release binary/installer per platform)
-      - name: Build application
+      # Build Rust binary first (with target flag)
+      - name: Build Rust binary
+        run: |
+          cd src-tauri
+          cargo build --release --target ${{ matrix.target }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues
+          MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
+          RUST_BACKTRACE: 1              # Print full stack traces on panic
+          CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
+          CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
+          
+          # Windows: use MSBuild (Visual Studio). macOS: use Unix Makefiles. Linux: leave empty for default.
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || (contains(matrix.platform, 'macos') && 'Unix Makefiles' || '') }}
+          CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && 'x64' || '' }}
+          
+          # Disable AVX instructions for Whisper:
+          # GitHub Action runners (especially older/virtualized ones) may crash with AVX.
+          # We force these off to ensure stability in CI.
+          WHISPER_NO_AVX: "1"
+          WHISPER_NO_AVX2: "1"
+          GGML_AVX: "OFF"
+          GGML_AVX2: "OFF"
+          
+          # Force CUDA architectures:
+          # In CI (headless), cmake cannot auto-detect the GPU architecture.
+          # We specify a list of common supported architectures (Pascal, Volta, Turing, Ampere).
+          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
+          
+          # macOS: Set minimum deployment target for ONNX Runtime/CoreML support.
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          
+          # Pass environment variables set in previous steps to the build process
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          VULKAN_SDK: ${{ env.VULKAN_SDK }}
+          VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
+          VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
+
+      # Build frontend
+      - name: Build frontend
+        run: bun run build
+
+      # Copy binary from target-specific directory to expected location for Tauri bundler
+      # When using --target, Cargo outputs to target/<target-triple>/release/, but Tauri expects target/release/
+      - name: Copy binary to expected location
+        run: |
+          cd src-tauri
+          mkdir -p target/release
+          # macOS/Linux: copy binary
+          if [ -f "target/${{ matrix.target }}/release/taurscribe" ]; then
+            cp "target/${{ matrix.target }}/release/taurscribe" "target/release/taurscribe"
+            chmod +x "target/release/taurscribe"
+          fi
+          # Windows: copy binary
+          if [ -f "target/${{ matrix.target }}/release/taurscribe.exe" ]; then
+            cp "target/${{ matrix.target }}/release/taurscribe.exe" "target/release/taurscribe.exe"
+          fi
+        shell: bash
+
+      # Bundle the application (frontend and binary already built, tauri build will detect and skip rebuild)
+      - name: Bundle application
         run: bun run tauri build -- --target ${{ matrix.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
