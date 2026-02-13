@@ -296,9 +296,9 @@ jobs:
           CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
-          # [!] SOLUTION: Switch to MSBuild (Visual Studio) for stability
-          CMAKE_GENERATOR: "Visual Studio 17 2022"
-          CMAKE_GENERATOR_PLATFORM: "x64"
+          # Windows only: use MSBuild (Visual Studio). Leave empty on macOS/Linux so CMake uses default generator.
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || '' }}
+          CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && 'x64' || '' }}
           
           # Disable AVX instructions for Whisper:
           # GitHub Action runners (especially older/virtualized ones) may crash with AVX.
