@@ -200,6 +200,7 @@ jobs:
            echo "CC=clang-cl" >> $env:GITHUB_ENV
            echo "CXX=clang-cl" >> $env:GITHUB_ENV
            echo "CXXFLAGS=/EHsc" >> $env:GITHUB_ENV
+           echo "CMAKE_GENERATOR=Ninja" >> $env:GITHUB_ENV
            # Note: Do NOT set CMAKE_GENERATOR_TOOLSET with Ninja as it causes a build error.
            # The CC/CXX variables above are sufficient for Ninja to use clang-cl.
 
@@ -307,9 +308,9 @@ jobs:
           CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
-          # Windows: use MSBuild (Visual Studio). macOS/Linux: use Unix Makefiles.
-          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || 'Unix Makefiles' }}
-          CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && 'x64' || '' }}
+          # Windows: use Ninja (simpler, avoids MSBuild/ExternalProject path issues). macOS/Linux: Unix Makefiles.
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
+          CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && '' || '' }}
           
           # Disable AVX instructions for Whisper:
           # GitHub Action runners (especially older/virtualized ones) may crash with AVX.
@@ -367,9 +368,9 @@ jobs:
           CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
-          # Windows: use MSBuild (Visual Studio). macOS/Linux: use Unix Makefiles.
-          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Visual Studio 17 2022' || 'Unix Makefiles' }}
-          CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && 'x64' || '' }}
+          # Windows: use Ninja (simpler, avoids MSBuild/ExternalProject path issues). macOS/Linux: Unix Makefiles.
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
+          CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && '' || '' }}
           
           # Disable AVX instructions for Whisper:
           # GitHub Action runners (especially older/virtualized ones) may crash with AVX.
