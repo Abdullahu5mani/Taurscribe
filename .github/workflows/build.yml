@@ -294,6 +294,14 @@ jobs:
           # Also clean the workspace target if rust-cache restored it
           if (Test-Path src-tauri/target/debug/build) { Remove-Item -Recurse -Force src-tauri/target/debug/build }
 
+      # Disable ccache in CMake so FindCcache doesn't wrap the compiler (avoids LNK1181 / stale cache)
+      - name: Disable ccache in CMake
+        if: contains(matrix.platform, 'windows')
+        run: |
+          echo "CMAKE_C_COMPILER_LAUNCHER=" >> $env:GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=" >> $env:GITHUB_ENV
+          echo "CMAKE_DISABLE_FIND_PACKAGE_Ccache=TRUE" >> $env:GITHUB_ENV
+
       # Build Rust binary first (with target flag)
       - name: Build Rust binary
         run: |
@@ -302,6 +310,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues
+          CMAKE_C_COMPILER_LAUNCHER: ""  # Explicitly no launcher (override any cached ccache)
+          CMAKE_CXX_COMPILER_LAUNCHER: "" # Explicitly no launcher
+          CMAKE_DISABLE_FIND_PACKAGE_Ccache: "TRUE" # Prevent CMake from finding/using ccache
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
@@ -362,6 +373,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues
+          CMAKE_C_COMPILER_LAUNCHER: ""  # Explicitly no launcher (override any cached ccache)
+          CMAKE_CXX_COMPILER_LAUNCHER: "" # Explicitly no launcher
+          CMAKE_DISABLE_FIND_PACKAGE_Ccache: "TRUE" # Prevent CMake from finding/using ccache
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
