@@ -316,20 +316,22 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
-          CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
+          # Windows: serial CMake builds to avoid whisper-rs-sys vs llama-cpp-sys-2 ggml.c race (LNK1181). Others: parallel.
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
+          
+          # Disable ggml/ccache on Windows to fix path mismatch; allow on macOS/Linux.
+          GGML_CCACHE: ${{ contains(matrix.platform, 'windows') && 'OFF' || 'ON' }}
           
           # Windows: use Ninja (simpler, avoids MSBuild/ExternalProject path issues). macOS/Linux: Unix Makefiles.
           CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
           CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && '' || '' }}
           
-          # Disable AVX instructions for Whisper:
-          # GitHub Action runners (especially older/virtualized ones) may crash with AVX.
-          # We force these off to ensure stability in CI.
-          WHISPER_NO_AVX: "1"
-          WHISPER_NO_AVX2: "1"
-          GGML_AVX: "OFF"
-          GGML_AVX2: "OFF"
+          # Enable AVX/AVX2 for Whisper/ggml (faster on modern CPUs and typical CI runners).
+          WHISPER_NO_AVX: "0"
+          WHISPER_NO_AVX2: "0"
+          GGML_AVX: "ON"
+          GGML_AVX2: "ON"
           
           # Force CUDA architectures:
           # In CI (headless), cmake cannot auto-detect the GPU architecture.
@@ -379,20 +381,22 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
-          CMAKE_BUILD_PARALLEL_LEVEL: 4  # Use 4 cores for C++ compilation
+          # Windows: serial CMake builds to avoid whisper-rs-sys vs llama-cpp-sys-2 ggml.c race (LNK1181). Others: parallel.
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
+          
+          # Disable ggml/ccache on Windows to fix path mismatch; allow on macOS/Linux.
+          GGML_CCACHE: ${{ contains(matrix.platform, 'windows') && 'OFF' || 'ON' }}
           
           # Windows: use Ninja (simpler, avoids MSBuild/ExternalProject path issues). macOS/Linux: Unix Makefiles.
           CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
           CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && '' || '' }}
           
-          # Disable AVX instructions for Whisper:
-          # GitHub Action runners (especially older/virtualized ones) may crash with AVX.
-          # We force these off to ensure stability in CI.
-          WHISPER_NO_AVX: "1"
-          WHISPER_NO_AVX2: "1"
-          GGML_AVX: "OFF"
-          GGML_AVX2: "OFF"
+          # Enable AVX/AVX2 for Whisper/ggml (faster on modern CPUs and typical CI runners).
+          WHISPER_NO_AVX: "0"
+          WHISPER_NO_AVX2: "0"
+          GGML_AVX: "ON"
+          GGML_AVX2: "ON"
           
           # Force CUDA architectures:
           # In CI (headless), cmake cannot auto-detect the GPU architecture.
