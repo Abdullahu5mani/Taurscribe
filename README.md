@@ -13,10 +13,27 @@
 ---
 
 <p align="center">
-  <img src="assets/screenshots/UI.png" width="48%" />
-  <img src="assets/screenshots/live-transcription.png" width="48%" />
-  <br>
-  <img src="assets/screenshots/Settings.png" width="80%" />
+  <table>
+    <tr>
+      <td align="center">
+        <img src="assets/screenshots/UI.png" width="100%" />
+        <br />
+        <b>Modern, Minimalist Interface</b>
+      </td>
+      <td align="center">
+        <img src="assets/screenshots/live-transcription.png" width="100%" />
+        <br />
+        <b>Real-Time Streaming Transcription</b>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2" align="center">
+        <img src="assets/screenshots/Settings.png" width="100%" />
+        <br />
+        <b>Comprehensive Settings & Model Management</b>
+      </td>
+    </tr>
+  </table>
 </p>
 
 ## 🚀 Key Technical Achievements
@@ -28,6 +45,33 @@ This project demonstrates advanced systems programming and machine learning inte
 *   **Zero-Copy Audio Pipeline**: Built with Rust's ownership model to manage high-throughput audio streams (48kHz stereo → 16kHz mono) without memory leaks or data races.
 *   **Custom Fine-Tuned LLM**: Features a specialized, fine-tuned Language Model (LLM) optimized for local inference. This model is trained to reconstruct punctuation, capitalization, and sentence structure from raw ASR output, delivering professional-grade readability on consumer hardware without cloud dependencies.
 *   **Custom Voice Activity Detection (VAD)**: Energy-based VAD algorithm to filter silence and optimize compute resources, reducing idle CPU usage by ~45%.
+
+## ⚙️ Audio Processing Pipeline
+
+Taurscribe employs two distinct architectural strategies to balance speed and accuracy:
+
+```mermaid
+graph TD;
+    subgraph Whisper["🎯 Whisper (High Accuracy)"]
+        A[Audio Input] --> B[Accumulator];
+        B -->|Wait 6s| C{VAD Check};
+        C -->|Silence| B;
+        C -->|Speech| D[Whisper Encoder];
+        D -->|Seq2Seq| E[Complete Sentence];
+    end
+```
+
+```mermaid
+graph TD;
+    subgraph Parakeet["⚡ Parakeet (Ultra-Low Latency)"]
+        F[Audio Input] --> G((Circular Buffer));
+        G -->|Continuous Read| H[Parakeet Engine];
+        H -->|CTC Search| I[Token Stream];
+        I -->|Update| J[Real-time Text];
+    end
+```
+
+> **Note on Circular Buffer**: The Parakeet engine utilizes a lock-free ring buffer to handle audio samples. As the microphone writes data (`write_ptr`), the inference engine chases it (`read_ptr`) with millisecond precision, ensuring zero buffer bloat.
 
 ## ✨ Features
 
