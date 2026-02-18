@@ -50,9 +50,10 @@ pub struct WhisperManager {
 }
 
 // Specialized "callback" to hide noisy logs from the C++ library.
-// whisper_rs expects (level: u32, text, user_data) on all platforms.
-unsafe extern "C" fn null_log_callback(_level: u32, _text: *const c_char, _user_data: *mut c_void) {
-    // Do nothing.
+// The exact integer type for the log level depends on the whisper-rs version.
+// We define it with i32 (the standard C `int`) and cast if needed at the call site.
+unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
+    // Do nothing — suppress all C++ library output.
 }
 
 impl WhisperManager {
@@ -219,7 +220,10 @@ impl WhisperManager {
                     default_id.to_string()
                 } else {
                     // Fallback: Try to find ANY available model
-                    println!("[INFO] Default model '{}' not found. Checking for other models...", default_id);
+                    println!(
+                        "[INFO] Default model '{}' not found. Checking for other models...",
+                        default_id
+                    );
                     match Self::list_available_models() {
                         Ok(models) if !models.is_empty() => {
                             // Use the first one (smallest usually, due to sorting)

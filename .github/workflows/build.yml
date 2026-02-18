@@ -140,6 +140,7 @@ jobs:
       # Linux Dependencies
       # Install system libraries needed for Tauri (WebKit, GTK, AppIndicator)
       # and build tools (build-essential, cmake).
+      # Also install Vulkan development libraries for GPU acceleration.
       - name: Install Linux System Dependencies
         if: contains(matrix.platform, 'ubuntu')
         run: |
@@ -154,7 +155,9 @@ jobs:
             curl wget file \
             libssl-dev \
             libgtk-3-dev \
-            cmake
+            cmake \
+            libvulkan-dev \
+            pkg-config
 
       # Install Vulkan SDK on Linux for GPU-accelerated audio processing (Whisper Vulkan backend)
       - name: Install Vulkan SDK (Linux)
@@ -163,13 +166,31 @@ jobs:
         with:
           version: 1.4.309.0
           cache: true
-          
+
+      # Export the Vulkan SDK lib directory so the linker can find libvulkan.so.
+      # The install-vulkan-sdk action sets VULKAN_SDK but does NOT add its lib dir
+      # to LD_LIBRARY_PATH, causing "unable to find library -lvulkan" at link time.
+      - name: Export Vulkan Library Path (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          echo "LD_LIBRARY_PATH=${VULKAN_SDK}/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=${VULKAN_SDK}/lib:${LIBRARY_PATH}" >> $GITHUB_ENV
+
       - name: Verify Vulkan Installation (Linux)
         if: contains(matrix.platform, 'ubuntu')
         run: |
           echo "=== Vulkan SDK Verification ==="
+          echo "VULKAN_SDK=${VULKAN_SDK}"
+          echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
           # Check for Shader Compiler (glslc) needed by whisper-rs
           which glslc && glslc --version || { echo "ERROR: glslc not found!"; exit 1; }
+          # Check for libvulkan.so in the SDK lib directory
+          ls -l ${VULKAN_SDK}/lib/libvulkan.so* || { echo "ERROR: libvulkan.so not found in Vulkan SDK lib directory!"; exit 1; }
+          # Check for Vulkan library (libvulkan.so) needed for linking
+          pkg-config --exists vulkan || { echo "WARNING: Vulkan pkg-config not found (may still link via LD_LIBRARY_PATH)"; }
+          pkg-config --libs vulkan || true
+          # Verify Vulkan library is findable by linker
+          ldconfig -p | grep libvulkan || echo "NOTE: libvulkan not in ldconfig cache, but SDK path is set via LD_LIBRARY_PATH"
 
       # Windows Dependencies (Critical)
       # 1. Vulkan SDK: Required for whisper-rs Vulkan backend on Windows
@@ -347,6 +368,11 @@ jobs:
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
+          # Linux: ensure the Vulkan SDK lib dir is on the linker search path.
+          # LD_LIBRARY_PATH is set via GITHUB_ENV but we also pass it explicitly here
+          # and add a -L flag via RUSTFLAGS so rustc's linker invocation finds libvulkan.so.
+          LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || '' }}
 
       # Build frontend
       - name: Build frontend
@@ -413,3 +439,6 @@ jobs:
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
+          # Linux: ensure the Vulkan SDK lib dir is on the linker search path.
+          LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || '' }}
