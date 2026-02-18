@@ -307,6 +307,16 @@ jobs:
         if: contains(matrix.platform, 'windows')
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Create dummy m.lib (Windows)
+        if: contains(matrix.platform, 'windows')
+        shell: cmd
+        run: |
+          cd %TEMP%
+          echo // > empty.c
+          cl /c empty.c
+          lib /out:"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\lib\x64\m.lib" /machine:x64 empty.obj
+          lib /out:"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\lib\arm64\m.lib" /machine:ARM64 empty.obj
+
       # Clean build artifacts so MSBuild does not see stale Ninja/CMake output
       - name: Clean Build Artifacts
         if: contains(matrix.platform, 'windows')
@@ -372,7 +382,7 @@ jobs:
           # LD_LIBRARY_PATH is set via GITHUB_ENV but we also pass it explicitly here
           # and add a -L flag via RUSTFLAGS so rustc's linker invocation finds libvulkan.so.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
-          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || '' }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
 
       # Build frontend
       - name: Build frontend
@@ -441,4 +451,4 @@ jobs:
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
           # Linux: ensure the Vulkan SDK lib dir is on the linker search path.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
-          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || '' }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
