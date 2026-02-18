@@ -49,16 +49,9 @@ pub struct WhisperManager {
     resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>, // (Sample Rate, Chunk Size, Resampler)
 }
 
-// specialized "callback" function to hide confusing logs from the C++ library
-// "unsafe" means we are doing dangerous manual memory management (needed for C interop)
-// macOS bindings expect u32 for log level, others (Windows/Linux) usually expect i32
-#[cfg(target_os = "macos")]
+// Specialized "callback" to hide noisy logs from the C++ library.
+// whisper_rs expects (level: u32, text, user_data) on all platforms.
 unsafe extern "C" fn null_log_callback(_level: u32, _text: *const c_char, _user_data: *mut c_void) {
-    // Do nothing.
-}
-
-#[cfg(not(target_os = "macos"))]
-unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
     // Do nothing.
 }
 
