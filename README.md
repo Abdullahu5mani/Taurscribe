@@ -50,25 +50,39 @@ This project demonstrates advanced systems programming and machine learning inte
 
 Taurscribe employs two distinct architectural strategies to balance speed and accuracy:
 
-```mermaid
-graph TD;
-    subgraph Whisper["🎯 Whisper (High Accuracy)"]
-        A[Audio Input] --> B[Accumulator];
-        B -->|Wait 6s| C{VAD Check};
-        C -->|Silence| B;
-        C -->|Speech| D[Whisper Encoder];
-        D -->|Seq2Seq| E[Complete Sentence];
-    end
+```
+  🎯 WHISPER ARCHITECTURE (Buffered)
+  ┌──────────────┐     ┌─────────────┐     ┌────┐              ┌──────────────┐
+  │  Audio Input │ ──► │ Accumulator │ ──► │VAD?│ ──(Yes)───► │   Whisper    │
+  └──────────────┘     └─────────────┘     └────┘              │   Encoder    │
+                              ▲               │ (No)           └──────┬───────┘
+                              └───────────────┘                       │
+                                   (Wait 6s)                          ▼
+                                                              ┌──────────────┐
+                                                              │   Seq2Seq    │
+                                                              │   Decoder    │
+                                                              └──────────────┘
 ```
 
-```mermaid
-graph TD;
-    subgraph Parakeet["⚡ Parakeet (Ultra-Low Latency)"]
-        F[Audio Input] --> G((Circular Buffer));
-        G -->|Continuous Read| H[Parakeet Engine];
-        H -->|CTC Search| I[Token Stream];
-        I -->|Update| J[Real-time Text];
-    end
+```
+  ⚡ PARAKEET ARCHITECTURE (Streaming Ring Buffer)
+  
+       Microphone (Write Ptr)
+             │
+             ▼
+      ┌──────┴──────┐
+      │  R I N G    │ ◄── Circular Buffer (Lock-Free)
+      │  B U F F E R│
+      └──────┬──────┘
+             │
+             ▼
+        (Read Ptr) ──► ┌─────────────┐      ┌──────────────┐
+                       │  Parakeet   │ ──►  │  CTC Search  │ ──► "Hello..."
+                       │   Engine    │      │   Decoding   │
+                       └─────────────┘      └──────────────┘
+                                                  ▲
+                                                  │
+                                            (0.5s Latency)
 ```
 
 > **Note on Circular Buffer**: The Parakeet engine utilizes a lock-free ring buffer to handle audio samples. As the microphone writes data (`write_ptr`), the inference engine chases it (`read_ptr`) with millisecond precision, ensuring zero buffer bloat.
