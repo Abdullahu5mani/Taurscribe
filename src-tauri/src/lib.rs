@@ -4,6 +4,7 @@ mod commands;
 mod hotkeys;
 mod llm;
 mod parakeet;
+mod parakeet_loaders;
 mod spellcheck;
 mod state;
 mod tray;

@@ -49,11 +49,31 @@ pub struct WhisperManager {
     resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>, // (Sample Rate, Chunk Size, Resampler)
 }
 
-// Specialized "callback" to hide noisy logs from the C++ library.
-// The exact integer type for the log level depends on the whisper-rs version.
-// We define it with i32 (the standard C `int`) and cast if needed at the call site.
+// Suppress noisy C++ logs from whisper.cpp.
+//
+// The log-level integer type varies by platform because whisper.cpp's
+// ggml_log_callback is defined against different system headers:
+//
+//   macOS   → u32  (Apple SDK / Objective-C headers use `unsigned int`)
+//   Windows → i32  (MSVC / MinGW headers use `int`)
+//   Linux   → i32  (glibc headers use `int`)
+//
+// Each branch compiles only on its target OS, giving the linker an exact
+// type match for the fn-pointer passed to set_log_callback().
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn null_log_callback(_level: u32, _text: *const c_char, _user_data: *mut c_void) {
+    // Do nothing — suppress all whisper.cpp / ggml log output.
+}
+
+#[cfg(target_os = "windows")]
 unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
-    // Do nothing — suppress all C++ library output.
+    // Do nothing — suppress all whisper.cpp / ggml log output.
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
+    // Do nothing — suppress all whisper.cpp / ggml log output.
 }
 
 impl WhisperManager {

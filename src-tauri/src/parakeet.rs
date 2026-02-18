@@ -4,6 +4,8 @@ use rubato::{
 };
 use std::path::PathBuf;
 
+use crate::parakeet_loaders::{init_ctc, init_eou, init_nemotron, init_tdt};
+
 /// GPU Backend Type
 #[derive(Debug, Clone, serde::Serialize)]
 #[allow(dead_code)] // Cuda/DirectML used only on non-macOS builds
@@ -28,7 +30,7 @@ impl std::fmt::Display for GpuBackend {
 pub struct ParakeetModelInfo {
     pub id: String,
     pub display_name: String,
-    pub model_type: String, // "Nemotron" or "CTC"
+    pub model_type: String, // "Nemotron" | "CTC" | "EOU" | "TDT"
     pub size_mb: f64,
 }
 
@@ -68,7 +70,7 @@ impl ParakeetManager {
         }
     }
 
-    /// Helper: Find the folder where Parakeet models are stored (AppData/Local/Taurscribe/models)
+    /// Helper: Find the folder where Parakeet models are stored
     fn get_models_dir() -> Result<PathBuf, String> {
         crate::utils::get_models_dir()
     }
@@ -79,66 +81,62 @@ impl ParakeetManager {
         let mut models = Vec::new();
 
         if !models_dir.exists() {
-            return Ok(vec![]); // Return empty if dir doesn't exist yet
+            return Ok(vec![]);
         }
 
-        // 1. Check for Nemotron (Top level or in subdirs)
         let entries = std::fs::read_dir(&models_dir)
             .map_err(|e| format!("Failed to read models directory: {}", e))?;
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
+            if !path.is_dir() {
+                continue;
+            }
+            let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
 
-                // Detect Nemotron
-                if path.join("encoder.onnx").exists() && path.join("decoder_joint.onnx").exists() {
-                    // It could be Nemotron or EOU
-                    if path.join("tokenizer.model").exists() {
-                        models.push(ParakeetModelInfo {
-                            id: format!("nemotron:{}", dir_name),
-                            display_name: format!("Nemotron (Streaming) - {}", dir_name),
-                            model_type: "Nemotron".to_string(),
-                            size_mb: Self::estimate_model_size(&path),
-                        });
-                    } else if path.join("tokenizer.json").exists() {
-                        models.push(ParakeetModelInfo {
-                            id: format!("eou:{}", dir_name),
-                            display_name: format!("Parakeet EOU - {}", dir_name),
-                            model_type: "EOU".to_string(),
-                            size_mb: Self::estimate_model_size(&path),
-                        });
-                    }
-                }
-
-                // Detect TDT
-                if path.join("encoder.onnx").exists()
-                    && path.join("decoder.onnx").exists()
-                    && path.join("joint.onnx").exists()
-                {
+            // Detect Nemotron / EOU (both have encoder.onnx + decoder_joint.onnx)
+            if path.join("encoder.onnx").exists() && path.join("decoder_joint.onnx").exists() {
+                if path.join("tokenizer.model").exists() {
                     models.push(ParakeetModelInfo {
-                        id: format!("tdt:{}", dir_name),
-                        display_name: format!("Parakeet TDT - {}", dir_name),
-                        model_type: "TDT".to_string(),
+                        id: format!("nemotron:{}", dir_name),
+                        display_name: format!("Nemotron (Streaming) - {}", dir_name),
+                        model_type: "Nemotron".to_string(),
                         size_mb: Self::estimate_model_size(&path),
                     });
-                }
-
-                // Detect Parakeet / CTC models (often in models/parakeet/ctc-en)
-                // Check if this dir ITSELF is a CTC model
-                if path.join("model.onnx").exists() && path.join("tokenizer.json").exists() {
+                } else if path.join("tokenizer.json").exists() {
                     models.push(ParakeetModelInfo {
-                        id: format!("ctc:{}", dir_name),
-                        display_name: format!("Parakeet CTC - {}", dir_name),
-                        model_type: "CTC".to_string(),
+                        id: format!("eou:{}", dir_name),
+                        display_name: format!("Parakeet EOU - {}", dir_name),
+                        model_type: "EOU".to_string(),
                         size_mb: Self::estimate_model_size(&path),
                     });
                 }
             }
+
+            // Detect TDT (separate encoder / decoder / joint files)
+            if path.join("encoder.onnx").exists()
+                && path.join("decoder.onnx").exists()
+                && path.join("joint.onnx").exists()
+            {
+                models.push(ParakeetModelInfo {
+                    id: format!("tdt:{}", dir_name),
+                    display_name: format!("Parakeet TDT - {}", dir_name),
+                    model_type: "TDT".to_string(),
+                    size_mb: Self::estimate_model_size(&path),
+                });
+            }
+
+            // Detect CTC
+            if path.join("model.onnx").exists() && path.join("tokenizer.json").exists() {
+                models.push(ParakeetModelInfo {
+                    id: format!("ctc:{}", dir_name),
+                    display_name: format!("Parakeet CTC - {}", dir_name),
+                    model_type: "CTC".to_string(),
+                    size_mb: Self::estimate_model_size(&path),
+                });
+            }
         }
 
-        // 2. (Removed) Explicit subdirectory check is redundant as the first loop handles scanning.
-        // If models are missing, ensure they are in the root 'models' directory or a direct subdirectory.
         Ok(models)
     }
 
@@ -194,10 +192,8 @@ impl ParakeetManager {
             return Err("No Parakeet/Nemotron models found.".to_string());
         }
 
-        // Default to first available if none specified
         let target_id = model_id.unwrap_or(&available[0].id);
 
-        // Find info for this ID
         let info = available
             .iter()
             .find(|m| m.id == target_id)
@@ -208,8 +204,6 @@ impl ParakeetManager {
             info.display_name, info.model_type
         );
 
-        // Construct full path
-        // ID format "type:subpath" -> e.g. "ctc:parakeet/ctc-en"
         let subpath = target_id
             .split_once(':')
             .map(|(_, p)| p)
@@ -220,22 +214,21 @@ impl ParakeetManager {
             return Err(format!("Model path not found: {}", model_path.display()));
         }
 
-        // Initialize based on type
-        let (model, backend) = match info.model_type.as_str() {
+        let (model, backend): (LoadedModel, GpuBackend) = match info.model_type.as_str() {
             "Nemotron" => {
-                let (m, b) = Self::init_nemotron(&model_path)?;
+                let (m, b) = init_nemotron(&model_path)?;
                 (LoadedModel::Nemotron(m), b)
             }
             "CTC" => {
-                let (m, b) = Self::init_ctc(&model_path)?;
+                let (m, b) = init_ctc(&model_path)?;
                 (LoadedModel::Ctc(m), b)
             }
             "EOU" => {
-                let (m, b) = Self::init_eou(&model_path)?;
+                let (m, b) = init_eou(&model_path)?;
                 (LoadedModel::Eou(m), b)
             }
             "TDT" => {
-                let (m, b) = Self::init_tdt(&model_path)?;
+                let (m, b) = init_tdt(&model_path)?;
                 (LoadedModel::Tdt(m), b)
             }
             _ => return Err(format!("Unknown model type: {}", info.model_type)),
@@ -248,270 +241,11 @@ impl ParakeetManager {
         Ok(format!("Loaded {} ({})", info.display_name, backend))
     }
 
-    fn init_nemotron(path: &PathBuf) -> Result<(Nemotron, GpuBackend), String> {
-        #[cfg(target_os = "macos")]
-        {
-            println!("[PARAKEET] macOS detected - explicitly forcing CPU for Nemotron");
-            let m = Self::try_cpu_nemotron(path.to_str().unwrap())?;
-            return Ok((m, GpuBackend::Cpu));
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            // Try CUDA
-            if let Ok(m) = Self::try_gpu_nemotron(path.to_str().unwrap()) {
-                println!("[PARAKEET] Loaded Nemotron with CUDA");
-                return Ok((m, GpuBackend::Cuda));
-            }
-            // Try DirectML
-            if let Ok(m) = Self::try_directml_nemotron(path.to_str().unwrap()) {
-                println!("[PARAKEET] Loaded Nemotron with DirectML");
-                return Ok((m, GpuBackend::DirectML));
-            }
-            println!("[PARAKEET] Fallback to CPU for Nemotron");
-            let m = Self::try_cpu_nemotron(path.to_str().unwrap())?;
-            Ok((m, GpuBackend::Cpu))
-        }
-    }
-
-    fn init_ctc(path: &PathBuf) -> Result<(Parakeet, GpuBackend), String> {
-        #[cfg(target_os = "macos")]
-        {
-            println!("[PARAKEET] macOS detected - explicitly forcing CPU for CTC");
-            let m = Self::try_cpu_ctc(path.to_str().unwrap())?;
-            return Ok((m, GpuBackend::Cpu));
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            // Try CUDA
-            if let Ok(m) = Self::try_gpu_ctc(path.to_str().unwrap()) {
-                println!("[PARAKEET] Loaded CTC with CUDA");
-                return Ok((m, GpuBackend::Cuda));
-            }
-            // Try DirectML
-            if let Ok(m) = Self::try_directml_ctc(path.to_str().unwrap()) {
-                println!("[PARAKEET] Loaded CTC with DirectML");
-                return Ok((m, GpuBackend::DirectML));
-            }
-            println!("[PARAKEET] Fallback to CPU for CTC");
-            let m = Self::try_cpu_ctc(path.to_str().unwrap())?;
-            Ok((m, GpuBackend::Cpu))
-        }
-    }
-
-    // --- GPU/CPU Loaders ---
-
-    #[allow(dead_code)] // used on Linux/Windows, not on macOS
-    fn try_gpu_nemotron(_path: &str) -> Result<Nemotron, String> {
-        #[cfg(any(
-            target_os = "linux",
-            all(target_os = "windows", target_arch = "x86_64")
-        ))]
-        {
-            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-            let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-            Nemotron::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
-        }
-        #[cfg(not(any(
-            target_os = "linux",
-            all(target_os = "windows", target_arch = "x86_64")
-        )))]
-        {
-            Err("CUDA feature not enabled".to_string())
-        }
-    }
-
-    #[allow(dead_code)] // used on Windows only
-    fn try_directml_nemotron(_path: &str) -> Result<Nemotron, String> {
-        #[cfg(target_os = "windows")]
-        {
-            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-            let config =
-                ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
-            Nemotron::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            Err("DirectML feature not enabled".to_string())
-        }
-    }
-
-    fn try_cpu_nemotron(path: &str) -> Result<Nemotron, String> {
-        Nemotron::from_pretrained(path, None).map_err(|e| format!("{}", e))
-    }
-
-    #[allow(dead_code)] // used on Linux/Windows, not on macOS
-    fn try_gpu_ctc(_path: &str) -> Result<Parakeet, String> {
-        #[cfg(any(
-            target_os = "linux",
-            all(target_os = "windows", target_arch = "x86_64")
-        ))]
-        {
-            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-            let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-            Parakeet::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
-        }
-        #[cfg(not(any(
-            target_os = "linux",
-            all(target_os = "windows", target_arch = "x86_64")
-        )))]
-        {
-            Err("CUDA feature not enabled".to_string())
-        }
-    }
-
-    #[allow(dead_code)] // used on Windows only
-    fn try_directml_ctc(_path: &str) -> Result<Parakeet, String> {
-        #[cfg(target_os = "windows")]
-        {
-            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-            let config =
-                ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
-            Parakeet::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            Err("DirectML feature not enabled".to_string())
-        }
-    }
-
-    fn try_cpu_ctc(path: &str) -> Result<Parakeet, String> {
-        Parakeet::from_pretrained(path, None).map_err(|e| format!("{}", e))
-    }
-
-    fn init_eou(path: &PathBuf) -> Result<(ParakeetEOU, GpuBackend), String> {
-        #[cfg(target_os = "macos")]
-        {
-            // Make explicit: macOS always uses CPU for now
-            let m = Self::try_cpu_eou(path.to_str().unwrap())?;
-            return Ok((m, GpuBackend::Cpu));
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Ok(m) = Self::try_gpu_eou(path.to_str().unwrap()) {
-                return Ok((m, GpuBackend::Cuda));
-            }
-            if let Ok(m) = Self::try_directml_eou(path.to_str().unwrap()) {
-                return Ok((m, GpuBackend::DirectML));
-            }
-            let m = Self::try_cpu_eou(path.to_str().unwrap())?;
-            Ok((m, GpuBackend::Cpu))
-        }
-    }
-
-    #[allow(dead_code)] // used on Linux/Windows, not on macOS
-    fn try_gpu_eou(_path: &str) -> Result<ParakeetEOU, String> {
-        #[cfg(any(
-            target_os = "linux",
-            all(target_os = "windows", target_arch = "x86_64")
-        ))]
-        {
-            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-            let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-            ParakeetEOU::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
-        }
-        #[cfg(not(any(
-            target_os = "linux",
-            all(target_os = "windows", target_arch = "x86_64")
-        )))]
-        {
-            Err("CUDA feature not enabled".to_string())
-        }
-    }
-
-    #[allow(dead_code)] // used on Windows only
-    fn try_directml_eou(_path: &str) -> Result<ParakeetEOU, String> {
-        #[cfg(target_os = "windows")]
-        {
-            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-            let config =
-                ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
-            ParakeetEOU::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            Err("DirectML feature not enabled".to_string())
-        }
-    }
-
-    fn try_cpu_eou(path: &str) -> Result<ParakeetEOU, String> {
-        ParakeetEOU::from_pretrained(path, None).map_err(|e| format!("{}", e))
-    }
-
-    fn init_tdt(path: &PathBuf) -> Result<(ParakeetTDT, GpuBackend), String> {
-        #[cfg(target_os = "macos")]
-        {
-            // Make explicit: macOS always uses CPU for now
-            let m = Self::try_cpu_tdt(path.to_str().unwrap())?;
-            return Ok((m, GpuBackend::Cpu));
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Ok(m) = Self::try_gpu_tdt(path.to_str().unwrap()) {
-                return Ok((m, GpuBackend::Cuda));
-            }
-            if let Ok(m) = Self::try_directml_tdt(path.to_str().unwrap()) {
-                return Ok((m, GpuBackend::DirectML));
-            }
-            let m = Self::try_cpu_tdt(path.to_str().unwrap())?;
-            Ok((m, GpuBackend::Cpu))
-        }
-    }
-
-    #[allow(dead_code)] // used on Linux/Windows, not on macOS
-    fn try_gpu_tdt(_path: &str) -> Result<ParakeetTDT, String> {
-        #[cfg(any(
-            target_os = "linux",
-            all(target_os = "windows", target_arch = "x86_64")
-        ))]
-        {
-            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-            let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-            ParakeetTDT::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
-        }
-        #[cfg(not(any(
-            target_os = "linux",
-            all(target_os = "windows", target_arch = "x86_64")
-        )))]
-        {
-            Err("CUDA feature not enabled".to_string())
-        }
-    }
-
-    #[allow(dead_code)] // used on Windows only
-    fn try_directml_tdt(_path: &str) -> Result<ParakeetTDT, String> {
-        #[cfg(target_os = "windows")]
-        {
-            use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-            let config =
-                ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
-            ParakeetTDT::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            Err("DirectML feature not enabled".to_string())
-        }
-    }
-
-    fn try_cpu_tdt(path: &str) -> Result<ParakeetTDT, String> {
-        ParakeetTDT::from_pretrained(path, None).map_err(|e| format!("{}", e))
-    }
-
-    // --- Transcription ---
-
-    /// Clear the internal context/state of the model (Reset for new recording)
+    /// Clear the internal context/state of the model (reset for new recording)
     pub fn clear_context(&mut self) {
         if let Some(model) = &mut self.model {
-            match model {
-                LoadedModel::Nemotron(m) => {
-                    m.reset();
-                }
-                _ => {
-                    // Other models (CTC, EOU, TDT) either don't support or don't need manual resetting
-                }
+            if let LoadedModel::Nemotron(m) = model {
+                m.reset();
             }
         }
     }
@@ -522,9 +256,8 @@ impl ParakeetManager {
         samples: &[f32],
         sample_rate: u32,
     ) -> Result<String, String> {
-        // 1. Resample to 16kHz
+        // 1. Resample to 16 kHz if needed
         let audio = if sample_rate != 16000 {
-            // Check if we already have a resampler for this rate with this input size
             let needs_new_resampler = self
                 .resampler
                 .as_ref()
@@ -558,11 +291,12 @@ impl ParakeetManager {
             samples.to_vec()
         };
 
+        // 2. Transcribe
         if let Some(model) = &mut self.model {
             match model {
                 LoadedModel::Nemotron(m) => {
                     let mut transcript = String::new();
-                    const CHUNK_SIZE: usize = 8960; // 560ms at 16kHz
+                    const CHUNK_SIZE: usize = 8960; // 560 ms at 16 kHz
                     for chunk in audio.chunks(CHUNK_SIZE) {
                         let mut chunk_vec = chunk.to_vec();
                         if chunk_vec.len() < CHUNK_SIZE {
@@ -576,13 +310,12 @@ impl ParakeetManager {
                     let result = m
                         .transcribe_samples(audio.clone(), 16000, 1, Some(TimestampMode::Words))
                         .map_err(|e| format!("CTC Error: {}", e))?;
-
                     println!("[PARAKEET CTC] {}", result.text.trim());
                     Ok(result.text)
                 }
                 LoadedModel::Eou(m) => {
                     let mut full_text = String::new();
-                    const CHUNK_SIZE: usize = 2560; // 160ms
+                    const CHUNK_SIZE: usize = 2560; // 160 ms
                     for chunk in audio.chunks(CHUNK_SIZE) {
                         let text = m.transcribe(&chunk.to_vec(), false).unwrap_or_default();
                         full_text.push_str(&text);
@@ -594,7 +327,6 @@ impl ParakeetManager {
                     let result = m
                         .transcribe_samples(audio.clone(), 16000, 1, Some(TimestampMode::Sentences))
                         .map_err(|e| format!("TDT Error: {}", e))?;
-
                     println!("[PARAKEET TDT] {}", result.text.trim());
                     Ok(result.text)
                 }

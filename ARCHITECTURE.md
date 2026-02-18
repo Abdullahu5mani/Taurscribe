@@ -100,20 +100,21 @@ Think of Taurscribe as a **speech-to-text factory**:
   ════════════                    ══════════                     ══════
 
   🎤 Your Voice           ┌─────────────────────────┐
-     │                    │    FRONTEND (React)     │
-     │                    │    App.tsx - 700 lines  │           📺 UI
-     │                    │    =====================│           Display
-     │                    │    • Recording buttons  │              ▲
-     │                    │    • Model selection    │              │
-     │                    │    • Settings modal     │              │
-     │                    │    • Transcription view │              │
-     │                    └────────────┬────────────┘              │
+      │                    │    FRONTEND (React)     │           📺 UI
+      │                    │    App.tsx - 340 lines  │           Display
+      │                    │    =====================│              ▲
+      │                    │    • Recording buttons  │              │
+      │                    │    • Model selection    │              │
+      │                    │    • Settings modal     │              │
+      │                    │    • Transcription view │              │
+      │                    │    (logic in hooks/)    │              │
+      │                    └────────────┬────────────┘              │
      │                                 │                           │
      │                    Tauri IPC Bridge (JavaScript ↔ Rust)     │
      │                                 │                           │
      ▼                    ┌────────────▼────────────┐              │
   ════════════            │     BACKEND (Rust)      │              │
-  │ Microphone │─────────►│     lib.rs - 127 lines  │──────────────┘
+  │ Microphone │─────────►│     lib.rs - 131 lines  │──────────────┘
   ════════════            │     =====================│
                           │     Entry point, setup   │
                           └────────────┬────────────┘
@@ -121,11 +122,17 @@ Think of Taurscribe as a **speech-to-text factory**:
               ┌────────────────────────┼────────────────────────┐
               │                        │                        │
               ▼                        ▼                        ▼
-    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-    │  whisper.rs     │    │  parakeet.rs    │    │  vad.rs         │
-    │  (Whisper AI)   │    │  (Parakeet AI)  │    │  (Silence Det.) │
-    │  780 lines      │    │  578 lines      │    │  214 lines      │
-    └─────────────────┘    └─────────────────┘    └─────────────────┘
+     ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+     │  whisper.rs     │    │  parakeet.rs    │    │  vad.rs         │
+     │  (Whisper AI)   │    │  (Parakeet AI)  │    │  (Silence Det.) │
+     │  ~600 lines     │    │  ~270 lines     │    │  ~280 lines     │
+     └─────────────────┘    └─────────────────┘    └─────────────────┘
+               │                        │
+               │              ┌─────────────────┐
+               │              │parakeet_loaders │
+               │              │(GPU/CPU loaders)│
+               │              │  ~220 lines     │
+               │              └─────────────────┘
               │                        │                        │
               └────────────────────────┼────────────────────────┘
                                        │
@@ -851,86 +858,118 @@ let value = maybe.ok_or("No value")?;
 
 ## 📐 Module Architecture
 
-### 🗂️ Current File Structure (Updated January 2026)
+### 🗂️ Current File Structure (Updated February 2026)
 
 ```
 Taurscribe/
 ├── 🎨 Frontend
-│   ├── src/App.tsx           # Main UI logic (~700 lines)
-│   ├── src/App.css           # Styling
-│   ├── src/main.tsx          # React entry point
-│   └── index.html            # HTML shell
+│   ├── src/
+│   │   ├── App.tsx               # UI assembly only (~340 lines)
+│   │   ├── App.css               # Styling
+│   │   ├── main.tsx              # React entry point
+│   │   │
+│   │   ├── hooks/                # Custom React hooks (all logic lives here)
+│   │   │   ├── useHeaderStatus.ts    # Temporary status messages (~25 lines)
+│   │   │   ├── useModels.ts          # Whisper + Parakeet model lists (~55 lines)
+│   │   │   ├── usePostProcessing.ts  # LLM + SymSpell toggle logic (~75 lines)
+│   │   │   ├── useEngineSwitch.ts    # Engine switching + model loading (~210 lines)
+│   │   │   └── useRecording.ts       # Recording state + post-processing (~185 lines)
+│   │   │
+│   │   └── components/
+│   │       └── settings/         # Settings modal sub-components
+│   │           ├── SettingsModal.tsx  # Modal shell + tab routing (~220 lines)
+│   │           ├── GeneralTab.tsx     # LLM + Spell Check toggles (~90 lines)
+│   │           ├── DownloadsTab.tsx   # Model library list (~120 lines)
+│   │           ├── ModelRow.tsx       # Single model row with actions (~130 lines)
+│   │           └── types.ts           # Shared types + MODELS constant (~125 lines)
+│   │
+│   └── index.html                # HTML shell
 │
 ├── 🦀 Backend (Rust)
-│   ├── src-tauri/
-│   │   ├── src/
-│   │   │   ├── 🎯 Core
-│   │   │   │   ├── lib.rs          # App entry (127 lines)
-│   │   │   │   ├── main.rs         # Binary entry (6 lines)
-│   │   │   │   ├── types.rs        # Shared types (30 lines)
-│   │   │   │   ├── state.rs        # AudioState (68 lines)
-│   │   │   │   ├── utils.rs        # Helpers (62 lines)
-│   │   │   │   └── audio.rs        # Audio primitives (24 lines)
-│   │   │   │
-│   │   │   ├── 🎤 Audio Processing
-│   │   │   │   ├── whisper.rs      # Whisper AI (~780 lines)
-│   │   │   │   ├── parakeet.rs     # Parakeet AI (~578 lines)
-│   │   │   │   └── vad.rs          # Voice Detection (~280 lines)
-│   │   │   │
-│   │   │   ├── ✨ Post-Processing
-│   │   │   │   ├── llm.rs          # Grammar (LLM) (~200 lines)
-│   │   │   │   └── spellcheck.rs   # Spell check (~150 lines)
-│   │   │   │
-│   │   │   ├── 📡 Commands (Tauri API)
-│   │   │   │   ├── commands/
-│   │   │   │   │   ├── mod.rs          # Module exports
-│   │   │   │   │   ├── misc.rs         # Test commands
-│   │   │   │   │   ├── models.rs       # Model management
-│   │   │   │   │   ├── settings.rs     # Engine config
-│   │   │   │   │   ├── recording.rs    # Start/stop (~400 lines)
-│   │   │   │   │   ├── transcription.rs # Benchmarks (~220 lines)
-│   │   │   │   │   ├── llm.rs          # LLM commands
-│   │   │   │   │   ├── spellcheck.rs   # Spell commands
-│   │   │   │   │   └── downloader.rs   # Model download (~550 lines)
-│   │   │   │
-│   │   │   ├── 🖼️ System Tray
-│   │   │   │   └── tray/
-│   │   │   │       ├── mod.rs
-│   │   │   │       └── icons.rs        # Tray menu (~100 lines)
-│   │   │   │
-│   │   │   └── ⌨️ Global Hotkeys
-│   │   │       └── hotkeys/
-│   │   │           ├── mod.rs
-│   │   │           └── listener.rs     # Ctrl+Win (~80 lines)
-│   │   │
-│   │   ├── build.rs          # Build script
-│   │   └── Cargo.toml        # Rust dependencies
+│   └── src-tauri/
+│       ├── src/
+│       │   ├── 🎯 Core
+│       │   │   ├── lib.rs              # App entry + module declarations (131 lines)
+│       │   │   ├── main.rs             # Binary entry (6 lines)
+│       │   │   ├── types.rs            # Shared types (~30 lines)
+│       │   │   ├── state.rs            # AudioState (~68 lines)
+│       │   │   ├── utils.rs            # Helpers (models dir, etc.) (~62 lines)
+│       │   │   └── audio.rs            # Audio primitives (~24 lines)
+│       │   │
+│       │   ├── 🎤 Audio Processing
+│       │   │   ├── whisper.rs          # Whisper AI manager (~600 lines)
+│       │   │   ├── parakeet.rs         # Parakeet manager + transcription (~270 lines)
+│       │   │   ├── parakeet_loaders.rs # GPU/CPU loader helpers (~220 lines)
+│       │   │   └── vad.rs              # Voice Activity Detection (~280 lines)
+│       │   │
+│       │   ├── ✨ Post-Processing
+│       │   │   ├── llm.rs              # Grammar correction LLM (~200 lines)
+│       │   │   └── spellcheck.rs       # SymSpell spell checker (~150 lines)
+│       │   │
+│       │   ├── 📡 Commands (Tauri API)
+│       │   │   └── commands/
+│       │   │       ├── mod.rs              # Module exports
+│       │   │       ├── model_registry.rs   # Model configs + get_model_config() (~260 lines)
+│       │   │       ├── downloader.rs       # HTTP download/verify/delete (~230 lines)
+│       │   │       ├── models.rs           # Whisper model management
+│       │   │       ├── settings.rs         # Engine config commands
+│       │   │       ├── recording.rs        # Start/stop recording (~380 lines)
+│       │   │       ├── llm.rs              # LLM commands
+│       │   │       ├── spellcheck.rs       # Spell check commands
+│       │   │       └── misc.rs             # Utility commands
+│       │   │
+│       │   ├── 🖼️ System Tray
+│       │   │   └── tray.rs / tray/         # Tray setup + icons
+│       │   │
+│       │   ├── ⌨️ Global Hotkeys
+│       │   │   └── hotkeys.rs / hotkeys/   # Ctrl+Win listener
+│       │   │
+│       │   └── 👁️ File Watcher
+│       │       └── watcher.rs              # Models directory watcher
+│       │
+│       ├── build.rs              # Build script
+│       └── Cargo.toml            # Rust dependencies
 │
 ├── 📦 Runtime Assets
 │   └── taurscribe-runtime/
-│       ├── models/           # AI models (.bin, .onnx)
-│       │   └── llm/          # LLM files
-│       └── samples/          # Test audio (.wav)
+│       ├── models/               # AI models (.bin, .onnx, .gguf)
+│       │   ├── llm/              # Grammar LLM files
+│       │   ├── spellcheck/       # SymSpell dictionary
+│       │   └── parakeet-*/       # Parakeet ONNX model folders
+│       └── samples/              # Test audio (.wav)
 │
 └── 📚 Documentation
-    ├── ARCHITECTURE.md       # This file!
+    ├── ARCHITECTURE.md           # This file!
     └── README.md
 ```
 
 ### 🏗️ Module Dependency Diagram
 
 ```
-┌─────────────────────────────────────────┐
-│              lib.rs (top)               │  ← Entry point, depends on all
-├─────────────────────────────────────────┤
-│  commands/  tray/  hotkeys/             │  ← Feature modules
-├─────────────────────────────────────────┤
-│  whisper  parakeet  vad  llm  spell     │  ← AI engines
-├─────────────────────────────────────────┤
-│  types  state  utils  audio             │  ← Core (no dependencies)
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                   lib.rs (top)                       │  ← Entry point, declares all modules
+├──────────────────────────────────────────────────────┤
+│  commands/   tray   hotkeys   watcher                │  ← Feature modules
+├──────────────────────────────────────────────────────┤
+│  whisper   parakeet   vad   llm   spellcheck         │  ← AI engines
+│                 │                                    │
+│          parakeet_loaders                            │  ← Loader helpers (used by parakeet)
+├──────────────────────────────────────────────────────┤
+│  commands/model_registry   commands/downloader       │  ← Download subsystem
+│  (registry has no deps)    (uses registry + utils)   │
+├──────────────────────────────────────────────────────┤
+│  types   state   utils   audio                       │  ← Core (no dependencies)
+└──────────────────────────────────────────────────────┘
 
 Rule: Lower modules NEVER depend on higher modules!
+
+Frontend hook dependency order:
+  useHeaderStatus  ←  (no deps)
+  useModels        ←  useHeaderStatus
+  usePostProcessing←  useHeaderStatus
+  useEngineSwitch  ←  useModels, useHeaderStatus
+  useRecording     ←  useEngineSwitch, usePostProcessing, useHeaderStatus
+  App.tsx          ←  all hooks
 ```
 
 ### ⚠️ Gotcha: Circular Dependencies
@@ -953,47 +992,56 @@ Rule: Lower modules NEVER depend on higher modules!
 | Add a new Tauri command | `commands/*.rs` | Create function with `#[tauri::command]` |
 | Change recording behavior | `commands/recording.rs` | `start_recording()`, `stop_recording()` |
 | Modify Whisper logic | `whisper.rs` | `transcribe_chunk()`, `transcribe_file()` |
-| Modify Parakeet logic | `parakeet.rs` | `transcribe_chunk()` |
-| Add model support | `commands/models.rs` | New function + register |
+| Modify Parakeet transcription | `parakeet.rs` | `transcribe_chunk()`, `initialize()` |
+| Change how Parakeet loads GPU/CPU | `parakeet_loaders.rs` | `init_*()`, `try_gpu_*()`, `try_cpu_*()` |
+| Add a new downloadable model | `commands/model_registry.rs` | Add entry to `get_model_config()` |
+| Change download/verify logic | `commands/downloader.rs` | `download_model()`, `verify_model_hash()` |
 | Change LLM behavior | `llm.rs` | `generate_correction()` |
 | Change spell check | `spellcheck.rs` | Correction logic |
-| Download new model | `commands/downloader.rs` | `download_model()` |
-| Modify tray icon | `tray/icons.rs` | `update_tray_icon()` |
-| Change hotkey | `hotkeys/listener.rs` | Key detection logic |
+| Modify tray icon | `tray.rs` | `setup_tray()` |
+| Change hotkey | `hotkeys.rs` | Key detection logic |
 | Add shared type | `types.rs` | Define struct/enum |
 | Add utility function | `utils.rs` | Create public function |
+| Change UI recording logic | `src/hooks/useRecording.ts` | `handleStartRecording()`, `handleStopRecording()` |
+| Change engine switching UI | `src/hooks/useEngineSwitch.ts` | `handleSwitchToWhisper()`, `handleSwitchToParakeet()` |
+| Add a new model to the download UI | `src/components/settings/types.ts` | Add entry to `MODELS` array |
+| Change settings tab layout | `src/components/settings/` | `GeneralTab.tsx`, `DownloadsTab.tsx` |
 
-### 📋 All Tauri Commands (as of January 2026)
+### 📋 All Tauri Commands (as of February 2026)
 
 ```rust
-// From lib.rs invoke_handler:
-commands::greet,                 // Test/greeting
-commands::start_recording,       // Start mic + transcription
-commands::stop_recording,        // Stop + get final transcript
-commands::get_backend_info,      // Get GPU backend info
-commands::benchmark_test,        // Run transcription benchmark
-commands::list_sample_files,     // List test audio files
-commands::list_models,           // List Whisper models
-commands::get_current_model,     // Get active Whisper model
-commands::switch_model,          // Switch Whisper model
-commands::list_parakeet_models,  // List Parakeet models
-commands::init_parakeet,         // Initialize Parakeet model
-commands::get_parakeet_status,   // Check Parakeet status
-commands::set_active_engine,     // Switch Whisper/Parakeet
-commands::get_active_engine,     // Get active engine
-commands::set_tray_state,        // Update tray icon
-commands::init_llm,              // Initialize LLM
-commands::run_llm_inference,     // Run raw LLM
-commands::check_llm_status,      // Check if LLM loaded
-commands::correct_text,          // Grammar correction
-commands::init_spellcheck,       // Initialize spell checker
-commands::check_spellcheck_status, // Check spell checker
-commands::correct_spelling,      // Fix spelling errors
-commands::download_model,        // Download model file
-commands::get_download_status,   // Get download progress
-commands::delete_model,          // Delete model file
-commands::verify_model_hash,     // Verify model integrity
+// From lib.rs invoke_handler (matches tauri::generate_handler! exactly):
+commands::greet,                   // Test/greeting
+commands::start_recording,         // Start mic + transcription
+commands::stop_recording,          // Stop + get final transcript
+commands::get_backend_info,        // Get GPU backend info
+commands::list_models,             // List Whisper models
+commands::get_current_model,       // Get active Whisper model
+commands::switch_model,            // Switch Whisper model
+commands::list_parakeet_models,    // List Parakeet models
+commands::init_parakeet,           // Initialize Parakeet model
+commands::get_parakeet_status,     // Check Parakeet status
+commands::set_active_engine,       // Switch Whisper/Parakeet
+commands::get_active_engine,       // Get active engine
+commands::set_tray_state,          // Update tray icon
+commands::init_llm,                // Initialize LLM
+commands::unload_llm,              // Unload LLM to free memory
+commands::run_llm_inference,       // Run raw LLM inference
+commands::check_llm_status,        // Check if LLM loaded
+commands::correct_text,            // Grammar correction
+commands::type_text,               // Type text via Enigo (keyboard injection)
+commands::init_spellcheck,         // Initialize spell checker
+commands::unload_spellcheck,       // Unload spell checker
+commands::check_spellcheck_status, // Check spell checker status
+commands::correct_spelling,        // Fix spelling errors
+commands::download_model,          // Download model file (from model_registry)
+commands::get_download_status,     // Get per-model download status
+commands::delete_model,            // Delete model file(s)
+commands::verify_model_hash,       // Verify model SHA-1 integrity
 ```
+
+> **Note**: `benchmark_test` and `list_sample_files` were removed in the January 2026 cleanup.
+> `unload_llm`, `unload_spellcheck`, and `type_text` were added in the same pass.
 
 ---
 

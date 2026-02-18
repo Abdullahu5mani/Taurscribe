@@ -1,5 +1,6 @@
 mod llm;
 mod misc;
+pub(crate) mod model_registry;
 mod models;
 mod recording;
 mod settings;
