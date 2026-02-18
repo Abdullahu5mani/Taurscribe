@@ -416,8 +416,16 @@ jobs:
 
       # Bundle the application (frontend and binary already built, tauri build will detect and skip rebuild)
       # On Windows, build only NSIS to avoid WiX/light.exe failures in CI (MSI can fail with path or tool issues).
+      # --- Bundle the application ---
       - name: Bundle application
-        run: bun run tauri build -- --target ${{ matrix.target }} ${{ contains(matrix.platform, 'windows') && '--bundles nsis' || '' }}
+        # Remove the extra "--" before --bundles
+        run: |
+          if [ "${{ matrix.os_name }}" = "Windows" ]; then
+            bun run tauri build --target ${{ matrix.target }} --bundles nsis
+          else
+            bun run tauri build --target ${{ matrix.target }}
+          fi
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues

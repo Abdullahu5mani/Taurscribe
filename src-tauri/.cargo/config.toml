@@ -2,9 +2,11 @@
 rustflags = [
     # Force dynamic CRT (MD) cleanly.
     # This replaces all the /NODEFAULTLIB and /DEFAULTLIB hacks.
-    "-C", "target-feature=-crt-static",
+    "-C",
+    "target-feature=-crt-static",
     # Add your library search path if strictly necessary (usually handled by PATH, but keeping it is fine)
-    "-L", "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin",
+    "-L",
+    "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin",
     # ── Diamond dependency fix (whisper-rs ggml vs llama-cpp-2 ggml) ──
     # whisper-rs-sys statically links ggml into its .rlib.
     # llama-cpp-sys-2 (dynamic-link) provides ggml import-library thunks.
@@ -13,8 +15,10 @@ rustflags = [
     # definitions win in the host binary while llama.dll uses its own
     # ggml-base.dll via the DLL's private import table.
     # /ignore:4006 suppresses the per-symbol "already defined" warnings.
-    "-C", "link-arg=/FORCE:MULTIPLE",
-    "-C", "link-arg=/ignore:4006",
+    "-C",
+    "link-arg=/FORCE:MULTIPLE",
+    "-C",
+    "link-arg=/ignore:4006",
 ]
 
 # ── macOS Intel ──
@@ -42,17 +46,14 @@ rustflags = [
 
 # ── Windows ARM64: diamond dependency fix ──
 [target.aarch64-pc-windows-msvc]
-rustflags = [
-    "-C", "link-arg=/FORCE:MULTIPLE",
-    "-C", "link-arg=/ignore:4006",
-]
+rustflags = ["-C", "link-arg=/FORCE:MULTIPLE", "-C", "link-arg=/ignore:4006"]
 
 [env]
 MACOSX_DEPLOYMENT_TARGET = "13.4"
-WHISPER_LIB_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin"
-GRAMMAR_LLM_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/models/qwen_finetuned_gguf"
-VULKAN_SDK = "C:/VulkanSDK/1.4.335.0"
-LIBCLANG_PATH = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
+# WHISPER_LIB_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin"
+# GRAMMAR_LLM_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/models/qwen_finetuned_gguf"
+# VULKAN_SDK = "C:/VulkanSDK/1.4.335.0"
+# LIBCLANG_PATH = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
 CFLAGS = "/MD"
 CXXFLAGS = "/MD"
 # Force MSVC (and nvcc's host compiler) to use dynamic CRT (/MD) so
@@ -66,14 +67,13 @@ rustflags = [
     # whisper-rs-sys statically links ggml; llama-cpp-sys-2 (dynamic-link)
     # provides its own libggml.so with the same symbols → duplicate definition.
     # --allow-multiple-definition is the GNU ld equivalent of MSVC /FORCE:MULTIPLE.
-    "-C", "link-arg=-Wl,--allow-multiple-definition",
+    "-C",
+    "link-arg=-Wl,--allow-multiple-definition",
 ]
 
 # ── Linux ARM64: same diamond dependency fix ──
 [target.aarch64-unknown-linux-gnu]
-rustflags = [
-    "-C", "link-arg=-Wl,--allow-multiple-definition",
-]
+rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
 
 [target.x86_64-pc-windows-gnu]
 linker = "C:\\msys64\\ucrt64\\bin\\gcc.exe"

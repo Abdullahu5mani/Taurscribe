@@ -225,7 +225,14 @@ impl WhisperManager {
     pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
         // Disable noisy C++ logs
         unsafe {
-            set_log_callback(Some(null_log_callback), std::ptr::null_mut());
+            // We explicitely define result type to satisfy the E0308 error.
+            #[cfg(target_os = "macos")]
+            let callback: unsafe extern "C" fn(u32, *const c_char, *mut c_void) = null_log_callback;
+
+            #[cfg(not(target_os = "macos"))]
+            let callback: unsafe extern "C" fn(i32, *const c_char, *mut c_void) = null_log_callback;
+
+            set_log_callback(Some(callback), std::ptr::null_mut());
         }
 
         // Find the folder
