@@ -8,9 +8,16 @@
 
 > **Private, Offline, GPU-Accelerated Speech-to-Text Application**
 
-Taurscribe is a state-of-the-art desktop application designed to bring powerful AI transcription models directly to your local machine. By running entirely offline, it guarantees 100% privacy while leveraging your hardware's full potential for real-time performance.
+**Taurscribe** (*Tauri* + *Transcribe*) is a state-of-the-art desktop application designed to bring powerful AI transcription models directly to your local machine. By running entirely offline, it guarantees 100% privacy while leveraging your hardware's full potential for real-time performance.
 
 ---
+
+<p align="center">
+  <img src="assets/screenshots/UI.png" width="48%" />
+  <img src="assets/screenshots/live-transcription.png" width="48%" />
+  <br>
+  <img src="assets/screenshots/Settings.png" width="80%" />
+</p>
 
 ## 🚀 Key Technical Achievements
 
@@ -27,8 +34,11 @@ This project demonstrates advanced systems programming and machine learning inte
 - **Offline Privacy**: No data ever leaves your device. No API keys, no subscriptions, no tracking.
 - **Real-Time Transcription**: See words appear instantly as you speak.
 - **Grammar Correction**: Integrated LLM automatically fixes punctuation, capitalization, and grammar on the fly.
-- **Smart Model Management**: Download and manage quantized models directly within the app (supports GGUF and ONNX formats).
+- **Model Management**: Support for GGUF and ONNX formats with easy switching.
 - **Cross-Platform Core**: Designed with a Rust backend that compiles to native binaries for Windows, macOS, and Linux.
+- **Global Hotkeys**: Control recording from any application using `Ctrl+Win`, perfect for capturing quick thoughts without switching windows.
+- **System Tray Integration**: Runs unobtrusively in the background with dynamic status icons (Ready/Recording/Processing).
+- **Download Manager**: Integrated tool to download models directly from the app with built-in cryptographic verification (SHA1) for security.
 
 ## 🧠 Custom Intelligence Engine
 
@@ -97,8 +107,6 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - [x] Core Whisper Integration
 - [x] Real-time VAD Implementation
 - [x] Local LLM Grammar Correction
-- [ ] Speaker Diarization (Identify different speakers)
-- [ ] Export to SRT/VTT for Subtitles
 - [ ] Custom Vocabulary Finetuning
 
 ---
