@@ -54,12 +54,12 @@ MACOSX_DEPLOYMENT_TARGET = "13.4"
 # GRAMMAR_LLM_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/models/qwen_finetuned_gguf"
 # VULKAN_SDK = "C:/VulkanSDK/1.4.335.0"
 # LIBCLANG_PATH = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin"
-CFLAGS = "/MD"
-CXXFLAGS = "/MD"
-# Force MSVC (and nvcc's host compiler) to use dynamic CRT (/MD) so
+CFLAGS = "-MD"
+CXXFLAGS = "-MD"
+# Force MSVC (and nvcc's host compiler) to use dynamic CRT (-MD) so
 # llama-cpp-sys-2 CUDA kernels match whisper_rs. Without this, nvcc
 # builds with /MT and link fails with LNK2038.
-CL = "/MD"
+CL = "-MD"
 
 # ── Linux x86_64: diamond dependency fix (same ggml conflict as Windows) ──
 [target.x86_64-unknown-linux-gnu]

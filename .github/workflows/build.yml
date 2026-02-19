@@ -205,13 +205,26 @@ jobs:
       # - LLVM: Required for bindgen to generate C++ bindings for Rust.
       # - NASM: Assembler required for some crypto/media libraries.
       # - Ninja: High-speed build system. Replaces MSBuild to fix "File path too long" errors.
+      # 2. Build Tools
       - name: Install Windows Build Dependencies
         if: contains(matrix.platform, 'windows')
         run: |
           choco install llvm nasm ninja -y
           # Point 'bindgen' to the LLVM installation
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-          
+
+      # FIX: Remove Git's link.exe which conflicts with MSVC's link.exe
+      # This resolves "error: linking with `link.exe` failed: exit code: 1" / "missing operand"
+      - name: Remove Git's link.exe (Windows)
+        if: contains(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          $gitLink = "C:\Program Files\Git\usr\bin\link.exe"
+          if (Test-Path $gitLink) {
+            echo "Removing conflicting linker: $gitLink"
+            Remove-Item -Force $gitLink
+          }
+
       # 3. Clang configuration for ARM64 Cross-compilation (Windows)
       # Since we are building for ARM64 on x64, we need to explicitly tell CMake 
       # to use the clang-cl compiler provided by Visual Studio.
@@ -220,7 +233,9 @@ jobs:
         run: |
            echo "CC=clang-cl" >> $env:GITHUB_ENV
            echo "CXX=clang-cl" >> $env:GITHUB_ENV
-           echo "CXXFLAGS=/EHsc" >> $env:GITHUB_ENV
+           # Use hyphen instead of slash for flags to prevent MSYS2/Git Bash path mangling
+           # (e.g. /EHsc -> C:/Program Files/Git/EHsc)
+           echo "CXXFLAGS=-EHsc" >> $env:GITHUB_ENV
            echo "CMAKE_GENERATOR=Ninja" >> $env:GITHUB_ENV
            # Note: Do NOT set CMAKE_GENERATOR_TOOLSET with Ninja as it causes a build error.
            # The CC/CXX variables above are sufficient for Ninja to use clang-cl.

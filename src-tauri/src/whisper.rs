@@ -72,7 +72,7 @@ unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_
 }
 
 #[cfg(target_os = "linux")]
-unsafe extern "C" fn null_log_callback(_level: i32, _text: *const c_char, _user_data: *mut c_void) {
+unsafe extern "C" fn null_log_callback(_level: u32, _text: *const c_char, _user_data: *mut c_void) {
     // Do nothing — suppress all whisper.cpp / ggml log output.
 }
 
@@ -226,10 +226,10 @@ impl WhisperManager {
         // Disable noisy C++ logs
         unsafe {
             // We explicitely define result type to satisfy the E0308 error.
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             let callback: unsafe extern "C" fn(u32, *const c_char, *mut c_void) = null_log_callback;
 
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
             let callback: unsafe extern "C" fn(i32, *const c_char, *mut c_void) = null_log_callback;
 
             set_log_callback(Some(callback), std::ptr::null_mut());
