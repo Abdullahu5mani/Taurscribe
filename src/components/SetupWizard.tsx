@@ -68,7 +68,7 @@ export function SetupWizard({ onComplete }: Props) {
       case 1: return <StepHardware sysInfo={sysInfo} onNext={next} onBack={back} />;
       case 2: return <StepEngines onNext={next} onBack={back} />;
       case 3: return <StepHotkey onNext={next} onBack={back} />;
-      case 4: return <StepReady onComplete={onComplete} onBack={back} />;
+      case 4: return <StepReady onComplete={onComplete} />;
       default: return null;
     }
   };
@@ -320,10 +320,8 @@ function StepHotkey({ onNext, onBack }: { onNext: () => void; onBack: () => void
 // ─────────────────────────────────────────────────────────────────
 function StepReady({
   onComplete,
-  onBack,
 }: {
   onComplete: (openSettings: boolean) => void;
-  onBack: () => void;
 }) {
   return (
     <>
