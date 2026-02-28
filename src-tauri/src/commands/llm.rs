@@ -3,8 +3,8 @@ use crate::state::AudioState;
 use tauri::State;
 
 #[tauri::command]
-pub async fn init_llm(state: State<'_, AudioState>) -> Result<String, String> {
-    println!("[COMMAND] init_llm requested");
+pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<String, String> {
+    println!("[COMMAND] init_llm requested. use_gpu: {}", use_gpu);
 
     // Check if already loaded
     {
@@ -15,7 +15,7 @@ pub async fn init_llm(state: State<'_, AudioState>) -> Result<String, String> {
     }
 
     // Load in a blocking task since it's heavy
-    let result = tauri::async_runtime::spawn_blocking(move || LLMEngine::new())
+    let result = tauri::async_runtime::spawn_blocking(move || LLMEngine::new(use_gpu))
         .await
         .map_err(|e| format!("JoinError: {}", e))?;
 
@@ -72,7 +72,11 @@ pub fn check_llm_status(state: State<'_, AudioState>) -> bool {
 
 /// Grammar correction: fix punctuation and grammar. Uses same prompt as format_transcript.
 #[tauri::command]
-pub async fn correct_text(state: State<'_, AudioState>, text: String) -> Result<String, String> {
+pub async fn correct_text(
+    state: State<'_, AudioState>,
+    text: String,
+    style: Option<String>,
+) -> Result<String, String> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return Ok(String::new());
@@ -82,12 +86,13 @@ pub async fn correct_text(state: State<'_, AudioState>, text: String) -> Result<
         text.len()
     );
     let llm_handle = state.llm.clone();
+    let style = style.clone(); // Clone for the closure
 
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut llm_guard = llm_handle.lock().unwrap();
         if let Some(engine) = llm_guard.as_mut() {
             println!("[LLM] Running grammar correction...");
-            match engine.format_transcript(&text) {
+            match engine.format_transcript(&text, style.as_deref()) {
                 Ok(formatted) => {
                     println!("[LLM] Correction finished. Output length: {}", formatted.len());
                     Ok(formatted)

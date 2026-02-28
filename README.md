@@ -165,8 +165,22 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - [x] Core Whisper Integration
 - [x] Real-time VAD Implementation
 - [x] Local LLM Grammar Correction
-- [ ] Custom Vocabulary Finetuning
-
+- [ ] Brand Refresh (New Logo)
+- [ ] Buffer in the beginning and towards the end and let the user customize that buffer so like 0.5 seconds so the lm can actually catch what they're saying and not get cut off
+- [ ] UI Sound Effects (Success/Fail/Too Short)
+- [ ] Toggle Recording Mode (Click-to-Record vs Hold)
+- [ ] Text Snippets / Macros
+- [ ] Custom Dictionary (Proper Nouns)
+- [ ] AI Style Presets (Formal, Casual, etc.)
+- [ ] Smart Fallback for Short Audio
+- [ ] Customizable Hotkeys
+- [ ] MySQL Database for Transcription History
+- [ ] Visual Listening Overlay
+- [ ] Context-aware Paste (Text/Image detection on clipboard)
+- [ ] MacOS CoreML optimization (Whisper.cpp)
+- [ ] Nice Installer Screen (Custom Tauri Customization)
+- [ ] First Launch & Guide Screen (Onboarding flow)
+- [ ] Overlay Recording Mode (Press and hold to record, release to stop)
 ---
 
 <p align="center">

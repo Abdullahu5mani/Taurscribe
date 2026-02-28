@@ -6,7 +6,6 @@ use crate::audio::{RecordingHandle, SendStream};
 use crate::state::AudioState;
 use crate::types::{ASREngine, TranscriptionChunk};
 use crate::utils::{clean_transcript, get_recordings_dir};
-use enigo::{Enigo, Keyboard, Settings};
 
 /// COMMAND: START RECORDING
 /// This initializes the microphone, files, and processing threads.
@@ -268,24 +267,122 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>) -> Resul
     Ok(format!("Recording started: {}", path.display()))
 }
 
-/// COMMAND: Type text with Enigo (called by frontend once after spell/grammar processing).
+/// COMMAND: Insert text into the focused application.
+/// macOS:         AXUIElement (kAXSelectedTextAttribute) — inserts at cursor, no clipboard touch
+///                → fallback: clipboard + Cmd+V
+/// Windows/Linux: clipboard save → set text → Ctrl+V → restore clipboard
 #[tauri::command]
 pub fn type_text(text: String) {
     if text.trim().is_empty() || text.trim() == "[silence]" {
         return;
     }
-    println!("[ENIGO] Typing out text: \"{}\"", text.trim());
     let text_to_type = text.trim().to_string();
     std::thread::spawn(move || {
-        match Enigo::new(&Settings::default()) {
-            Ok(mut enigo) => {
-                if let Err(e) = enigo.text(&text_to_type) {
-                    eprintln!("[ERROR] Enigo failed to type text: {:?}", e);
-                }
-            }
-            Err(e) => eprintln!("[ERROR] Failed to initialize Enigo: {:?}", e),
-        }
+        insert_text(&text_to_type);
     });
+}
+
+fn insert_text(text: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        if ax_insert(text) {
+            println!("[INSERT] AXUIElement succeeded");
+            return;
+        }
+        eprintln!("[INSERT] AXUIElement failed, falling back to clipboard+Cmd+V");
+    }
+    clipboard_paste(text);
+}
+
+/// Clipboard + simulated paste keystroke (Cmd+V on macOS, Ctrl+V elsewhere).
+/// Saves and restores the previous clipboard content.
+fn clipboard_paste(text: &str) {
+    use arboard::Clipboard;
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+    let mut clipboard = match Clipboard::new() {
+        Ok(c) => c,
+        Err(e) => { eprintln!("[INSERT] Clipboard init failed: {}", e); return; }
+    };
+
+    let previous = clipboard.get_text().ok();
+
+    if let Err(e) = clipboard.set_text(text) {
+        eprintln!("[INSERT] Failed to set clipboard: {}", e);
+        return;
+    }
+
+    // Give the clipboard time to propagate before simulating the keystroke
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let mut enigo = match Enigo::new(&Settings::default()) {
+        Ok(e) => e,
+        Err(e) => { eprintln!("[INSERT] Enigo init failed: {:?}", e); return; }
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = enigo.key(Key::Meta, Direction::Press);
+        let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+        let _ = enigo.key(Key::Meta, Direction::Release);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = enigo.key(Key::Control, Direction::Press);
+        let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+        let _ = enigo.key(Key::Control, Direction::Release);
+    }
+
+    // Wait for the paste to land before restoring the clipboard
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    if let Some(prev) = previous {
+        let _ = clipboard.set_text(prev);
+    }
+}
+
+/// macOS only: insert text at the cursor via the Accessibility API.
+/// Equivalent to kAXSelectedTextAttribute — replaces the current selection
+/// or inserts at the caret if nothing is selected. No clipboard involved.
+#[cfg(target_os = "macos")]
+fn ax_insert(text: &str) -> bool {
+    use accessibility_sys::{
+        AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
+        AXUIElementSetAttributeValue, kAXErrorSuccess,
+        kAXFocusedUIElementAttribute, kAXSelectedTextAttribute,
+    };
+    use core_foundation::{base::{CFTypeRef, TCFType}, string::CFString};
+
+    unsafe {
+        let system = AXUIElementCreateSystemWide();
+        if system.is_null() {
+            return false;
+        }
+
+        let mut focused: CFTypeRef = std::ptr::null();
+        let err = AXUIElementCopyAttributeValue(
+            system,
+            kAXFocusedUIElementAttribute,
+            &mut focused,
+        );
+
+        // Release the system-wide element — we no longer need it
+        core_foundation_sys::base::CFRelease(system as CFTypeRef);
+
+        if err != kAXErrorSuccess || focused.is_null() {
+            return false;
+        }
+
+        let cf_text = CFString::new(text);
+        let err = AXUIElementSetAttributeValue(
+            focused as *mut std::ffi::c_void as accessibility_sys::AXUIElementRef,
+            kAXSelectedTextAttribute,
+            cf_text.as_CFTypeRef(),
+        );
+
+        core_foundation_sys::base::CFRelease(focused);
+
+        err == kAXErrorSuccess
+    }
 }
 
 /// COMMAND: STOP RECORDING

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
 use tauri::{AppHandle, Emitter};
+use zip::ZipArchive;
 
 use super::model_registry::get_model_config;
 
@@ -153,7 +154,10 @@ pub async fn get_download_status(
             for file_spec in &config.files {
                 let file_path = base_dir.join(file_spec.filename);
                 if file_path.exists() {
-                    if let Ok(metadata) = std::fs::metadata(&file_path) {
+                    if file_path.is_dir() {
+                        // CoreML .mlmodelc directories — mark as present with size 1
+                        total_size += 1;
+                    } else if let Ok(metadata) = std::fs::metadata(&file_path) {
                         total_size += metadata.len();
                     } else {
                         all_exist = false;
@@ -196,7 +200,11 @@ pub async fn delete_model(_app: AppHandle, model_id: String) -> Result<String, S
     for file_spec in &config.files {
         let file_path = base_dir.join(file_spec.filename);
         if file_path.exists() {
-            let _ = std::fs::remove_file(&file_path);
+            if file_path.is_dir() {
+                let _ = std::fs::remove_dir_all(&file_path);
+            } else {
+                let _ = std::fs::remove_file(&file_path);
+            }
         }
     }
 
@@ -245,7 +253,15 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                 config.repo, config.branch, file_spec.remote_path
             )
         };
-        let target_path = base_dir.join(file_spec.filename);
+
+        // For zip files (e.g. CoreML encoders), download to a temp .zip path then extract.
+        let is_zip = file_spec.remote_path.ends_with(".zip");
+        let download_path = if is_zip {
+            base_dir.join(format!("{}.zip", file_spec.filename))
+        } else {
+            base_dir.join(file_spec.filename)
+        };
+        let target_path = download_path.clone();
 
         println!(
             "[DOWNLOAD] Starting download for {} ({}/{}) from {}",
@@ -292,6 +308,21 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                     },
                 );
             }
+        }
+        drop(file); // close file handle before reading it for zip extraction
+
+        // If the downloaded file is a zip (e.g. CoreML encoder), extract it then remove the zip.
+        if is_zip {
+            println!("[DOWNLOAD] Extracting zip: {:?}", download_path);
+            let zip_file = File::open(&download_path)
+                .map_err(|e| format!("Failed to open zip for extraction: {}", e))?;
+            let mut archive = ZipArchive::new(zip_file)
+                .map_err(|e| format!("Failed to read zip archive: {}", e))?;
+            archive
+                .extract(&base_dir)
+                .map_err(|e| format!("Failed to extract zip: {}", e))?;
+            std::fs::remove_file(&download_path).ok();
+            println!("[DOWNLOAD] Extraction complete, zip removed.");
         }
     }
 
