@@ -99,6 +99,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::greet,
+            commands::get_system_info,
             commands::start_recording,
             commands::stop_recording,
             commands::get_backend_info,
@@ -124,7 +125,8 @@ pub fn run() {
             commands::download_model,
             commands::get_download_status,
             commands::delete_model,
-            commands::verify_model_hash
+            commands::verify_model_hash,
+            commands::get_platform
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
