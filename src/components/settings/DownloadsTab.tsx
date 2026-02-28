@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { DownloadableModel, DownloadProgress } from "./types";
 import { ModelRow } from "./ModelRow";
 
@@ -21,11 +22,19 @@ const SIZE_ORDER = ['Tiny', 'Base', 'Small', 'Large'];
 
 export function DownloadsTab({ models, downloadProgress, onDownload, onDelete, onVerify }: DownloadsTabProps) {
     const [isWhisperExpanded, setIsWhisperExpanded] = useState(false);
+    const [platform, setPlatform] = useState<string>('');
+
+    useEffect(() => {
+        invoke<string>('get_platform').then(setPlatform).catch(() => {});
+    }, []);
+
+    const isMac = platform === 'macos';
 
     const whisperModels = models.filter(m => m.type === 'Whisper');
     const parakeetModels = models.filter(m => m.type === 'Parakeet');
     const llmModels = models.filter(m => m.type === 'LLM');
     const utilityModels = models.filter(m => m.type === 'Utility');
+    const coremlModels = models.filter(m => m.type === 'CoreML');
 
     const visibleWhisper = whisperModels
         .filter(m => PRIORITY_WHISPER_IDS.includes(m.id))
@@ -100,6 +109,19 @@ export function DownloadsTab({ models, downloadProgress, onDownload, onDelete, o
                             🛠️ Utilities
                         </h4>
                         {utilityModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
+                    </div>
+                )}
+
+                {isMac && coremlModels.length > 0 && (
+                    <div style={{ marginBottom: '24px' }}>
+                        <h4 style={{ color: '#fff', borderBottom: '1px solid #334155', paddingBottom: '8px', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            CoreML Encoders
+                            <span style={{ fontSize: '0.7rem', background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '4px', padding: '2px 6px', color: '#94a3b8', fontWeight: 400 }}>Apple Silicon</span>
+                        </h4>
+                        <p style={{ fontSize: '0.82rem', color: '#64748b', marginBottom: '12px', lineHeight: '1.5' }}>
+                            Hardware-accelerated encoder inference via the Apple Neural Engine. Download the encoder that matches your Whisper model — both files must be in the same models folder.
+                        </p>
+                        {coremlModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
                     </div>
                 )}
             </div>

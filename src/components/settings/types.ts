@@ -3,11 +3,12 @@
 export interface DownloadableModel {
     id: string;
     name: string;
-    type: 'Whisper' | 'Parakeet' | 'LLM' | 'Utility';
+    type: 'Whisper' | 'Parakeet' | 'LLM' | 'Utility' | 'CoreML';
     size: string;
     description: string;
     downloaded: boolean;
     verified?: boolean;
+    macosOnly?: boolean;
 }
 
 export interface DownloadProgress {
@@ -59,4 +60,16 @@ export const MODELS: DownloadableModel[] = [
 
     // --- Utility ---
     { id: 'symspell-en-82k', name: 'English Dictionary (SymSpell)', type: 'Utility', size: '1 MB', description: 'Fast spelling correction (82k words). English only.', downloaded: false },
+
+    // --- CoreML Encoders (macOS Apple Silicon only) ---
+    { id: 'whisper-tiny-coreml', name: 'Tiny CoreML Encoder', type: 'CoreML', size: '15 MB', description: 'Apple Neural Engine encoder for Tiny (multilingual). Pair with ggml-tiny.bin.', downloaded: false, macosOnly: true },
+    { id: 'whisper-tiny-en-coreml', name: 'Tiny (English) CoreML Encoder', type: 'CoreML', size: '15 MB', description: 'Apple Neural Engine encoder for Tiny (English). Pair with ggml-tiny.en.bin.', downloaded: false, macosOnly: true },
+    { id: 'whisper-base-coreml', name: 'Base CoreML Encoder', type: 'CoreML', size: '38 MB', description: 'Apple Neural Engine encoder for Base (multilingual). Pair with ggml-base.bin.', downloaded: false, macosOnly: true },
+    { id: 'whisper-base-en-coreml', name: 'Base (English) CoreML Encoder', type: 'CoreML', size: '38 MB', description: 'Apple Neural Engine encoder for Base (English). Pair with ggml-base.en.bin.', downloaded: false, macosOnly: true },
+    { id: 'whisper-small-coreml', name: 'Small CoreML Encoder', type: 'CoreML', size: '163 MB', description: 'Apple Neural Engine encoder for Small (multilingual). Pair with ggml-small.bin.', downloaded: false, macosOnly: true },
+    { id: 'whisper-small-en-coreml', name: 'Small (English) CoreML Encoder', type: 'CoreML', size: '163 MB', description: 'Apple Neural Engine encoder for Small (English). Pair with ggml-small.en.bin.', downloaded: false, macosOnly: true },
+    { id: 'whisper-medium-coreml', name: 'Medium CoreML Encoder', type: 'CoreML', size: '568 MB', description: 'Apple Neural Engine encoder for Medium (multilingual). Pair with ggml-medium.bin.', downloaded: false, macosOnly: true },
+    { id: 'whisper-medium-en-coreml', name: 'Medium (English) CoreML Encoder', type: 'CoreML', size: '567 MB', description: 'Apple Neural Engine encoder for Medium (English). Pair with ggml-medium.en.bin.', downloaded: false, macosOnly: true },
+    { id: 'whisper-large-v3-coreml', name: 'Large V3 CoreML Encoder', type: 'CoreML', size: '1.18 GB', description: 'Apple Neural Engine encoder for Large V3. Pair with ggml-large-v3.bin.', downloaded: false, macosOnly: true },
+    { id: 'whisper-large-v3-turbo-coreml', name: 'Large V3 Turbo CoreML Encoder', type: 'CoreML', size: '1.17 GB', description: 'Apple Neural Engine encoder for Large V3 Turbo. Pair with ggml-large-v3-turbo.bin.', downloaded: false, macosOnly: true },
 ];

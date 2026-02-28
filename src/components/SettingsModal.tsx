@@ -21,6 +21,12 @@ interface SettingsModalProps {
     enableSpellCheck: boolean;
     setEnableSpellCheck: (val: boolean) => void;
     spellCheckStatus: string;
+
+    llmBackend: "gpu" | "cpu";
+    setLlmBackend: (val: "gpu" | "cpu") => void;
+
+    transcriptionStyle: string;
+    setTranscriptionStyle: (val: string) => void;
 }
 
 interface DownloadProgressPayload {
@@ -43,7 +49,11 @@ export function SettingsModal({
     llmStatus,
     enableSpellCheck,
     setEnableSpellCheck,
-    spellCheckStatus
+    spellCheckStatus,
+    transcriptionStyle,
+    setTranscriptionStyle,
+    llmBackend,
+    setLlmBackend
 }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<Tab>('downloads');
     const [models, setModels] = useState<DownloadableModel[]>(MODELS);
@@ -175,9 +185,6 @@ export function SettingsModal({
             case 'general':
                 return (
                     <GeneralTab
-                        enableGrammarLM={enableGrammarLM}
-                        setEnableGrammarLM={setEnableGrammarLM}
-                        llmStatus={llmStatus}
                         enableSpellCheck={enableSpellCheck}
                         setEnableSpellCheck={setEnableSpellCheck}
                         spellCheckStatus={spellCheckStatus}
@@ -219,16 +226,88 @@ export function SettingsModal({
                         <p style={{ color: '#94a3b8', marginBottom: '24px' }}>
                             Local Large Language Models used for post-processing text corrections.
                         </p>
-                        <div style={{ background: 'rgba(30, 41, 59, 0.4)', padding: '20px', borderRadius: '12px', border: '1px solid rgba(148, 163, 184, 0.1)' }}>
-                            <h4 style={{ marginTop: 0, marginBottom: '12px' }}>Prompt Customization</h4>
-                            <textarea
-                                style={{ width: '100%', background: '#020617', border: '1px solid rgba(148,163,184,0.2)', color: '#cbd5e1', borderRadius: '8px', padding: '12px', minHeight: '100px', fontFamily: 'monospace' }}
-                                defaultValue="You are a helpful assistant. Fix the grammar and punctuation of the user's text. Do not change the meaning."
-                            />
-                            <p style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '8px' }}>
-                                System prompt used when "Correct Grammar" is enabled.
+
+                        <div className="setting-card" style={{ background: 'rgba(30, 41, 59, 0.4)', padding: '20px', borderRadius: '12px', border: '1px solid rgba(148, 163, 184, 0.1)', marginBottom: '20px' }}>
+                            <div className="setting-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div className="status-dot" style={{
+                                        backgroundColor: !enableGrammarLM ? "#ef4444" : (llmStatus === "Loading..." ? "#f59e0b" : (llmStatus === "Loaded" ? "#22c55e" : "#ef4444"))
+                                    }} />
+                                    <h4 style={{ margin: 0 }}>Grammar Correction (LLM)</h4>
+                                </div>
+                                <label className={`switch ${llmStatus === "Loading..." ? "switch--disabled" : ""}`} title={llmStatus === "Loading..." ? "Loading… please wait" : undefined}>
+                                    <input
+                                        type="checkbox"
+                                        checked={enableGrammarLM}
+                                        onChange={(e) => setEnableGrammarLM(e.target.checked)}
+                                        disabled={llmStatus === "Loading..."}
+                                    />
+                                    <span className="slider round"></span>
+                                </label>
+                            </div>
+                            <p style={{ margin: 0, fontSize: '0.9rem', color: '#94a3b8' }}>
+                                Uses local Qwen 2.5 0.5B (GGUF) to format and clean up transcripts.
+                            </p>
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '12px' }}>
+                                <div className="status-badge" style={{ display: 'inline-block', padding: '6px 10px', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', fontSize: '0.8rem', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                    Status: <span style={{ fontWeight: 500, color: llmStatus === "Loaded" ? "#22c55e" : (llmStatus === "Loading..." ? "#f59e0b" : "#f43f5e") }}>{llmStatus}</span>
+                                </div>
+
+                                <select
+                                    value={llmBackend}
+                                    onChange={(e) => setLlmBackend(e.target.value as "gpu" | "cpu")}
+                                    disabled={llmStatus === "Loading..." || llmStatus === "Loaded"} // Force toggle off to change
+                                    title={llmStatus === "Loaded" ? "Turn off LLM to change backend" : "Select compute backend"}
+                                    style={{
+                                        background: 'rgba(255,255,255,0.05)',
+                                        border: '1px solid rgba(255,255,255,0.1)',
+                                        color: '#cbd5e1',
+                                        borderRadius: '6px',
+                                        fontSize: '0.8rem',
+                                        padding: '5px 8px',
+                                        cursor: (llmStatus === "Loaded" || llmStatus === "Loading...") ? 'not-allowed' : 'pointer',
+                                        opacity: (llmStatus === "Loaded" || llmStatus === "Loading...") ? 0.5 : 1,
+                                        outline: 'none'
+                                    }}
+                                >
+                                    <option value="gpu">Auto / GPU</option>
+                                    <option value="cpu">CPU Only</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="setting-card" style={{ background: 'rgba(30, 41, 59, 0.4)', padding: '20px', borderRadius: '12px', border: '1px solid rgba(148, 163, 184, 0.1)', marginBottom: '20px' }}>
+                            <div className="setting-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                <h4 style={{ margin: 0 }}>Transcription Style</h4>
+                            </div>
+                            <select
+                                value={transcriptionStyle}
+                                onChange={(e) => setTranscriptionStyle(e.target.value)}
+                                disabled={llmStatus !== "Loaded"}
+                                style={{
+                                    width: '100%',
+                                    padding: '10px',
+                                    borderRadius: '8px',
+                                    border: '1px solid rgba(148,163,184,0.2)',
+                                    background: '#0f172a',
+                                    color: '#e2e8f0',
+                                    cursor: llmStatus !== "Loaded" ? 'not-allowed' : 'pointer',
+                                    opacity: llmStatus !== "Loaded" ? 0.5 : 1
+                                }}
+                            >
+                                <option value="Auto">Auto (Default)</option>
+                                <option value="Casual">Casual</option>
+                                <option value="Verbatim">Verbatim</option>
+                                <option value="Enthusiastic">Enthusiastic</option>
+                                <option value="Software_Dev">Software Dev</option>
+                                <option value="Professional">Professional</option>
+                            </select>
+                            <p style={{ marginTop: '12px', fontSize: '0.9rem', color: '#94a3b8' }}>
+                                Controls the tone and formatting of the corrected text.
                             </p>
                         </div>
+
+
                     </div>
                 );
         }
