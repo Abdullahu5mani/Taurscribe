@@ -26,6 +26,7 @@
 17. [🏪 App State & Settings Persistence](#-app-state--settings-persistence)
 18. [🪝 Frontend Hook Architecture](#-frontend-hook-architecture)
 19. [🍎 CoreML Acceleration (Apple Silicon)](#-coreml-acceleration-apple-silicon)
+20. [⌨️ Customizable Global Hotkey](#️-customizable-global-hotkey)
 
 ---
 
@@ -3446,6 +3447,859 @@ The callout (`src/components/SetupWizard.tsx`):
 | `src/components/settings/DownloadsTab.tsx` | Platform detection via `get_platform`; macOS-only CoreML section |
 | `src/components/SetupWizard.tsx` | CoreML callout note in Engines step |
 | `src/components/SetupWizard.css` | Styles for `.engines-coreml-note` and `.engines-coreml-badge` |
+
+---
+
+---
+
+## ⌨️ Customizable Global Hotkey
+
+### Overview
+
+Taurscribe listens for a global keyboard shortcut to start and stop recording from any application — without the user switching windows. Originally hardcoded to `Ctrl+Win`, the hotkey is now fully user-configurable: up to 2 keys held simultaneously, chosen from modifiers and function keys, persisted across restarts.
+
+---
+
+### The Data Type: `HotkeyBinding`
+
+**`src-tauri/src/types.rs`**
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HotkeyBinding {
+    pub keys: Vec<String>,  // 1 or 2 key codes, e.g. ["ControlLeft", "MetaLeft"]
+}
+
+impl Default for HotkeyBinding {
+    fn default() -> Self {
+        HotkeyBinding { keys: vec!["ControlLeft".to_string(), "MetaLeft".to_string()] }
+    }
+}
+```
+
+Key codes use the same naming convention as the browser's `KeyboardEvent.code` property (`"ControlLeft"`, `"ShiftLeft"`, `"F9"`, etc.). This means the same string that the frontend captures from a `keydown` event is what Rust stores and matches against — no translation layer needed.
+
+---
+
+### Shared State: The Arc<Mutex<>> Bridge
+
+The hotkey binding lives in `AudioState` as a shared reference:
+
+**`src-tauri/src/state.rs`**
+
+```rust
+pub struct AudioState {
+    // ... other fields ...
+    pub hotkey_config: Arc<Mutex<HotkeyBinding>>,
+}
+```
+
+The key design decision is **sharing the same `Arc`** between two parties:
+
+1. The `set_hotkey` Tauri command (called by the frontend when the user saves a new hotkey)
+2. The background hotkey listener thread
+
+```
+Frontend saves new hotkey
+         │
+         ▼
+invoke("set_hotkey", { binding: { keys: ["ShiftLeft", "F9"] } })
+         │
+         ▼
+Rust: *state.hotkey_config.lock().unwrap() = new_binding;
+         │
+         ▼        (same Arc pointer, shared memory)
+         ▼
+Listener thread: config_c.lock().unwrap().clone()
+         │
+         ▼
+Immediately matches new combo on next keypress ✓
+```
+
+No thread restart, no channel message, no polling — the listener reads the current config on every single keystroke via the mutex.
+
+---
+
+### The Listener Thread
+
+**`src-tauri/src/hotkeys/listener.rs`**
+
+The listener is spawned once at app startup and runs for the entire app lifetime:
+
+```rust
+// lib.rs — setup closure
+let hotkey_config = app.state::<AudioState>().hotkey_config.clone(); // clone the Arc
+let app_handle = app.handle().clone();
+std::thread::spawn(move || {
+    hotkeys::start_hotkey_listener(app_handle, hotkey_config);
+});
+```
+
+Inside the listener, `rdev::listen()` calls a callback for every OS-level keyboard event. The callback:
+
+1. **Clones the current config** from the mutex at the top of each event (cheap — just a Vec of 1–2 strings)
+2. **Maps the rdev `Key` enum to a code string** via `key_to_code()`
+3. **Tracks which configured keys are currently held** in a `Vec<String>`
+4. **Fires start** when all configured keys are simultaneously held
+5. **Fires stop** when any configured key is released while recording is active
+
+```rust
+let callback = move |event: Event| {
+    let config = config_c.lock().unwrap().clone(); // read current binding
+
+    match event.event_type {
+        EventType::KeyPress(key) => {
+            if let Some(code) = key_to_code(&key) {
+                let mut held = held_keys_c.lock().unwrap();
+                if config.keys.contains(&code.to_string()) && !held.contains(&code.to_string()) {
+                    held.push(code.to_string());
+                }
+                // All required keys held? → start recording
+                let all_held = config.keys.iter().all(|k| held.contains(k));
+                if all_held && !config.keys.is_empty() && !recording_active_c.load(...) {
+                    recording_active_c.store(true, ...);
+                    let _ = app_c.emit("hotkey-start-recording", ());
+                }
+            }
+        }
+        EventType::KeyRelease(key) => {
+            if let Some(code) = key_to_code(&key) {
+                held_keys_c.lock().unwrap().retain(|k| k != code);
+                // A configured key released while recording? → stop
+                if recording_active_c.load(...) && config.keys.contains(&code.to_string()) {
+                    recording_active_c.store(false, ...);
+                    let _ = app_c.emit("hotkey-stop-recording", ());
+                }
+            }
+        }
+        _ => {}
+    }
+};
+```
+
+#### Key → code mapping
+
+`rdev`'s `Key` enum uses variants like `Key::ControlLeft`, `Key::F9`, etc. These are mapped to strings by `key_to_code()`:
+
+```rust
+fn key_to_code(key: &Key) -> Option<&'static str> {
+    match key {
+        Key::ControlLeft  => Some("ControlLeft"),
+        Key::MetaLeft     => Some("MetaLeft"),    // Windows key / Cmd
+        Key::ShiftLeft    => Some("ShiftLeft"),
+        Key::Alt          => Some("AltLeft"),
+        Key::F9           => Some("F9"),
+        // ... F1–F12, CapsLock, Escape, Tab, all modifier variants
+        _ => None,  // unmapped keys are silently ignored
+    }
+}
+```
+
+Keys that return `None` (letter keys, number keys, etc.) are completely ignored by the hotkey system — they pass through to the active application untouched.
+
+---
+
+### The `set_hotkey` and `get_hotkey` Commands
+
+**`src-tauri/src/commands/settings.rs`**
+
+```rust
+#[tauri::command]
+pub fn get_hotkey(state: State<AudioState>) -> HotkeyBinding {
+    state.hotkey_config.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn set_hotkey(state: State<AudioState>, binding: HotkeyBinding) -> Result<(), String> {
+    *state.hotkey_config.lock().unwrap() = binding;
+    Ok(())
+}
+```
+
+`set_hotkey` writes through the `Arc` to the same memory the listener thread reads. The change is atomic from the listener's perspective — it either sees the old binding or the new one, never a partial write.
+
+---
+
+### Persistence: The Store
+
+The binding is saved to `settings.json` via `@tauri-apps/plugin-store` so it survives app restarts.
+
+**On save (frontend `GeneralTab.tsx`):**
+```ts
+await invoke('set_hotkey', { binding });          // update listener immediately
+const store = await Store.load('settings.json');
+await store.set('hotkey_binding', binding);       // persist to disk
+await store.save();
+```
+
+**On startup (frontend `App.tsx`):**
+```ts
+const savedHotkey = await loadedStore.get<{ keys: string[] }>('hotkey_binding');
+if (savedHotkey?.keys?.length) {
+    invoke('set_hotkey', { binding: savedHotkey }).catch(() => {});
+}
+```
+
+This runs inside the main startup `useEffect`, right after the store is loaded. The listener starts with the default `Ctrl+Win` binding and is updated to the saved binding within milliseconds of app launch — before the user could realistically trigger a recording.
+
+---
+
+### The Frontend Hotkey Recorder
+
+The UI lives in **`src/components/settings/GeneralTab.tsx`** inside the Settings modal → General tab.
+
+**States:**
+- `currentBinding` — the active binding, shown as key chips
+- `recording` — whether capture mode is active
+- `heldKeys` — keys currently pressed (live feedback)
+- `pendingKeys` — the last confirmed combo (persists after release, used for Save)
+
+**Capture flow:**
+
+```
+User clicks "Change"
+        │
+        ▼
+recording = true
+Window-level keydown/keyup listeners attached (capture phase)
+        │
+        ▼
+User presses e.g. Shift + F9
+  keydown "ShiftLeft" → heldKeys = ["ShiftLeft"], pendingKeys = ["ShiftLeft"]
+  keydown "F9"        → heldKeys = ["ShiftLeft","F9"], pendingKeys = ["ShiftLeft","F9"]
+        │
+        ▼
+UI shows: [Shift] [F9]   with a Save button (enabled)
+        │
+        ▼
+User releases keys
+  keyup → heldKeys clears, but pendingKeys stays ["ShiftLeft","F9"]
+        │
+        ▼
+User clicks Save
+  invoke("set_hotkey", { binding: { keys: ["ShiftLeft","F9"] } })
+  store.set("hotkey_binding", ...) + store.save()
+  currentBinding updated, recording mode exits, "Saved ✓" flashes
+```
+
+**Why capture phase (`true` as third argument to `addEventListener`)?**
+
+Using the capture phase intercepts events before they reach the modal's own inputs and buttons. This prevents keys like `Tab`, `Escape`, or `F11` from triggering browser/Tauri default behaviors while the user is recording a hotkey.
+
+```ts
+window.addEventListener('keydown', onKeyDown, true);  // capture = true
+window.addEventListener('keyup',   onKeyUp,   true);
+```
+
+**Key limits:**
+- Maximum 2 keys (enforced in `onKeyDown` with `if (heldRef.current.length >= 2) return`)
+- Only keys in `ALLOWED_KEYS` are accepted (the same set that `key_to_code()` handles in Rust)
+- Regular letter/number keys are silently ignored, preventing accidental bindings that would interfere with typing
+
+---
+
+### Complete Data Flow: From UI to Listener
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      SETTINGS MODAL                             │
+│  GeneralTab: User holds [Ctrl] + [F9], clicks Save             │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │ invoke("set_hotkey", { keys: [...] })
+                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    RUST COMMAND LAYER                           │
+│  set_hotkey() → *state.hotkey_config.lock() = new_binding      │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │ Arc<Mutex<HotkeyBinding>> (shared pointer)
+                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   LISTENER THREAD (rdev)                        │
+│  Every keypress: config = hotkey_config.lock().clone()          │
+│  Checks if all config.keys are held                             │
+│  Emits "hotkey-start-recording" / "hotkey-stop-recording"       │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │ Tauri event
+                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    FRONTEND (App.tsx)                           │
+│  listen("hotkey-start-recording") → handleStartRecording()      │
+│  listen("hotkey-stop-recording")  → handleStopRecording()       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Summary of Files Changed
+
+| File | Change |
+|------|--------|
+| `src-tauri/src/types.rs` | Added `HotkeyBinding` struct with `Default` impl (Ctrl+Win) |
+| `src-tauri/src/state.rs` | Added `hotkey_config: Arc<Mutex<HotkeyBinding>>` to `AudioState` |
+| `src-tauri/src/hotkeys/listener.rs` | Full rewrite: accepts shared Arc, dynamic key matching via `key_to_code()`, tracks held keys |
+| `src-tauri/src/commands/settings.rs` | Added `get_hotkey` and `set_hotkey` Tauri commands |
+| `src-tauri/src/lib.rs` | Clones `hotkey_config` Arc and passes it to the listener; registers new commands |
+| `src/App.tsx` | Loads saved binding from store on startup and calls `set_hotkey` |
+| `src/components/settings/GeneralTab.tsx` | Hotkey recorder UI with capture-phase event listeners, chip display, Save/Cancel |
+
+---
+
+## Section 21: UI Sound Effects
+
+Taurscribe plays short audio cues to give the user tactile feedback without needing to watch the screen. Three WAV files live in `src/assets/sounds/` and are bundled by Vite at build time.
+
+| File | When it plays |
+|---|---|
+| `recStart.wav` | Recording starts successfully |
+| `paste.wav` | Transcription completes and `type_text` is called |
+| `error.wav` | Start failure, recording too short (<1.5 s), or stop/processing error |
+
+---
+
+### `src/hooks/useSounds.ts`
+
+A custom React hook that owns the audio pipeline end-to-end.
+
+**Asset loading**
+
+Vite treats static imports of media files (`.wav`, `.mp3`, …) as URL strings:
+
+```ts
+import recStartUrl from '../assets/sounds/recStart.wav';
+```
+
+`recStartUrl` is a hashed asset URL like `/assets/recStart-abc123.wav`. Three `HTMLAudioElement` objects are created once in a `useEffect` on mount and stored in refs so they are never recreated on re-render.
+
+**Volume and mute**
+
+Both values live in React state (for the UI) *and* in `useRef` (so async callbacks always read the current value without stale closures):
+
+```ts
+const volumeRef = useRef(0.7);
+const mutedRef  = useRef(false);
+```
+
+When `setVolume` or `setMuted` is called it updates both the ref and the state simultaneously, then persists to `settings.json` via `@tauri-apps/plugin-store`.
+
+**Play function**
+
+```ts
+const play = (audio: HTMLAudioElement | null) => {
+    if (!audio || mutedRef.current) return;
+    audio.currentTime = 0;   // rewind so rapid triggers work
+    audio.volume = volumeRef.current;
+    audio.play().catch(() => {});   // ignore autoplay policy rejections
+};
+```
+
+Resetting `currentTime` before play means that if the user starts recording quickly twice in a row the sound still fires each time.
+
+**Persistence**
+
+On mount the hook reads `sound_volume` and `sound_muted` from `settings.json`. On every change it writes back:
+
+```ts
+Store.load('settings.json').then(store => {
+    store.set('sound_volume', v);
+    store.save();
+});
+```
+
+---
+
+### Integration with `useRecording`
+
+`useSounds` is instantiated in `App.tsx` and three callbacks (`playStart`, `playPaste`, `playError`) are passed into `useRecording` as optional props:
+
+```ts
+const { playStart, playPaste, playError, ... } = useSounds();
+
+useRecording({ ..., playStart, playPaste, playError });
+```
+
+Inside `useRecording`:
+
+| Trigger point | Sound |
+|---|---|
+| After `invoke("start_recording")` succeeds | `playStart()` |
+| After `invoke("type_text", ...)` succeeds | `playPaste()` |
+| Recording start throws | `playError()` |
+| Duration < `MIN_RECORDING_MS` (1500 ms) | `playError()` |
+| `stop_recording` processing throws | `playError()` |
+
+The props are optional (`playStart?: () => void`) so the hook can be used without sounds if needed.
+
+**Recording session timeline — when each sound fires:**
+
+```
+ User presses hotkey / REC button
+          │
+          ▼
+ ┌─────────────────────────────────────────────────────────────────────────────────┐
+ │                         handleStartRecording()                                  │
+ │                                                                                 │
+ │  Engine ready? ──No──▶ show error status ──────────────────────▶ 🔴 error.wav  │
+ │       │                                                                         │
+ │      Yes                                                                        │
+ │       │                                                                         │
+ │  invoke("start_recording") ──Err──▶ show error status ─────────▶ 🔴 error.wav  │
+ │       │                                                                         │
+ │      Ok                                                                         │
+ │       │                                                                         │
+ │       └──────────────────────────────────────────────────────── 🟢 recStart.wav│
+ └─────────────────────────────────────────────────────────────────────────────────┘
+          │
+          │  (mic is live — audio flowing to threads)
+          │
+ User releases hotkey / presses STOP
+          │
+          ▼
+ ┌─────────────────────────────────────────────────────────────────────────────────┐
+ │                         handleStopRecording()                                   │
+ │                                                                                 │
+ │  Duration < 1500 ms? ──Yes──▶ "Recording too short" ──────────▶ 🔴 error.wav  │
+ │       │                                                                         │
+ │      No                                                                         │
+ │       │                                                                         │
+ │  invoke("stop_recording") + spell check + grammar LLM                          │
+ │       │                                                                         │
+ │  invoke("type_text", finalTranscript)                                           │
+ │       │                    │                                                    │
+ │      Ok ───────────────────┘ ──────────────────────────────── 🟡 paste.wav     │
+ │      Err ──────────────────────────────────────────────────── 🔴 error.wav     │
+ └─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Hook Wiring Diagram
+
+```
+                          App.tsx
+                             │
+              ┌──────────────┴──────────────────────┐
+              │                                     │
+        useSounds()                         useRecording(...)
+              │                                     │
+     ┌────────┴────────┐                   receives as props:
+     │                 │                   ┌─────────────────┐
+  volume            playStart ────────────▶│   playStart?    │
+  muted             playPaste ────────────▶│   playPaste?    │
+  setVolume         playError ────────────▶│   playError?    │
+  setMuted                                 └────────┬────────┘
+     │                                              │
+     │                                     called at runtime
+     ▼                                              │
+SettingsModal                              start_recording OK → playStart()
+     │                                     type_text OK       → playPaste()
+  GeneralTab                               any error          → playError()
+     │
+  [ Sound Effects card ]
+    mute button  → setMuted()
+    volume slider → setVolume()
+         │
+         ▼
+   volumeRef / mutedRef (updated immediately)
+         │
+         ▼
+   settings.json  ← persisted on every change
+```
+
+---
+
+### Settings UI
+
+The sound controls live in `GeneralTab.tsx` as a new card above the hotkey section.
+
+**Mute toggle button** — a styled `<button>` that calls `setSoundMuted(!soundMuted)`. It renders green "On" or red "Muted" with inline speaker SVG icons.
+
+**Volume slider** — a native `<input type="range" min={0} max={1} step={0.01}>`. It is `disabled` and dimmed (`opacity: 0.4`) when muted. A percentage label (`Math.round(soundVolume * 100)%`) updates live.
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  Sound Effects                                      [ 🔊 On      ] │
+│  Plays audio feedback on recording start, paste, and error         │
+│                                                                    │
+│  🔈  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●━━━━━━━━  🔊   70%       │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Sound Effects                                      [ 🔇 Muted   ] │
+│  Plays audio feedback on recording start, paste, and error         │
+│                                                                    │
+│  🔈  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  🔊   70%  (dim) │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Complete Data Flow
+
+```
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │                           App.tsx                                   │
+ │                                                                     │
+ │  useSounds() ────────────────────────────────────────────────────┐  │
+ │    │ returns: playStart, playPaste, playError, volume, muted     │  │
+ │    │                                                              │  │
+ │    ├──▶ useRecording({                                            │  │
+ │    │       ...otherProps,                                         │  │
+ │    │       playStart,   ◀─── called after start_recording OK     │  │
+ │    │       playPaste,   ◀─── called after type_text OK           │  │
+ │    │       playError,   ◀─── called on any failure               │  │
+ │    │    })                                                        │  │
+ │    │                                                              │  │
+ │    └──▶ <SettingsModal                                            │  │
+ │              soundVolume={volume}   ─────────────────────────────┘  │
+ │              soundMuted={muted}                                      │
+ │              setSoundVolume={setVolume}                              │
+ │              setSoundMuted={setMuted}                                │
+ │          />                                                          │
+ └───────────────────────────┬─────────────────────────────────────────┘
+                             │
+                   ┌─────────▼─────────┐
+                   │   SettingsModal   │
+                   └─────────┬─────────┘
+                             │
+                   ┌─────────▼─────────┐
+                   │    GeneralTab     │
+                   │                   │
+                   │  volume slider ───┼──▶ setSoundVolume(v)
+                   │  mute button  ───┼──▶ setSoundMuted(!m)
+                   └───────────────────┘
+                                           │
+                             ┌─────────────┴──────────────┐
+                             ▼                            ▼
+                      volumeRef.current          settings.json
+                      mutedRef.current           "sound_volume": v
+                       (immediate)               "sound_muted": m
+                                                  (persisted)
+```
+
+---
+
+### Summary of Files Changed
+
+| File | Change |
+|---|---|
+| `src/assets/sounds/recStart.wav` | Plays on recording start |
+| `src/assets/sounds/paste.wav` | Plays on successful paste |
+| `src/assets/sounds/error.wav` | Plays on error or too-short recording |
+| `src/hooks/useSounds.ts` | New hook: audio loading, volume/mute state, persistence |
+| `src/hooks/useRecording.ts` | Added `playStart?`, `playPaste?`, `playError?` params; calls at trigger points |
+| `src/App.tsx` | Instantiates `useSounds`, passes callbacks to `useRecording` and props to `SettingsModal` |
+| `src/components/SettingsModal.tsx` | Added sound props; forwards to `GeneralTab` |
+| `src/components/settings/GeneralTab.tsx` | New Sound Effects card: mute button + volume slider |
+
+---
+
+## Section 22: Microphone Selection
+
+By default Taurscribe records from whatever the OS considers the system default microphone. This section adds a persistent **Input Device** preference so users can pin a specific mic — a USB headset, a virtual audio cable, or a dedicated audio interface — without changing the OS default.
+
+---
+
+### State (`src-tauri/src/state.rs`)
+
+A single new field is added to `AudioState`:
+
+```rust
+pub selected_input_device: Mutex<Option<String>>,
+```
+
+- `None` — use the cpal system default (backward-compatible default)
+- `Some("Elgato Wave:3")` — open that specific device by name
+
+The value is a plain `String` because cpal identifies devices by their display name (e.g. `"Microphone (USB Audio Device)"`), which is what the OS exposes.
+
+---
+
+### Platform Audio Backend Diagram
+
+`cpal::default_host()` picks the right OS audio API automatically:
+
+```
+ ┌──────────────────────────────────────────────────────────────────┐
+ │                       cpal::default_host()                       │
+ └───────────────────────────┬──────────────────────────────────────┘
+                             │
+          ┌──────────────────┼──────────────────┐
+          │                  │                  │
+          ▼                  ▼                  ▼
+   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+   │   Windows   │   │   macOS     │   │   Linux     │
+   │             │   │             │   │             │
+   │   WASAPI    │   │  CoreAudio  │   │    ALSA     │
+   └──────┬──────┘   └──────┬──────┘   └──────┬──────┘
+          │                  │                  │
+          └──────────────────┼──────────────────┘
+                             │
+                    ┌────────▼────────┐
+                    │ host.input_     │
+                    │ devices()       │
+                    │ (lazy iterator) │
+                    └────────┬────────┘
+                             │
+                    .filter_map(|d| d.name().ok())
+                    (silently skips unreadable devices)
+                             │
+                    ┌────────▼────────┐
+                    │  Vec<String>    │
+                    │ ["Mic A",       │
+                    │  "Mic B", ...]  │
+                    └─────────────────┘
+```
+
+---
+
+### Rust Commands
+
+#### `list_input_devices` (`commands/misc.rs`)
+
+Enumerates every device the system exposes as a recording source:
+
+```rust
+#[tauri::command]
+pub fn list_input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    host.input_devices()
+        .map(|devices| devices.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default()
+}
+```
+
+`cpal::default_host()` returns the platform's primary audio backend (WASAPI on Windows, CoreAudio on macOS, ALSA on Linux). `input_devices()` is a lazy iterator; `.filter_map(|d| d.name().ok())` silently skips any device whose name can't be read (some virtual devices behave this way).
+
+#### `get_input_device` / `set_input_device` (`commands/settings.rs`)
+
+```rust
+#[tauri::command]
+pub fn get_input_device(state: State<AudioState>) -> Option<String> {
+    state.selected_input_device.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn set_input_device(state: State<AudioState>, name: Option<String>) {
+    *state.selected_input_device.lock().unwrap() = name;
+}
+```
+
+Passing `None` from the frontend (JavaScript `null`) reverts to the system default. This is safe to call at any time, even while recording — the new value takes effect on the *next* `start_recording` call.
+
+---
+
+### Device Resolution in `start_recording` (`commands/recording.rs`)
+
+The original code always called `host.default_input_device()`. It now checks the preference first:
+
+```rust
+let preferred = state.selected_input_device.lock().unwrap().clone();
+
+let device = if let Some(ref name) = preferred {
+    // Walk the iterator until we find a device whose name matches exactly.
+    host.input_devices()
+        .map_err(|e| e.to_string())?
+        .find(|d| d.name().ok().as_deref() == Some(name))
+        .ok_or_else(|| format!("Input device '{}' not found", name))?
+} else {
+    host.default_input_device().ok_or("No input device")?
+};
+```
+
+**Device resolution flowchart:**
+
+```
+ start_recording() called
+          │
+          ▼
+ ┌─────────────────────────────────┐
+ │  selected_input_device.lock()   │
+ │  read preference from state     │
+ └────────────────┬────────────────┘
+                  │
+         ┌────────┴────────┐
+         │                 │
+      Some(name)          None
+         │                 │
+         ▼                 ▼
+ ┌───────────────┐  ┌──────────────────────┐
+ │ host.input_   │  │ host.default_input_  │
+ │ devices()     │  │ device()             │
+ │ .find(name)   │  └──────────┬───────────┘
+ └───────┬───────┘             │
+         │                     │
+    ┌────┴────┐           ┌────┴────┐
+   Found   Missing       Found   None
+    │         │            │        │
+    ▼         ▼            ▼        ▼
+  open     Err(         open     Err(
+ stream   "device        stream   "No input
+          not found")             device")
+          │
+          ▼
+   shown in header
+   status bar — user
+   fixes in Settings
+```
+
+**Why fail hard if the device is missing?** If we silently fell back to the default, users would record with the wrong mic without knowing. An explicit error is shown in the header status bar ("Error: Input device 'X' not found") and the user can fix it in Settings.
+
+---
+
+### Frontend: `AudioTab` (`src/components/settings/AudioTab.tsx`)
+
+A self-contained component that owns the device-selection UI. It manages its own state rather than lifting it to `App.tsx`, because no other part of the app needs to know which mic is selected at runtime.
+
+**Component state machine:**
+
+```
+ ┌─────────────────────────────────────────────────────────────────┐
+ │                        AudioTab                                 │
+ │                                                                 │
+ │  State: devices[], selected, saved, loading                     │
+ └──────────────────────┬──────────────────────────────────────────┘
+                        │
+                        │ useEffect (mount)
+                        │
+          ┌─────────────┴─────────────┐
+          │                           │
+          ▼                           ▼
+  invoke("list_input_         Store.load("settings.json")
+   devices")                  .get("input_device")
+          │                           │
+          ▼                           ▼
+  setDevices([...])          savedDevice found?
+  loading = false                     │
+                              ┌───────┴───────┐
+                              │               │
+                             Yes              No
+                              │               │
+                              ▼               ▼
+                       setSelected(name)  setSelected("")
+                       invoke("set_       (= system default)
+                        input_device",
+                        { name })
+
+
+ ─────────────────────────────────────────────────────
+
+                   User changes <select>
+                        │
+                        ▼
+               handleChange(value)
+                        │
+           ┌────────────┴────────────┐
+           │                         │
+    value = ""                value = "Mic B"
+    (System Default)                 │
+           │                         │
+           ▼                         ▼
+  invoke("set_input_device",  invoke("set_input_device",
+   { name: null })             { name: "Mic B" })
+           │                         │
+  store.delete(                store.set(
+   "input_device")              "input_device", "Mic B")
+           │                         │
+           └────────────┬────────────┘
+                        │
+                  store.save()
+                        │
+                  saved = true
+                  (flashes "Saved ✓")
+                        │
+                setTimeout(2000)
+                        │
+                  saved = false
+```
+
+Passing an empty string from the `<select>` maps to `null` in Rust (`value || null`) which sets `selected_input_device` back to `None`.
+
+---
+
+### App Startup Restore (`src/App.tsx`)
+
+During initial data load, the saved preference is pushed to the backend before the first recording is possible:
+
+```ts
+const savedDevice = await loadedStore.get<string>("input_device");
+if (savedDevice && !cancelled) {
+    invoke("set_input_device", { name: savedDevice }).catch(() => {});
+}
+```
+
+This ensures the preference is live even before the user opens Settings.
+
+---
+
+### Complete Data Flow
+
+```
+ ┌─────────────────────────────────────────────────────────────────────────┐
+ │  FRONTEND                          RUST BACKEND                        │
+ │                                                                         │
+ │  ① Settings opened                                                      │
+ │                                                                         │
+ │  AudioTab mounts                                                         │
+ │    invoke("list_input_devices") ──────────────▶ cpal enumerates OS mics │
+ │                                 ◀────────────── ["Mic A","Mic B","Mic C"]│
+ │    <select> populated ✓                                                 │
+ │                                                                         │
+ │    Store.get("input_device")                                             │
+ │      → "Mic B" (from last session)                                      │
+ │    setSelected("Mic B")                                                  │
+ │    invoke("set_input_device",   ──────────────▶ selected_input_device   │
+ │      { name: "Mic B" })                          = Some("Mic B")        │
+ │                                                                         │
+ │ ─────────────────────────────────────────────────────────────────────── │
+ │                                                                         │
+ │  ② User picks "Mic C"                                                   │
+ │                                                                         │
+ │    invoke("set_input_device",   ──────────────▶ selected_input_device   │
+ │      { name: "Mic C" })                          = Some("Mic C")        │
+ │    Store.set("input_device","Mic C")                                    │
+ │    "Saved ✓" flashes                                                    │
+ │                                                                         │
+ │ ─────────────────────────────────────────────────────────────────────── │
+ │                                                                         │
+ │  ③ App cold-starts next session                                         │
+ │                                                                         │
+ │  App.tsx loadInitialData()                                               │
+ │    Store.get("input_device") → "Mic C"                                  │
+ │    invoke("set_input_device",   ──────────────▶ selected_input_device   │
+ │      { name: "Mic C" })                          = Some("Mic C")        │
+ │                                    (ready before first recording)       │
+ │                                                                         │
+ │ ─────────────────────────────────────────────────────────────────────── │
+ │                                                                         │
+ │  ④ User records                                                         │
+ │                                                                         │
+ │    invoke("start_recording")    ──────────────▶ read selected_input_    │
+ │                                                  device → Some("Mic C") │
+ │                                                                         │
+ │                                                  cpal: search devices   │
+ │                                                  "Mic C" found? ─Yes──▶ │
+ │                                                    open stream, record  │
+ │                                                             └──No──▶   │
+ │                                                    Err("device not      │
+ │                                 ◀────────────────   found") → show in  │
+ │    header: "Error: …not found"                      status bar         │
+ └─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Summary of Files Changed
+
+| File | Change |
+|---|---|
+| `src-tauri/src/state.rs` | Added `selected_input_device: Mutex<Option<String>>`, initialised to `None` |
+| `src-tauri/src/commands/misc.rs` | New `list_input_devices()` — cpal enumeration |
+| `src-tauri/src/commands/settings.rs` | New `get_input_device()` / `set_input_device()` |
+| `src-tauri/src/commands/recording.rs` | `start_recording()` resolves preferred device before opening stream |
+| `src-tauri/src/lib.rs` | Registered three new commands |
+| `src/components/settings/AudioTab.tsx` | New component: device list + selector + persistence |
+| `src/components/SettingsModal.tsx` | Audio tab now renders `<AudioTab />` instead of placeholder |
+| `src/App.tsx` | Restores `input_device` from store on startup |
 
 ---
 

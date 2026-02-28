@@ -1,5 +1,15 @@
+use cpal::traits::{DeviceTrait, HostTrait};
 use serde::Serialize;
 use sysinfo::System;
+
+/// Returns the names of all available audio input devices on this machine.
+#[tauri::command]
+pub fn list_input_devices() -> Vec<String> {
+    let host = cpal::default_host();
+    host.input_devices()
+        .map(|devices| devices.filter_map(|d| d.name().ok()).collect())
+        .unwrap_or_default()
+}
 
 // Simple test command to see if Rust is working
 #[tauri::command]
