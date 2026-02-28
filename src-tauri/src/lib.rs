@@ -17,6 +17,7 @@ mod whisper;
 // Imports
 use parakeet::ParakeetManager;
 use state::AudioState;
+use tauri::Manager;
 use vad::VADManager;
 use whisper::WhisperManager;
 
@@ -75,12 +76,14 @@ pub fn run() {
             tray::setup_tray(app)?;
 
             // Start Hotkey Listener in Background Thread
+            // Clone the hotkey_config Arc so the listener reacts to config changes immediately.
+            let hotkey_config = app.state::<AudioState>().hotkey_config.clone();
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
-                hotkeys::start_hotkey_listener(app_handle);
+                hotkeys::start_hotkey_listener(app_handle, hotkey_config);
             });
 
-            println!("[INFO] Global hotkey listener started (Ctrl+Win to record)");
+            println!("[INFO] Global hotkey listener started (configurable hotkey)");
 
             // Start File Watcher for Models Directory
             let watcher_handle = app.handle().clone();
@@ -126,7 +129,12 @@ pub fn run() {
             commands::get_download_status,
             commands::delete_model,
             commands::verify_model_hash,
-            commands::get_platform
+            commands::get_platform,
+            commands::get_hotkey,
+            commands::set_hotkey,
+            commands::list_input_devices,
+            commands::get_input_device,
+            commands::set_input_device
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
