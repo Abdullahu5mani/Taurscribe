@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { GeneralTab } from './settings/GeneralTab';
 import { DownloadsTab } from './settings/DownloadsTab';
+import { AudioTab } from './settings/AudioTab';
 import { MODELS } from './settings/types';
 import type { DownloadableModel, DownloadProgress } from './settings/types';
 
@@ -27,6 +28,11 @@ interface SettingsModalProps {
 
     transcriptionStyle: string;
     setTranscriptionStyle: (val: string) => void;
+
+    soundVolume: number;
+    soundMuted: boolean;
+    setSoundVolume: (v: number) => void;
+    setSoundMuted: (m: boolean) => void;
 }
 
 interface DownloadProgressPayload {
@@ -53,7 +59,11 @@ export function SettingsModal({
     transcriptionStyle,
     setTranscriptionStyle,
     llmBackend,
-    setLlmBackend
+    setLlmBackend,
+    soundVolume,
+    soundMuted,
+    setSoundVolume,
+    setSoundMuted,
 }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<Tab>('downloads');
     const [models, setModels] = useState<DownloadableModel[]>(MODELS);
@@ -188,6 +198,10 @@ export function SettingsModal({
                         enableSpellCheck={enableSpellCheck}
                         setEnableSpellCheck={setEnableSpellCheck}
                         spellCheckStatus={spellCheckStatus}
+                        soundVolume={soundVolume}
+                        soundMuted={soundMuted}
+                        setSoundVolume={setSoundVolume}
+                        setSoundMuted={setSoundMuted}
                     />
                 );
             case 'downloads':
@@ -201,12 +215,7 @@ export function SettingsModal({
                     />
                 );
             case 'audio':
-                return (
-                    <div className="audio-settings">
-                        <h3 className="settings-section-title">Audio & Microphone</h3>
-                        <p style={{ color: '#64748b' }}>Device selection coming soon...</p>
-                    </div>
-                );
+                return <AudioTab />;
             case 'vad':
                 return (
                     <div className="vad-settings">

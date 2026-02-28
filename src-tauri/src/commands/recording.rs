@@ -13,7 +13,16 @@ use crate::utils::{clean_transcript, get_recordings_dir};
 pub fn start_recording(app_handle: AppHandle, state: State<AudioState>) -> Result<String, String> {
     // 1. Setup Microphone
     let host = cpal::default_host();
-    let device = host.default_input_device().ok_or("No input device")?;
+    let preferred = state.selected_input_device.lock().unwrap().clone();
+    let device = if let Some(ref name) = preferred {
+        host.input_devices()
+            .map_err(|e| e.to_string())?
+            .find(|d| d.name().ok().as_deref() == Some(name))
+            .ok_or_else(|| format!("Input device '{}' not found", name))?
+    } else {
+        host.default_input_device().ok_or("No input device")?
+    };
+    println!("[INFO] Using input device: {}", device.name().unwrap_or_default());
     let config: cpal::StreamConfig = device
         .default_input_config()
         .map_err(|e| e.to_string())?
@@ -312,8 +321,8 @@ fn clipboard_paste(text: &str) {
         return;
     }
 
-    // Give the clipboard time to propagate before simulating the keystroke
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // arboard's set_text is synchronous; a short yield lets the OS finalise the write
+    std::thread::sleep(std::time::Duration::from_millis(10));
 
     let mut enigo = match Enigo::new(&Settings::default()) {
         Ok(e) => e,
@@ -333,8 +342,8 @@ fn clipboard_paste(text: &str) {
         let _ = enigo.key(Key::Control, Direction::Release);
     }
 
-    // Wait for the paste to land before restoring the clipboard
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Wait for the target app to read the clipboard before we restore it
+    std::thread::sleep(std::time::Duration::from_millis(150));
     if let Some(prev) = previous {
         let _ = clipboard.set_text(prev);
     }
@@ -348,9 +357,11 @@ fn ax_insert(text: &str) -> bool {
     use accessibility_sys::{
         AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
         AXUIElementSetAttributeValue, kAXErrorSuccess,
-        kAXFocusedUIElementAttribute, kAXSelectedTextAttribute,
     };
-    use core_foundation::{base::{CFTypeRef, TCFType}, string::CFString};
+    use core_foundation::{
+        base::{CFRelease, CFTypeRef, TCFType},
+        string::CFString,
+    };
 
     unsafe {
         let system = AXUIElementCreateSystemWide();
@@ -358,28 +369,30 @@ fn ax_insert(text: &str) -> bool {
             return false;
         }
 
+        let cf_focused_attr = CFString::new("AXFocusedUIElement");
         let mut focused: CFTypeRef = std::ptr::null();
         let err = AXUIElementCopyAttributeValue(
             system,
-            kAXFocusedUIElementAttribute,
+            cf_focused_attr.as_CFTypeRef() as *const _,
             &mut focused,
         );
 
         // Release the system-wide element — we no longer need it
-        core_foundation_sys::base::CFRelease(system as CFTypeRef);
+        CFRelease(system as CFTypeRef);
 
         if err != kAXErrorSuccess || focused.is_null() {
             return false;
         }
 
         let cf_text = CFString::new(text);
+        let cf_selected_attr = CFString::new("AXSelectedText");
         let err = AXUIElementSetAttributeValue(
             focused as *mut std::ffi::c_void as accessibility_sys::AXUIElementRef,
-            kAXSelectedTextAttribute,
+            cf_selected_attr.as_CFTypeRef() as *const _,
             cf_text.as_CFTypeRef(),
         );
 
-        core_foundation_sys::base::CFRelease(focused);
+        CFRelease(focused);
 
         err == kAXErrorSuccess
     }

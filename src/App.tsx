@@ -11,6 +11,7 @@ import { useModels } from "./hooks/useModels";
 import { usePostProcessing } from "./hooks/usePostProcessing";
 import { useEngineSwitch } from "./hooks/useEngineSwitch";
 import { useRecording } from "./hooks/useRecording";
+import { useSounds } from "./hooks/useSounds";
 import "./components/TitleBar.css";
 import "./App.css";
 
@@ -140,6 +141,8 @@ function App() {
     storeRef, setHeaderStatus, setTrayState,
   });
 
+  const { volume, muted, setVolume, setMuted, playStart, playPaste, playError } = useSounds();
+
   const {
     isRecording, isRecordingRef, isProcessingTranscript, isCorrecting,
     liveTranscript, latestLatency,
@@ -148,6 +151,7 @@ function App() {
     activeEngineRef, models, parakeetModels, currentModel, currentParakeetModel,
     setCurrentModel, setLoadedEngine, enableGrammarLMRef, enableSpellCheckRef,
     transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
+    playStart, playPaste, playError,
   });
 
   // --- Copy reset animation ---
@@ -208,6 +212,18 @@ function App() {
 
           const setupComplete = await loadedStore.get<boolean>("setup_complete");
           if (!cancelled) setShowSetupWizard(setupComplete !== true);
+
+          // Restore saved hotkey binding so the listener uses the user's preference immediately.
+          const savedHotkey = await loadedStore.get<{ keys: string[] }>("hotkey_binding");
+          if (savedHotkey?.keys?.length && !cancelled) {
+            invoke("set_hotkey", { binding: savedHotkey }).catch(() => {});
+          }
+
+          // Restore saved input device preference.
+          const savedDevice = await loadedStore.get<string>("input_device");
+          if (savedDevice && !cancelled) {
+            invoke("set_input_device", { name: savedDevice }).catch(() => {});
+          }
 
           savedEngine = (await loadedStore.get<"whisper" | "parakeet">("active_engine")) || null;
           if (savedEngine) {
@@ -658,6 +674,10 @@ function App() {
           setTranscriptionStyle={setTranscriptionStyle}
           llmBackend={llmBackend}
           setLlmBackend={setLlmBackend}
+          soundVolume={volume}
+          soundMuted={muted}
+          setSoundVolume={setVolume}
+          setSoundMuted={setMuted}
         />
       </main>
     </>
