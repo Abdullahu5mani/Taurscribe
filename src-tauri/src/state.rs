@@ -1,7 +1,7 @@
 use crate::audio::RecordingHandle;
 use crate::parakeet::ParakeetManager;
 use crate::spellcheck::SpellChecker;
-use crate::types::{ASREngine, AppState};
+use crate::types::{ASREngine, AppState, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
 use std::sync::{Arc, Mutex};
@@ -39,6 +39,13 @@ pub struct AudioState {
 
     // SymSpell spell checker (optional, loaded on demand)
     pub spellcheck: Arc<Mutex<Option<SpellChecker>>>,
+
+    // The user-configured global hotkey binding (keyboard combo or mouse button).
+    // Shared with the hotkey listener thread so changes take effect immediately.
+    pub hotkey_config: Arc<Mutex<HotkeyBinding>>,
+
+    // The name of the preferred input device. None means use the system default.
+    pub selected_input_device: Mutex<Option<String>>,
 }
 
 impl AudioState {
@@ -54,6 +61,8 @@ impl AudioState {
             session_transcript: Arc::new(Mutex::new(String::new())),
             llm: Arc::new(Mutex::new(None)),
             spellcheck: Arc::new(Mutex::new(None)),
+            hotkey_config: Arc::new(Mutex::new(HotkeyBinding::default())),
+            selected_input_device: Mutex::new(None),
         }
     }
 }

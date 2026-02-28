@@ -17,6 +17,9 @@ interface UseRecordingParams {
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
     setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
     setIsSettingsOpen: (open: boolean) => void;
+    playStart?: () => void;
+    playPaste?: () => void;
+    playError?: () => void;
 }
 
 const MIN_RECORDING_MS = 1500;
@@ -39,6 +42,9 @@ export function useRecording({
     setHeaderStatus,
     setTrayState,
     setIsSettingsOpen,
+    playStart,
+    playPaste,
+    playError,
 }: UseRecordingParams) {
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessingTranscript, setIsProcessingTranscript] = useState(false);
@@ -103,9 +109,11 @@ export function useRecording({
             recordingStartTimeRef.current = Date.now();
             setIsRecording(true);
             isRecordingRef.current = true;
+            playStart?.();
         } catch (e) {
             console.error("Start recording failed:", e);
             setHeaderStatus("Error: " + e, 5000);
+            playError?.();
             await setTrayState("ready");
             setIsRecording(false);
             isRecordingRef.current = false;
@@ -129,6 +137,7 @@ export function useRecording({
             const recordingDurationMs = Date.now() - recordingStartTimeRef.current;
             if (recordingDurationMs < MIN_RECORDING_MS) {
                 setHeaderStatus("Recording too short — try at least 1.5 seconds", 5000);
+                playError?.();
                 setLiveTranscript("");
                 setIsProcessingTranscript(false);
                 await setTrayState("ready");
@@ -166,6 +175,7 @@ export function useRecording({
             setLiveTranscript(finalTrans);
 
             await invoke("type_text", { text: finalTrans });
+            playPaste?.();
 
             setIsProcessingTranscript(false);
             await setTrayState("ready");
@@ -174,6 +184,7 @@ export function useRecording({
             const errStr = String(e);
             if (!errStr.includes("Not recording")) {
                 setHeaderStatus("Error: " + e, 5000);
+                playError?.();
             }
             isRecordingRef.current = false;
             setIsCorrecting(false);
