@@ -181,6 +181,110 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             "01bf15bedffe9f39d65c1b6ff9b687ea91f59e0e",
         )),
 
+        // ── Whisper CoreML Encoders (macOS Apple Silicon) ─────────────────────
+        // These zip files extract to a .mlmodelc directory alongside the .bin.
+        // whisper.cpp automatically uses CoreML when the directory is present.
+        "whisper-tiny-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-tiny-encoder.mlmodelc",
+                remote_path: "ggml-tiny-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+        "whisper-tiny-en-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-tiny.en-encoder.mlmodelc",
+                remote_path: "ggml-tiny.en-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+        "whisper-base-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-base-encoder.mlmodelc",
+                remote_path: "ggml-base-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+        "whisper-base-en-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-base.en-encoder.mlmodelc",
+                remote_path: "ggml-base.en-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+        "whisper-small-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-small-encoder.mlmodelc",
+                remote_path: "ggml-small-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+        "whisper-small-en-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-small.en-encoder.mlmodelc",
+                remote_path: "ggml-small.en-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+        "whisper-medium-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-medium-encoder.mlmodelc",
+                remote_path: "ggml-medium-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+        "whisper-medium-en-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-medium.en-encoder.mlmodelc",
+                remote_path: "ggml-medium.en-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+        "whisper-large-v3-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-large-v3-encoder.mlmodelc",
+                remote_path: "ggml-large-v3-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+        "whisper-large-v3-turbo-coreml" => Some(ModelConfig {
+            repo: DEFAULT_HF_REPO,
+            branch: DEFAULT_HF_BRANCH,
+            files: vec![ModelFile {
+                filename: "ggml-large-v3-turbo-encoder.mlmodelc",
+                remote_path: "ggml-large-v3-turbo-encoder.mlmodelc.zip",
+                sha1: "",
+            }],
+            subdirectory: None,
+        }),
+
         // ── Parakeet ──────────────────────────────────────────────────────────
         "parakeet-nemotron" => Some(ModelConfig {
             repo: "altunenes/parakeet-rs",

@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
 import { SettingsModal } from "./components/SettingsModal";
+import { SetupWizard } from "./components/SetupWizard";
 import { TitleBar } from "./components/TitleBar";
 import { useState } from "react";
 import { useHeaderStatus } from "./hooks/useHeaderStatus";
@@ -105,6 +106,8 @@ function App() {
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  /** null = not yet loaded from store; true = show wizard (first run); false = show main app */
+  const [showSetupWizard, setShowSetupWizard] = useState<boolean | null>(null);
   const [copyJustConfirmed, setCopyJustConfirmed] = useState(false);
   const [copyJustReset, setCopyJustReset] = useState(false);
   const copyConfirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -121,6 +124,8 @@ function App() {
   const {
     llmStatus, enableGrammarLM, setEnableGrammarLM, enableGrammarLMRef,
     enableSpellCheck, setEnableSpellCheck, enableSpellCheckRef, spellCheckStatus,
+    transcriptionStyle, setTranscriptionStyle, transcriptionStyleRef,
+    llmBackend, setLlmBackend,
   } = usePostProcessing(setHeaderStatus);
 
   const {
@@ -142,7 +147,7 @@ function App() {
   } = useRecording({
     activeEngineRef, models, parakeetModels, currentModel, currentParakeetModel,
     setCurrentModel, setLoadedEngine, enableGrammarLMRef, enableSpellCheckRef,
-    setHeaderStatus, setTrayState, setIsSettingsOpen,
+    transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
   });
 
   // --- Copy reset animation ---
@@ -201,6 +206,9 @@ function App() {
           if (cancelled) return;
           storeRef.current = loadedStore;
 
+          const setupComplete = await loadedStore.get<boolean>("setup_complete");
+          if (!cancelled) setShowSetupWizard(setupComplete !== true);
+
           savedEngine = (await loadedStore.get<"whisper" | "parakeet">("active_engine")) || null;
           if (savedEngine) {
             setActiveEngine(savedEngine);
@@ -237,6 +245,7 @@ function App() {
           }
         } catch (storeErr) {
           console.warn("Store load failed:", storeErr);
+          if (!cancelled) setShowSetupWizard(true);
         }
 
         if (!cancelled && pStatus.loaded && !current && !savedEngine) {
@@ -248,6 +257,7 @@ function App() {
         console.error("Failed to load initial data:", e);
         setBackendInfo("Unknown");
         setHeaderStatus(`Error loading models: ${e}`, 5000);
+        setShowSetupWizard(false);
       } finally {
         if (!cancelled) setIsInitialLoading(false);
       }
@@ -388,6 +398,25 @@ function App() {
     if (isRecording) handleStopRecording();
     else handleStartRecording();
   };
+
+  const handleSetupComplete = useCallback((openSettings: boolean) => {
+    storeRef.current?.set("setup_complete", true);
+    storeRef.current?.save().catch(console.error);
+    setShowSetupWizard(false);
+    if (openSettings) setIsSettingsOpen(true);
+  }, []);
+
+  if (showSetupWizard === null) {
+    return (
+      <div className="app-loading" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#0f172a", color: "#94a3b8" }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (showSetupWizard === true) {
+    return <SetupWizard onComplete={handleSetupComplete} />;
+  }
 
   return (
     <>
@@ -625,6 +654,10 @@ function App() {
           enableSpellCheck={enableSpellCheck}
           setEnableSpellCheck={setEnableSpellCheck}
           spellCheckStatus={spellCheckStatus}
+          transcriptionStyle={transcriptionStyle}
+          setTranscriptionStyle={setTranscriptionStyle}
+          llmBackend={llmBackend}
+          setLlmBackend={setLlmBackend}
         />
       </main>
     </>

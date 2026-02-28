@@ -13,6 +13,7 @@ interface UseRecordingParams {
     setLoadedEngine: (engine: ASREngine) => void;
     enableGrammarLMRef: React.RefObject<boolean>;
     enableSpellCheckRef: React.RefObject<boolean>;
+    transcriptionStyleRef: React.MutableRefObject<string>;
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
     setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
     setIsSettingsOpen: (open: boolean) => void;
@@ -34,6 +35,7 @@ export function useRecording({
     setLoadedEngine,
     enableGrammarLMRef,
     enableSpellCheckRef,
+    transcriptionStyleRef,
     setHeaderStatus,
     setTrayState,
     setIsSettingsOpen,
@@ -149,7 +151,8 @@ export function useRecording({
             if (enableGrammarLMRef.current) {
                 setHeaderStatus("Correcting grammar...", 60_000, true);
                 try {
-                    finalTrans = await invoke("correct_text", { text: finalTrans });
+                    const activeStyle = transcriptionStyleRef.current;
+                    finalTrans = await invoke("correct_text", { text: finalTrans, style: activeStyle });
                     setHeaderStatus("Transcribed & Corrected!");
                 } catch (e) {
                     setHeaderStatus("Grammar correction failed: " + e, 5000);
