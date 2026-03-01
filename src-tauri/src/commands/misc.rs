@@ -1,6 +1,110 @@
 use cpal::traits::{DeviceTrait, HostTrait};
 use serde::Serialize;
 use sysinfo::System;
+use tauri::Manager;
+
+/// Shows the main window. Called by the frontend once it has finished its own
+/// initialization so the user never sees a loading state when the window opens.
+///
+/// Also performs one-time deferred setup of the system tray and global hotkey
+/// listener on the first call, so neither appears before the UI is ready.
+#[tauri::command]
+pub fn show_main_window(app: tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    let state = app.state::<crate::state::AudioState>();
+
+    // One-time deferred setup: tray icon + hotkey listener
+    if !state.ui_ready.swap(true, Ordering::SeqCst) {
+        println!("[INFO] Frontend ready — initializing tray and hotkey listener");
+
+        // Setup system tray
+        if let Err(e) = crate::tray::setup_tray_from_handle(&app) {
+            eprintln!("[ERROR] Failed to set up tray: {}", e);
+        }
+
+        // Start hotkey listener in background thread
+        let hotkey_config = state.hotkey_config.clone();
+        let app_handle = app.clone();
+        std::thread::spawn(move || {
+            crate::hotkeys::start_hotkey_listener(app_handle, hotkey_config);
+        });
+        println!("[INFO] Global hotkey listener started (configurable hotkey)");
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_skip_taskbar(false);
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+#[tauri::command]
+pub fn show_overlay(app: tauri::AppHandle) {
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let monitor = cursor_monitor(&app).or_else(|| overlay.primary_monitor().ok().flatten());
+
+        if let Some(monitor) = monitor {
+            let monitor_size = monitor.size();
+            let monitor_pos = monitor.position();
+            let overlay_size = overlay
+                .outer_size()
+                .unwrap_or(tauri::PhysicalSize::new(56, 56));
+            let x = monitor_pos.x + ((monitor_size.width as i32 - overlay_size.width as i32) / 2);
+            let bottom_margin = (120.0 * monitor.scale_factor()) as i32;
+            let y = monitor_pos.y + monitor_size.height as i32
+                - overlay_size.height as i32
+                - bottom_margin;
+            let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+        let _ = overlay.set_always_on_top(true);
+        let _ = overlay.show();
+    }
+}
+
+/// Returns the monitor the mouse cursor is currently on.
+/// Uses GetCursorPos (Win32 FFI) on Windows; returns None on other platforms.
+fn cursor_monitor(app: &tauri::AppHandle) -> Option<tauri::Monitor> {
+    let (cx, cy) = cursor_pos()?;
+    app.available_monitors().ok()?.into_iter().find(|m| {
+        let pos = m.position();
+        let size = m.size();
+        cx >= pos.x
+            && cx < pos.x + size.width as i32
+            && cy >= pos.y
+            && cy < pos.y + size.height as i32
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn cursor_pos() -> Option<(i32, i32)> {
+    #[repr(C)]
+    struct POINT {
+        x: i32,
+        y: i32,
+    }
+    extern "system" {
+        fn GetCursorPos(lp: *mut POINT) -> i32;
+    }
+    let mut pt = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut pt) } != 0 {
+        Some((pt.x, pt.y))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn cursor_pos() -> Option<(i32, i32)> {
+    None
+}
+
+#[tauri::command]
+pub fn hide_overlay(app: tauri::AppHandle) {
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = overlay.hide();
+    }
+}
 
 /// Returns the names of all available audio input devices on this machine.
 #[tauri::command]
@@ -20,13 +124,21 @@ pub fn greet(name: &str) -> String {
 #[tauri::command]
 pub fn get_platform() -> &'static str {
     #[cfg(target_os = "macos")]
-    { "macos" }
+    {
+        "macos"
+    }
     #[cfg(target_os = "windows")]
-    { "windows" }
+    {
+        "windows"
+    }
     #[cfg(target_os = "linux")]
-    { "linux" }
+    {
+        "linux"
+    }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    { "unknown" }
+    {
+        "unknown"
+    }
 }
 
 #[derive(Serialize)]
@@ -62,7 +174,9 @@ pub fn get_system_info() -> SystemInfo {
         "CUDA".to_string()
     } else {
         #[cfg(target_os = "macos")]
-        { "Metal".to_string() }
+        {
+            "Metal".to_string()
+        }
         #[cfg(not(target_os = "macos"))]
         {
             if gpu_name != "Unknown" {
@@ -115,7 +229,10 @@ fn detect_gpu() -> (String, bool, Option<f32>) {
 
 fn try_nvidia_smi() -> Option<(String, f32)> {
     let out = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
         .ok()?;
 
@@ -176,5 +293,8 @@ fn try_lspci_gpu() -> Option<String> {
     // "01:00.0 VGA compatible controller: NVIDIA Corporation GeForce ..."
     // We want everything after the second ':'
     let after_addr = line.splitn(2, ' ').nth(1)?;
-    after_addr.splitn(2, ':').nth(1).map(|s| s.trim().to_string())
+    after_addr
+        .splitn(2, ':')
+        .nth(1)
+        .map(|s| s.trim().to_string())
 }

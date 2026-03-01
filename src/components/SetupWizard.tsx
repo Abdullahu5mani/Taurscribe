@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { TitleBar } from './TitleBar';
 import './SetupWizard.css';
 
 interface SystemInfo {
@@ -27,6 +28,7 @@ const STEPS = 5;
 
 export function SetupWizard({ onComplete }: Props) {
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
+  const [platform, setPlatform] = useState<string>('');
   const [current, setCurrent] = useState<StepEntry>({ idx: 0, enterDir: 'right', key: 0 });
   const [exiting, setExiting] = useState<{ idx: number; exitDir: 'left' | 'right'; key: number } | null>(null);
   const transitioning = useRef(false);
@@ -43,6 +45,7 @@ export function SetupWizard({ onComplete }: Props) {
         vram_gb: null,
         backend_hint: 'CPU',
       }));
+    invoke<string>('get_platform').then(setPlatform).catch(() => {});
   }, []);
 
   const goTo = useCallback((target: number) => {
@@ -66,7 +69,7 @@ export function SetupWizard({ onComplete }: Props) {
     switch (idx) {
       case 0: return <StepWelcome onNext={next} />;
       case 1: return <StepHardware sysInfo={sysInfo} onNext={next} onBack={back} />;
-      case 2: return <StepEngines onNext={next} onBack={back} />;
+      case 2: return <StepEngines onNext={next} onBack={back} platform={platform} />;
       case 3: return <StepHotkey onNext={next} onBack={back} />;
       case 4: return <StepReady onComplete={onComplete} />;
       default: return null;
@@ -75,6 +78,7 @@ export function SetupWizard({ onComplete }: Props) {
 
   return (
     <div className="setup-overlay">
+      <TitleBar />
       <div className="setup-dots">
         {Array.from({ length: STEPS }).map((_, i) => (
           <div
@@ -222,7 +226,7 @@ function StepHardware({
 // ─────────────────────────────────────────────────────────────────
 // STEP 2 — ENGINES
 // ─────────────────────────────────────────────────────────────────
-function StepEngines({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+function StepEngines({ onNext, onBack, platform }: { onNext: () => void; onBack: () => void; platform: string }) {
   return (
     <>
       <p className="setup-eyebrow">Step 3 of 5</p>
@@ -259,12 +263,14 @@ function StepEngines({ onNext, onBack }: { onNext: () => void; onBack: () => voi
 
       <p className="engines-note">Switch between engines anytime in the main UI.</p>
 
-      <div className="engines-coreml-note">
-        <span className="engines-coreml-badge">CoreML</span>
-        Apple Silicon · CoreML encoder libraries are available for Whisper — download them
-        in Settings → Downloads to offload the encoder to the Neural Engine for faster,
-        lower-power transcription on M-series Macs.
-      </div>
+      {platform === 'macos' && (
+        <div className="engines-coreml-note">
+          <span className="engines-coreml-badge">CoreML</span>
+          Apple Silicon · CoreML encoder libraries are available for Whisper — download them
+          in Settings → Downloads to offload the encoder to the Neural Engine for faster,
+          lower-power transcription on M-series Macs.
+        </div>
+      )}
 
       <div className="setup-nav setup-nav--spread">
         <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>

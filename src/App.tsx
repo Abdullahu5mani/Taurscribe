@@ -66,6 +66,15 @@ const TICKER_PHRASES: { parts: { text: string; highlight?: TickerHighlight }[] }
   { parts: [{ text: "One app · two engines · zero compromise" }] },
 ];
 
+const TONE_STYLES = [
+  { value: 'Auto',         label: 'Auto',         desc: 'Let the model decide' },
+  { value: 'Casual',       label: 'Casual',        desc: 'Relaxed, conversational tone' },
+  { value: 'Verbatim',     label: 'Verbatim',      desc: 'Minimal changes, preserve speech' },
+  { value: 'Enthusiastic', label: 'Enthusiastic',  desc: 'Energetic and expressive' },
+  { value: 'Software_Dev', label: 'Software Dev',  desc: 'Technical language, code terms' },
+  { value: 'Professional', label: 'Professional',  desc: 'Formal and polished' },
+];
+
 const setTrayState = async (newState: "ready" | "recording" | "processing") => {
   try {
     await invoke("set_tray_state", { newState });
@@ -125,6 +134,8 @@ function App() {
   const {
     llmStatus, enableGrammarLM, setEnableGrammarLM, enableGrammarLMRef,
     enableSpellCheck, setEnableSpellCheck, enableSpellCheckRef, spellCheckStatus,
+    enableDenoise, setEnableDenoise, enableDenoiseRef,
+    enableOverlay, setEnableOverlay, enableOverlayRef,
     transcriptionStyle, setTranscriptionStyle, transcriptionStyleRef,
     llmBackend, setLlmBackend,
   } = usePostProcessing(setHeaderStatus);
@@ -150,7 +161,7 @@ function App() {
   } = useRecording({
     activeEngineRef, models, parakeetModels, currentModel, currentParakeetModel,
     setCurrentModel, setLoadedEngine, enableGrammarLMRef, enableSpellCheckRef,
-    transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
+    enableDenoiseRef, enableOverlayRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
     playStart, playPaste, playError,
   });
 
@@ -209,6 +220,7 @@ function App() {
           const loadedStore = await Store.load("settings.json");
           if (cancelled) return;
           storeRef.current = loadedStore;
+          await loadedStore.save(); // ensure the file exists on disk from first launch
 
           const setupComplete = await loadedStore.get<boolean>("setup_complete");
           if (!cancelled) setShowSetupWizard(setupComplete !== true);
@@ -275,7 +287,10 @@ function App() {
         setHeaderStatus(`Error loading models: ${e}`, 5000);
         setShowSetupWizard(false);
       } finally {
-        if (!cancelled) setIsInitialLoading(false);
+        if (!cancelled) {
+          setIsInitialLoading(false);
+          invoke("show_main_window").catch(() => {});
+        }
       }
     }
 
@@ -338,7 +353,7 @@ function App() {
         if (!isRecordingRef.current && !startingRecordingRef.current) {
           startingRecordingRef.current = true;
           pendingStopRef.current = false;
-          await handleStartRecordingRef.current();
+          await handleStartRecordingRef.current(true);
           startingRecordingRef.current = false;
           if (pendingStopRef.current) {
             pendingStopRef.current = false;
@@ -528,7 +543,7 @@ function App() {
             <div className="status-item">
               <span className="status-label">Model</span>
               <span className={`status-value ${parakeetModels.length === 0 ? "error" : ""}`}>
-                {parakeetModels.length === 0 ? "Download required" : (currentParakeetModel ? beautifyModelName(parakeetModels.find(m => m.id === currentParakeetModel)?.display_name || currentParakeetModel) : "None")}
+                {parakeetModels.length === 0 ? "Download required" : beautifyModelName((parakeetModels.find(m => m.id === currentParakeetModel) ?? parakeetModels[0]).display_name)}
               </span>
             </div>
           </div>
@@ -578,6 +593,46 @@ function App() {
                   </div>
                 </>
               )}
+            </div>
+
+            {/* ── LLM toggle + tone pills ── */}
+            <div className="llm-section">
+              <div className="llm-section-header">
+                <div className="llm-identity">
+                  <span
+                    className="llm-status-dot"
+                    style={{
+                      background: !enableGrammarLM ? 'var(--text-muted)' :
+                        llmStatus === 'Loaded' ? 'var(--success)' :
+                          llmStatus === 'Loading...' ? 'var(--warning)' : 'var(--error)'
+                    }}
+                  />
+                  <span className="llm-name">Qwen 2.5 0.5B</span>
+                  <span className="llm-meta">fine-tuned · grammar & tone</span>
+                </div>
+                <label className="mini-toggle" title={enableGrammarLM ? 'Disable grammar LLM' : 'Enable grammar LLM'}>
+                  <input
+                    type="checkbox"
+                    checked={enableGrammarLM}
+                    onChange={e => setEnableGrammarLM(e.target.checked)}
+                    disabled={llmStatus === 'Loading...'}
+                  />
+                  <span className="mini-toggle-track" />
+                </label>
+              </div>
+              <div className={`tone-pills ${!enableGrammarLM ? 'tone-pills--off' : ''}`}>
+                {TONE_STYLES.map(s => (
+                  <button
+                    key={s.value}
+                    className={`tone-pill ${transcriptionStyle === s.value ? 'tone-pill--active' : ''}`}
+                    onClick={() => setTranscriptionStyle(s.value)}
+                    disabled={!enableGrammarLM || llmStatus !== 'Loaded'}
+                    title={s.desc}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           <div className="record-btn-wrap">
@@ -670,6 +725,10 @@ function App() {
           enableSpellCheck={enableSpellCheck}
           setEnableSpellCheck={setEnableSpellCheck}
           spellCheckStatus={spellCheckStatus}
+          enableDenoise={enableDenoise}
+          setEnableDenoise={setEnableDenoise}
+          enableOverlay={enableOverlay}
+          setEnableOverlay={setEnableOverlay}
           transcriptionStyle={transcriptionStyle}
           setTranscriptionStyle={setTranscriptionStyle}
           llmBackend={llmBackend}

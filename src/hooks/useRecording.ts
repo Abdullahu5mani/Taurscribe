@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emitTo } from "@tauri-apps/api/event";
 import type { ModelInfo, ParakeetModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 
@@ -13,6 +14,8 @@ interface UseRecordingParams {
     setLoadedEngine: (engine: ASREngine) => void;
     enableGrammarLMRef: React.RefObject<boolean>;
     enableSpellCheckRef: React.RefObject<boolean>;
+    enableDenoiseRef: React.RefObject<boolean>;
+    enableOverlayRef: React.RefObject<boolean>;
     transcriptionStyleRef: React.MutableRefObject<string>;
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
     setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
@@ -38,6 +41,8 @@ export function useRecording({
     setLoadedEngine,
     enableGrammarLMRef,
     enableSpellCheckRef,
+    enableDenoiseRef,
+    enableOverlayRef,
     transcriptionStyleRef,
     setHeaderStatus,
     setTrayState,
@@ -54,8 +59,10 @@ export function useRecording({
 
     const isRecordingRef = useRef(false);
     const recordingStartTimeRef = useRef(0);
+    const hotkeySessionRef = useRef(false);
 
-    const handleStartRecording = async () => {
+    const handleStartRecording = async (fromHotkey = false) => {
+        hotkeySessionRef.current = fromHotkey && enableOverlayRef.current;
         const currentEngine = activeEngineRef.current;
 
         if (currentEngine === "whisper") {
@@ -104,11 +111,16 @@ export function useRecording({
             await setTrayState("recording");
             setLiveTranscript("");
             setLatestLatency(null);
-            const res = await invoke("start_recording");
+            const res = await invoke("start_recording", { denoise: enableDenoiseRef.current });
             setHeaderStatus(res as string);
             recordingStartTimeRef.current = Date.now();
             setIsRecording(true);
             isRecordingRef.current = true;
+            if (fromHotkey) {
+                await invoke("show_overlay").catch(() => { });
+                await new Promise(r => setTimeout(r, 50));
+                emitTo("overlay", "overlay-state", { phase: "recording" }).catch(() => { });
+            }
             playStart?.();
         } catch (e) {
             console.error("Start recording failed:", e);
@@ -117,16 +129,19 @@ export function useRecording({
             await setTrayState("ready");
             setIsRecording(false);
             isRecordingRef.current = false;
+            if (fromHotkey) invoke("hide_overlay").catch(() => { });
         }
     };
 
     const handleStopRecording = async () => {
         const currentEngine = activeEngineRef.current;
         const processingStartMs = Date.now();
+        const isOverlay = hotkeySessionRef.current;
         console.log("[STOP] handleStopRecording called. GrammarLM:", enableGrammarLMRef.current, "SpellCheck:", enableSpellCheckRef.current);
         setIsRecording(false);
         isRecordingRef.current = false;
         setIsProcessingTranscript(true);
+        if (isOverlay) emitTo("overlay", "overlay-state", { phase: "transcribing" }).catch(() => { });
 
         try {
             await setTrayState("processing");
@@ -136,16 +151,36 @@ export function useRecording({
 
             const recordingDurationMs = Date.now() - recordingStartTimeRef.current;
             if (recordingDurationMs < MIN_RECORDING_MS) {
-                setHeaderStatus("Recording too short — try at least 1.5 seconds", 5000);
+                setHeaderStatus("Recording too short — hold for at least 1.5 seconds", 5000);
                 playError?.();
                 setLiveTranscript("");
                 setIsProcessingTranscript(false);
                 await setTrayState("ready");
+                if (isOverlay) {
+                    invoke("hide_overlay").catch(() => { });
+                    emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+                }
+                return;
+            }
+
+            // Treat empty / silence / "Recording saved." as no speech detected
+            const trimmed = finalTrans.trim();
+            if (!trimmed || trimmed === "[silence]" || trimmed === "Recording saved.") {
+                setHeaderStatus("No speech detected", 4000);
+                playError?.();
+                setLiveTranscript("");
+                setIsProcessingTranscript(false);
+                await setTrayState("ready");
+                if (isOverlay) {
+                    invoke("hide_overlay").catch(() => { });
+                    emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+                }
                 return;
             }
 
             if (enableSpellCheckRef.current) {
                 setIsCorrecting(true);
+                if (isOverlay) emitTo("overlay", "overlay-state", { phase: "correcting" }).catch(() => { });
                 setHeaderStatus("Fixing spelling...", 60_000, true);
                 try {
                     finalTrans = await invoke("correct_spelling", { text: finalTrans });
@@ -158,6 +193,7 @@ export function useRecording({
             }
 
             if (enableGrammarLMRef.current) {
+                if (isOverlay) emitTo("overlay", "overlay-state", { phase: "correcting" }).catch(() => { });
                 setHeaderStatus("Correcting grammar...", 60_000, true);
                 try {
                     const activeStyle = transcriptionStyleRef.current;
@@ -177,6 +213,15 @@ export function useRecording({
             await invoke("type_text", { text: finalTrans });
             playPaste?.();
 
+            if (isOverlay) {
+                const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
+                await emitTo("overlay", "overlay-state", { phase: "done", text: preview });
+                setTimeout(() => {
+                    invoke("hide_overlay").catch(() => { });
+                    emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+                }, 1500);
+            }
+
             setIsProcessingTranscript(false);
             await setTrayState("ready");
         } catch (e) {
@@ -190,7 +235,12 @@ export function useRecording({
             setIsCorrecting(false);
             setIsProcessingTranscript(false);
             await setTrayState("ready");
+            if (isOverlay) {
+                invoke("hide_overlay").catch(() => { });
+                emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+            }
         }
+        hotkeySessionRef.current = false;
     };
 
     return {
