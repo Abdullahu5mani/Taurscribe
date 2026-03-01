@@ -2,7 +2,12 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
 
-export function AudioTab() {
+interface AudioTabProps {
+    enableDenoise: boolean;
+    setEnableDenoise: (val: boolean) => void;
+}
+
+export function AudioTab({ enableDenoise, setEnableDenoise }: AudioTabProps) {
     const [devices, setDevices] = useState<string[]>([]);
     const [selected, setSelected] = useState<string>('');   // '' = system default
     const [saved, setSaved] = useState(false);
@@ -52,57 +57,98 @@ export function AudioTab() {
     };
 
     return (
-        <div className="audio-settings">
-            <h3 className="settings-section-title">Audio & Microphone</h3>
+        <div className="audio-tab">
+            {/* ── Microphone ──────────────────────────────────────── */}
+            <h3 className="settings-section-title">Microphone</h3>
 
-            <div style={{
-                background: 'rgba(30, 41, 59, 0.4)',
-                padding: '20px',
-                borderRadius: '12px',
-                border: '1px solid rgba(148, 163, 184, 0.1)',
-            }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                    <h4 style={{ margin: 0 }}>Input Device</h4>
-                    {saved && (
-                        <span style={{ fontSize: '0.78rem', color: '#22c55e' }}>Saved ✓</span>
-                    )}
+            <div className="setting-card">
+                <div className="setting-card-header">
+                    <span className="setting-card-label-plain">Input Device</span>
+                    {saved && <span className="saved-confirm">Saved ✓</span>}
                 </div>
-
-                <p style={{ margin: '0 0 14px', fontSize: '0.9rem', color: '#94a3b8' }}>
-                    Choose which microphone Taurscribe records from.
-                    Takes effect on the next recording.
+                <p className="setting-card-desc">
+                    Choose which microphone Taurscribe records from. Takes effect on the next recording.
                 </p>
 
                 {loading ? (
-                    <div style={{ color: '#475569', fontSize: '0.85rem' }}>Detecting devices…</div>
+                    <div className="audio-detecting">Detecting devices…</div>
                 ) : (
                     <select
+                        className="select-input select-input--full"
                         value={selected}
-                        onChange={(e) => handleChange(e.target.value)}
-                        style={{
-                            width: '100%',
-                            padding: '10px 12px',
-                            borderRadius: '8px',
-                            border: '1px solid rgba(148, 163, 184, 0.2)',
-                            background: '#0f172a',
-                            color: '#e2e8f0',
-                            fontSize: '0.875rem',
-                            cursor: 'pointer',
-                            outline: 'none',
-                        }}
+                        onChange={e => handleChange(e.target.value)}
                     >
                         <option value="">System Default</option>
-                        {devices.map((name) => (
+                        {devices.map(name => (
                             <option key={name} value={name}>{name}</option>
                         ))}
                     </select>
                 )}
 
                 {devices.length === 0 && !loading && (
-                    <p style={{ marginTop: '10px', fontSize: '0.8rem', color: '#ef4444' }}>
+                    <p className="audio-no-devices">
                         No input devices detected. Check that a microphone is connected.
                     </p>
                 )}
+            </div>
+
+            {/* ── Noise Suppression ──────────────────────────────────── */}
+            <h3 className="settings-section-title" style={{ marginTop: '32px' }}>Noise Suppression</h3>
+
+            <div className="setting-card">
+                <div className="setting-card-header">
+                    <div className="setting-card-label">
+                        <span className="status-dot" style={{ background: enableDenoise ? '#3ecfa5' : '#4b4b55' }} />
+                        <span>RNNoise</span>
+                        <span className="setting-card-meta">CPU · real-time · no GPU needed</span>
+                    </div>
+                    <label className="switch">
+                        <input
+                            type="checkbox"
+                            checked={enableDenoise}
+                            onChange={e => setEnableDenoise(e.target.checked)}
+                        />
+                        <span className="slider round" />
+                    </label>
+                </div>
+                <p className="setting-card-desc">
+                    Removes background noise from the audio before it reaches the transcription engine.
+                    The saved WAV file always keeps the original unprocessed audio.
+                </p>
+                <div className="about-row">
+                    <span className="about-row-label">Method</span>
+                    <span className="about-row-value">RNNoise (recurrent neural network)</span>
+                </div>
+                <div className="about-row">
+                    <span className="about-row-label">Operates at</span>
+                    <span className="about-row-value">48 kHz · 480-sample frames</span>
+                </div>
+                <div className="about-row" style={{ marginTop: '16px' }}>
+                    <span className="about-row-label" style={{ color: '#4b4b55' }}>High Quality (DeepFilterNet3)</span>
+                    <span className="about-row-value" style={{ color: '#4b4b55' }}>Coming in a future update</span>
+                </div>
+            </div>
+
+            {/* ── Voice Activity Detection ─────────────────────────── */}
+            <h3 className="settings-section-title" style={{ marginTop: '32px' }}>Voice Activity Detection</h3>
+
+            <div className="setting-card">
+                <p className="setting-card-desc">
+                    VAD filters silence before sending audio to the transcription engine,
+                    reducing hallucinations and improving accuracy.
+                </p>
+                <div className="about-row">
+                    <span className="about-row-label">Method</span>
+                    <span className="about-row-value">Energy-based (RMS threshold)</span>
+                </div>
+                <div className="about-row">
+                    <span className="about-row-label">Min recording</span>
+                    <span className="about-row-value">1500 ms</span>
+                </div>
+                <div className="about-row" style={{ marginTop: '16px' }}>
+                    <span className="about-row-label" style={{ color: '#4b4b55' }}>Threshold control</span>
+                    <span className="about-row-value" style={{ color: '#4b4b55' }}>Coming in a future update</span>
+                </div>
             </div>
         </div>
     );

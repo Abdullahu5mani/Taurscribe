@@ -27,6 +27,7 @@
 18. [🪝 Frontend Hook Architecture](#-frontend-hook-architecture)
 19. [🍎 CoreML Acceleration (Apple Silicon)](#-coreml-acceleration-apple-silicon)
 20. [⌨️ Customizable Global Hotkey](#️-customizable-global-hotkey)
+21. [🪟 Deferred Window Visibility](#-deferred-window-visibility)
 
 ---
 
@@ -3388,17 +3389,21 @@ CoreML entries in the `MODELS` array look like:
 
 ### Setup Wizard Note
 
-The Engines step (Step 3 of 5) in the Setup Wizard shows a brief CoreML callout **on all platforms** — it is informational text rather than a functional UI element, so it is not gated by platform. This way users who switch to a Mac later still see the information during their first setup.
-
-The callout (`src/components/SetupWizard.tsx`):
+The Engines step (Step 3 of 5) in the Setup Wizard shows a brief CoreML callout **on macOS only**. `SetupWizard` fetches the platform via `get_platform` on mount and passes it to `StepEngines`, which conditionally renders the note:
 
 ```tsx
-<div className="engines-coreml-note">
+// SetupWizard — fetches platform alongside system info
+invoke<string>('get_platform').then(setPlatform).catch(() => {});
+
+// StepEngines — renders callout only on macOS
+{platform === 'macos' && (
+  <div className="engines-coreml-note">
     <span className="engines-coreml-badge">CoreML</span>
     Apple Silicon · CoreML encoder libraries are available for Whisper — download them
     in Settings → Downloads to offload the encoder to the Neural Engine for faster,
     lower-power transcription on M-series Macs.
-</div>
+  </div>
+)}
 ```
 
 ---
@@ -4300,6 +4305,172 @@ This ensures the preference is live even before the user opens Settings.
 | `src/components/settings/AudioTab.tsx` | New component: device list + selector + persistence |
 | `src/components/SettingsModal.tsx` | Audio tab now renders `<AudioTab />` instead of placeholder |
 | `src/App.tsx` | Restores `input_device` from store on startup |
+
+---
+
+## 🪟 Deferred Window Visibility
+
+### Overview
+
+The main window stays **hidden** until the app is fully ready — Rust model loaded, frontend data fetched, settings restored. The user never sees a loading spinner or a half-initialised UI.
+
+### Why This Matters
+
+Without deferred visibility the sequence looked like this:
+
+```
+App starts → Window appears → "Loading…" overlay visible → Data loads → UI ready
+```
+
+The user saw a flash of the loading state every launch. With deferred visibility:
+
+```
+App starts → (window hidden) → Rust init → Frontend init → Window appears (fully ready)
+```
+
+### The Two-Layer Problem
+
+There are **two independent loading phases** that both had to finish before the window could safely appear:
+
+| Layer | What happens | Where |
+|---|---|---|
+| Rust / backend | Whisper model loaded from disk into memory on a dedicated thread | `lib.rs` before `tauri::Builder` |
+| Frontend | `loadInitialData()` — invokes `get_backend_info`, `list_models`, `get_current_model`, `list_parakeet_models`, `get_parakeet_status`, loads `settings.json`, restores saved engine / hotkey / input device, optionally auto-loads Parakeet | `App.tsx` `useEffect` |
+
+The Rust phase finishes first (before `setup` even runs). The frontend phase is async and takes longer. The window must stay hidden until **both** are done.
+
+### Implementation
+
+**1. Window starts hidden — `tauri.conf.json`**
+
+```json
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Taurscribe",
+        "visible": false
+      }
+    ]
+  }
+}
+```
+
+Setting `visible: false` means the OS never renders the window at startup. No flicker, no blank frame.
+
+**2. Rust backend initialises safely — `src-tauri/src/lib.rs`**
+
+Whisper init runs on a dedicated 8 MiB stack thread. A thread panic is caught with `unwrap_or_else` so the app always continues rather than crashing:
+
+```rust
+let (whisper, init_result) = std::thread::Builder::new()
+    .stack_size(8 * 1024 * 1024)
+    .spawn(move || {
+        let mut whisper = whisper;
+        let res = whisper.initialize(None);
+        (whisper, res)
+    })
+    .expect("Failed to spawn whisper init thread")
+    .join()
+    .unwrap_or_else(|_| {
+        eprintln!("[ERROR] Whisper init thread panicked unexpectedly");
+        (WhisperManager::new(), Err("Initialization thread panicked".to_string()))
+    });
+```
+
+If `initialize` returns `Err` (no model file found), the error is logged and the app continues — the user can still open Settings and download a model. The window is **not** shown from the Rust side at all.
+
+**3. Frontend signals readiness — `src/App.tsx`**
+
+`loadInitialData()` is an async function that runs once on mount. Its `finally` block clears the loading state and then calls the `show_main_window` command:
+
+```ts
+} finally {
+  if (!cancelled) {
+    setIsInitialLoading(false);
+    invoke("show_main_window").catch(() => {});
+  }
+}
+```
+
+`invoke("show_main_window")` crosses the IPC bridge to Rust. The `.catch(() => {})` is a safety net — if the invoke somehow fails the window would just stay hidden, but this cannot happen in practice because the command is always registered.
+
+**4. The Tauri command — `src-tauri/src/commands/misc.rs`**
+
+```rust
+#[tauri::command]
+pub fn show_main_window(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+```
+
+`set_focus()` ensures the window comes to the front on Windows rather than just appearing behind other windows.
+
+### Complete Startup Sequence
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     APP STARTUP SEQUENCE                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  1. OS launches process                                         │
+│       │                                                         │
+│       ▼                                                         │
+│  2. Rust: spawn Whisper init thread (8 MiB stack)               │
+│       │   • Scans models dir for .bin files                     │
+│       │   • Loads first found model into WhisperContext         │
+│       │   • On panic → fallback WhisperManager (no crash)       │
+│       │                                                         │
+│       ▼                                                         │
+│  3. Rust: init VAD + create ParakeetManager (not loaded yet)    │
+│       │                                                         │
+│       ▼                                                         │
+│  4. Tauri setup() runs                                          │
+│       │   • System tray created                                 │
+│       │   • Global hotkey listener spawned                      │
+│       │   • Models directory file watcher started               │
+│       │   Window is still HIDDEN                                │
+│       │                                                         │
+│       ▼                                                         │
+│  5. WebView loads → React mounts → loadInitialData() fires      │
+│       │   • get_backend_info                                    │
+│       │   • list_models / get_current_model                     │
+│       │   • list_parakeet_models / get_parakeet_status          │
+│       │   • Store.load("settings.json")                         │
+│       │     → restore hotkey, input device, active engine       │
+│       │   • If saved engine = parakeet → invoke init_parakeet   │
+│       │                                                         │
+│       ▼                                                         │
+│  6. finally block                                               │
+│       │   • setIsInitialLoading(false)  ← loading overlay gone  │
+│       │   • invoke("show_main_window")  ← window appears        │
+│       │                                                         │
+│       ▼                                                         │
+│  7. User sees fully-ready UI with no loading state              │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Failure Modes & Fallbacks
+
+| Failure | What happens |
+|---|---|
+| No Whisper model on disk | `initialize()` returns `Err`; logged to console; app continues; window still opens; user sees "Download required" |
+| Whisper init thread panics | `unwrap_or_else` catches the panic; fresh unloaded `WhisperManager` used; app continues normally |
+| `loadInitialData()` throws | `catch` block sets `showSetupWizard(false)` and falls through to `finally`; `show_main_window` still called |
+| `show_main_window` invoke fails | Window stays hidden; cannot happen in practice as the command is always registered |
+
+### Files Changed
+
+| File | Change |
+|---|---|
+| `src-tauri/tauri.conf.json` | Added `"visible": false` to the window config |
+| `src-tauri/src/lib.rs` | Wrapped `join().expect(...)` with `unwrap_or_else` panic fallback; removed early `window.show()` from setup; registered `show_main_window` command |
+| `src-tauri/src/commands/misc.rs` | Added `show_main_window` Tauri command |
+| `src/App.tsx` | Added `invoke("show_main_window")` call in `loadInitialData` `finally` block |
 
 ---
 
