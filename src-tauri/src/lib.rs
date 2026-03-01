@@ -1,6 +1,7 @@
 // Module declarations
 mod audio;
 mod commands;
+mod denoise;
 mod hotkeys;
 mod llm;
 mod parakeet;
@@ -17,7 +18,6 @@ mod whisper;
 // Imports
 use parakeet::ParakeetManager;
 use state::AudioState;
-use tauri::Manager;
 use vad::VADManager;
 use whisper::WhisperManager;
 
@@ -38,7 +38,13 @@ pub fn run() {
         })
         .expect("Failed to spawn whisper init thread")
         .join()
-        .expect("Whisper init thread panicked");
+        .unwrap_or_else(|_| {
+            eprintln!("[ERROR] Whisper init thread panicked unexpectedly");
+            (
+                WhisperManager::new(),
+                Err("Initialization thread panicked".to_string()),
+            )
+        });
 
     match init_result {
         Ok(backend_msg) => {
@@ -72,24 +78,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AudioState::new(whisper, parakeet, vad))
         .setup(|app| {
-            // Setup System Tray
-            tray::setup_tray(app)?;
-
-            // Start Hotkey Listener in Background Thread
-            // Clone the hotkey_config Arc so the listener reacts to config changes immediately.
-            let hotkey_config = app.state::<AudioState>().hotkey_config.clone();
-            let app_handle = app.handle().clone();
-            std::thread::spawn(move || {
-                hotkeys::start_hotkey_listener(app_handle, hotkey_config);
-            });
-
-            println!("[INFO] Global hotkey listener started (configurable hotkey)");
-
-            // Start File Watcher for Models Directory
+            // File watcher starts immediately (it's invisible to the user)
             let watcher_handle = app.handle().clone();
             if let Err(e) = watcher::start_models_watcher(watcher_handle) {
                 eprintln!("[WARN] Failed to start models watcher: {}", e);
             }
+
+            // NOTE: Tray icon and hotkey listener are deferred until the frontend
+            // calls show_main_window, so the taskbar icon doesn't flash early.
 
             Ok(())
         })
@@ -101,6 +97,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::show_main_window,
             commands::greet,
             commands::get_system_info,
             commands::start_recording,
@@ -134,7 +131,9 @@ pub fn run() {
             commands::set_hotkey,
             commands::list_input_devices,
             commands::get_input_device,
-            commands::set_input_device
+            commands::set_input_device,
+            commands::show_overlay,
+            commands::hide_overlay
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
