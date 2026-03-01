@@ -165,22 +165,36 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - [x] Core Whisper Integration
 - [x] Real-time VAD Implementation
 - [x] Local LLM Grammar Correction
-- [ ] Brand Refresh (New Logo)
-- [ ] Buffer in the beginning and towards the end and let the user customize that buffer so like 0.5 seconds so the lm can actually catch what they're saying and not get cut off
 - [x] UI Sound Effects (Success/Fail/Too Short)
+- [x] Customizable Hotkeys
+- [x] MacOS CoreML optimization (Whisper.cpp)
+- [x] Nice Installer Screen (Custom Tauri Customization)
+- [x] Audio Lead-in & Tail Silence Padding
+- [ ] Brand Refresh (New Logo)
 - [ ] Toggle Recording Mode (Click-to-Record vs Hold)
 - [ ] Text Snippets / Macros
 - [ ] Custom Dictionary (Proper Nouns)
-- [ ] AI Style Presets (Formal, Casual, etc.)
 - [ ] Smart Fallback for Short Audio
-- [x] Customizable Hotkeys
-- [ ] MySQL Database for Transcription History
-- [ ] Visual Listening Overlay
-- [ ] Context-aware Paste (Text/Image detection on clipboard)
-- [x] MacOS CoreML optimization (Whisper.cpp)
-- [x] Nice Installer Screen (Custom Tauri Customization)
+- [ ] Transcription History (Save & revisit past transcriptions)
+- [ ] Recording Duration Timer (Live `00:12` counter while recording)
+- [ ] Multilingual / Language Selector (Whisper supports 90+ languages)
+- [ ] Auto-Start on Boot
+- [ ] Minimize to System Tray
+- [ ] Live Transcript Display (Show streaming text while recording)
+- [ ] Export Options (`.txt`, `.srt`, `.md`)
+- [ ] Audio Waveform Visualizer
+- [ ] Extended Keyboard Shortcuts
+- [ ] Recording Playback (Listen back to saved `.wav` files)
+- [ ] Speaker Diarization (Label transcript by speaker)
+- [ ] File / Audio Import (Drag-and-drop `.wav`, `.mp3`, `.m4a`)
+- [ ] Smart Punctuation & Formatting
+- [ ] Auto-Update Mechanism (Tauri updater plugin)
+- [ ] Accessibility (Screen reader, keyboard navigation, high-contrast)
 - [ ] First Launch & Guide Screen (Onboarding flow)
 - [ ] Overlay Recording Mode (Press and hold to record, release to stop)
+- [ ] Context-aware Paste (Text/Image detection on clipboard)
+- [ ] Visual Listening Overlay
+
 ---
 
 <p align="center">

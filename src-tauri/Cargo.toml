@@ -52,6 +52,9 @@ anyhow = "1.0"
 # SymSpell - Fast spell checking
 symspell = "0.4"
 
+# RNNoise noise suppression (pure Rust, no C deps, CPU-only, cross-platform)
+nnnoiseless = "0.5"
+
 # File system watcher - Detect model changes
 notify = "6.1"
 

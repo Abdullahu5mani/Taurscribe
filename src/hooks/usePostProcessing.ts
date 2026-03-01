@@ -11,11 +11,15 @@ import { Store } from "@tauri-apps/plugin-store";
  *   enable_spell_check  boolean
  *   transcription_style string
  *   llm_backend         "gpu" | "cpu"
+ *   enable_denoise      boolean
+ *   enable_overlay      boolean
  */
 export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void) {
     const [llmStatus, setLlmStatus] = useState("Not Loaded");
     const [enableGrammarLM, setEnableGrammarLMState] = useState(false);
     const [enableSpellCheck, setEnableSpellCheckState] = useState(false);
+    const [enableDenoise, setEnableDenoiseState] = useState(false);
+    const [enableOverlay, setEnableOverlayState] = useState(true);
     const [spellCheckStatus, setSpellCheckStatus] = useState("Not Loaded");
     const [llmBackend, setLlmBackendState] = useState<"gpu" | "cpu">("gpu");
     const [transcriptionStyle, setTranscriptionStyleState] = useState("Auto");
@@ -26,11 +30,15 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
 
     const enableGrammarLMRef = useRef(enableGrammarLM);
     const enableSpellCheckRef = useRef(enableSpellCheck);
+    const enableDenoiseRef = useRef(enableDenoise);
+    const enableOverlayRef = useRef(enableOverlay);
     const transcriptionStyleRef = useRef(transcriptionStyle);
     const storeRef = useRef<Store | null>(null);
 
     useEffect(() => { enableGrammarLMRef.current = enableGrammarLM; }, [enableGrammarLM]);
     useEffect(() => { enableSpellCheckRef.current = enableSpellCheck; }, [enableSpellCheck]);
+    useEffect(() => { enableDenoiseRef.current = enableDenoise; }, [enableDenoise]);
+    useEffect(() => { enableOverlayRef.current = enableOverlay; }, [enableOverlay]);
     useEffect(() => { transcriptionStyleRef.current = transcriptionStyle; }, [transcriptionStyle]);
 
     // ── Load persisted settings on mount ──────────────────────────────────
@@ -41,11 +49,15 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
 
                 const grammarLM  = await store.get<boolean>("enable_grammar_lm");
                 const spellCheck = await store.get<boolean>("enable_spell_check");
+                const denoise    = await store.get<boolean>("enable_denoise");
+                const overlay    = await store.get<boolean>("enable_overlay");
                 const style      = await store.get<string>("transcription_style");
                 const backend    = await store.get<"gpu" | "cpu">("llm_backend");
 
                 if (grammarLM  != null) setEnableGrammarLMState(grammarLM);
                 if (spellCheck != null) setEnableSpellCheckState(spellCheck);
+                if (denoise    != null) setEnableDenoiseState(denoise);
+                if (overlay    != null) setEnableOverlayState(overlay);
                 if (style      != null) setTranscriptionStyleState(style);
                 if (backend    != null) setLlmBackendState(backend);
 
@@ -75,6 +87,16 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
     const setEnableSpellCheck = useCallback((val: boolean) => {
         setEnableSpellCheckState(val);
         persist("enable_spell_check", val);
+    }, [persist]);
+
+    const setEnableDenoise = useCallback((val: boolean) => {
+        setEnableDenoiseState(val);
+        persist("enable_denoise", val);
+    }, [persist]);
+
+    const setEnableOverlay = useCallback((val: boolean) => {
+        setEnableOverlayState(val);
+        persist("enable_overlay", val);
     }, [persist]);
 
     const setTranscriptionStyle = useCallback((val: string) => {
@@ -150,6 +172,12 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
         setEnableSpellCheck,
         enableSpellCheckRef,
         spellCheckStatus,
+        enableDenoise,
+        setEnableDenoise,
+        enableDenoiseRef,
+        enableOverlay,
+        setEnableOverlay,
+        enableOverlayRef,
         llmBackend,
         setLlmBackend,
     };
