@@ -29,6 +29,7 @@ pub fn show_overlay(app: tauri::AppHandle) {
             let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
         }
         let _ = overlay.set_always_on_top(true);
+        let _ = overlay.set_ignore_cursor_events(true);
         let _ = overlay.show();
     }
 }
@@ -64,6 +65,7 @@ fn cursor_pos() -> Option<(i32, i32)> {
 #[tauri::command]
 pub fn hide_overlay(app: tauri::AppHandle) {
     if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = overlay.set_ignore_cursor_events(false);
         let _ = overlay.hide();
     }
 }

@@ -441,6 +441,10 @@ jobs:
             bun run tauri build --target ${{ matrix.target }}
           fi
         shell: bash
+        # NO_STRIP: Preserves __TAURI_BUNDLE_TYPE symbol needed by the updater plugin.
+        # APPIMAGE_EXTRACT_AND_RUN: linuxdeploy uses FUSE to mount itself, but GitHub
+        # Actions runners (Ubuntu 22.04+) don't have FUSE installed. This flag makes
+        # linuxdeploy extract to a temp dir instead, which is the standard CI workaround.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues
@@ -484,3 +488,8 @@ jobs:
           # Linux: ensure the Vulkan SDK lib dir is on the linker search path.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          # Linux AppImage: linuxdeploy requires FUSE to self-mount, but CI runners lack it.
+          # This flag makes it extract to a temp directory instead.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          # Preserve debug symbols so __TAURI_BUNDLE_TYPE is found by the bundler.
+          NO_STRIP: "true"

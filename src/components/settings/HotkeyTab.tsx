@@ -52,7 +52,7 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
                 const saved = await store.get<Partial<HotkeyBinding>>('hotkey_binding');
                 if (saved?.keys?.length) {
                     // Backward compat: old bindings may not have mode field
-                    const binding: HotkeyBinding = { mode: 'hold', ...saved } as HotkeyBinding;
+                    const binding: HotkeyBinding = { keys: saved.keys!, mode: saved.mode ?? 'hold' };
                     setCurrentBinding(binding);
                     setPendingMode(binding.mode);
                     return;
@@ -60,7 +60,7 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
             } catch { /* fall through */ }
             const fromRust = await invoke<HotkeyBinding>('get_hotkey').catch(() => null);
             if (fromRust) {
-                const binding: HotkeyBinding = { mode: 'hold', ...fromRust };
+                const binding: HotkeyBinding = { keys: fromRust.keys, mode: fromRust.mode ?? 'hold' };
                 setCurrentBinding(binding);
                 setPendingMode(binding.mode);
             }
