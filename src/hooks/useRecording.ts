@@ -166,6 +166,8 @@ export function useRecording({
                 setIsProcessingTranscript(false);
                 await setTrayState("ready");
                 if (isOverlay) {
+                    await emitTo("overlay", "overlay-state", { phase: "too_short" }).catch(() => {});
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                     invoke("hide_overlay").catch(() => {});
                     emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => {});
                 }

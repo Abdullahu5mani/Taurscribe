@@ -500,8 +500,11 @@ impl WhisperManager {
     }
 
     /// Optimized: Transcribe raw audio data that is ALREADY loaded
-    /// Used when we filter audio with VAD and don't want to re-read from disk
-    pub fn transcribe_audio_data(&mut self, audio_data: &[f32]) -> Result<String, String> {
+    /// Used when we filter audio with VAD and don't want to re-read from disk.
+    ///
+    /// `initial_prompt` — optional text injected before decoding to bias Whisper
+    /// toward the vocabulary of the active application (e.g. the window title).
+    pub fn transcribe_audio_data(&mut self, audio_data: &[f32], initial_prompt: Option<&str>) -> Result<String, String> {
         let ctx = self
             .context
             .as_mut()
@@ -530,6 +533,15 @@ impl WhisperManager {
         params.set_print_timestamps(false);
         params.set_max_len(1);
         params.set_token_timestamps(false);
+
+        // Inject active-app context as initial prompt so Whisper favours
+        // domain-relevant vocabulary (e.g. code identifiers, document titles).
+        if let Some(prompt) = initial_prompt {
+            if !prompt.trim().is_empty() {
+                params.set_initial_prompt(prompt);
+                println!("[WHISPER] initial_prompt: \"{}\"", prompt);
+            }
+        }
 
         // Run
         state
