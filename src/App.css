@@ -1,6 +1,6 @@
 /* Taurscribe — Dark Studio Hardware Theme */
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&family=Syne:wght@700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=Martian+Mono:wght@400;500&display=swap');
 
 :root {
   /* Base — warm near-black */
@@ -42,7 +42,10 @@
   --border-color: rgba(255, 255, 255, 0.06);
   --border-hover: rgba(255, 255, 255, 0.12);
 
-  font-family: 'Outfit', system-ui, sans-serif;
+  /* Focus ring — offset double-ring: dark inner gap + amber outer */
+  --focus-ring: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--accent-primary);
+
+  font-family: 'Barlow', system-ui, sans-serif;
   font-size: 16px;
   line-height: 1.6;
   font-weight: 400;
@@ -181,6 +184,33 @@ body {
     0 0 24px rgba(254, 240, 138, 0.3);
 }
 
+/* Gold glow for transcription complete */
+.header-status-message--success {
+  color: #e09f3e;
+  font-weight: 600;
+  text-shadow:
+    0 0 8px rgba(224, 159, 62, 0.9),
+    0 0 18px rgba(224, 159, 62, 0.5),
+    0 0 32px rgba(224, 159, 62, 0.25);
+  animation: header-success-glow 0.5s ease-out;
+}
+
+@keyframes header-success-glow {
+  from {
+    text-shadow:
+      0 0 12px rgba(224, 159, 62, 1),
+      0 0 30px rgba(224, 159, 62, 0.7),
+      0 0 50px rgba(224, 159, 62, 0.4);
+  }
+
+  to {
+    text-shadow:
+      0 0 8px rgba(224, 159, 62, 0.9),
+      0 0 18px rgba(224, 159, 62, 0.5),
+      0 0 32px rgba(224, 159, 62, 0.25);
+  }
+}
+
 /* Ticker tape strip (idle): fades in when returning from message */
 .header-ticker {
   width: 100%;
@@ -270,10 +300,10 @@ body {
 
 .app-title {
   margin: 0;
-  font-family: 'Syne', sans-serif;
-  font-size: 1.75rem;
-  font-weight: 800;
-  letter-spacing: 0.2em;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 0.25em;
   text-transform: uppercase;
   color: var(--text-primary);
 }
@@ -299,7 +329,7 @@ body {
 }
 
 .hardware-bar {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.7rem;
   font-weight: 500;
   letter-spacing: 0.05em;
@@ -309,6 +339,47 @@ body {
 
 .hardware-bar span {
   color: var(--accent-primary);
+}
+
+.hardware-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.backend-toggle-inline {
+  display: flex;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.backend-toggle-inline-btn {
+  padding: 3px 10px;
+  font-size: 0.65rem;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.backend-toggle-inline-btn:first-child {
+  border-right: 1px solid var(--border-color);
+}
+
+.backend-toggle-inline-btn:hover:not(.active) {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.backend-toggle-inline-btn.active {
+  color: var(--accent-primary);
+  background: rgba(224, 159, 62, 0.08);
 }
 
 /* ---- Engine cards (hardware modules) ---- */
@@ -369,7 +440,7 @@ body {
 }
 
 .engine-badge {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.65rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -464,10 +535,11 @@ body {
 .status-item {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .status-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -476,10 +548,13 @@ body {
 }
 
 .status-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-weight: 500;
   color: var(--text-primary);
-  font-size: 0.95rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-value.error {
@@ -524,7 +599,7 @@ body {
 }
 
 .model-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -539,7 +614,7 @@ body {
   padding: 0 20px 0 16px;
   display: flex;
   align-items: center;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.9rem;
   font-weight: 500;
   color: var(--text-primary);
@@ -614,7 +689,7 @@ body {
   border-radius: 50%;
   border: none;
   cursor: pointer;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.15em;
@@ -785,7 +860,7 @@ body {
 }
 
 .loading-text {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-weight: 500;
   font-size: 0.9rem;
   color: var(--text-primary);
@@ -811,7 +886,7 @@ body {
 
 .output-area pre {
   margin: 0;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.9rem;
   line-height: 1.75;
   color: var(--text-primary);
@@ -854,7 +929,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -887,7 +962,7 @@ body {
 }
 
 .latency-badge {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.7rem;
   font-weight: 500;
   color: var(--accent-primary);
@@ -899,7 +974,7 @@ body {
 
 .live-transcript p {
   margin: 0;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 1rem;
   color: var(--text-primary);
   line-height: 1.65;
@@ -943,7 +1018,7 @@ body {
   border-radius: 10px;
   cursor: pointer;
   transition: color 0.35s ease-out, border-color 0.35s ease-out, background 0.35s ease-out, transform 0.35s ease-out;
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.85rem;
   font-weight: 500;
 }
@@ -1129,7 +1204,7 @@ body {
 }
 
 .llm-name {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-primary);
@@ -1178,17 +1253,17 @@ body {
   transition: all 0.25s ease;
 }
 
-.mini-toggle input:checked + .mini-toggle-track {
+.mini-toggle input:checked+.mini-toggle-track {
   background: rgba(224, 159, 62, 0.18);
   border-color: var(--accent-primary);
 }
 
-.mini-toggle input:checked + .mini-toggle-track::after {
+.mini-toggle input:checked+.mini-toggle-track::after {
   background: var(--accent-primary);
   transform: translateX(14px);
 }
 
-.mini-toggle input:disabled + .mini-toggle-track {
+.mini-toggle input:disabled+.mini-toggle-track {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -1212,7 +1287,7 @@ body {
   border: 1px solid var(--border-color);
   background: transparent;
   color: var(--text-secondary);
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.73rem;
   font-weight: 500;
   cursor: pointer;
@@ -1239,6 +1314,43 @@ body {
 
 .tone-pill:disabled {
   cursor: default;
+}
+
+/* ---- Focus-visible: amber ring, never suppress ---- */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 4px;
+}
+
+/* Components with their own border-radius need to override it */
+.record-btn:focus-visible,
+.status-card:focus-visible {
+  border-radius: 50%;
+}
+
+.settings-btn:focus-visible,
+.model-select:focus-visible,
+.btn-copy:focus-visible,
+.tone-pill:focus-visible {
+  border-radius: 10px;
+}
+
+/* ---- Reduced motion: pause all continuous animation loops ---- */
+@media (prefers-reduced-motion: reduce) {
+  .header-ticker-track,
+  .status-bar-transfer-line,
+  .led-dot.loading,
+  .record-btn.idle::before,
+  .record-btn.recording::before,
+  .record-btn.processing::before,
+  .live-indicator::before {
+    animation: none;
+  }
+
+  .container > * {
+    animation: none;
+  }
 }
 
 /* ---- Responsive ---- */

@@ -1,4 +1,4 @@
-use crate::types::HotkeyBinding;
+use crate::types::{HotkeyBinding, RecordingMode};
 use rdev::{listen, Event, EventType, Key};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -45,9 +45,12 @@ pub fn start_hotkey_listener(
 
     let recording_active = Arc::new(AtomicBool::new(false));
     let held_keys: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // Prevents keyboard auto-repeat from firing the action multiple times per physical press.
+    let combo_triggered = Arc::new(AtomicBool::new(false));
 
     let recording_active_c = recording_active.clone();
     let held_keys_c = held_keys.clone();
+    let combo_triggered_c = combo_triggered.clone();
     let app_c = app_handle.clone();
     let config_c = hotkey_config.clone();
 
@@ -62,11 +65,29 @@ pub fn start_hotkey_listener(
                         held.push(code.to_string());
                     }
                     let all_held = config.keys.iter().all(|k| held.contains(k));
-                    if all_held && !config.keys.is_empty() && !recording_active_c.load(Ordering::SeqCst) {
+                    if all_held && !config.keys.is_empty() && !combo_triggered_c.load(Ordering::SeqCst) {
+                        combo_triggered_c.store(true, Ordering::SeqCst);
                         drop(held);
-                        recording_active_c.store(true, Ordering::SeqCst);
-                        println!("[HOTKEY] Hotkey pressed — starting recording");
-                        let _ = app_c.emit("hotkey-start-recording", ());
+                        match config.mode {
+                            RecordingMode::Hold => {
+                                if !recording_active_c.load(Ordering::SeqCst) {
+                                    recording_active_c.store(true, Ordering::SeqCst);
+                                    println!("[HOTKEY] Hold — starting recording");
+                                    let _ = app_c.emit("hotkey-start-recording", ());
+                                }
+                            }
+                            RecordingMode::Toggle => {
+                                if recording_active_c.load(Ordering::SeqCst) {
+                                    recording_active_c.store(false, Ordering::SeqCst);
+                                    println!("[HOTKEY] Toggle — stopping recording");
+                                    let _ = app_c.emit("hotkey-stop-recording", ());
+                                } else {
+                                    recording_active_c.store(true, Ordering::SeqCst);
+                                    println!("[HOTKEY] Toggle — starting recording");
+                                    let _ = app_c.emit("hotkey-start-recording", ());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -74,12 +95,18 @@ pub fn start_hotkey_listener(
             EventType::KeyRelease(key) => {
                 if let Some(code) = key_to_code(&key) {
                     held_keys_c.lock().unwrap().retain(|k| k != code);
-                    if recording_active_c.load(Ordering::SeqCst)
-                        && config.keys.contains(&code.to_string())
-                    {
-                        recording_active_c.store(false, Ordering::SeqCst);
-                        println!("[HOTKEY] Hotkey released — stopping recording");
-                        let _ = app_c.emit("hotkey-stop-recording", ());
+                    if config.keys.contains(&code.to_string()) {
+                        // Reset so the next physical key press can trigger the combo again.
+                        combo_triggered_c.store(false, Ordering::SeqCst);
+                        // Hold mode: releasing any combo key stops recording.
+                        // Toggle mode: key releases have no effect on recording state.
+                        if config.mode == RecordingMode::Hold
+                            && recording_active_c.load(Ordering::SeqCst)
+                        {
+                            recording_active_c.store(false, Ordering::SeqCst);
+                            println!("[HOTKEY] Hold — stopping recording");
+                            let _ = app_c.emit("hotkey-stop-recording", ());
+                        }
                     }
                 }
             }

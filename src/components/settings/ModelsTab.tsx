@@ -134,7 +134,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onVe
             <div className="model-group">
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Parakeet</h3>
-                    <span className="model-group-sub">by NVIDIA Nemotron · English only · NVIDIA GPU required</span>
+                    <span className="model-group-sub">by NVIDIA Nemotron · English only</span>
                 </div>
                 <div className="model-list">
                     {parakeetModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}

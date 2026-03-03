@@ -12,12 +12,11 @@ interface PostProcessingTabProps {
 }
 
 const STYLES = [
-    { value: 'Auto',         label: 'Auto',         desc: 'Let the model decide' },
-    { value: 'Casual',       label: 'Casual',        desc: 'Relaxed, conversational tone' },
-    { value: 'Verbatim',     label: 'Verbatim',      desc: 'Minimal changes, preserve speech' },
-    { value: 'Enthusiastic', label: 'Enthusiastic',  desc: 'Energetic and expressive' },
-    { value: 'Software_Dev', label: 'Software Dev',  desc: 'Technical language, code terms' },
-    { value: 'Professional', label: 'Professional',  desc: 'Formal and polished' },
+    { value: 'Verbatim', label: 'Verbatim', desc: 'Minimal changes, preserve speech' },
+    { value: 'Casual', label: 'Casual', desc: 'Relaxed, conversational tone' },
+    { value: 'Enthusiastic', label: 'Enthusiastic', desc: 'Energetic and expressive' },
+    { value: 'Software_Dev', label: 'Software Dev', desc: 'Technical language, code terms' },
+    { value: 'Professional', label: 'Professional', desc: 'Formal and polished' },
 ];
 
 function statusColor(status: string, enabled: boolean): string {
@@ -34,6 +33,7 @@ export function PostProcessingTab({
 }: PostProcessingTabProps) {
     const llmLoading = llmStatus === 'Loading...';
     const llmLoaded = llmStatus === 'Loaded';
+    const llmBackendLocked = enableGrammarLM; // can't change backend while model is loaded/loading
 
     return (
         <div className="pp-tab">
@@ -68,17 +68,30 @@ export function PostProcessingTab({
                 </div>
 
                 <div className="setting-row">
-                    <span className="setting-row-label">Backend</span>
-                    <select
-                        className="select-input"
-                        value={llmBackend}
-                        onChange={e => setLlmBackend(e.target.value as 'gpu' | 'cpu')}
-                        disabled={llmLoading || llmLoaded}
-                        title={llmLoaded ? 'Turn off grammar LLM to change backend' : undefined}
-                    >
-                        <option value="gpu">Auto / GPU</option>
-                        <option value="cpu">CPU Only</option>
-                    </select>
+                    <span className="setting-row-label">
+                        Backend
+                        {llmBackendLocked && (
+                            <span style={{ display: 'block', fontSize: '0.72rem', color: '#4b4b55', marginTop: '2px' }}>
+                                disable LLM to change
+                            </span>
+                        )}
+                    </span>
+                    <div className={`backend-toggle ${llmBackendLocked ? 'backend-toggle--locked' : ''}`}>
+                        <button
+                            className={`backend-toggle-btn ${llmBackend === 'gpu' ? 'active' : ''}`}
+                            onClick={() => setLlmBackend('gpu')}
+                            disabled={llmBackendLocked}
+                        >
+                            ⚡ GPU
+                        </button>
+                        <button
+                            className={`backend-toggle-btn ${llmBackend === 'cpu' ? 'active' : ''}`}
+                            onClick={() => setLlmBackend('cpu')}
+                            disabled={llmBackendLocked}
+                        >
+                            🔋 CPU
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -140,6 +153,7 @@ export function PostProcessingTab({
             <p className="pp-tab-note">
                 Download the required models from the <strong>Models</strong> tab.
             </p>
+
         </div>
     );
 }

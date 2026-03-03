@@ -11,11 +11,7 @@ use crate::utils::{clean_transcript, get_recordings_dir};
 /// COMMAND: START RECORDING
 /// This initializes the microphone, files, and processing threads.
 #[tauri::command]
-pub fn start_recording(
-    app_handle: AppHandle,
-    state: State<AudioState>,
-    denoise: Option<bool>,
-) -> Result<String, String> {
+pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise: Option<bool>) -> Result<String, String> {
     let denoise_enabled = denoise.unwrap_or(false);
     // 1. Setup Microphone
     let host = cpal::default_host();
@@ -28,10 +24,7 @@ pub fn start_recording(
     } else {
         host.default_input_device().ok_or("No input device")?
     };
-    println!(
-        "[INFO] Using input device: {}",
-        device.name().unwrap_or_default()
-    );
+    println!("[INFO] Using input device: {}", device.name().unwrap_or_default());
     let config: cpal::StreamConfig = device
         .default_input_config()
         .map_err(|e| e.to_string())?
@@ -81,15 +74,6 @@ pub fn start_recording(
     let whisper_tx_clone = whisper_tx.clone();
 
     let sample_rate = config.sample_rate.0;
-
-    // Pre-fill the transcriber channel with ~0.5s of silence so the ASR model
-    // has a clean lead-in and doesn't clip the first spoken syllable.
-    let lead_in_samples = (sample_rate as f32 * 0.5) as usize;
-    whisper_tx.send(vec![0.0f32; lead_in_samples]).ok();
-    println!(
-        "[INFO] 🔇 Injected {} lead-in silence samples (~0.5s) to prevent head clipping",
-        lead_in_samples
-    );
 
     // 6. SPAWN THREAD 1: THE FILE SAVER
     let writer_thread = std::thread::spawn(move || {
@@ -351,10 +335,7 @@ fn clipboard_paste(text: &str) {
 
     let mut clipboard = match Clipboard::new() {
         Ok(c) => c,
-        Err(e) => {
-            eprintln!("[INSERT] Clipboard init failed: {}", e);
-            return;
-        }
+        Err(e) => { eprintln!("[INSERT] Clipboard init failed: {}", e); return; }
     };
 
     let previous = clipboard.get_text().ok();
@@ -369,10 +350,7 @@ fn clipboard_paste(text: &str) {
 
     let mut enigo = match Enigo::new(&Settings::default()) {
         Ok(e) => e,
-        Err(e) => {
-            eprintln!("[INSERT] Enigo init failed: {:?}", e);
-            return;
-        }
+        Err(e) => { eprintln!("[INSERT] Enigo init failed: {:?}", e); return; }
     };
 
     #[cfg(target_os = "macos")]
@@ -401,8 +379,8 @@ fn clipboard_paste(text: &str) {
 #[cfg(target_os = "macos")]
 fn ax_insert(text: &str) -> bool {
     use accessibility_sys::{
-        kAXErrorSuccess, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
-        AXUIElementSetAttributeValue,
+        AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
+        AXUIElementSetAttributeValue, kAXErrorSuccess,
     };
     use core_foundation::{
         base::{CFRelease, CFTypeRef, TCFType},
@@ -447,31 +425,13 @@ fn ax_insert(text: &str) -> bool {
 /// COMMAND: STOP RECORDING
 #[tauri::command]
 pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
+    // Release denoiser state (GRU context must not leak across sessions)
+    *state.denoiser.lock().unwrap() = None;
+
     let mut handle = state.recording_handle.lock().unwrap();
     if let Some(recording) = handle.take() {
-        // Stop the microphone first so no new audio arrives
         drop(recording.stream);
-
-        // Drop the file channel immediately so the WAV writer finalizes
-        // with clean, unmodified audio (no artificial silence padding).
         drop(recording.file_tx);
-
-        // Inject ~1 second of silence into the TRANSCRIBER channel only,
-        // so it can flush any buffered audio without the speaker's last
-        // words being clipped. The saved WAV stays clean.
-        let silence_samples = recording.sample_rate as usize; // 1 second
-        let silence = vec![0.0f32; silence_samples];
-        println!(
-            "[INFO] 🔇 Injecting {} silence samples (~1s) into transcriber to prevent tail clipping",
-            silence_samples
-        );
-        recording.whisper_tx.send(silence).ok();
-
-        // Now release denoiser state (GRU context must not leak across sessions)
-        println!("[DENOISE] 🧹 Releasing denoiser state (end of session)");
-        *state.denoiser.lock().unwrap() = None;
-
-        // Drop transcriber channel so the worker threads see EOF and finish
         drop(recording.whisper_tx);
 
         // Join the threads to ensure they finish processing before we proceed.

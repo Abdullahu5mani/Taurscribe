@@ -93,6 +93,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Same as `setup_tray` but accepts an `AppHandle` (used for deferred init
 /// after the frontend signals it's ready, outside the `setup()` closure).
+#[allow(dead_code)]
 pub fn setup_tray_from_handle(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 

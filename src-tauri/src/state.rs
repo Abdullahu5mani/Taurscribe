@@ -5,7 +5,6 @@ use crate::spellcheck::SpellChecker;
 use crate::types::{ASREngine, AppState, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 /// The Global "Brain" of the application.
@@ -51,10 +50,6 @@ pub struct AudioState {
 
     // RNNoise denoiser (created fresh per recording session, None when idle)
     pub denoiser: Arc<Mutex<Option<Denoiser>>>,
-
-    // True once the frontend has finished loading and the main window is shown.
-    // Used to defer tray + hotkey setup so the taskbar icon doesn't flash early.
-    pub ui_ready: AtomicBool,
 }
 
 impl AudioState {
@@ -73,7 +68,6 @@ impl AudioState {
             hotkey_config: Arc::new(Mutex::new(HotkeyBinding::default())),
             selected_input_device: Mutex::new(None),
             denoiser: Arc::new(Mutex::new(None)),
-            ui_ready: AtomicBool::new(false),
         }
     }
 }
