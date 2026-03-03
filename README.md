@@ -96,7 +96,37 @@ Taurscribe employs two distinct architectural strategies to balance speed and ac
 - **Cross-Platform Core**: Designed with a Rust backend that compiles to native binaries for Windows, macOS, and Linux.
 - **Global Hotkeys**: Control recording from any application using `Ctrl+Win`, perfect for capturing quick thoughts without switching windows.
 - **System Tray Integration**: Runs unobtrusively in the background with dynamic status icons (Ready/Recording/Processing).
-- **Download Manager**: Integrated tool to download models directly from the app with built-in cryptographic verification (SHA1) for security.
+- **Download Manager**: Integrated tool to download models directly from the app with progress tracking, automatic extraction (zip/CoreML), and cryptographic integrity verification.
+
+## 🔐 Model Integrity & SHA Verification
+
+Taurscribe implements cryptographic verification to ensure every downloaded model is authentic and uncorrupted. This protects against man-in-the-middle attacks, partial downloads, and file corruption.
+
+### How It Works
+
+| Step | Description |
+|------|-------------|
+| **1. Registry** | Each model in the [model registry](src-tauri/src/commands/model_registry.rs) has a hardcoded **SHA-1 hash** compiled into the binary. These hashes are sourced from the official upstream repositories (e.g. [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp)). |
+| **2. Download** | Files are streamed from Hugging Face / GitHub with real-time progress events sent to the UI. |
+| **3. Verify** | After download, the `verify_model_hash` command reads each file in **8 KB chunks**, computing a streaming SHA-1 digest. The result is compared against the hardcoded hash. |
+| **4. Marker** | On success, a `.verified` marker file is written alongside the model so the app can skip re-verification on subsequent launches. |
+| **5. Mismatch** | If the hash doesn't match, the user receives an explicit error (`Hash mismatch for <file>: Expected <x>, Got <y>`) and the model is not loaded. |
+
+### Verified Models
+
+All **Whisper GGML models** (tiny through large-v3-turbo, including quantized variants) ship with hardcoded SHA-1 hashes:
+
+```
+ggml-tiny.bin          → bd577a113a864445d4c299885e0cb97d4ba92b5f
+ggml-base.bin          → 465707469ff3a37a2b9b8d8f89f2f99de7299dac
+ggml-small.bin         → 55356645c2b361a969dfd0ef2c5a50d530afd8d5
+ggml-medium.bin        → fd9727b6e1217c2f614f9b698455c4ffd82463b4
+ggml-large-v3.bin      → ad82bf6a9043ceed055076d0fd39f5f186ff8062
+ggml-large-v3-turbo.bin→ 4af2b29d7ec73d781377bfd1758ca957a807e941
+...and all quantized variants (q5_0, q5_1, q8_0)
+```
+
+> **Note**: CoreML encoders, Parakeet ONNX models, LLM weights, and the spell-check dictionary currently download without SHA verification (`sha1: ""`). Their integrity relies on HTTPS transport security. Adding SHA-256 hashes for these models is on the roadmap.
 
 ## 🧠 Custom Intelligence Engine
 

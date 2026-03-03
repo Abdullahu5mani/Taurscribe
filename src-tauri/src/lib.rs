@@ -1,6 +1,7 @@
 // Module declarations
 mod audio;
 mod commands;
+mod context;
 mod denoise;
 mod hotkeys;
 mod llm;

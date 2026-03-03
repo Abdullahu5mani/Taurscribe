@@ -43,11 +43,15 @@ sysinfo = "0.32"
 # dynamic-link builds ggml/llama as shared libs (DLLs) to avoid LNK2005
 # diamond-dependency with whisper-rs which also statically links ggml.
 # Use crates.io so CI can build without private repo access.
-llama-cpp-2 = { version = "0.1.137", default-features = false, features = [
+# PINNED: v0.1.137 sys crate has a broken CMake install step on Windows.
+# Pin both the wrapper AND sys crate to the last known working version.
+llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
     "dynamic-link",
 ] }
+llama-cpp-sys-2 = "=0.1.134"
 encoding_rs = "0.8"
 anyhow = "1.0"
+ndarray = "0.15"
 
 # SymSpell - Fast spell checking
 symspell = "0.4"
@@ -90,12 +94,15 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # XNNPACK: Cross-platform CPU optimization (fallback for Intel Macs)
 # -------------------------------------------------------------------------
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["coreml"] }
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
+    "coreml",
+] }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack"] }
 # llama-cpp-2: Uses Metal automatically on macOS (no special feature needed)
-llama-cpp-2 = { version = "0.1.137", default-features = false, features = [
+llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
     "dynamic-link",
 ] }
+llama-cpp-sys-2 = "=0.1.134"
 # macOS Accessibility API for native text insertion (kAXSelectedTextAttribute)
 accessibility-sys = "0.1"
 core-foundation = "0.9"
@@ -121,14 +128,11 @@ ort = { version = "2.0.0-rc.11", features = [
     "tensorrt",
     "xnnpack",
 ] }
-# llama-cpp-2 with CUDA only — Vulkan on Windows hits an MSBuild parallel
-# race condition in ExternalProject_Add that can't be fixed from Cargo.toml.
-# AMD/Intel users get CPU fallback for Grammar LLM (0.5B model, fast enough).
-# Parakeet uses DirectML and Whisper uses Vulkan for AMD GPU acceleration.
-llama-cpp-2 = { version = "0.1.137", default-features = false, features = [
+# llama-cpp-2 with dynamic-link (CPU-only LLM on Windows to avoid CUDA build issues)
+llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
     "dynamic-link",
-    "cuda",
 ] }
+llama-cpp-sys-2 = "=0.1.134"
 # 3b. Linux (x86_64) -> CUDA + TensorRT
 # CUDA: NVIDIA GPU acceleration (primary)
 # TensorRT: NVIDIA optimized inference
@@ -149,12 +153,12 @@ ort = { version = "2.0.0-rc.11", features = [
     "tensorrt",
     "xnnpack",
 ] }
-# llama-cpp-2 with CUDA + Vulkan — CUDA for NVIDIA, Vulkan for AMD/Intel on Linux
-llama-cpp-2 = { version = "0.1.137", default-features = false, features = [
+# llama-cpp-2 with CUDA + dynamic-link for LLM GPU acceleration
+llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
     "dynamic-link",
     "cuda",
-    "vulkan",
 ] }
+llama-cpp-sys-2 = "=0.1.134"
 # 4. Windows (ARM64) -> DirectML + XNNPACK# DirectML: Hardware-accelerated on Qualcomm Snapdragon X ARM processors
 # XNNPACK: Cross-platform CPU optimization
 # -------------------------------------------------------------------------
