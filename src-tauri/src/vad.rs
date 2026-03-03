@@ -1,161 +1,251 @@
 /// VAD (Voice Activity Detection) Manager
 ///
-/// NOTE: This is currently a simple version (stub) that we will improve later.
-/// Right now, it works by checking how "loud" the audio is (energy).
+/// Uses Silero VAD v4 (ONNX) running on ORT for neural speech detection.
+/// Falls back to a simple energy-based VAD if the ORT session fails to load.
+///
+/// Silero VAD is an LSTM-based model that processes 512-sample (32ms @ 16kHz) frames
+/// and returns a speech probability 0.0–1.0 while maintaining GRU hidden state across
+/// frames so that context is preserved within a single recording session.
+use ort::inputs;
+use ort::session::Session;
+use ort::value::Tensor;
+
+/// Silero VAD v4 ONNX model compiled into the binary (~2.3 MB).
+static SILERO_BYTES: &[u8] = include_bytes!("../resources/silero_vad.onnx");
+
+/// Silero VAD processes 512 samples per frame at 16 kHz (32 ms).
+const CHUNK_SIZE: usize = 512;
+/// LSTM hidden/cell state size: shape [2, 1, 64] = 128 f32 values.
+const STATE_SIZE: usize = 128;
+
 pub struct VADManager {
-    threshold: f32, // The volume level that counts as "speech". 0.005 is a good default.
+    /// Loaded ORT session, None if initialization failed (falls back to energy VAD).
+    session: Option<Session>,
+    /// LSTM hidden state h — shape [2, 1, 64], flattened to 128 f32s.
+    h: Vec<f32>,
+    /// LSTM cell state c — shape [2, 1, 64], flattened to 128 f32s.
+    c: Vec<f32>,
+    /// Speech probability threshold (0.5 is the Silero-recommended default).
+    threshold: f32,
 }
 
 impl VADManager {
-    /// Create a new VAD manager (Constructor)
     pub fn new() -> Result<Self, String> {
-        // Announce that we are using the simple energy method
-        println!("[VAD] Using energy-based VAD (Threshold: 0.005)");
+        let session = match Session::builder() {
+            Ok(builder) => match builder.commit_from_memory(SILERO_BYTES) {
+                Ok(s) => {
+                    println!("[VAD] Silero VAD initialized (ORT session ready)");
+                    Some(s)
+                }
+                Err(e) => {
+                    println!(
+                        "[VAD] Silero VAD ORT session failed ({}), using energy-based fallback",
+                        e
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                println!(
+                    "[VAD] Silero VAD Session::builder() failed ({}), using energy-based fallback",
+                    e
+                );
+                None
+            }
+        };
 
-        // Return the new VADManager object initialized with our threshold
         Ok(Self {
-            threshold: 0.005, // Set threshold to 0.005. Lowered this to catch quieter speech.
+            session,
+            h: vec![0.0_f32; STATE_SIZE],
+            c: vec![0.0_f32; STATE_SIZE],
+            threshold: 0.5,
         })
     }
 
-    /// The Main Function: Check if a chunk of audio is speech
-    /// Returns a probability score (0.0 to 1.0)
-    /// 0.0 = Silence
-    /// 1.0 = Speech
-    pub fn is_speech(&mut self, audio: &[f32]) -> Result<f32, String> {
-        // Calculate the "Energy" (loudness) of the audio
-        // 1. Square every sample (x * x) and add them all up
-        let sum_squares: f32 = audio.iter().map(|&x| x * x).sum();
-
-        // 2. Divide by number of samples (Mean) and take Square Root -> RMS (Root Mean Square)
-        let rms = (sum_squares / audio.len() as f32).sqrt();
-
-        // Convert that single RMS number into a probability (0.0 - 1.0)
-        let prob = if rms < self.threshold {
-            0.0 // It's too quiet -> definitely silence
-        } else if rms > self.threshold * 5.0 {
-            1.0 // It's very loud -> definitely speech
-        } else {
-            // It's in between. Map it to a value between 0.0 and 1.0
-            // logic: (loudness - threshold) / range
-            ((rms - self.threshold) / (self.threshold * 4.0)).min(1.0)
-        };
-
-        Ok(prob) // Return the result
+    /// Reset the LSTM state — call this at the start of every new recording session
+    /// so context from a previous session does not bleed into the next one.
+    pub fn reset_state(&mut self) {
+        self.h.fill(0.0);
+        self.c.fill(0.0);
     }
 
-    /// Advanced Function: Find exactly WHEN speech happens in a full file
-    /// Returns a list of (start_time, end_time) pairs in seconds
+    /// Return a speech probability for `audio` (0.0 = silence, 1.0 = speech).
+    ///
+    /// When using Silero VAD, only the first `CHUNK_SIZE` samples are evaluated per
+    /// call (to match the model's fixed input window). The LSTM state is updated in-place
+    /// so successive calls share temporal context across a recording session.
+    pub fn is_speech(&mut self, audio: &[f32]) -> Result<f32, String> {
+        if self.session.is_some() {
+            self.run_silero(audio)
+        } else {
+            Ok(Self::energy_vad(audio))
+        }
+    }
+
+    /// Run one Silero VAD inference step and update the internal LSTM state.
+    fn run_silero(&mut self, audio: &[f32]) -> Result<f32, String> {
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| "Silero session not initialized".to_string())?;
+        // Pad or truncate to exactly CHUNK_SIZE samples
+        let mut chunk = vec![0.0_f32; CHUNK_SIZE];
+        let copy_len = audio.len().min(CHUNK_SIZE);
+        chunk[..copy_len].copy_from_slice(&audio[..copy_len]);
+
+        // input: [1, CHUNK_SIZE]
+        let input_tensor = Tensor::from_array(([1_usize, CHUNK_SIZE], chunk.into_boxed_slice()))
+            .map_err(|e| format!("Silero input tensor error: {}", e))?;
+
+        // sr: int64 — 0-dim scalar tensor (scalar has empty shape)
+        let sr_tensor = Tensor::from_array((Vec::<i64>::new(), vec![16000_i64]))
+            .map_err(|e| format!("Silero sr tensor error: {}", e))?;
+
+        // h / c: [2, 1, 64]
+        let h_tensor = Tensor::from_array(([2_usize, 1, 64], self.h.clone().into_boxed_slice()))
+            .map_err(|e| format!("Silero h tensor error: {}", e))?;
+        let c_tensor = Tensor::from_array(([2_usize, 1, 64], self.c.clone().into_boxed_slice()))
+            .map_err(|e| format!("Silero c tensor error: {}", e))?;
+
+        let outputs = session
+            .run(inputs![
+                "input" => input_tensor,
+                "sr"    => sr_tensor,
+                "h"     => h_tensor,
+                "c"     => c_tensor,
+            ])
+            .map_err(|e| format!("Silero run error: {}", e))?;
+
+        // Extract speech probability [1, 1]
+        let out_tensor = outputs["output"]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| format!("Silero output extract error: {}", e))?;
+        let (_, out_data) = out_tensor;
+        let prob = out_data.first().copied().unwrap_or(0.0);
+
+        // Update LSTM state from hn / cn
+        if let Ok(hn) = outputs["hn"].try_extract_tensor::<f32>() {
+            let (_, data) = hn;
+            let v = data.to_vec();
+            if v.len() == STATE_SIZE {
+                self.h = v;
+            }
+        }
+        if let Ok(cn) = outputs["cn"].try_extract_tensor::<f32>() {
+            let (_, data) = cn;
+            let v = data.to_vec();
+            if v.len() == STATE_SIZE {
+                self.c = v;
+            }
+        }
+
+        Ok(prob)
+    }
+
+    /// Simple energy-based fallback used when the ORT session is unavailable.
+    fn energy_vad(audio: &[f32]) -> f32 {
+        if audio.is_empty() {
+            return 0.0;
+        }
+        let rms = (audio.iter().map(|&x| x * x).sum::<f32>() / audio.len() as f32).sqrt();
+        let threshold = 0.005_f32;
+        if rms < threshold {
+            0.0
+        } else if rms > threshold * 5.0 {
+            1.0
+        } else {
+            ((rms - threshold) / (threshold * 4.0)).min(1.0)
+        }
+    }
+
+    /// Find speech segments in a full audio buffer (used on the final Whisper pass).
+    ///
+    /// Returns a list of `(start_sec, end_sec)` pairs covering all detected speech,
+    /// with `padding_ms` of silence kept around each segment for safety.
     pub fn get_speech_timestamps(
         &mut self,
-        audio: &[f32],     // The full audio recording data
-        padding_ms: usize, // How much extra time to add around speech (for safety)
+        audio: &[f32],
+        padding_ms: usize,
     ) -> Result<Vec<(f32, f32)>, String> {
-        const SAMPLE_RATE: f32 = 16000.0; // Assume 16kHz audio (standard for AI)
-        const FRAME_SIZE: usize = 512; // Check audio in chunks of 512 samples (~32ms)
-        const MIN_SPEECH_FRAMES: usize = 5; // Must have ~150ms of speech to count as a real segment
+        const SAMPLE_RATE: f32 = 16000.0;
+        const MIN_SPEECH_FRAMES: usize = 5; // ~160 ms minimum to count as real speech
 
-        // Convert padding from milliseconds to number of frames
-        // e.g., 500ms padding -> ~15 frames
-        let frame_ms = (FRAME_SIZE as f32 / SAMPLE_RATE * 1000.0) as usize;
-        let padding_frames = padding_ms / frame_ms;
+        let frame_ms = (CHUNK_SIZE as f32 / SAMPLE_RATE * 1000.0) as usize;
+        let padding_frames = padding_ms / frame_ms.max(1);
 
-        let mut segments = Vec::new(); // Where we'll store the results
-        let mut speech_start: Option<usize> = None; // Start frame of current speech block
-        let mut consecutive_speech_frames = 0; // How long have we been speaking?
-        let mut silence_frames = 0; // How long has it been silent?
+        // Reset LSTM state so this offline pass starts clean
+        self.reset_state();
 
-        // Loop through the audio in small "frame" chunks
-        for (i, chunk) in audio.chunks(FRAME_SIZE).enumerate() {
-            // Is this tiny chunk speech? (> 50% probability)
-            let is_speech = self.is_speech(chunk)? > 0.5;
+        let mut segments = Vec::new();
+        let mut speech_start: Option<usize> = None;
+        let mut consecutive_speech = 0usize;
+        let mut silence_frames = 0usize;
 
-            // State Machine to track speech detection
+        for (i, chunk) in audio.chunks(CHUNK_SIZE).enumerate() {
+            let prob = self.is_speech(chunk).unwrap_or(0.0);
+            let is_speech = prob > self.threshold;
+
             match (is_speech, speech_start) {
                 (true, None) => {
-                    // NEW SPEECH DETECTED! We weren't speaking, now we are.
-                    consecutive_speech_frames = 1;
-                    speech_start = Some(i); // Mark the start frame index
+                    speech_start = Some(i);
+                    consecutive_speech = 1;
                     silence_frames = 0;
                 }
                 (true, Some(_)) => {
-                    // STILL SPEAKING... We were already speaking.
-                    consecutive_speech_frames += 1;
+                    consecutive_speech += 1;
                     silence_frames = 0;
                 }
                 (false, Some(_)) => {
-                    // SPEECH STOPPED (Temporarily?). usage: sentence pauses.
                     silence_frames += 1;
-
-                    // If that pause lasts too long (more than our padding)... end the segment
                     if silence_frames > padding_frames {
-                        // Was it a real sentence? (Was it long enough?)
-                        if consecutive_speech_frames >= MIN_SPEECH_FRAMES {
-                            // Yes! It was valid speech. Save it.
-
-                            // Calculate start index (go back a bit for padding)
+                        if consecutive_speech >= MIN_SPEECH_FRAMES {
                             let start_idx = speech_start.unwrap().saturating_sub(padding_frames);
-                            // End index is where we are now (current frame `i`)
                             let end_idx = i;
-
-                            // Convert frame numbers to seconds (frame * size / rate)
-                            let start_time = (start_idx * FRAME_SIZE) as f32 / SAMPLE_RATE;
-                            let end_time = (end_idx * FRAME_SIZE) as f32 / SAMPLE_RATE;
-
-                            // Add to our list
-                            segments.push((start_time, end_time));
+                            segments.push((
+                                (start_idx * CHUNK_SIZE) as f32 / SAMPLE_RATE,
+                                (end_idx * CHUNK_SIZE) as f32 / SAMPLE_RATE,
+                            ));
                         }
-
-                        // Reset everything to look for next sentence
                         speech_start = None;
-                        consecutive_speech_frames = 0;
+                        consecutive_speech = 0;
                         silence_frames = 0;
                     }
                 }
-                (false, None) => {
-                    // STILL SILENT. Nothing happening.
-                }
+                (false, None) => {}
             }
         }
 
-        // Check if file ended while we were still speaking (handle the last segment)
+        // Flush any trailing speech segment
         if let Some(start_idx) = speech_start {
-            if consecutive_speech_frames >= MIN_SPEECH_FRAMES {
+            if consecutive_speech >= MIN_SPEECH_FRAMES {
                 let start_idx = start_idx.saturating_sub(padding_frames);
-                let start_time = (start_idx * FRAME_SIZE) as f32 / SAMPLE_RATE;
-                let end_time = audio.len() as f32 / SAMPLE_RATE;
-                segments.push((start_time, end_time));
+                segments.push((
+                    (start_idx * CHUNK_SIZE) as f32 / SAMPLE_RATE,
+                    audio.len() as f32 / SAMPLE_RATE,
+                ));
             }
         }
 
-        // Clean up: Merge segments that are overlapping or touching
-        // Example: Seg1 ends at 5.0s, Seg2 starts at 4.8s -> Merge them!
-        let mut merged_segments: Vec<(f32, f32)> = Vec::new();
-        for segment in segments {
-            if let Some(last) = merged_segments.last_mut() {
-                // If this segment starts before the last one ends...
-                if segment.0 <= last.1 {
-                    // Merge them! Extend the last one to cover this one too.
-                    last.1 = segment.1.max(last.1);
-                } else {
-                    // No overlap, add as a new separate segment
-                    merged_segments.push(segment);
+        // Merge overlapping or adjacent segments
+        let mut merged: Vec<(f32, f32)> = Vec::new();
+        for seg in segments {
+            if let Some(last) = merged.last_mut() {
+                if seg.0 <= last.1 {
+                    last.1 = seg.1.max(last.1);
+                    continue;
                 }
-            } else {
-                // First segment
-                merged_segments.push(segment);
             }
+            merged.push(seg);
         }
 
-        // Print debug info about what we found
         println!(
-            "[VAD] Found {} speech segments (merged)",
-            merged_segments.len()
+            "[VAD] Found {} speech segment(s)",
+            merged.len()
         );
-        for (i, (start, end)) in merged_segments.iter().enumerate() {
-            println!("  Segment {}: {:.2}s - {:.2}s", i + 1, start, end);
+        for (i, (s, e)) in merged.iter().enumerate() {
+            println!("  Segment {}: {:.2}s – {:.2}s", i + 1, s, e);
         }
 
-        Ok(merged_segments) // Return the final list
+        Ok(merged)
     }
 }

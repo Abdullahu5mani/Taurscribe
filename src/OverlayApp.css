@@ -182,3 +182,53 @@ html, body, #root {
 .overlay-box--done {
   box-shadow: inset 0 0 20px rgba(62, 207, 165, 0.15);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/*  TOO SHORT – X circle draw + label                                         */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+.anim-too-short {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.too-short-label {
+  font-family: 'Barlow', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #dc2626;
+  text-transform: uppercase;
+  opacity: 0;
+  animation: tooShortLabelFade 0.2s ease-out 0.55s forwards;
+}
+
+.x-circle {
+  animation: drawXCircle 0.35s ease-out 0.05s forwards;
+}
+
+.x-line-1 {
+  animation: drawXLine 0.18s ease-out 0.35s forwards;
+}
+
+.x-line-2 {
+  animation: drawXLine 0.18s ease-out 0.48s forwards;
+}
+
+@keyframes drawXCircle {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes drawXLine {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes tooShortLabelFade {
+  to { opacity: 1; }
+}
+
+.overlay-box--too_short {
+  box-shadow: inset 0 0 0 1.5px rgba(220, 38, 38, 0.35),
+              0 8px 32px rgba(0, 0, 0, 0.45);
+}

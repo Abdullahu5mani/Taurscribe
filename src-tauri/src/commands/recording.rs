@@ -6,7 +6,8 @@ use crate::audio::{RecordingHandle, SendStream};
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
 use crate::types::{ASREngine, TranscriptionChunk};
-use crate::utils::{clean_transcript, get_recordings_dir};
+use crate::context::get_active_context;
+use crate::utils::{clean_transcript, get_recordings_dir, normalize_audio};
 
 /// COMMAND: START RECORDING
 /// This initializes the microphone, files, and processing threads.
@@ -44,6 +45,8 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
     } else {
         state.parakeet.lock().unwrap().clear_context();
     }
+    // Reset Silero VAD LSTM state so prior session context doesn't bleed in
+    state.vad.lock().unwrap().reset_state();
 
     *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
     state.session_transcript.lock().unwrap().clear();
@@ -114,7 +117,8 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
                         println!("[WARNING] Buffer full, dropping old audio to catch up");
                         buffer.drain(..chunk_size);
                     }
-                    let chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
+                    let mut chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
+                    normalize_audio(&mut chunk);
                     let is_speech = vad.lock().unwrap().is_speech(&chunk).unwrap_or(0.5);
 
                     if is_speech > 0.5 {
@@ -166,7 +170,8 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
                         buffer.drain(..parakeet_chunk_size);
                     }
 
-                    let chunk: Vec<f32> = buffer.drain(..parakeet_chunk_size).collect();
+                    let mut chunk: Vec<f32> = buffer.drain(..parakeet_chunk_size).collect();
+                    normalize_audio(&mut chunk);
                     let start_time = std::time::Instant::now();
 
                     match parakeet_manager
@@ -456,6 +461,9 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
                 clean_transcript(&transcript)
             };
             println!("[FINAL_TRANSCRIPT] (Raw)\n{}", final_text);
+            if let Some(path) = state.last_recording_path.lock().unwrap().as_ref() {
+                let _ = std::fs::remove_file(path);
+            }
             return Ok(final_text);
         }
 
@@ -466,8 +474,17 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
                 path
             );
 
+            // Snapshot active-app context BEFORE acquiring any locks
+            let app_context = get_active_context();
+            if let Some(ref ctx) = app_context {
+                println!("[CONTEXT] Active window: \"{}\"", ctx);
+            }
+
             let whisper = state.whisper.lock().unwrap();
-            let audio_data = whisper.load_audio(&path)?;
+            let mut audio_data = whisper.load_audio(&path)?;
+
+            // Normalize the full recording before VAD + final transcription
+            normalize_audio(&mut audio_data);
 
             println!("[PROCESSING] Applying VAD filtering for Whisper...");
             let mut vad = state.vad.lock().unwrap();
@@ -486,14 +503,16 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
                 );
             }
 
-            // Release locks before LLM processing to avoid deadlock
+            // Release locks before transcription to avoid deadlock
             drop(whisper);
             drop(vad);
 
             let result = {
                 let mut whisper = state.whisper.lock().unwrap();
-                whisper.transcribe_audio_data(&clean)
+                whisper.transcribe_audio_data(&clean, app_context.as_deref())
             };
+
+            let _ = std::fs::remove_file(&path);
 
             match result {
                 Ok(raw_text) => {
