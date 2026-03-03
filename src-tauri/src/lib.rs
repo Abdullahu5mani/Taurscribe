@@ -18,6 +18,7 @@ mod whisper;
 // Imports
 use parakeet::ParakeetManager;
 use state::AudioState;
+use tauri::Manager;
 use vad::VADManager;
 use whisper::WhisperManager;
 
@@ -33,17 +34,14 @@ pub fn run() {
         .stack_size(8 * 1024 * 1024) // 8 MiB Stack
         .spawn(move || {
             let mut whisper = whisper;
-            let res = whisper.initialize(None);
+            let res = whisper.initialize(None, false);
             (whisper, res)
         })
         .expect("Failed to spawn whisper init thread")
         .join()
         .unwrap_or_else(|_| {
             eprintln!("[ERROR] Whisper init thread panicked unexpectedly");
-            (
-                WhisperManager::new(),
-                Err("Initialization thread panicked".to_string()),
-            )
+            (WhisperManager::new(), Err("Initialization thread panicked".to_string()))
         });
 
     match init_result {
@@ -78,14 +76,24 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AudioState::new(whisper, parakeet, vad))
         .setup(|app| {
-            // File watcher starts immediately (it's invisible to the user)
+            // Setup System Tray
+            tray::setup_tray(app)?;
+
+            // Start Hotkey Listener in Background Thread
+            // Clone the hotkey_config Arc so the listener reacts to config changes immediately.
+            let hotkey_config = app.state::<AudioState>().hotkey_config.clone();
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                hotkeys::start_hotkey_listener(app_handle, hotkey_config);
+            });
+
+            println!("[INFO] Global hotkey listener started (configurable hotkey)");
+
+            // Start File Watcher for Models Directory
             let watcher_handle = app.handle().clone();
             if let Err(e) = watcher::start_models_watcher(watcher_handle) {
                 eprintln!("[WARN] Failed to start models watcher: {}", e);
             }
-
-            // NOTE: Tray icon and hotkey listener are deferred until the frontend
-            // calls show_main_window, so the taskbar icon doesn't flash early.
 
             Ok(())
         })

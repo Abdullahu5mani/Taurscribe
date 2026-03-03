@@ -1,8 +1,8 @@
-use tauri::State;
 use crate::parakeet;
 use crate::state::AudioState;
 use crate::types::ASREngine;
 use crate::whisper;
+use tauri::State;
 
 /// List all available AI models found in the models folder
 #[tauri::command]
@@ -19,7 +19,13 @@ pub fn get_current_model(state: State<AudioState>) -> Result<Option<String>, Str
 
 /// Command to swap the AI model (e.g. from Tiny to Large)
 #[tauri::command]
-pub fn switch_model(state: State<AudioState>, model_id: String) -> Result<String, String> {
+pub fn switch_model(
+    state: State<AudioState>,
+    model_id: String,
+    use_gpu: Option<bool>,
+) -> Result<String, String> {
+    let force_cpu = !use_gpu.unwrap_or(true);
+
     // 1. Safety Check: Don't switch models while recording!
     let handle = state.recording_handle.lock().unwrap();
     if handle.is_some() {
@@ -27,14 +33,18 @@ pub fn switch_model(state: State<AudioState>, model_id: String) -> Result<String
     }
     drop(handle);
 
-    println!("[INFO] Switching to model: {}", model_id);
+    println!(
+        "[INFO] Switching to model: {}{}",
+        model_id,
+        if force_cpu { " [CPU-only]" } else { "" }
+    );
 
     // 2. Unload Parakeet if loaded (Exclusive Mode)
     state.parakeet.lock().unwrap().unload();
 
     // 3. Initialize the new model
     let mut whisper = state.whisper.lock().unwrap();
-    let res = whisper.initialize(Some(&model_id));
+    let res = whisper.initialize(Some(&model_id), force_cpu);
 
     // Update active engine
     *state.active_engine.lock().unwrap() = ASREngine::Whisper;
@@ -50,13 +60,19 @@ pub fn list_parakeet_models() -> Result<Vec<parakeet::ParakeetModelInfo>, String
 
 /// Initialize Parakeet
 #[tauri::command]
-pub fn init_parakeet(state: State<AudioState>, model_id: Option<String>) -> Result<String, String> {
+pub fn init_parakeet(
+    state: State<AudioState>,
+    model_id: Option<String>,
+    use_gpu: Option<bool>,
+) -> Result<String, String> {
+    let force_cpu = !use_gpu.unwrap_or(true);
+
     // 1. Unload Whisper if loaded (Exclusive Mode)
     state.whisper.lock().unwrap().unload();
 
     // 2. Load Parakeet
     let mut parakeet = state.parakeet.lock().unwrap();
-    let result = parakeet.initialize(model_id.as_deref())?;
+    let result = parakeet.initialize(model_id.as_deref(), force_cpu)?;
 
     // Auto-switch to parakeet if initialized
     *state.active_engine.lock().unwrap() = ASREngine::Parakeet;

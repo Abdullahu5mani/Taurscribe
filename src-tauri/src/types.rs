@@ -14,15 +14,35 @@ pub enum ASREngine {
     Parakeet,
 }
 
+/// Recording mode: hold keys down the whole time, or press once to start / again to stop.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingMode {
+    Hold,
+    Toggle,
+}
+
+impl Default for RecordingMode {
+    fn default() -> Self { RecordingMode::Hold }
+}
+
 /// Hotkey binding — up to 2 keyboard keys held simultaneously.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct HotkeyBinding {
     pub keys: Vec<String>,
+    #[serde(default)]
+    pub mode: RecordingMode,
 }
 
 impl Default for HotkeyBinding {
     fn default() -> Self {
-        HotkeyBinding { keys: vec!["ControlLeft".to_string(), "MetaLeft".to_string()] }
+        // macOS: Ctrl+Option (Cmd is intercepted by the OS at the kernel level)
+        // Windows / Linux: Ctrl+Win / Ctrl+Super
+        #[cfg(target_os = "macos")]
+        let keys = vec!["ControlLeft".to_string(), "AltLeft".to_string()];
+        #[cfg(not(target_os = "macos"))]
+        let keys = vec!["ControlLeft".to_string(), "MetaLeft".to_string()];
+        HotkeyBinding { keys, mode: RecordingMode::default() }
     }
 }
 

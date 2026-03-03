@@ -184,7 +184,11 @@ impl ParakeetManager {
     }
 
     /// Initialize (Load) a Model
-    pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
+    pub fn initialize(
+        &mut self,
+        model_id: Option<&str>,
+        force_cpu: bool,
+    ) -> Result<String, String> {
         let models_dir = Self::get_models_dir()?;
 
         let available = Self::list_available_models()?;
@@ -200,8 +204,10 @@ impl ParakeetManager {
             .ok_or_else(|| format!("Model ID '{}' not found in list", target_id))?;
 
         println!(
-            "[PARAKEET] Initializing model: {} ({})",
-            info.display_name, info.model_type
+            "[PARAKEET] Initializing model: {} ({}){}",
+            info.display_name,
+            info.model_type,
+            if force_cpu { " [CPU-only mode]" } else { "" }
         );
 
         let subpath = target_id
@@ -216,19 +222,19 @@ impl ParakeetManager {
 
         let (model, backend): (LoadedModel, GpuBackend) = match info.model_type.as_str() {
             "Nemotron" => {
-                let (m, b) = init_nemotron(&model_path)?;
+                let (m, b) = init_nemotron(&model_path, force_cpu)?;
                 (LoadedModel::Nemotron(m), b)
             }
             "CTC" => {
-                let (m, b) = init_ctc(&model_path)?;
+                let (m, b) = init_ctc(&model_path, force_cpu)?;
                 (LoadedModel::Ctc(m), b)
             }
             "EOU" => {
-                let (m, b) = init_eou(&model_path)?;
+                let (m, b) = init_eou(&model_path, force_cpu)?;
                 (LoadedModel::Eou(m), b)
             }
             "TDT" => {
-                let (m, b) = init_tdt(&model_path)?;
+                let (m, b) = init_tdt(&model_path, force_cpu)?;
                 (LoadedModel::Tdt(m), b)
             }
             _ => return Err(format!("Unknown model type: {}", info.model_type)),

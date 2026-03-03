@@ -22,6 +22,7 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
     const [enableOverlay, setEnableOverlayState] = useState(true);
     const [spellCheckStatus, setSpellCheckStatus] = useState("Not Loaded");
     const [llmBackend, setLlmBackendState] = useState<"gpu" | "cpu">("gpu");
+    const [asrBackend, setAsrBackendState] = useState<"gpu" | "cpu">("gpu");
     const [transcriptionStyle, setTranscriptionStyleState] = useState("Auto");
 
     // Gate auto-load effects until settings are loaded from store,
@@ -53,6 +54,7 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
                 const overlay    = await store.get<boolean>("enable_overlay");
                 const style      = await store.get<string>("transcription_style");
                 const backend    = await store.get<"gpu" | "cpu">("llm_backend");
+                const asrBe      = await store.get<"gpu" | "cpu">("asr_backend");
 
                 if (grammarLM  != null) setEnableGrammarLMState(grammarLM);
                 if (spellCheck != null) setEnableSpellCheckState(spellCheck);
@@ -60,6 +62,7 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
                 if (overlay    != null) setEnableOverlayState(overlay);
                 if (style      != null) setTranscriptionStyleState(style);
                 if (backend    != null) setLlmBackendState(backend);
+                if (asrBe      != null) setAsrBackendState(asrBe);
 
                 setSettingsLoaded(true);
             })
@@ -107,6 +110,11 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
     const setLlmBackend = useCallback((val: "gpu" | "cpu") => {
         setLlmBackendState(val);
         persist("llm_backend", val);
+    }, [persist]);
+
+    const setAsrBackend = useCallback((val: "gpu" | "cpu") => {
+        setAsrBackendState(val);
+        persist("asr_backend", val);
     }, [persist]);
 
     // ── Auto-load / unload LLM ────────────────────────────────────────────
@@ -180,5 +188,7 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
         enableOverlayRef,
         llmBackend,
         setLlmBackend,
+        asrBackend,
+        setAsrBackend,
     };
 }

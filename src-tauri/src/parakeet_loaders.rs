@@ -14,7 +14,7 @@ use crate::parakeet::GpuBackend;
 
 // ─── Nemotron ────────────────────────────────────────────────────────────────
 
-pub fn init_nemotron(path: &PathBuf) -> Result<(Nemotron, GpuBackend), String> {
+pub fn init_nemotron(path: &PathBuf, force_cpu: bool) -> Result<(Nemotron, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
         println!("[PARAKEET] macOS detected - explicitly forcing CPU for Nemotron");
@@ -24,6 +24,11 @@ pub fn init_nemotron(path: &PathBuf) -> Result<(Nemotron, GpuBackend), String> {
 
     #[cfg(not(target_os = "macos"))]
     {
+        if force_cpu {
+            println!("[PARAKEET] CPU-only mode selected for Nemotron");
+            let m = try_cpu_nemotron(path.to_str().unwrap())?;
+            return Ok((m, GpuBackend::Cpu));
+        }
         if let Ok(m) = try_gpu_nemotron(path.to_str().unwrap()) {
             println!("[PARAKEET] Loaded Nemotron with CUDA");
             return Ok((m, GpuBackend::Cuda));
@@ -74,7 +79,7 @@ fn try_cpu_nemotron(path: &str) -> Result<Nemotron, String> {
 
 // ─── CTC ─────────────────────────────────────────────────────────────────────
 
-pub fn init_ctc(path: &PathBuf) -> Result<(Parakeet, GpuBackend), String> {
+pub fn init_ctc(path: &PathBuf, force_cpu: bool) -> Result<(Parakeet, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
         println!("[PARAKEET] macOS detected - explicitly forcing CPU for CTC");
@@ -84,6 +89,11 @@ pub fn init_ctc(path: &PathBuf) -> Result<(Parakeet, GpuBackend), String> {
 
     #[cfg(not(target_os = "macos"))]
     {
+        if force_cpu {
+            println!("[PARAKEET] CPU-only mode selected for CTC");
+            let m = try_cpu_ctc(path.to_str().unwrap())?;
+            return Ok((m, GpuBackend::Cpu));
+        }
         if let Ok(m) = try_gpu_ctc(path.to_str().unwrap()) {
             println!("[PARAKEET] Loaded CTC with CUDA");
             return Ok((m, GpuBackend::Cuda));
@@ -134,7 +144,7 @@ fn try_cpu_ctc(path: &str) -> Result<Parakeet, String> {
 
 // ─── EOU ─────────────────────────────────────────────────────────────────────
 
-pub fn init_eou(path: &PathBuf) -> Result<(ParakeetEOU, GpuBackend), String> {
+pub fn init_eou(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetEOU, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
         let m = try_cpu_eou(path.to_str().unwrap())?;
@@ -143,6 +153,11 @@ pub fn init_eou(path: &PathBuf) -> Result<(ParakeetEOU, GpuBackend), String> {
 
     #[cfg(not(target_os = "macos"))]
     {
+        if force_cpu {
+            println!("[PARAKEET] CPU-only mode selected for EOU");
+            let m = try_cpu_eou(path.to_str().unwrap())?;
+            return Ok((m, GpuBackend::Cpu));
+        }
         if let Ok(m) = try_gpu_eou(path.to_str().unwrap()) {
             return Ok((m, GpuBackend::Cuda));
         }
@@ -190,7 +205,7 @@ fn try_cpu_eou(path: &str) -> Result<ParakeetEOU, String> {
 
 // ─── TDT ─────────────────────────────────────────────────────────────────────
 
-pub fn init_tdt(path: &PathBuf) -> Result<(ParakeetTDT, GpuBackend), String> {
+pub fn init_tdt(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetTDT, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
         let m = try_cpu_tdt(path.to_str().unwrap())?;
@@ -199,6 +214,11 @@ pub fn init_tdt(path: &PathBuf) -> Result<(ParakeetTDT, GpuBackend), String> {
 
     #[cfg(not(target_os = "macos"))]
     {
+        if force_cpu {
+            println!("[PARAKEET] CPU-only mode selected for TDT");
+            let m = try_cpu_tdt(path.to_str().unwrap())?;
+            return Ok((m, GpuBackend::Cpu));
+        }
         if let Ok(m) = try_gpu_tdt(path.to_str().unwrap()) {
             return Ok((m, GpuBackend::Cuda));
         }

@@ -222,7 +222,11 @@ impl WhisperManager {
 
     /// Initialize (Load) the Whisper Brain
     /// This loads the model file from disk into memory (and GPU)
-    pub fn initialize(&mut self, model_id: Option<&str>) -> Result<String, String> {
+    pub fn initialize(
+        &mut self,
+        model_id: Option<&str>,
+        force_cpu: bool,
+    ) -> Result<String, String> {
         // Disable noisy C++ logs
         unsafe {
             // We explicitely define result type to satisfy the E0308 error.
@@ -278,14 +282,18 @@ impl WhisperManager {
         }
 
         println!(
-            "[INFO] Loading Whisper model from disk: '{}'",
-            absolute_path.display()
+            "[INFO] Loading Whisper model from disk: '{}'{}",
+            absolute_path.display(),
+            if force_cpu { " [CPU-only mode]" } else { "" }
         );
 
-        // Try to load with GPU acceleration first. If that fails, fallback to CPU.
-        let (ctx, backend) = self
-            .try_gpu(&absolute_path)
-            .or_else(|_| self.try_cpu(&absolute_path))?; // OR_ELSE is the fallback logic
+        // Try to load with GPU acceleration first (unless force_cpu). If that fails, fallback to CPU.
+        let (ctx, backend) = if force_cpu {
+            self.try_cpu(&absolute_path)?
+        } else {
+            self.try_gpu(&absolute_path)
+                .or_else(|_| self.try_cpu(&absolute_path))?
+        };
 
         // Save the loaded state
         self.context = Some(ctx);

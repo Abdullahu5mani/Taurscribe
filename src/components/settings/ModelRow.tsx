@@ -33,7 +33,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onVeri
                     {model.description}
                 </p>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px', minWidth: '160px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px', minWidth: '160px', flexShrink: 0, marginLeft: '16px' }}>
                 {progress && !model.downloaded ? (
                     <div style={{ width: '100%' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '4px', color: '#94a3b8' }}>
