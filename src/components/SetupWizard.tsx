@@ -255,7 +255,6 @@ function StepEngines({ onNext, onBack, platform }: { onNext: () => void; onBack:
           <ul className="engine-card-traits">
             <li className="engine-card-trait">Real-time streaming</li>
             <li className="engine-card-trait">Under 500ms latency</li>
-            <li className="engine-card-trait">NVIDIA GPU required</li>
             <li className="engine-card-trait">English only</li>
           </ul>
         </div>

@@ -2,13 +2,20 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
 
-interface HotkeyBinding { keys: string[]; }
+type RecordingMode = 'hold' | 'toggle';
+interface HotkeyBinding { keys: string[]; mode: RecordingMode; }
+
+// Platform detection for key labels and default bindings.
+const isMac = navigator.platform.toLowerCase().includes('mac');
+const isLinux = navigator.platform.toLowerCase().includes('linux');
 
 const KEY_LABELS: Record<string, string> = {
     ControlLeft: 'Ctrl', ControlRight: 'Ctrl R',
-    MetaLeft: 'Win', MetaRight: 'Win R',
+    // MetaLeft/Right label differs by platform
+    MetaLeft: isMac ? 'Cmd' : isLinux ? 'Super' : 'Win',
+    MetaRight: isMac ? 'Cmd R' : isLinux ? 'Super R' : 'Win R',
     ShiftLeft: 'Shift', ShiftRight: 'Shift R',
-    AltLeft: 'Alt', AltRight: 'Alt R',
+    AltLeft: isMac ? 'Option' : 'Alt', AltRight: isMac ? 'Option R' : 'Alt R',
     CapsLock: 'Caps Lock', Escape: 'Esc', Tab: 'Tab',
     F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4',
     F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8',
@@ -17,13 +24,19 @@ const KEY_LABELS: Record<string, string> = {
 
 const ALLOWED_KEYS = new Set(Object.keys(KEY_LABELS));
 
+const DEFAULT_BINDING: HotkeyBinding = {
+    keys: isMac ? ['ControlLeft', 'AltLeft'] : ['ControlLeft', 'MetaLeft'],
+    mode: 'hold',
+};
+
 interface HotkeyTabProps {
     enableOverlay: boolean;
     setEnableOverlay: (val: boolean) => void;
 }
 
 export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
-    const [currentBinding, setCurrentBinding] = useState<HotkeyBinding>({ keys: ['ControlLeft', 'MetaLeft'] });
+    const [currentBinding, setCurrentBinding] = useState<HotkeyBinding>(DEFAULT_BINDING);
+    const [pendingMode, setPendingMode] = useState<RecordingMode>('hold');
     const [recording, setRecording] = useState(false);
     const [heldKeys, setHeldKeys] = useState<string[]>([]);
     const [pendingKeys, setPendingKeys] = useState<string[]>([]);
@@ -36,11 +49,21 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
         const load = async () => {
             try {
                 const store = await Store.load('settings.json');
-                const saved = await store.get<HotkeyBinding>('hotkey_binding');
-                if (saved?.keys?.length) { setCurrentBinding(saved); return; }
+                const saved = await store.get<Partial<HotkeyBinding>>('hotkey_binding');
+                if (saved?.keys?.length) {
+                    // Backward compat: old bindings may not have mode field
+                    const binding: HotkeyBinding = { mode: 'hold', ...saved } as HotkeyBinding;
+                    setCurrentBinding(binding);
+                    setPendingMode(binding.mode);
+                    return;
+                }
             } catch { /* fall through */ }
             const fromRust = await invoke<HotkeyBinding>('get_hotkey').catch(() => null);
-            if (fromRust) setCurrentBinding(fromRust);
+            if (fromRust) {
+                const binding: HotkeyBinding = { mode: 'hold', ...fromRust };
+                setCurrentBinding(binding);
+                setPendingMode(binding.mode);
+            }
         };
         load();
     }, []);
@@ -89,7 +112,7 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
     const saveBinding = async () => {
         const keys = pendingRef.current;
         if (!keys.length) return;
-        const binding: HotkeyBinding = { keys };
+        const binding: HotkeyBinding = { keys, mode: pendingMode };
         try {
             await invoke('set_hotkey', { binding });
             const store = await Store.load('settings.json');
@@ -106,10 +129,31 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
         }
     };
 
+    // When mode changes outside of the capture flow, save immediately with existing keys
+    const handleModeChange = async (mode: RecordingMode) => {
+        setPendingMode(mode);
+        const binding: HotkeyBinding = { ...currentBinding, mode };
+        try {
+            await invoke('set_hotkey', { binding });
+            const store = await Store.load('settings.json');
+            await store.set('hotkey_binding', binding);
+            await store.save();
+            setCurrentBinding(binding);
+            setSaved(true);
+            setTimeout(() => setSaved(false), 2000);
+        } catch (err) {
+            console.error('Failed to save mode:', err);
+        }
+    };
+
     const chips = (keys: string[]) =>
         keys.map((k, i) => <span key={i} className="key-chip">{KEY_LABELS[k] ?? k}</span>);
 
     const captureChips = heldKeys.length > 0 ? heldKeys : pendingKeys;
+
+    const modeDescription = currentBinding.mode === 'hold'
+        ? 'Hold all keys while speaking. Releasing any key stops recording.'
+        : 'Press the hotkey once to start recording, then press it again to stop.';
 
     return (
         <div className="hotkey-tab">
@@ -120,6 +164,23 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
                     Press this combination from any application to start or stop recording.
                     The hotkey works even when Taurscribe is minimised to the tray.
                 </p>
+
+                {/* ── Recording Mode segmented control ── */}
+                <div className="recording-mode-seg" style={{ marginBottom: '16px' }}>
+                    <button
+                        className={currentBinding.mode === 'hold' ? 'active' : ''}
+                        onClick={() => handleModeChange('hold')}
+                    >
+                        Hold to Record
+                    </button>
+                    <button
+                        className={currentBinding.mode === 'toggle' ? 'active' : ''}
+                        onClick={() => handleModeChange('toggle')}
+                    >
+                        Click to Toggle
+                    </button>
+                </div>
+                <p className="setting-card-desc" style={{ marginBottom: '16px' }}>{modeDescription}</p>
 
                 {!recording && (
                     <div className="hotkey-current">
@@ -155,7 +216,7 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
                             <button className="ghost-btn" onClick={cancelRecording}>Cancel</button>
                         </div>
                         <p className="hotkey-supported-keys">
-                            Supported: Ctrl · Shift · Alt · Win/Cmd · Caps Lock · Esc · Tab · F1–F12
+                            Supported: Ctrl · Shift · Alt{isMac ? ' · Option' : ''} · {isMac ? 'Cmd' : isLinux ? 'Super' : 'Win'} · Caps Lock · Esc · Tab · F1–F12
                         </p>
                     </div>
                 )}
@@ -188,13 +249,19 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
             <div className="setting-card" style={{ marginTop: '12px' }}>
                 <h4 className="setting-card-label-plain">How it works</h4>
                 <div className="hotkey-steps">
-                    {[
+                    {(currentBinding.mode === 'hold' ? [
+                        'Focus any text field in any app',
+                        'Hold your hotkey combination',
+                        'Speak naturally while holding',
+                        'Release the hotkey to stop',
+                        'Transcribed text is typed at your cursor',
+                    ] : [
                         'Focus any text field in any app',
                         'Press your hotkey to start recording',
                         'Speak naturally',
                         'Press the hotkey again to stop',
                         'Transcribed text is typed at your cursor',
-                    ].map((text, i) => (
+                    ]).map((text, i) => (
                         <div className="hotkey-step" key={i}>
                             <span className="hotkey-step-num">{String(i + 1).padStart(2, '0')}</span>
                             <span>{text}</span>
