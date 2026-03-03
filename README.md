@@ -172,28 +172,28 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - [x] Audio Lead-in & Tail Silence Padding
 - [ ] Brand Refresh (New Logo)
 - [ ] Toggle Recording Mode (Click-to-Record vs Hold)
-- [ ] Text Snippets / Macros
-- [ ] Custom Dictionary (Proper Nouns)
+ - [x] Text Snippets / Macros
+ - [x] Custom Dictionary (Proper Nouns)
 - [ ] Smart Fallback for Short Audio
 - [ ] Transcription History (Save & revisit past transcriptions)
 - [ ] Recording Duration Timer (Live `00:12` counter while recording)
 - [ ] Multilingual / Language Selector (Whisper supports 90+ languages)
 - [ ] Auto-Start on Boot
-- [ ] Minimize to System Tray
+ - [x] Minimize to System Tray
 - [ ] Live Transcript Display (Show streaming text while recording)
 - [ ] Export Options (`.txt`, `.srt`, `.md`)
 - [ ] Audio Waveform Visualizer
-- [ ] Extended Keyboard Shortcuts
+ - [x] Extended Keyboard Shortcuts
 - [ ] Recording Playback (Listen back to saved `.wav` files)
 - [ ] Speaker Diarization (Label transcript by speaker)
 - [ ] File / Audio Import (Drag-and-drop `.wav`, `.mp3`, `.m4a`)
-- [ ] Smart Punctuation & Formatting
+ - [x] Smart Punctuation & Formatting
 - [ ] Auto-Update Mechanism (Tauri updater plugin)
 - [ ] Accessibility (Screen reader, keyboard navigation, high-contrast)
 - [ ] First Launch & Guide Screen (Onboarding flow)
 - [ ] Overlay Recording Mode (Press and hold to record, release to stop)
 - [ ] Context-aware Paste (Text/Image detection on clipboard)
-- [ ] Visual Listening Overlay
+ - [x] Visual Listening Overlay
 
 ---
 

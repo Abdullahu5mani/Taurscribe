@@ -16,6 +16,7 @@ interface UseEngineSwitchParams {
     storeRef: React.RefObject<Store | null>;
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
     setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
+    asrBackend: "gpu" | "cpu";
 }
 
 /**
@@ -33,6 +34,7 @@ export function useEngineSwitch({
     storeRef,
     setHeaderStatus,
     setTrayState,
+    asrBackend,
 }: UseEngineSwitchParams) {
     const [activeEngine, setActiveEngine] = useState<ASREngine>("whisper");
     const [loadedEngine, setLoadedEngine] = useState<ASREngine | null>(null);
@@ -64,7 +66,7 @@ export function useEngineSwitch({
 
         try {
             await setTrayState("processing");
-            await invoke("switch_model", { modelId });
+            await invoke("switch_model", { modelId, useGpu: asrBackend === "gpu" });
             if (activeEngine !== "whisper") {
                 setActiveEngine("whisper");
                 activeEngineRef.current = "whisper";
@@ -142,7 +144,7 @@ export function useEngineSwitch({
 
         try {
             await setTrayState("processing");
-            await invoke("init_parakeet", { modelId: targetModel });
+            await invoke("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
 
             setCurrentParakeetModel(targetModel);
             setActiveEngine("parakeet");

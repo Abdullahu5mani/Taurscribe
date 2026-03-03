@@ -1,6 +1,4 @@
-html,
-body,
-#root {
+html, body, #root {
   margin: 0;
   padding: 0;
   background: #09090b;
@@ -22,13 +20,8 @@ body,
 }
 
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
@@ -36,8 +29,8 @@ body,
 /* ═══════════════════════════════════════════════════════════════════════════ */
 .anim-recording {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 56px;
+  height: 56px;
 }
 
 .ring {
@@ -48,20 +41,14 @@ body,
   animation: ringPulse 2s ease-out infinite;
 }
 
-.ring-2 {
-  animation-delay: 0.5s;
-}
-
-.ring-3 {
-  animation-delay: 1.0s;
-}
+.ring-2 { animation-delay: 0.5s; }
+.ring-3 { animation-delay: 1.0s; }
 
 @keyframes ringPulse {
   0% {
     transform: scale(0.4);
     opacity: 1;
   }
-
   100% {
     transform: scale(1.1);
     opacity: 0;
@@ -72,13 +59,13 @@ body,
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 12px;
-  height: 12px;
+  width: 16px;
+  height: 16px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   background: #dc2626;
   animation: coreBreathe 1.2s ease-in-out infinite alternate;
-  box-shadow: 0 0 10px rgba(220, 38, 38, 0.6), 0 0 20px rgba(220, 38, 38, 0.3);
+  box-shadow: 0 0 12px rgba(220, 38, 38, 0.6), 0 0 24px rgba(220, 38, 38, 0.3);
 }
 
 @keyframes coreBreathe {
@@ -86,7 +73,6 @@ body,
     transform: translate(-50%, -50%) scale(0.85);
     box-shadow: 0 0 8px rgba(220, 38, 38, 0.5), 0 0 16px rgba(220, 38, 38, 0.2);
   }
-
   to {
     transform: translate(-50%, -50%) scale(1.15);
     box-shadow: 0 0 16px rgba(220, 38, 38, 0.8), 0 0 32px rgba(220, 38, 38, 0.4);
@@ -100,15 +86,8 @@ body,
 }
 
 @keyframes borderGlowRed {
-
-  0%,
-  100% {
-    box-shadow: inset 0 0 15px rgba(220, 38, 38, 0.1);
-  }
-
-  50% {
-    box-shadow: inset 0 0 25px rgba(220, 38, 38, 0.25);
-  }
+  0%, 100% { box-shadow: inset 0 0 15px rgba(220, 38, 38, 0.1); }
+  50%      { box-shadow: inset 0 0 25px rgba(220, 38, 38, 0.25); }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
@@ -116,38 +95,34 @@ body,
 /* ═══════════════════════════════════════════════════════════════════════════ */
 .anim-processing {
   position: relative;
-  width: 34px;
-  height: 34px;
+  width: 48px;
+  height: 48px;
 }
 
 .arc {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 2px solid transparent;
+  border: 2.5px solid transparent;
 }
 
 .arc-1 {
   border-top-color: #eab308;
   animation: spin 1s linear infinite;
 }
-
 .arc-2 {
-  inset: 4px;
+  inset: 5px;
   border-right-color: rgba(234, 179, 8, 0.5);
   animation: spin 1.6s linear infinite reverse;
 }
-
 .arc-3 {
-  inset: 8px;
+  inset: 10px;
   border-bottom-color: rgba(234, 179, 8, 0.3);
   animation: spin 2.2s linear infinite;
 }
 
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
 .overlay-box--transcribing {
@@ -155,17 +130,9 @@ body,
 }
 
 /* Correcting variant – amber/orange tint */
-.anim-correcting .arc-1 {
-  border-top-color: #e09f3e;
-}
-
-.anim-correcting .arc-2 {
-  border-right-color: rgba(224, 159, 62, 0.5);
-}
-
-.anim-correcting .arc-3 {
-  border-bottom-color: rgba(224, 159, 62, 0.3);
-}
+.anim-correcting .arc-1 { border-top-color: #e09f3e; }
+.anim-correcting .arc-2 { border-right-color: rgba(224, 159, 62, 0.5); }
+.anim-correcting .arc-3 { border-bottom-color: rgba(224, 159, 62, 0.3); }
 
 .overlay-box--correcting {
   box-shadow: inset 0 0 20px rgba(224, 159, 62, 0.1);
@@ -175,8 +142,8 @@ body,
 /*  DONE – animated checkmark                                                 */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 .anim-done {
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
 }
 
 .check-svg {
@@ -205,15 +172,11 @@ body,
 }
 
 @keyframes drawCircle {
-  to {
-    stroke-dashoffset: 0;
-  }
+  to { stroke-dashoffset: 0; }
 }
 
 @keyframes drawCheck {
-  to {
-    stroke-dashoffset: 0;
-  }
+  to { stroke-dashoffset: 0; }
 }
 
 .overlay-box--done {

@@ -9,8 +9,11 @@ import { AudioTab } from './settings/AudioTab';
 import { HotkeyTab } from './settings/HotkeyTab';
 import { SoundTab } from './settings/SoundTab';
 import { AboutTab } from './settings/AboutTab';
+import { DictionaryTab } from './settings/DictionaryTab';
+import { SnippetsTab } from './settings/SnippetsTab';
 import { MODELS } from './settings/types';
 import type { DownloadableModel, DownloadProgress } from './settings/types';
+import type { DictEntry, SnippetEntry } from '../hooks/usePersonalization';
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -34,6 +37,14 @@ interface SettingsModalProps {
     soundMuted: boolean;
     setSoundVolume: (v: number) => void;
     setSoundMuted: (m: boolean) => void;
+    dictionary: DictEntry[];
+    addDictEntry: (entry: Omit<DictEntry, "id">) => void;
+    updateDictEntry: (id: string, updates: Partial<Omit<DictEntry, "id">>) => void;
+    removeDictEntry: (id: string) => void;
+    snippets: SnippetEntry[];
+    addSnippet: (entry: Omit<SnippetEntry, "id">) => void;
+    updateSnippet: (id: string, updates: Partial<Omit<SnippetEntry, "id">>) => void;
+    removeSnippet: (id: string) => void;
 }
 
 interface DownloadProgressPayload {
@@ -45,7 +56,7 @@ interface DownloadProgressPayload {
     total_files?: number;
 }
 
-type Tab = 'models' | 'post-processing' | 'audio' | 'hotkey' | 'sound' | 'about';
+type Tab = 'models' | 'post-processing' | 'audio' | 'hotkey' | 'sound' | 'dictionary' | 'snippets' | 'about';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     {
@@ -103,6 +114,29 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
         ),
     },
     {
+        id: 'dictionary',
+        label: 'Dictionary',
+        icon: (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+            </svg>
+        ),
+    },
+    {
+        id: 'snippets',
+        label: 'Snippets',
+        icon: (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="13 2 13 9 20 9" />
+                <path d="M20 9L13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                <line x1="8" y1="13" x2="16" y2="13" />
+                <line x1="8" y1="17" x2="16" y2="17" />
+                <line x1="10" y1="9" x2="8" y2="9" />
+            </svg>
+        ),
+    },
+    {
         id: 'about',
         label: 'About',
         icon: (
@@ -124,6 +158,8 @@ export function SettingsModal({
     transcriptionStyle, setTranscriptionStyle,
     llmBackend, setLlmBackend,
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
+    dictionary, addDictEntry, updateDictEntry, removeDictEntry,
+    snippets, addSnippet, updateSnippet, removeSnippet,
 }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<Tab>('models');
     const [models, setModels] = useState<DownloadableModel[]>(MODELS);
@@ -247,6 +283,24 @@ export function SettingsModal({
                 return <HotkeyTab enableOverlay={enableOverlay} setEnableOverlay={setEnableOverlay} />;
             case 'sound':
                 return <SoundTab soundVolume={soundVolume} soundMuted={soundMuted} setSoundVolume={setSoundVolume} setSoundMuted={setSoundMuted} />;
+            case 'dictionary':
+                return (
+                    <DictionaryTab
+                        dictionary={dictionary}
+                        addDictEntry={addDictEntry}
+                        updateDictEntry={updateDictEntry}
+                        removeDictEntry={removeDictEntry}
+                    />
+                );
+            case 'snippets':
+                return (
+                    <SnippetsTab
+                        snippets={snippets}
+                        addSnippet={addSnippet}
+                        updateSnippet={updateSnippet}
+                        removeSnippet={removeSnippet}
+                    />
+                );
             case 'about':
                 return <AboutTab />;
         }

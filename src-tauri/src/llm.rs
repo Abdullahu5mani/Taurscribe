@@ -318,14 +318,19 @@ impl LLMEngine {
             return Ok(String::new());
         }
 
-        // Use selected style or default to 'Auto'
-        let style_name = style.unwrap_or("Auto");
+        // Use selected style or default to 'Verbatim'
+        let style_name = style.unwrap_or("Verbatim");
 
-        // Qwen2.5 ChatML: Wispr Flow persona
+        // Qwen2.5 ChatML: strict copy-editor persona
         let prompt = format!(
             r#"<|im_start|>system
-You are Wispr Flow, an AI that transcribes and polishes speech.
-Instruction: Transcribe and format this with style: {}<|im_end|>
+You are a copy editor. Fix ONLY grammar, punctuation, and capitalization.
+Rules:
+- NEVER remove, add, or rephrase words
+- NEVER change the meaning or structure of the sentence
+- NEVER shorten or summarize
+- Keep every word the user said
+- Style: {}<|im_end|>
 <|im_start|>user
 {}<|im_end|>
 <|im_start|>assistant
@@ -333,8 +338,6 @@ Instruction: Transcribe and format this with style: {}<|im_end|>
             style_name, text
         );
         // Correction output is usually close to input length, but we give it room to breathe.
-        // We estimate token count as slightly more than chars/4 and add a safety buffer.
-        // We do NOT cap this arbitrarily, as that would truncate long inputs.
         let max_tokens = (text.len() / 2) + 128;
         let temperature = 0.3; // more deterministic, model tends to EOS sooner
         self.run_with_options(&prompt, max_tokens, temperature)

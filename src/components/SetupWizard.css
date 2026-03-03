@@ -100,7 +100,7 @@
 
 /* ── Shared step typography ────────────────────────────────── */
 .setup-eyebrow {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.18em;
@@ -110,7 +110,7 @@
 }
 
 .setup-heading {
-  font-family: 'Syne', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 2.6rem;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -122,7 +122,7 @@
 }
 
 .setup-sub {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.95rem;
   color: var(--text-secondary, #6b6b76);
   text-align: center;
@@ -146,7 +146,7 @@
 }
 
 .setup-btn {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -184,7 +184,7 @@
    ───────────────────────────────────────────────────────────── */
 
 .welcome-logo {
-  font-family: 'Syne', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 3.2rem;
   font-weight: 800;
   letter-spacing: 0.22em;
@@ -215,7 +215,7 @@
 }
 
 .welcome-tagline {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 1rem;
   color: var(--text-secondary, #6b6b76);
   letter-spacing: 0.05em;
@@ -239,7 +239,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.9rem;
   color: var(--text-primary, #ededef);
   opacity: 0;
@@ -327,7 +327,7 @@
 }
 
 .hw-label {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -338,7 +338,7 @@
 }
 
 .hw-value {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.85rem;
   color: var(--text-primary, #ededef);
   flex: 1;
@@ -357,7 +357,7 @@
 .hw-status--bad { background: var(--error, #dc2626); }
 
 .hw-verdict {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.9rem;
   color: var(--text-secondary, #6b6b76);
   text-align: center;
@@ -395,7 +395,7 @@
 .engine-card:nth-child(2) { animation-delay: 0.25s; border-top: 2px solid var(--parakeet-color, #3ecfa5); }
 
 .engine-card-name {
-  font-family: 'Syne', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 1.1rem;
   font-weight: 800;
   letter-spacing: 0.1em;
@@ -405,7 +405,7 @@
 .engine-card:nth-child(2) .engine-card-name { color: var(--parakeet-color, #3ecfa5); }
 
 .engine-card-source {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.6rem;
   letter-spacing: 0.08em;
   color: var(--text-muted, #44444d);
@@ -423,7 +423,7 @@
 }
 
 .engine-card-trait {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.82rem;
   color: var(--text-secondary, #6b6b76);
   display: flex;
@@ -441,7 +441,7 @@
 }
 
 .engines-note {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.85rem;
   color: var(--text-muted, #44444d);
   text-align: center;
@@ -493,7 +493,7 @@
 }
 
 .hotkey-key {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.05em;
@@ -507,7 +507,7 @@
 }
 
 .hotkey-plus {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 1.4rem;
   color: var(--text-muted, #44444d);
 }
@@ -536,7 +536,7 @@
 .hotkey-step:nth-child(5) { animation-delay: 0.8s; }
 
 .hotkey-step-num {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.65rem;
   font-weight: 600;
   color: var(--accent-primary, #e09f3e);
@@ -545,13 +545,13 @@
 }
 
 .hotkey-step-text {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.9rem;
   color: var(--text-secondary, #6b6b76);
 }
 
 .hotkey-privacy {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.65rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -579,7 +579,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.9rem;
   color: var(--text-secondary, #6b6b76);
   opacity: 0;
@@ -604,7 +604,7 @@
 }
 
 .ready-cta-note {
-  font-family: 'Outfit', sans-serif;
+  font-family: 'Barlow', sans-serif;
   font-size: 0.9rem;
   color: var(--text-muted, #44444d);
   text-align: center;

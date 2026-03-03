@@ -12,6 +12,7 @@ import { usePostProcessing } from "./hooks/usePostProcessing";
 import { useEngineSwitch } from "./hooks/useEngineSwitch";
 import { useRecording } from "./hooks/useRecording";
 import { useSounds } from "./hooks/useSounds";
+import { usePersonalization } from "./hooks/usePersonalization";
 import "./components/TitleBar.css";
 import "./App.css";
 
@@ -138,6 +139,7 @@ function App() {
     enableOverlay, setEnableOverlay, enableOverlayRef,
     transcriptionStyle, setTranscriptionStyle, transcriptionStyleRef,
     llmBackend, setLlmBackend,
+    asrBackend, setAsrBackend,
   } = usePostProcessing(setHeaderStatus);
 
   const {
@@ -149,10 +151,15 @@ function App() {
   } = useEngineSwitch({
     models, parakeetModels, currentModel, currentParakeetModel,
     setCurrentModel, setCurrentParakeetModel, setBackendInfo,
-    storeRef, setHeaderStatus, setTrayState,
+    storeRef, setHeaderStatus, setTrayState, asrBackend,
   });
 
   const { volume, muted, setVolume, setMuted, playStart, playPaste, playError } = useSounds();
+
+  const {
+    dictionary, dictionaryRef, addDictEntry, updateDictEntry, removeDictEntry,
+    snippets, snippetsRef, addSnippet, updateSnippet, removeSnippet,
+  } = usePersonalization();
 
   const {
     isRecording, isRecordingRef, isProcessingTranscript, isCorrecting,
@@ -163,6 +170,7 @@ function App() {
     setCurrentModel, setLoadedEngine, enableGrammarLMRef, enableSpellCheckRef,
     enableDenoiseRef, enableOverlayRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
     playStart, playPaste, playError,
+    dictionaryRef, snippetsRef,
   });
 
   // --- Copy reset animation ---
@@ -487,7 +495,17 @@ function App() {
             </button>
           </div>
           <div className="hardware-bar">
-            Hardware: <span>{backendInfo}</span>
+            <span>Hardware: <span>{backendInfo}</span></span>
+            <div className="backend-toggle-inline">
+              <button
+                className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
+                onClick={() => setAsrBackend('gpu')}
+              >⚡ GPU</button>
+              <button
+                className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
+                onClick={() => setAsrBackend('cpu')}
+              >🔋 CPU</button>
+            </div>
           </div>
         </div>
 
@@ -543,7 +561,7 @@ function App() {
             <div className="status-item">
               <span className="status-label">Model</span>
               <span className={`status-value ${parakeetModels.length === 0 ? "error" : ""}`}>
-                {parakeetModels.length === 0 ? "Download required" : beautifyModelName((parakeetModels.find(m => m.id === currentParakeetModel) ?? parakeetModels[0]).display_name)}
+                {parakeetModels.length === 0 ? "Download required" : (parakeetModels.find(m => m.id === currentParakeetModel) ?? parakeetModels[0]).display_name.split(' - ')[0].replace(/\s*\(.*?\)/g, '').trim()}
               </span>
             </div>
           </div>
@@ -737,6 +755,14 @@ function App() {
           soundMuted={muted}
           setSoundVolume={setVolume}
           setSoundMuted={setMuted}
+          dictionary={dictionary}
+          addDictEntry={addDictEntry}
+          updateDictEntry={updateDictEntry}
+          removeDictEntry={removeDictEntry}
+          snippets={snippets}
+          addSnippet={addSnippet}
+          updateSnippet={updateSnippet}
+          removeSnippet={removeSnippet}
         />
       </main>
     </>
