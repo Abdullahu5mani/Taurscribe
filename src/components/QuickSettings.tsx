@@ -1,4 +1,6 @@
 
+import { IconBolt, IconCpu, IconVolumeHigh, IconVolumeLow, IconVolumeMuted } from "./Icons";
+
 interface QuickSettingsProps {
     // Post-processing toggles
     enableGrammarLM: boolean;
@@ -25,7 +27,7 @@ interface QuickSettingsProps {
     dictionaryCount: number;
     snippetsCount: number;
     // Nav
-    onOpenSettings: () => void;
+    onOpenSettingsTab: (tab?: string) => void;
 }
 
 
@@ -77,7 +79,7 @@ export function QuickSettings({
     llmBackend, setLlmBackend,
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
     dictionaryCount, snippetsCount,
-    onOpenSettings,
+    onOpenSettingsTab,
 }: QuickSettingsProps) {
     const llmHint =
         llmStatus === "Not Downloaded" ? "not downloaded" :
@@ -91,7 +93,7 @@ export function QuickSettings({
                 <button
                     type="button"
                     className="qs-settings-link"
-                    onClick={onOpenSettings}
+                    onClick={() => onOpenSettingsTab()}
                     title="Open full settings"
                     aria-label="Open settings"
                 >
@@ -148,12 +150,12 @@ export function QuickSettings({
                         type="button"
                         className={`qs-backend-btn${llmBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
                         onClick={() => setLlmBackend("gpu")}
-                    >⚡ GPU</button>
+                    ><IconBolt size={12} style={{ color: '#facc15' }} /> GPU</button>
                     <button
                         type="button"
                         className={`qs-backend-btn${llmBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
                         onClick={() => setLlmBackend("cpu")}
-                    >🔋 CPU</button>
+                    ><IconCpu size={12} /> CPU</button>
                 </div>
 
                 {/* ── Sound ───────────────────────────────────── */}
@@ -165,7 +167,7 @@ export function QuickSettings({
                         onClick={() => setSoundMuted(!soundMuted)}
                         title={soundMuted ? "Unmute sounds" : "Mute sounds"}
                     >
-                        {soundMuted ? "🔇" : soundVolume > 50 ? "🔊" : "🔉"}
+                        {soundMuted ? <IconVolumeMuted size={14} /> : soundVolume > 50 ? <IconVolumeHigh size={14} /> : <IconVolumeLow size={14} />}
                     </button>
                     <input
                         type="range"
@@ -186,11 +188,11 @@ export function QuickSettings({
 
                 {/* ── Personalisation ─────────────────────────── */}
                 <Section label="Personalisation" />
-                <button type="button" className="qs-personal-row" onClick={onOpenSettings}>
+                <button type="button" className="qs-personal-row" onClick={() => onOpenSettingsTab('dictionary')}>
                     <span>Dictionary</span>
                     <span className="qs-personal-count">{dictionaryCount} entries →</span>
                 </button>
-                <button type="button" className="qs-personal-row" onClick={onOpenSettings}>
+                <button type="button" className="qs-personal-row" onClick={() => onOpenSettingsTab('snippets')}>
                     <span>Snippets</span>
                     <span className="qs-personal-count">{snippetsCount} entries →</span>
                 </button>
