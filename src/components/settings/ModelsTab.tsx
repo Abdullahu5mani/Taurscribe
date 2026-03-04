@@ -8,59 +8,57 @@ type WhisperTier = 'Tiny' | 'Base' | 'Small' | 'Medium' | 'Large';
 const TIERS: WhisperTier[] = ['Tiny', 'Base', 'Small', 'Medium', 'Large'];
 
 const TIER_DESCRIPTIONS: Record<WhisperTier, string> = {
-    Tiny:   'Fastest · lowest accuracy · great for quick dictation on any hardware',
-    Base:   'Good balance of speed and accuracy · solid starting point',
-    Small:  'High accuracy · reasonable speed · best all-rounder',
+    Tiny: 'Fastest · lowest accuracy · great for quick dictation on any hardware',
+    Base: 'Good balance of speed and accuracy · solid starting point',
+    Small: 'High accuracy · reasonable speed · best all-rounder',
     Medium: 'Very high accuracy · slower · needs 8 GB RAM',
-    Large:  'Best possible accuracy · slowest · requires 10 GB+ RAM/VRAM',
+    Large: 'Best possible accuracy · slowest · requires 10 GB+ RAM/VRAM',
 };
 
 const TIER_MODEL_IDS: Record<WhisperTier, string[]> = {
-    Tiny:   ['whisper-tiny-en-q5_1', 'whisper-tiny-en', 'whisper-tiny-q5_1', 'whisper-tiny'],
-    Base:   ['whisper-base-en-q5_1', 'whisper-base-en', 'whisper-base-q5_1', 'whisper-base'],
-    Small:  ['whisper-small-en-q5_1', 'whisper-small-en', 'whisper-small-q5_1', 'whisper-small'],
+    Tiny: ['whisper-tiny-en-q5_1', 'whisper-tiny-en', 'whisper-tiny-q5_1', 'whisper-tiny'],
+    Base: ['whisper-base-en-q5_1', 'whisper-base-en', 'whisper-base-q5_1', 'whisper-base'],
+    Small: ['whisper-small-en-q5_1', 'whisper-small-en', 'whisper-small-q5_1', 'whisper-small'],
     Medium: ['whisper-medium-en-q5_0', 'whisper-medium-en', 'whisper-medium-q5_0', 'whisper-medium'],
-    Large:  ['whisper-large-v3-turbo-q5_0', 'whisper-large-v3-turbo', 'whisper-large-v3-q5_0', 'whisper-large-v3'],
+    Large: ['whisper-large-v3-turbo-q5_0', 'whisper-large-v3-turbo', 'whisper-large-v3-q5_0', 'whisper-large-v3'],
 };
 
 const TIER_RECOMMENDED: Record<WhisperTier, string> = {
-    Tiny:   'whisper-tiny-en-q5_1',
-    Base:   'whisper-base-en-q5_1',
-    Small:  'whisper-small-en-q5_1',
+    Tiny: 'whisper-tiny-en-q5_1',
+    Base: 'whisper-base-en-q5_1',
+    Small: 'whisper-small-en-q5_1',
     Medium: 'whisper-medium-en-q5_0',
-    Large:  'whisper-large-v3-turbo-q5_0',
+    Large: 'whisper-large-v3-turbo-q5_0',
 };
 
 const TIER_COREML_IDS: Record<WhisperTier, string[]> = {
-    Tiny:   ['whisper-tiny-en-coreml', 'whisper-tiny-coreml'],
-    Base:   ['whisper-base-en-coreml', 'whisper-base-coreml'],
-    Small:  ['whisper-small-en-coreml', 'whisper-small-coreml'],
+    Tiny: ['whisper-tiny-en-coreml', 'whisper-tiny-coreml'],
+    Base: ['whisper-base-en-coreml', 'whisper-base-coreml'],
+    Small: ['whisper-small-en-coreml', 'whisper-small-coreml'],
     Medium: ['whisper-medium-en-coreml', 'whisper-medium-coreml'],
-    Large:  ['whisper-large-v3-turbo-coreml', 'whisper-large-v3-coreml'],
+    Large: ['whisper-large-v3-turbo-coreml', 'whisper-large-v3-coreml'],
 };
 
 interface ModelsTabProps {
     models: DownloadableModel[];
     downloadProgress: Record<string, DownloadProgress>;
     onDownload: (id: string, name: string) => void;
-    onDelete: (id: string, name: string) => void;
-    onVerify: (id: string, name: string) => void;
+    onDelete: (id: string, name: string) => Promise<void>;
 }
 
-export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onVerify }: ModelsTabProps) {
+export function ModelsTab({ models, downloadProgress, onDownload, onDelete }: ModelsTabProps) {
     const [activeTier, setActiveTier] = useState<WhisperTier>('Small');
     const [platform, setPlatform] = useState('');
 
     useEffect(() => {
-        invoke<string>('get_platform').then(setPlatform).catch(() => {});
+        invoke<string>('get_platform').then(setPlatform).catch(() => { });
     }, []);
 
     const isMac = platform === 'macos';
-    const rowProps = { downloadProgress, onDownload, onDelete, onVerify };
+    const rowProps = { downloadProgress, onDownload, onDelete };
 
     const parakeetModels = models.filter(m => m.type === 'Parakeet');
     const llmModels = models.filter(m => m.type === 'LLM');
-    const utilityModels = models.filter(m => m.type === 'Utility');
     const coremlModels = models.filter(m => m.type === 'CoreML');
 
     const tierModels = TIER_MODEL_IDS[activeTier]
@@ -145,11 +143,10 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onVe
             <div className="model-group">
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Post-Processing</h3>
-                    <span className="model-group-sub">optional · grammar correction &amp; spell check</span>
+                    <span className="model-group-sub">optional · grammar correction</span>
                 </div>
                 <div className="model-list">
                     {llmModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
-                    {utilityModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
                 </div>
             </div>
 

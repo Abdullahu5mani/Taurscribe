@@ -6,9 +6,6 @@ interface PostProcessingTabProps {
     setLlmBackend: (val: 'gpu' | 'cpu') => void;
     transcriptionStyle: string;
     setTranscriptionStyle: (val: string) => void;
-    enableSpellCheck: boolean;
-    setEnableSpellCheck: (val: boolean) => void;
-    spellCheckStatus: string;
 }
 
 const STYLES = [
@@ -29,10 +26,10 @@ function statusColor(status: string, enabled: boolean): string {
 export function PostProcessingTab({
     enableGrammarLM, setEnableGrammarLM, llmStatus, llmBackend, setLlmBackend,
     transcriptionStyle, setTranscriptionStyle,
-    enableSpellCheck, setEnableSpellCheck, spellCheckStatus,
 }: PostProcessingTabProps) {
     const llmLoading = llmStatus === 'Loading...';
     const llmLoaded = llmStatus === 'Loaded';
+    const llmNotDownloaded = llmStatus === 'Not Downloaded';
     const llmBackendLocked = enableGrammarLM; // can't change backend while model is loaded/loading
 
     return (
@@ -46,14 +43,14 @@ export function PostProcessingTab({
                     <div className="setting-card-label">
                         <span className="status-dot" style={{ background: statusColor(llmStatus, enableGrammarLM) }} />
                         <span>Grammar LLM</span>
-                        <span className="setting-card-meta">Qwen 2.5 0.5B · GGUF</span>
+                        <span className="setting-card-meta">FlowScribe Qwen 2.5 0.5B · GGUF</span>
                     </div>
-                    <label className={`switch ${llmLoading ? 'switch--disabled' : ''}`}>
+                    <label className={`switch ${llmLoading || llmNotDownloaded ? 'switch--disabled' : ''}`}>
                         <input
                             type="checkbox"
                             checked={enableGrammarLM}
                             onChange={e => setEnableGrammarLM(e.target.checked)}
-                            disabled={llmLoading}
+                            disabled={llmLoading || llmNotDownloaded}
                         />
                         <span className="slider round" />
                     </label>
@@ -61,6 +58,12 @@ export function PostProcessingTab({
                 <p className="setting-card-desc">
                     Runs a local LLM after each recording to fix grammar, punctuation, and formatting.
                 </p>
+
+                {llmNotDownloaded && (
+                    <p className="setting-card-desc" style={{ color: '#ef4444', marginTop: '8px' }}>
+                        Model not downloaded. Download FlowScribe Qwen from the <strong>Models</strong> tab.
+                    </p>
+                )}
 
                 <div className="setting-row">
                     <span className="setting-row-label">Status</span>
@@ -118,35 +121,6 @@ export function PostProcessingTab({
                             {s.label}
                         </button>
                     ))}
-                </div>
-            </div>
-
-            {/* ── Spell Check ─────────────────────────────────────── */}
-            <h3 className="settings-section-title" style={{ marginTop: '32px' }}>Spell Check</h3>
-
-            <div className="setting-card">
-                <div className="setting-card-header">
-                    <div className="setting-card-label">
-                        <span className="status-dot" style={{ background: statusColor(spellCheckStatus, enableSpellCheck) }} />
-                        <span>SymSpell Dictionary</span>
-                        <span className="setting-card-meta">English · 82k words</span>
-                    </div>
-                    <label className={`switch ${spellCheckStatus === 'Loading...' ? 'switch--disabled' : ''}`}>
-                        <input
-                            type="checkbox"
-                            checked={enableSpellCheck}
-                            onChange={e => setEnableSpellCheck(e.target.checked)}
-                            disabled={spellCheckStatus === 'Loading...'}
-                        />
-                        <span className="slider round" />
-                    </label>
-                </div>
-                <p className="setting-card-desc">
-                    Fast dictionary-based spelling correction applied after transcription. Runs before the grammar LLM.
-                </p>
-                <div className="setting-row">
-                    <span className="setting-row-label">Status</span>
-                    <span className="status-badge" style={{ color: statusColor(spellCheckStatus, true) }}>{spellCheckStatus}</span>
                 </div>
             </div>
 

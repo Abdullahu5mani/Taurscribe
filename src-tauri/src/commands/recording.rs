@@ -1,5 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::unbounded;
+use std::sync::{Arc, atomic::{AtomicBool, AtomicU32, Ordering}};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::{RecordingHandle, SendStream};
@@ -13,6 +14,14 @@ use crate::utils::{clean_transcript, get_recordings_dir, normalize_audio};
 /// This initializes the microphone, files, and processing threads.
 #[tauri::command]
 pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise: Option<bool>) -> Result<String, String> {
+    // Guard: reject if already recording (e.g. spam hotkey)
+    {
+        let handle = state.recording_handle.lock().unwrap();
+        if handle.is_some() {
+            return Err("Already recording".to_string());
+        }
+    }
+
     let denoise_enabled = denoise.unwrap_or(false);
     // 1. Setup Microphone
     let host = cpal::default_host();
@@ -119,9 +128,17 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
                     }
                     let mut chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
                     normalize_audio(&mut chunk);
-                    let is_speech = vad.lock().unwrap().is_speech(&chunk).unwrap_or(0.5);
+                    // VAD expects 16kHz — downsample from device rate before checking
+                    let vad_chunk: Vec<f32> = if sample_rate != 16000 {
+                        let ratio = sample_rate as f64 / 16000.0;
+                        let out_len = (chunk.len() as f64 / ratio) as usize;
+                        (0..out_len).map(|i| chunk[(i as f64 * ratio) as usize]).collect()
+                    } else {
+                        chunk.clone()
+                    };
+                    let is_speech = vad.lock().unwrap().is_speech(&vad_chunk).unwrap_or(0.5);
 
-                    if is_speech > 0.5 {
+                    if is_speech > 0.35 {
                         println!(
                             "[PROCESSING] 🎙️ Speech ({:.0}%) - Transcribing {:.2}s chunk...",
                             is_speech * 100.0,
@@ -255,6 +272,28 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
     let channels = config.channels as usize;
     let denoiser_arc = state.denoiser.clone();
 
+    // Audio level metering: the cpal callback writes a float (as AtomicU32 bits)
+    // and a dedicated thread reads it every 50ms to emit the Tauri event.
+    // We do NOT call emit() from inside the cpal callback because on Windows
+    // the WASAPI callback runs on a COM apartment thread where Tauri IPC fails.
+    let audio_level = Arc::new(AtomicU32::new(0u32));
+    let audio_level_writer = audio_level.clone();
+    let level_counter = Arc::new(AtomicU32::new(0));
+    let level_counter_clone = level_counter.clone();
+
+    let level_stop = Arc::new(AtomicBool::new(false));
+    let level_stop_clone = level_stop.clone();
+    let app_for_level = app_handle.clone();
+
+    let level_thread = std::thread::spawn(move || {
+        while !level_stop_clone.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let bits = audio_level.load(Ordering::Relaxed);
+            let level = f32::from_bits(bits);
+            let _ = app_for_level.emit("audio-level", level);
+        }
+    });
+
     // 10. Start the Microphone Stream
     let stream = device
         .build_input_stream(
@@ -282,6 +321,16 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
                     mono_data
                 };
 
+                // Store audio level in atomic for the emitter thread to pick up.
+                // Only compute every ~5 callbacks to avoid unnecessary work.
+                let cnt = level_counter_clone.fetch_add(1, Ordering::Relaxed);
+                if cnt % 5 == 0 && !data.is_empty() {
+                    let rms = (data.iter().map(|&s| s * s).sum::<f32>()
+                        / data.len() as f32).sqrt();
+                    let level = (rms / 0.015_f32).min(1.0_f32).sqrt();
+                    audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
+                }
+
                 whisper_tx_clone.send(transcriber_data).ok();
             },
             move |err| {
@@ -299,6 +348,8 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
         whisper_tx,
         writer_thread,
         transcriber_thread,
+        level_stop,
+        level_thread,
         sample_rate,
     });
 
@@ -435,9 +486,19 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
 
     let mut handle = state.recording_handle.lock().unwrap();
     if let Some(recording) = handle.take() {
+        // Tail capture: keep mic open briefly to capture the last syllable
+        // (e.g. "LLM design?" — "design?" often gets cut when releasing the hotkey)
+        std::thread::sleep(std::time::Duration::from_millis(220));
+
         drop(recording.stream);
         drop(recording.file_tx);
         drop(recording.whisper_tx);
+
+        // Signal the audio-level emitter thread to exit and join it.
+        recording.level_stop.store(true, Ordering::Relaxed);
+        if let Err(e) = recording.level_thread.join() {
+            eprintln!("[ERROR] Level thread panicked: {:?}", e);
+        }
 
         // Join the threads to ensure they finish processing before we proceed.
         // This is CRITICAL for Parakeet which relies on the transcript built by the thread.
@@ -455,8 +516,8 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
         if active_engine == ASREngine::Parakeet {
             println!("[PROCESSING] Skipping final pass (Parakeet streaming is sufficient)");
             let transcript = state.session_transcript.lock().unwrap().clone();
-            let final_text = if transcript.is_empty() {
-                "Recording saved.".to_string()
+            let final_text = if transcript.trim().is_empty() {
+                String::new() // Don't return "Recording saved." — nothing to paste
             } else {
                 clean_transcript(&transcript)
             };
@@ -490,11 +551,12 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
             let mut vad = state.vad.lock().unwrap();
             let timestamps = vad.get_speech_timestamps(&audio_data, 500)?;
 
-            if timestamps.is_empty() {
-                return Ok("[silence]".to_string());
-            }
-
             let mut clean = Vec::with_capacity(audio_data.len());
+            if timestamps.is_empty() {
+                // VAD found nothing — let Whisper decide rather than hard-failing
+                println!("[VAD] No speech segments found, passing full audio to Whisper as fallback");
+                clean.extend_from_slice(&audio_data);
+            }
             for (start, end) in timestamps {
                 let s = (start * 16000.0) as usize;
                 let e = (end * 16000.0) as usize;

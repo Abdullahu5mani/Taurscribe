@@ -1,21 +1,78 @@
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;
 
-use super::model_registry::get_model_config;
+use super::model_registry::{get_model_config, ModelFile};
+
+// ── Verification store ────────────────────────────────────────────────────────
+
+/// One entry in verified.json per model.
+#[derive(Clone, Serialize, Deserialize)]
+struct VerifiedEntry {
+    /// Concatenated SHA-256 hashes of all files, joined with "+".
+    /// Matches against the current registry hashes to detect stale records.
+    fingerprint: String,
+    verified_at: String,
+}
+
+type VerifiedStore = HashMap<String, VerifiedEntry>;
+
+/// Path to verified.json inside the models directory.
+fn verified_store_path() -> Result<std::path::PathBuf, String> {
+    let dir = crate::utils::get_models_dir().map_err(|e| e.to_string())?;
+    Ok(dir.join("verified.json"))
+}
+
+fn load_verified_store() -> VerifiedStore {
+    let path = match verified_store_path() {
+        Ok(p) => p,
+        Err(_) => return HashMap::new(),
+    };
+    let Ok(data) = std::fs::read_to_string(&path) else {
+        return HashMap::new();
+    };
+    serde_json::from_str(&data).unwrap_or_default()
+}
+
+fn save_verified_store(store: &VerifiedStore) {
+    let Ok(path) = verified_store_path() else {
+        return;
+    };
+    if let Ok(json) = serde_json::to_string_pretty(store) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// Build the expected fingerprint from the registry (all sha256 values joined with "+").
+/// Returns an empty string if no file has a hash (verification disabled).
+fn registry_fingerprint(files: &[ModelFile]) -> String {
+    files
+        .iter()
+        .map(|f| f.sha1) // sha1 field now holds SHA-256
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// Returns true if all hashes in the fingerprint are empty (verification disabled).
+fn fingerprint_is_empty(fp: &str) -> bool {
+    fp.split('+').all(|h| h.is_empty())
+}
+
+// ── Public types ──────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DownloadProgressPayload {
     pub model_id: String,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
-    pub status: String,    // "downloading", "verifying", "done", "error"
-    pub current_file: u32, // Current file being downloaded (1-indexed)
-    pub total_files: u32,  // Total number of files to download
+    pub status: String, // "downloading" | "verifying" | "done" | "error"
+    pub current_file: u32,
+    pub total_files: u32,
 }
 
 #[derive(Serialize)]
@@ -26,106 +83,7 @@ pub struct ModelStatus {
     pub size_on_disk: u64,
 }
 
-#[tauri::command]
-pub async fn verify_model_hash(app: AppHandle, model_id: String) -> Result<bool, String> {
-    let config =
-        get_model_config(&model_id).ok_or_else(|| format!("Unknown model ID: {}", model_id))?;
-
-    let has_any_hash = config.files.iter().any(|f| !f.sha1.is_empty());
-    if !has_any_hash {
-        return Ok(true);
-    }
-
-    let models_dir =
-        crate::utils::get_models_dir().map_err(|e| format!("Failed to get models dir: {}", e))?;
-    let base_dir = if let Some(subdir) = config.subdirectory {
-        models_dir.join(subdir)
-    } else {
-        models_dir.clone()
-    };
-
-    let total_files = config.files.len();
-    let mut verified_count = 0;
-
-    for (i, file_spec) in config.files.iter().enumerate() {
-        if file_spec.sha1.is_empty() {
-            continue;
-        }
-
-        let file_path = base_dir.join(file_spec.filename);
-        if !file_path.exists() {
-            return Err(format!("File not found: {}", file_spec.filename));
-        }
-
-        println!(
-            "[VERIFY] Calculating SHA1 for {} ({}/{})...",
-            file_spec.filename,
-            i + 1,
-            total_files
-        );
-        let _ = app.emit(
-            "download-progress",
-            DownloadProgressPayload {
-                model_id: model_id.clone(),
-                total_bytes: 0,
-                downloaded_bytes: 0,
-                status: "verifying".to_string(),
-                current_file: (i + 1) as u32,
-                total_files: total_files as u32,
-            },
-        );
-
-        let mut file = File::open(&file_path).map_err(|e| e.to_string())?;
-        let mut hasher = sha1::Sha1::new();
-        let mut buffer = [0; 8192];
-        use sha1::Digest;
-
-        loop {
-            let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
-            if count == 0 {
-                break;
-            }
-            hasher.update(&buffer[..count]);
-        }
-
-        let result = hasher.finalize();
-        let hash_hex = hex::encode(result);
-
-        println!(
-            "[VERIFY] {} SHA1: Expected {}, Got {}",
-            file_spec.filename, file_spec.sha1, hash_hex
-        );
-
-        if hash_hex != file_spec.sha1 {
-            return Err(format!(
-                "Hash mismatch for {}: Expected {}, Got {}",
-                file_spec.filename, file_spec.sha1, hash_hex
-            ));
-        }
-        verified_count += 1;
-    }
-
-    if verified_count > 0 {
-        let verified_marker = base_dir.join(format!("{}.verified", config.files[0].filename));
-        if let Ok(mut v_file) = File::create(&verified_marker) {
-            let _ = v_file.write_all(b"verified");
-        }
-    }
-
-    let _ = app.emit(
-        "download-progress",
-        DownloadProgressPayload {
-            model_id: model_id.clone(),
-            total_bytes: 100,
-            downloaded_bytes: 100,
-            status: "done".to_string(),
-            current_file: total_files as u32,
-            total_files: total_files as u32,
-        },
-    );
-
-    Ok(true)
-}
+// ── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_download_status(
@@ -134,6 +92,7 @@ pub async fn get_download_status(
 ) -> Result<Vec<ModelStatus>, String> {
     let models_dir =
         crate::utils::get_models_dir().map_err(|e| format!("Failed to get models dir: {}", e))?;
+    let store = load_verified_store();
 
     let mut statuses = Vec::new();
 
@@ -145,9 +104,7 @@ pub async fn get_download_status(
                 models_dir.clone()
             };
 
-            let verified_marker = base_dir.join(format!("{}.verified", config.files[0].filename));
-            let mut verified = verified_marker.exists();
-
+            // Check all files exist on disk and sum their sizes.
             let mut all_exist = true;
             let mut total_size: u64 = 0;
 
@@ -155,8 +112,7 @@ pub async fn get_download_status(
                 let file_path = base_dir.join(file_spec.filename);
                 if file_path.exists() {
                     if file_path.is_dir() {
-                        // CoreML .mlmodelc directories — mark as present with size 1
-                        total_size += 1;
+                        total_size += 1; // CoreML .mlmodelc directories
                     } else if let Ok(metadata) = std::fs::metadata(&file_path) {
                         total_size += metadata.len();
                     } else {
@@ -168,9 +124,22 @@ pub async fn get_download_status(
             }
 
             let downloaded = all_exist && total_size > 0;
-            if !downloaded {
-                verified = false;
-            }
+
+            // Verification: compare stored fingerprint against the current registry.
+            let verified = if !downloaded {
+                false
+            } else {
+                let expected_fp = registry_fingerprint(&config.files);
+                if fingerprint_is_empty(&expected_fp) {
+                    // No hashes in registry → treat as verified (nothing to check).
+                    true
+                } else {
+                    match store.get(&id) {
+                        Some(entry) => entry.fingerprint == expected_fp,
+                        None => false,
+                    }
+                }
+            };
 
             statuses.push(ModelStatus {
                 id,
@@ -182,42 +151,6 @@ pub async fn get_download_status(
     }
 
     Ok(statuses)
-}
-
-#[tauri::command]
-pub async fn delete_model(_app: AppHandle, model_id: String) -> Result<String, String> {
-    let config =
-        get_model_config(&model_id).ok_or_else(|| format!("Unknown model ID: {}", model_id))?;
-    let models_dir =
-        crate::utils::get_models_dir().map_err(|e| format!("Failed to get models dir: {}", e))?;
-
-    let base_dir = if let Some(subdir) = config.subdirectory {
-        models_dir.join(subdir)
-    } else {
-        models_dir.clone()
-    };
-
-    for file_spec in &config.files {
-        let file_path = base_dir.join(file_spec.filename);
-        if file_path.exists() {
-            if file_path.is_dir() {
-                let _ = std::fs::remove_dir_all(&file_path);
-            } else {
-                let _ = std::fs::remove_file(&file_path);
-            }
-        }
-    }
-
-    let verified_marker = base_dir.join(format!("{}.verified", config.files[0].filename));
-    if verified_marker.exists() {
-        let _ = std::fs::remove_file(&verified_marker);
-    }
-
-    if config.subdirectory.is_some() {
-        let _ = std::fs::remove_dir(&base_dir);
-    }
-
-    Ok(format!("Deleted model {}", model_id))
 }
 
 #[tauri::command]
@@ -240,6 +173,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
 
     let files_count = config.files.len();
 
+    // ── Download phase ────────────────────────────────────────────────────────
     for (i, file_spec) in config.files.iter().enumerate() {
         let url = if config.repo.starts_with("github:") {
             let repo_path = config.repo.trim_start_matches("github:");
@@ -254,17 +188,15 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
             )
         };
 
-        // For zip files (e.g. CoreML encoders), download to a temp .zip path then extract.
         let is_zip = file_spec.remote_path.ends_with(".zip");
         let download_path = if is_zip {
             base_dir.join(format!("{}.zip", file_spec.filename))
         } else {
             base_dir.join(file_spec.filename)
         };
-        let target_path = download_path.clone();
 
         println!(
-            "[DOWNLOAD] Starting download for {} ({}/{}) from {}",
+            "[DOWNLOAD] {} ({}/{}) from {}",
             model_id,
             i + 1,
             files_count,
@@ -276,22 +208,21 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
             .get(&url)
             .send()
             .await
-            .map_err(|e| format!("Failed to connect to Hugging Face: {}", e))?;
+            .map_err(|e| format!("Failed to connect: {}", e))?;
 
         let total_size = res.content_length().unwrap_or(0);
         let mut file =
-            File::create(&target_path).map_err(|e| format!("Failed to create file: {}", e))?;
+            File::create(&download_path).map_err(|e| format!("Failed to create file: {}", e))?;
 
         let mut downloaded: u64 = 0;
         let mut stream = res.bytes_stream();
-        let mut last_emit = 0;
+        let mut last_emit: u64 = 0;
         let emit_threshold = 1024 * 1024; // 1 MB
 
         while let Some(item) = stream.next().await {
             let chunk = item.map_err(|e| format!("Error while downloading chunk: {}", e))?;
             file.write_all(&chunk)
                 .map_err(|e| format!("Error writing to file: {}", e))?;
-
             downloaded += chunk.len() as u64;
 
             if downloaded - last_emit > emit_threshold || downloaded == total_size {
@@ -309,9 +240,8 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                 );
             }
         }
-        drop(file); // close file handle before reading it for zip extraction
+        drop(file);
 
-        // If the downloaded file is a zip (e.g. CoreML encoder), extract it then remove the zip.
         if is_zip {
             println!("[DOWNLOAD] Extracting zip: {:?}", download_path);
             let zip_file = File::open(&download_path)
@@ -322,11 +252,172 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                 .extract(&base_dir)
                 .map_err(|e| format!("Failed to extract zip: {}", e))?;
             std::fs::remove_file(&download_path).ok();
-            println!("[DOWNLOAD] Extraction complete, zip removed.");
+            println!("[DOWNLOAD] Extraction complete.");
         }
     }
 
     println!("[DOWNLOAD] Finished downloading {}", model_id);
+
+    // ── Auto-verify phase ─────────────────────────────────────────────────────
+    let expected_fp = registry_fingerprint(&config.files);
+
+    if fingerprint_is_empty(&expected_fp) {
+        // No hashes registered — skip verification, mark as done.
+        let _ = app.emit(
+            "download-progress",
+            DownloadProgressPayload {
+                model_id: model_id.clone(),
+                total_bytes: 100,
+                downloaded_bytes: 100,
+                status: "done".to_string(),
+                current_file: files_count as u32,
+                total_files: files_count as u32,
+            },
+        );
+        return Ok(format!("Downloaded to {:?}", base_dir));
+    }
+
+    // Pre-calculate total bytes to verify so we can report real progress.
+    let mut total_verify_bytes: u64 = 0;
+    for file_spec in &config.files {
+        if !file_spec.sha1.is_empty() {
+            let file_path = base_dir.join(file_spec.filename);
+            if let Ok(meta) = std::fs::metadata(&file_path) {
+                total_verify_bytes += meta.len();
+            }
+        }
+    }
+
+    // Hash each file and build the actual fingerprint.
+    let mut computed_fp_parts: Vec<String> = Vec::new();
+    let mut verified_bytes: u64 = 0;
+    let emit_threshold: u64 = 512 * 1024; // emit every 512 KiB
+
+    for (i, file_spec) in config.files.iter().enumerate() {
+        // Skip files without a registered hash.
+        if file_spec.sha1.is_empty() {
+            computed_fp_parts.push(String::new());
+            continue;
+        }
+
+        let file_path = base_dir.join(file_spec.filename);
+
+        println!(
+            "[VERIFY] SHA256 for {} ({}/{})...",
+            file_spec.filename,
+            i + 1,
+            files_count
+        );
+
+        // Emit initial progress for this file.
+        let _ = app.emit(
+            "download-progress",
+            DownloadProgressPayload {
+                model_id: model_id.clone(),
+                total_bytes: total_verify_bytes,
+                downloaded_bytes: verified_bytes,
+                status: "verifying".to_string(),
+                current_file: (i + 1) as u32,
+                total_files: files_count as u32,
+            },
+        );
+
+        let mut file = File::open(&file_path).map_err(|e| e.to_string())?;
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        let mut buffer = [0u8; 65536]; // 64 KiB chunks for speed
+        let mut last_emit: u64 = verified_bytes;
+
+        loop {
+            let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+            verified_bytes += count as u64;
+
+            if verified_bytes - last_emit > emit_threshold {
+                last_emit = verified_bytes;
+                let _ = app.emit(
+                    "download-progress",
+                    DownloadProgressPayload {
+                        model_id: model_id.clone(),
+                        total_bytes: total_verify_bytes,
+                        downloaded_bytes: verified_bytes,
+                        status: "verifying".to_string(),
+                        current_file: (i + 1) as u32,
+                        total_files: files_count as u32,
+                    },
+                );
+            }
+        }
+
+        // Final emit for this file at 100% of bytes processed so far.
+        let _ = app.emit(
+            "download-progress",
+            DownloadProgressPayload {
+                model_id: model_id.clone(),
+                total_bytes: total_verify_bytes,
+                downloaded_bytes: verified_bytes,
+                status: "verifying".to_string(),
+                current_file: (i + 1) as u32,
+                total_files: files_count as u32,
+            },
+        );
+
+        let hash_hex = hex::encode(hasher.finalize());
+        println!(
+            "[VERIFY] {} — Expected: {}, Got: {}",
+            file_spec.filename, file_spec.sha1, hash_hex
+        );
+
+        if hash_hex != file_spec.sha1 {
+            // Corrupted — delete ALL files for this model and return an error.
+            eprintln!("[VERIFY] Hash mismatch! Deleting corrupted files.");
+            for fs in &config.files {
+                let _ = std::fs::remove_file(base_dir.join(fs.filename));
+            }
+            // Also clean up the subdirectory if empty.
+            if config.subdirectory.is_some() {
+                let _ = std::fs::remove_dir(&base_dir);
+            }
+
+            let _ = app.emit(
+                "download-progress",
+                DownloadProgressPayload {
+                    model_id: model_id.clone(),
+                    total_bytes: 0,
+                    downloaded_bytes: 0,
+                    status: "error".to_string(),
+                    current_file: (i + 1) as u32,
+                    total_files: files_count as u32,
+                },
+            );
+
+            return Err(format!(
+                "Hash mismatch for {} — file may be corrupted. Please try downloading again.",
+                file_spec.filename
+            ));
+        }
+
+        computed_fp_parts.push(hash_hex);
+    }
+
+    // All hashes matched — write to verified.json.
+    let computed_fp = computed_fp_parts.join("+");
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let mut store = load_verified_store();
+    store.insert(
+        model_id.clone(),
+        VerifiedEntry {
+            fingerprint: computed_fp,
+            verified_at: now,
+        },
+    );
+    save_verified_store(&store);
+
+    println!("[VERIFY] {} — all files verified ✅", model_id);
 
     let _ = app.emit(
         "download-progress",
@@ -340,5 +431,83 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
         },
     );
 
-    Ok(format!("Downloaded to {:?}", base_dir))
+    Ok(format!("Downloaded and verified {:?}", base_dir))
+}
+
+#[tauri::command]
+pub async fn delete_model(app: AppHandle, model_id: String) -> Result<String, String> {
+    let config =
+        get_model_config(&model_id).ok_or_else(|| format!("Unknown model ID: {}", model_id))?;
+    let models_dir =
+        crate::utils::get_models_dir().map_err(|e| format!("Failed to get models dir: {}", e))?;
+
+    let base_dir = if let Some(subdir) = config.subdirectory {
+        models_dir.join(subdir)
+    } else {
+        models_dir.clone()
+    };
+
+    // Pre-calculate total size for progress reporting.
+    let mut total_size: u64 = 0;
+    for file_spec in &config.files {
+        let file_path = base_dir.join(file_spec.filename);
+        if file_path.exists() {
+            if let Ok(meta) = std::fs::metadata(&file_path) {
+                total_size += meta.len();
+            }
+        }
+    }
+
+    let files_count = config.files.len() as u32;
+    let mut deleted_bytes: u64 = 0;
+
+    for (i, file_spec) in config.files.iter().enumerate() {
+        // Emit progress before each file deletion.
+        let _ = app.emit(
+            "download-progress",
+            DownloadProgressPayload {
+                model_id: model_id.clone(),
+                total_bytes: total_size,
+                downloaded_bytes: deleted_bytes,
+                status: "deleting".to_string(),
+                current_file: (i + 1) as u32,
+                total_files: files_count,
+            },
+        );
+
+        let file_path = base_dir.join(file_spec.filename);
+        if file_path.exists() {
+            let size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
+            if file_path.is_dir() {
+                let _ = std::fs::remove_dir_all(&file_path);
+            } else {
+                let _ = std::fs::remove_file(&file_path);
+            }
+            deleted_bytes += size;
+        }
+    }
+
+    if config.subdirectory.is_some() {
+        let _ = std::fs::remove_dir(&base_dir);
+    }
+
+    // Remove verification record.
+    let mut store = load_verified_store();
+    store.remove(&model_id);
+    save_verified_store(&store);
+
+    // Emit final progress so frontend can clean up.
+    let _ = app.emit(
+        "download-progress",
+        DownloadProgressPayload {
+            model_id: model_id.clone(),
+            total_bytes: total_size,
+            downloaded_bytes: total_size,
+            status: "delete-done".to_string(),
+            current_file: files_count,
+            total_files: files_count,
+        },
+    );
+
+    Ok(format!("Deleted model {}", model_id))
 }
