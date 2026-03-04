@@ -58,12 +58,10 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                     <span className="model-tag" style={{
                         background: model.type === 'LLM' ? 'rgba(236, 72, 153, 0.15)' :
                             model.type === 'Parakeet' ? 'rgba(16, 185, 129, 0.15)' :
-                                model.type === 'Utility' ? 'rgba(245, 158, 11, 0.15)' :
-                                    'rgba(148, 163, 184, 0.1)',
+                                'rgba(148, 163, 184, 0.1)',
                         color: model.type === 'LLM' ? '#f472b6' :
                             model.type === 'Parakeet' ? '#34d399' :
-                                model.type === 'Utility' ? '#fbbf24' :
-                                    'inherit'
+                                'inherit'
                     }}>{model.type}</span>
                     <span>{model.size}</span>
                 </div>
