@@ -78,10 +78,12 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         })
         .on_tray_icon_event(|tray, event| {
             use tauri::tray::TrayIconEvent;
+            use tauri::Emitter;
             if let TrayIconEvent::Click { .. } = event {
                 if let Some(window) = tray.app_handle().get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                    let _ = window.emit("window-restored", ());
                 }
             }
         })
@@ -121,10 +123,12 @@ pub fn setup_tray_from_handle(app: &AppHandle) -> Result<(), Box<dyn std::error:
         })
         .on_tray_icon_event(|tray, event| {
             use tauri::tray::TrayIconEvent;
+            use tauri::Emitter;
             if let TrayIconEvent::Click { .. } = event {
                 if let Some(window) = tray.app_handle().get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
+                    let _ = window.emit("window-restored", ());
                 }
             }
         })

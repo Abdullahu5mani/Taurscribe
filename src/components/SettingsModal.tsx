@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { IconX } from './Icons';
 import './SettingsModal.css';
 import { ModelsTab } from './settings/ModelsTab';
 import { PostProcessingTab } from './settings/PostProcessingTab';
@@ -14,6 +15,7 @@ import type { DictEntry, SnippetEntry } from '../hooks/usePersonalization';
 interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
+    initialTab?: Tab;
     onModelDownloaded?: () => void;
     enableGrammarLM: boolean;
     setEnableGrammarLM: (val: boolean) => void;
@@ -140,7 +142,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 
 export function SettingsModal({
-    isOpen, onClose,
+    isOpen, onClose, initialTab,
     enableGrammarLM, setEnableGrammarLM, llmStatus,
     enableDenoise, setEnableDenoise,
     muteBackgroundAudio, setMuteBackgroundAudio,
@@ -153,6 +155,11 @@ export function SettingsModal({
     settingsModels, downloadProgress, onDownload, onDelete,
 }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<Tab>('models');
+
+    // Jump to the requested tab each time the modal is opened
+    useEffect(() => {
+        if (isOpen) setActiveTab(initialTab ?? 'models');
+    }, [isOpen, initialTab]);
 
     const renderContent = () => {
         switch (activeTab) {
@@ -216,7 +223,7 @@ export function SettingsModal({
                 <div className="settings-modal" onClick={e => e.stopPropagation()}>
                     <div className="settings-header">
                         <h2>Settings</h2>
-                        <button className="close-btn" onClick={onClose}>✕</button>
+                        <button className="close-btn" onClick={onClose}><IconX size={14} /></button>
                     </div>
 
                     <div className="settings-body">
