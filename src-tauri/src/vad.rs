@@ -58,7 +58,7 @@ impl VADManager {
             session,
             h: vec![0.0_f32; STATE_SIZE],
             c: vec![0.0_f32; STATE_SIZE],
-            threshold: 0.5,
+            threshold: 0.35,
         })
     }
 
@@ -168,7 +168,7 @@ impl VADManager {
         padding_ms: usize,
     ) -> Result<Vec<(f32, f32)>, String> {
         const SAMPLE_RATE: f32 = 16000.0;
-        const MIN_SPEECH_FRAMES: usize = 5; // ~160 ms minimum to count as real speech
+        const MIN_SPEECH_FRAMES: usize = 2; // ~64 ms minimum to count as real speech
 
         let frame_ms = (CHUNK_SIZE as f32 / SAMPLE_RATE * 1000.0) as usize;
         let padding_frames = padding_ms / frame_ms.max(1);

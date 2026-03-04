@@ -72,11 +72,7 @@ export function AboutTab() {
                 </div>
                 <div className="about-row">
                     <span className="about-row-label">Grammar LLM</span>
-                    <span className="about-row-value">Qwen 2.5 0.5B via llama-cpp-2</span>
-                </div>
-                <div className="about-row">
-                    <span className="about-row-label">Spell Check</span>
-                    <span className="about-row-value">SymSpell</span>
+                    <span className="about-row-value">FlowScribe Qwen 2.5 0.5B via llama-cpp-2</span>
                 </div>
             </div>
         </div>

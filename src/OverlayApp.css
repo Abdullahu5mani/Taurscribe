@@ -25,47 +25,67 @@ html, body, #root {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
-/*  RECORDING – pulsing concentric rings + glowing core                       */
+/*  RECORDING – live waveform bars + glowing dot                              */
 /* ═══════════════════════════════════════════════════════════════════════════ */
-.anim-recording {
-  position: relative;
-  width: 56px;
-  height: 56px;
+.waveform-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
 }
 
-.ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 2px solid rgba(220, 38, 38, 0.4);
-  animation: ringPulse 2s ease-out infinite;
+.waveform-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.ring-2 { animation-delay: 0.5s; }
-.ring-3 { animation-delay: 1.0s; }
-
-@keyframes ringPulse {
-  0% {
-    transform: scale(0.4);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1.1);
-    opacity: 0;
-  }
+.waveform-timer {
+  font-family: 'Martian Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  color: #dc2626;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
 }
 
-.core {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 16px;
-  height: 16px;
-  transform: translate(-50%, -50%);
+.waveform-dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #dc2626;
-  animation: coreBreathe 1.2s ease-in-out infinite alternate;
-  box-shadow: 0 0 12px rgba(220, 38, 38, 0.6), 0 0 24px rgba(220, 38, 38, 0.3);
+  box-shadow: 0 0 6px #dc2626;
+  animation: dotBreathe 1.2s ease-in-out infinite alternate;
+  flex-shrink: 0;
+}
+
+@keyframes dotBreathe {
+  from {
+    box-shadow: 0 0 4px rgba(220, 38, 38, 0.6), 0 0 8px rgba(220, 38, 38, 0.2);
+    transform: scale(0.85);
+  }
+  to {
+    box-shadow: 0 0 8px rgba(220, 38, 38, 0.9), 0 0 16px rgba(220, 38, 38, 0.4);
+    transform: scale(1.15);
+  }
+}
+
+.waveform-bars {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 44px;
+}
+
+.waveform-bar {
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to top, #dc2626, #e09f3e);
+  transition: height 0.12s ease-out;
+  min-height: 3px;
 }
 
 @keyframes coreBreathe {
@@ -91,48 +111,37 @@ html, body, #root {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
-/*  TRANSCRIBING / CORRECTING – spinning arcs                                 */
+/*  TRANSCRIBING / CORRECTING – jumping dots                                  */
 /* ═══════════════════════════════════════════════════════════════════════════ */
-.anim-processing {
-  position: relative;
-  width: 48px;
-  height: 48px;
+.anim-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 100%;
 }
 
-.arc {
-  position: absolute;
-  inset: 0;
+.dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  border: 2.5px solid transparent;
+  background: #eab308;
+  animation: dotJump 1s ease-in-out infinite;
 }
 
-.arc-1 {
-  border-top-color: #eab308;
-  animation: spin 1s linear infinite;
-}
-.arc-2 {
-  inset: 5px;
-  border-right-color: rgba(234, 179, 8, 0.5);
-  animation: spin 1.6s linear infinite reverse;
-}
-.arc-3 {
-  inset: 10px;
-  border-bottom-color: rgba(234, 179, 8, 0.3);
-  animation: spin 2.2s linear infinite;
+.dot-2 { animation-delay: 0.15s; }
+.dot-3 { animation-delay: 0.3s; }
+
+@keyframes dotJump {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30%           { transform: translateY(-10px); opacity: 1; }
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+.anim-dots--amber .dot { background: #e09f3e; }
 
 .overlay-box--transcribing {
   box-shadow: inset 0 0 20px rgba(234, 179, 8, 0.1);
 }
-
-/* Correcting variant – amber/orange tint */
-.anim-correcting .arc-1 { border-top-color: #e09f3e; }
-.anim-correcting .arc-2 { border-right-color: rgba(224, 159, 62, 0.5); }
-.anim-correcting .arc-3 { border-bottom-color: rgba(224, 159, 62, 0.3); }
 
 .overlay-box--correcting {
   box-shadow: inset 0 0 20px rgba(224, 159, 62, 0.1);
@@ -142,13 +151,29 @@ html, body, #root {
 /*  DONE – animated checkmark                                                 */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 .anim-done {
-  width: 40px;
-  height: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+}
+
+.done-latency {
+  font-family: 'Martian Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  color: #3ecfa5;
+  letter-spacing: 0.04em;
+  opacity: 0;
+  animation: tooShortLabelFade 0.25s ease-out 0.35s forwards;
 }
 
 .check-svg {
-  width: 100%;
-  height: 100%;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
 }
 
 .check-circle {

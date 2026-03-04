@@ -5,9 +5,11 @@ import { Store } from '@tauri-apps/plugin-store';
 interface AudioTabProps {
     enableDenoise: boolean;
     setEnableDenoise: (val: boolean) => void;
+    muteBackgroundAudio: boolean;
+    setMuteBackgroundAudio: (val: boolean) => void;
 }
 
-export function AudioTab({ enableDenoise, setEnableDenoise }: AudioTabProps) {
+export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio, setMuteBackgroundAudio }: AudioTabProps) {
     const [devices, setDevices] = useState<string[]>([]);
     const [selected, setSelected] = useState<string>('');   // '' = system default
     const [saved, setSaved] = useState(false);
@@ -127,6 +129,30 @@ export function AudioTab({ enableDenoise, setEnableDenoise }: AudioTabProps) {
                     <span className="about-row-label" style={{ color: '#4b4b55' }}>High Quality (DeepFilterNet3)</span>
                     <span className="about-row-value" style={{ color: '#4b4b55' }}>Coming in a future update</span>
                 </div>
+            </div>
+
+            {/* ── Background Audio ──────────────────────────────────── */}
+            <h3 className="settings-section-title" style={{ marginTop: '32px' }}>Background Audio</h3>
+
+            <div className="setting-card">
+                <div className="setting-card-header">
+                    <div className="setting-card-label">
+                        <span className="status-dot" style={{ background: muteBackgroundAudio ? '#3ecfa5' : '#4b4b55' }} />
+                        <span>Mute During Recording</span>
+                    </div>
+                    <label className="switch">
+                        <input
+                            type="checkbox"
+                            checked={muteBackgroundAudio}
+                            onChange={e => setMuteBackgroundAudio(e.target.checked)}
+                        />
+                        <span className="slider round" />
+                    </label>
+                </div>
+                <p className="setting-card-desc">
+                    Silence system audio output while recording so background sounds don't bleed into the microphone.
+                    If audio is already muted when recording starts, it stays muted after stopping.
+                </p>
             </div>
 
             {/* ── Voice Activity Detection ─────────────────────────── */}

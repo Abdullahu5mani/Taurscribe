@@ -7,8 +7,8 @@ mod hotkeys;
 mod llm;
 mod parakeet;
 mod parakeet_loaders;
-mod spellcheck;
 mod state;
+mod system_audio;
 mod tray;
 mod types;
 mod utils;
@@ -42,7 +42,10 @@ pub fn run() {
         .join()
         .unwrap_or_else(|_| {
             eprintln!("[ERROR] Whisper init thread panicked unexpectedly");
-            (WhisperManager::new(), Err("Initialization thread panicked".to_string()))
+            (
+                WhisperManager::new(),
+                Err("Initialization thread panicked".to_string()),
+            )
         });
 
     match init_result {
@@ -77,6 +80,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AudioState::new(whisper, parakeet, vad))
         .setup(|app| {
+            // Safety: if the app crashed mid-recording while system audio was
+            // muted, restore it now so the user doesn't start with no sound.
+            if let Err(e) = system_audio::force_unmute() {
+                eprintln!("[WARN] Safety unmute on startup failed: {}", e);
+            } else {
+                println!("[INFO] Safety unmute on startup completed");
+            }
+
             // Setup System Tray
             tray::setup_tray(app)?;
 
@@ -121,20 +132,19 @@ pub fn run() {
             commands::set_active_engine,
             commands::get_active_engine,
             commands::set_tray_state,
+            commands::check_grammar_llm_available,
             commands::init_llm,
             commands::unload_llm,
             commands::run_llm_inference,
             commands::check_llm_status,
             commands::correct_text,
             commands::type_text,
-            commands::init_spellcheck,
-            commands::unload_spellcheck,
-            commands::check_spellcheck_status,
-            commands::correct_spelling,
+            commands::save_transcript_history,
+            commands::list_transcript_history,
+            commands::delete_transcript_history,
             commands::download_model,
             commands::get_download_status,
             commands::delete_model,
-            commands::verify_model_hash,
             commands::get_platform,
             commands::get_hotkey,
             commands::set_hotkey,
@@ -142,7 +152,9 @@ pub fn run() {
             commands::get_input_device,
             commands::set_input_device,
             commands::show_overlay,
-            commands::hide_overlay
+            commands::hide_overlay,
+            commands::mute_system_audio,
+            commands::unmute_system_audio
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
