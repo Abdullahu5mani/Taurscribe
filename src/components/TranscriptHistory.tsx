@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { IconCheck } from "./Icons";
 
 type TranscriptRecord = {
     id: number;
@@ -125,7 +126,7 @@ export function TranscriptHistory({ refreshKey }: TranscriptHistoryProps) {
                                         </span>
                                         <div className="history-badges">
                                             {copiedId === item.id && (
-                                                <span className="history-badge history-badge-copied">✓ Typed</span>
+                                                <span className="history-badge history-badge-copied"><IconCheck size={11} /> Typed</span>
                                             )}
                                             <span className={`history-badge history-badge-engine history-badge-engine--${item.engine === "parakeet" ? "parakeet" : "whisper"}`}>
                                                 {item.engine === "parakeet" ? "Parakeet" : "Whisper"}

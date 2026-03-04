@@ -37,12 +37,15 @@ export function usePostProcessing(
     const muteBackgroundAudioRef = useRef(muteBackgroundAudio);
     const transcriptionStyleRef = useRef(transcriptionStyle);
     const storeRef = useRef<Store | null>(null);
+    const llmBackendRef = useRef<"gpu" | "cpu">(llmBackend);
+    const llmStatusRef = useRef<string>(llmStatus);
 
     useEffect(() => { enableGrammarLMRef.current = enableGrammarLM; }, [enableGrammarLM]);
     useEffect(() => { enableDenoiseRef.current = enableDenoise; }, [enableDenoise]);
     useEffect(() => { enableOverlayRef.current = enableOverlay; }, [enableOverlay]);
     useEffect(() => { muteBackgroundAudioRef.current = muteBackgroundAudio; }, [muteBackgroundAudio]);
     useEffect(() => { transcriptionStyleRef.current = transcriptionStyle; }, [transcriptionStyle]);
+    useEffect(() => { llmStatusRef.current = llmStatus; }, [llmStatus]);
 
     // ── Load persisted settings on mount ──────────────────────────────────
     useEffect(() => {
@@ -160,6 +163,31 @@ export function usePostProcessing(
             }
         }
     }, [enableGrammarLM, llmStatus, llmBackend, settingsLoaded, setEnableGrammarLM]);
+
+    // ── Hot-reload LLM when backend (GPU ↔ CPU) changes while loaded ──────
+    useEffect(() => {
+        // Skip on first render — llmBackendRef starts as the initial value
+        if (llmBackendRef.current === llmBackend) return;
+        llmBackendRef.current = llmBackend;
+
+        // Only hot-reload if the LLM is currently active
+        if (llmStatusRef.current !== "Loaded") return;
+
+        const label = llmBackend === "gpu" ? "GPU" : "CPU";
+        setHeaderStatus(`Switching LLM to ${label}…`, 60_000);
+        setLlmStatus("Loading...");
+
+        invoke("unload_llm")
+            .then(() => invoke("init_llm", { useGpu: llmBackend === "gpu" }))
+            .then((res) => {
+                setLlmStatus("Loaded");
+                setHeaderStatus(res as string);
+            })
+            .catch((err) => {
+                setLlmStatus("Error");
+                setHeaderStatus(`LLM backend switch failed: ${err}`, 5000);
+            });
+    }, [llmBackend, setHeaderStatus]);
 
     // ── Re-check LLM availability when models change (e.g. after download) ───
     useEffect(() => {

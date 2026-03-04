@@ -1,3 +1,5 @@
+import { IconBolt, IconCpu } from "../Icons";
+
 interface PostProcessingTabProps {
     enableGrammarLM: boolean;
     setEnableGrammarLM: (val: boolean) => void;
@@ -85,14 +87,14 @@ export function PostProcessingTab({
                             onClick={() => setLlmBackend('gpu')}
                             disabled={llmBackendLocked}
                         >
-                            ⚡ GPU
+                            <IconBolt size={12} style={{ color: '#facc15' }} /> GPU
                         </button>
                         <button
                             className={`backend-toggle-btn ${llmBackend === 'cpu' ? 'active' : ''}`}
                             onClick={() => setLlmBackend('cpu')}
                             disabled={llmBackendLocked}
                         >
-                            🔋 CPU
+                            <IconCpu size={12} /> CPU
                         </button>
                     </div>
                 </div>
