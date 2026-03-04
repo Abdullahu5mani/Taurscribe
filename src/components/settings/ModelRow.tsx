@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import type { DownloadableModel } from "./types";
 import type { DownloadProgress } from "./types";
+import { IconShieldCheck, IconTrash, IconCheck, IconRetry, IconWarning, IconDownload } from "../Icons";
 
 interface ModelRowProps {
     model: DownloadableModel;
@@ -75,7 +76,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                     <div style={{ width: '100%' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: '#06b6d4' }}>
                             <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                <span className="verify-pulse">🛡️</span>
+                                <span className="verify-pulse"><IconShieldCheck size={14} /></span>
                                 Verifying{(progress.total_files || 0) > 1 ? ` (${progress.current_file || 1}/${progress.total_files})` : ''}...
                             </span>
                             <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
@@ -118,7 +119,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                             <div style={{ width: '100%' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: '#f87171' }}>
                                     <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                        <span className="verify-pulse">🗑️</span>
+                                        <span className="verify-pulse"><IconTrash size={14} /></span>
                                         Deleting{delProgress && (delProgress.total_files || 0) > 1 ? ` (${delProgress.current_file || 1}/${delProgress.total_files})` : ''}...
                                     </span>
                                     <span>{pct}%</span>
@@ -137,7 +138,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                 ) : deletePhase === 'deleted' ? (
                     /* ── Deleted confirmation ────────────────────────────── */
                     <div className="delete-confirmed">
-                        <span>✓</span> Deleted
+                        <IconCheck size={14} /> Deleted
                     </div>
                 ) : (
                     <div style={{ display: 'flex', gap: '8px' }}>
@@ -154,7 +155,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                                     gap: '6px'
                                 }}
                             >
-                                <span>❌</span> Retry Download
+                                <IconRetry size={14} /> Retry Download
                             </button>
                         ) : model.downloaded ? (
                             deletePhase === 'confirm' ? (
@@ -191,7 +192,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                                             transition: 'all 0.2s',
                                         }}
                                     >
-                                        🗑️
+                                        <IconTrash size={16} />
                                     </button>
 
                                     <button
@@ -201,9 +202,9 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                                         style={!model.verified ? { background: '#eab308', color: '#000', borderColor: '#ca8a04' } : {}}
                                     >
                                         {model.verified ? (
-                                            <><span>🛡️</span> Verified</>
+                                            <><IconShieldCheck size={14} /> Verified</>
                                         ) : (
-                                            <><span>⚠️</span> Installed</>
+                                            <><IconWarning size={14} /> Installed</>
                                         )}
                                     </button>
                                 </>
@@ -214,7 +215,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                                 onClick={() => onDownload(model.id, model.name)}
                                 title="Download Model"
                             >
-                                <span>⬇</span> Download
+                                <IconDownload size={14} /> Download
                             </button>
                         )}
                     </div>

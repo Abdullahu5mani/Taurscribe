@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
@@ -20,6 +20,7 @@ import { MODELS } from "./components/settings/types";
 import type { DownloadableModel } from "./components/settings/types";
 import "./components/TitleBar.css";
 import "./App.css";
+import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb } from "./components/Icons";
 
 const ANIMATED_LOGOS = [
   "animated_logo_assemble.svg",
@@ -31,7 +32,6 @@ const ANIMATED_LOGOS = [
   "animated_logo_scan_reveal.svg",
   "animated_logo_shockwave.svg",
   "animated_logo_slice.svg",
-  "animated_logo_squish.svg",
   "animated_logo_stomp.svg",
   "animated_logo_write.svg",
   "animated_logo_pulse_reveal.svg",
@@ -51,7 +51,6 @@ const ANIMATED_LOGOS = [
   "animated_logo_heartbeat.svg",
   "animated_logo_laser_trace.svg",
   "animated_logo_split_door.svg",
-  "animated_logo_coaster.svg",
   "animated_logo_ripple.svg",
   "animated_logo_flare.svg",
   "animated_logo_handwrite.svg",
@@ -110,12 +109,12 @@ const TICKER_PHRASES: { parts: { text: string; highlight?: TickerHighlight }[] }
   { parts: [{ text: "One app · two engines · zero compromise" }] },
 ];
 
-const TONE_STYLES = [
-  { value: 'Casual', label: 'Casual', icon: '💬', accent: '#6895d2', desc: 'Relaxed, conversational tone. Great for notes, emails, and quick messages.' },
-  { value: 'Verbatim', label: 'Verbatim', icon: '📝', accent: '#94a3b8', desc: 'Minimal changes. Keeps your original speech intact with filler words preserved.' },
-  { value: 'Enthusiastic', label: 'Enthusiastic', icon: '🎉', accent: '#f472b6', desc: 'Energetic and expressive. Perfect for pitches, presentations, and vlogs.' },
-  { value: 'Software_Dev', label: 'Software Dev', icon: '💻', accent: '#3ecfa5', desc: 'Technical language with proper code terms, casing, and dev conventions.' },
-  { value: 'Professional', label: 'Professional', icon: '👔', accent: '#e09f3e', desc: 'Formal and polished. Ideal for reports, documentation, and client work.' },
+const TONE_STYLES: { value: string; label: string; icon: React.ReactNode; accent: string; desc: string }[] = [
+  { value: 'Casual', label: 'Casual', icon: <IconChat size={18} />, accent: '#6895d2', desc: 'Relaxed, conversational tone. Great for notes, emails, and quick messages.' },
+  { value: 'Verbatim', label: 'Verbatim', icon: <IconFileText size={18} />, accent: '#94a3b8', desc: 'Minimal changes. Keeps your original speech intact with filler words preserved.' },
+  { value: 'Enthusiastic', label: 'Enthusiastic', icon: <IconSparkle size={18} />, accent: '#f472b6', desc: 'Energetic and expressive. Perfect for pitches, presentations, and vlogs.' },
+  { value: 'Software_Dev', label: 'Software Dev', icon: <IconCode size={18} />, accent: '#3ecfa5', desc: 'Technical language with proper code terms, casing, and dev conventions.' },
+  { value: 'Professional', label: 'Professional', icon: <IconTie size={18} />, accent: '#e09f3e', desc: 'Formal and polished. Ideal for reports, documentation, and client work.' },
 ];
 
 const setTrayState = async (newState: "ready" | "recording" | "processing") => {
@@ -154,15 +153,26 @@ const beautifyModelName = (rawName: string) => {
 };
 
 function App() {
-  const randomLogo = useMemo(() => {
+  const pickRandomLogo = useCallback(() => {
     return ANIMATED_LOGOS[Math.floor(Math.random() * ANIMATED_LOGOS.length)];
   }, []);
+
+  const [randomLogo, setRandomLogo] = useState(pickRandomLogo);
+
+  // Re-randomize the logo animation when the window is restored from the tray
+  useEffect(() => {
+    const unlisten = listen("window-restored", () => {
+      setRandomLogo(pickRandomLogo());
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, [pickRandomLogo]);
 
   const storeRef = useRef<Store | null>(null);
   const [backendInfo, setBackendInfo] = useState("Loading...");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<string | undefined>(undefined);
   /** null = not yet loaded from store; true = show wizard (first run); false = show main app */
   const [showSetupWizard, setShowSetupWizard] = useState<boolean | null>(null);
   /** Incremented after each successful save_transcript_history; tells TranscriptFeed to reload. */
@@ -681,7 +691,7 @@ function App() {
           <div>
             <div className="app-header">
               <div className="app-title-container">
-                <img src={`/logos/${randomLogo}`} alt="" className="app-title-logo" />
+                <img key={randomLogo} src={`/logos/${randomLogo}`} alt="" className="app-title-logo" />
                 <h1 className="app-title">TAURSCRIBE</h1>
               </div>
               <div className="header-status">
@@ -721,12 +731,12 @@ function App() {
                   className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
                   onClick={() => handleToggleAsrBackend('gpu')}
                   disabled={isLoading}
-                >⚡ GPU</button>
+                ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
                 <button
                   className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
                   onClick={() => handleToggleAsrBackend('cpu')}
                   disabled={isLoading}
-                >🔋 CPU</button>
+                ><IconCpu size={11} /> CPU</button>
               </div>
             </div>
           </div>
@@ -866,6 +876,14 @@ function App() {
                       }}
                     />
                     <span className="llm-name">FlowScribe Qwen 2.5 0.5B</span>
+                    {llmStatus === 'Loaded' && (
+                      <span className={`llm-backend-badge llm-backend-badge--${llmBackend}`}>
+                        {llmBackend === 'gpu' ? <><IconBolt size={10} style={{ color: '#facc15' }} /> GPU</> : <><IconCpu size={10} /> CPU</>}
+                      </span>
+                    )}
+                    {llmStatus === 'Loading...' && (
+                      <span className="llm-backend-badge llm-backend-badge--loading">switching…</span>
+                    )}
                     <span className="llm-meta">fine-tuned · grammar & tone</span>
                   </div>
                   <label className={`mini-toggle ${llmStatus === 'Not Downloaded' ? 'mini-toggle--disabled' : ''}`} title={llmStatus === 'Not Downloaded' ? 'Download FlowScribe Qwen from Settings > Models' : enableGrammarLM ? 'Disable grammar LLM' : 'Enable grammar LLM'}>
@@ -934,7 +952,7 @@ function App() {
             {activeEngineHasNoModel ? (
               <div className="empty-state">
                 <div className="empty-state-icon" aria-hidden="true">
-                  {noAnyAsrModel ? "⬇" : activeEngine === "whisper" ? "🎙" : "⚡"}
+                  {noAnyAsrModel ? <IconDownload size={32} /> : activeEngine === "whisper" ? <IconMic size={32} /> : <IconBolt size={32} style={{ color: '#facc15' }} />}
                 </div>
                 <h2 className="empty-state-title">
                   {noAnyAsrModel
@@ -955,9 +973,9 @@ function App() {
                 {!noAnyAsrModel && (
                   <p className="empty-state-hint">
                     {activeEngine === "whisper" && !noParakeetModel
-                      ? "💡 You already have a Parakeet model — click the Parakeet card above to switch."
+                      ? <><IconLightbulb size={14} /> You already have a Parakeet model — click the Parakeet card above to switch.</>
                       : activeEngine === "parakeet" && !noWhisperModel
-                        ? "💡 You already have a Whisper model — click the Whisper card above to switch."
+                        ? <><IconLightbulb size={14} /> You already have a Whisper model — click the Whisper card above to switch.</>
                         : null}
                   </p>
                 )}
@@ -988,6 +1006,7 @@ function App() {
           <SettingsModal
             isOpen={isSettingsOpen}
             onClose={() => setIsSettingsOpen(false)}
+            initialTab={settingsInitialTab as Parameters<typeof SettingsModal>[0]['initialTab']}
             enableGrammarLM={enableGrammarLM}
             setEnableGrammarLM={setEnableGrammarLM}
             llmStatus={llmStatus}
@@ -1041,7 +1060,10 @@ function App() {
           setSoundMuted={setMuted}
           dictionaryCount={dictionary.length}
           snippetsCount={snippets.length}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettingsTab={(tab) => {
+            setSettingsInitialTab(tab);
+            setIsSettingsOpen(true);
+          }}
         />
       </div>
     </>
