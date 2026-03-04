@@ -31,7 +31,7 @@ export function genId(): string {
 
 /**
  * Apply custom dictionary substitutions (case-insensitive, whole-word).
- * Runs early in the pipeline to fix proper nouns before spell check.
+ * Runs early in the pipeline to fix proper nouns before grammar correction.
  */
 export function applyDictionary(text: string, dict: DictEntry[]): string {
     if (!dict.length) return text;

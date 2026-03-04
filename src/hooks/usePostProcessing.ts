@@ -1,45 +1,47 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
 
 /**
- * Manages LLM grammar correction and SymSpell spell-check toggle state.
+ * Manages LLM grammar correction toggle state.
  * All settings are persisted to settings.json and restored on startup.
  *
  * Persisted keys:
  *   enable_grammar_lm   boolean
- *   enable_spell_check  boolean
  *   transcription_style string
  *   llm_backend         "gpu" | "cpu"
  *   enable_denoise      boolean
  *   enable_overlay      boolean
  */
-export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void) {
+export function usePostProcessing(
+    setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void,
+    onOpenSettings?: () => void
+) {
     const [llmStatus, setLlmStatus] = useState("Not Loaded");
     const [enableGrammarLM, setEnableGrammarLMState] = useState(false);
-    const [enableSpellCheck, setEnableSpellCheckState] = useState(false);
     const [enableDenoise, setEnableDenoiseState] = useState(false);
     const [enableOverlay, setEnableOverlayState] = useState(true);
-    const [spellCheckStatus, setSpellCheckStatus] = useState("Not Loaded");
+    const [muteBackgroundAudio, setMuteBackgroundAudioState] = useState(false);
     const [llmBackend, setLlmBackendState] = useState<"gpu" | "cpu">("gpu");
     const [asrBackend, setAsrBackendState] = useState<"gpu" | "cpu">("gpu");
-    const [transcriptionStyle, setTranscriptionStyleState] = useState("Auto");
+    const [transcriptionStyle, setTranscriptionStyleState] = useState("Casual");
 
     // Gate auto-load effects until settings are loaded from store,
     // so the LLM initialises with the correct backend from the start.
     const [settingsLoaded, setSettingsLoaded] = useState(false);
 
     const enableGrammarLMRef = useRef(enableGrammarLM);
-    const enableSpellCheckRef = useRef(enableSpellCheck);
     const enableDenoiseRef = useRef(enableDenoise);
     const enableOverlayRef = useRef(enableOverlay);
+    const muteBackgroundAudioRef = useRef(muteBackgroundAudio);
     const transcriptionStyleRef = useRef(transcriptionStyle);
     const storeRef = useRef<Store | null>(null);
 
     useEffect(() => { enableGrammarLMRef.current = enableGrammarLM; }, [enableGrammarLM]);
-    useEffect(() => { enableSpellCheckRef.current = enableSpellCheck; }, [enableSpellCheck]);
     useEffect(() => { enableDenoiseRef.current = enableDenoise; }, [enableDenoise]);
     useEffect(() => { enableOverlayRef.current = enableOverlay; }, [enableOverlay]);
+    useEffect(() => { muteBackgroundAudioRef.current = muteBackgroundAudio; }, [muteBackgroundAudio]);
     useEffect(() => { transcriptionStyleRef.current = transcriptionStyle; }, [transcriptionStyle]);
 
     // ── Load persisted settings on mount ──────────────────────────────────
@@ -48,21 +50,21 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
             .then(async (store) => {
                 storeRef.current = store;
 
-                const grammarLM  = await store.get<boolean>("enable_grammar_lm");
-                const spellCheck = await store.get<boolean>("enable_spell_check");
-                const denoise    = await store.get<boolean>("enable_denoise");
-                const overlay    = await store.get<boolean>("enable_overlay");
-                const style      = await store.get<string>("transcription_style");
-                const backend    = await store.get<"gpu" | "cpu">("llm_backend");
-                const asrBe      = await store.get<"gpu" | "cpu">("asr_backend");
+                const grammarLM = await store.get<boolean>("enable_grammar_lm");
+                const denoise = await store.get<boolean>("enable_denoise");
+                const overlay = await store.get<boolean>("enable_overlay");
+                const muteBg = await store.get<boolean>("mute_background_audio");
+                const style = await store.get<string>("transcription_style");
+                const backend = await store.get<"gpu" | "cpu">("llm_backend");
+                const asrBe = await store.get<"gpu" | "cpu">("asr_backend");
 
-                if (grammarLM  != null) setEnableGrammarLMState(grammarLM);
-                if (spellCheck != null) setEnableSpellCheckState(spellCheck);
-                if (denoise    != null) setEnableDenoiseState(denoise);
-                if (overlay    != null) setEnableOverlayState(overlay);
-                if (style      != null) setTranscriptionStyleState(style);
-                if (backend    != null) setLlmBackendState(backend);
-                if (asrBe      != null) setAsrBackendState(asrBe);
+                if (grammarLM != null) setEnableGrammarLMState(grammarLM);
+                if (denoise != null) setEnableDenoiseState(denoise);
+                if (overlay != null) setEnableOverlayState(overlay);
+                if (muteBg != null) setMuteBackgroundAudioState(muteBg);
+                if (style != null) setTranscriptionStyleState(style);
+                if (backend != null) setLlmBackendState(backend);
+                if (asrBe != null) setAsrBackendState(asrBe);
 
                 setSettingsLoaded(true);
             })
@@ -87,10 +89,6 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
         persist("enable_grammar_lm", val);
     }, [persist]);
 
-    const setEnableSpellCheck = useCallback((val: boolean) => {
-        setEnableSpellCheckState(val);
-        persist("enable_spell_check", val);
-    }, [persist]);
 
     const setEnableDenoise = useCallback((val: boolean) => {
         setEnableDenoiseState(val);
@@ -100,6 +98,11 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
     const setEnableOverlay = useCallback((val: boolean) => {
         setEnableOverlayState(val);
         persist("enable_overlay", val);
+    }, [persist]);
+
+    const setMuteBackgroundAudio = useCallback((val: boolean) => {
+        setMuteBackgroundAudioState(val);
+        persist("mute_background_audio", val);
     }, [persist]);
 
     const setTranscriptionStyle = useCallback((val: string) => {
@@ -122,51 +125,54 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
     useEffect(() => {
         if (!settingsLoaded) return;
         if (enableGrammarLM && llmStatus === "Not Loaded") {
-            setHeaderStatus("Auto-loading Qwen LLM...", 60_000);
-            setLlmStatus("Loading...");
-            invoke("init_llm", { useGpu: llmBackend === "gpu" }).then((res) => {
-                setLlmStatus("Loaded");
-                setHeaderStatus(res as string);
-            }).catch((err) => {
-                setLlmStatus("Error");
-                setHeaderStatus("LLM Load Failed (check logs): " + err, 5000);
+            invoke("check_grammar_llm_available").then((available) => {
+                if (!available) {
+                    setLlmStatus("Not Downloaded");
+                    setEnableGrammarLM(false);
+                    setHeaderStatus("Grammar LLM not downloaded. Open Settings > Models to download FlowScribe Qwen.", 8000);
+                    onOpenSettings?.();
+                    return;
+                }
+                setHeaderStatus("Auto-loading FlowScribe LLM...", 60_000);
+                setLlmStatus("Loading...");
+                invoke("init_llm", { useGpu: llmBackend === "gpu" }).then((res) => {
+                    setLlmStatus("Loaded");
+                    setHeaderStatus(res as string);
+                }).catch((err) => {
+                    setLlmStatus("Error");
+                    setHeaderStatus("LLM Load Failed (check logs): " + err, 5000);
+                });
+            }).catch(() => {
+                setLlmStatus("Not Downloaded");
+                setHeaderStatus("Grammar LLM not downloaded. Open Settings > Models to download FlowScribe Qwen.", 8000);
+                onOpenSettings?.();
             });
-        } else if (!enableGrammarLM && llmStatus === "Loaded") {
-            setLlmStatus("Loading...");
-            invoke("unload_llm").then(() => {
-                setLlmStatus("Not Loaded");
-                setHeaderStatus("Qwen LLM unloaded");
-            }).catch((e) => {
-                setLlmStatus("Error");
-                setHeaderStatus(`Failed to unload: ${e}`, 5000);
-            });
+        } else if (!enableGrammarLM) {
+            if (llmStatus === "Loaded") {
+                setLlmStatus("Loading...");
+                invoke("unload_llm").then(() => {
+                    setLlmStatus("Not Loaded");
+                    setHeaderStatus("FlowScribe LLM unloaded");
+                }).catch((e) => {
+                    setLlmStatus("Error");
+                    setHeaderStatus(`Failed to unload: ${e}`, 5000);
+                });
+            }
         }
-    }, [enableGrammarLM, llmStatus, llmBackend, settingsLoaded]);
+    }, [enableGrammarLM, llmStatus, llmBackend, settingsLoaded, setEnableGrammarLM]);
 
-    // ── Auto-load / unload SpellCheck ─────────────────────────────────────
+    // ── Re-check LLM availability when models change (e.g. after download) ───
     useEffect(() => {
-        if (!settingsLoaded) return;
-        if (enableSpellCheck && spellCheckStatus === "Not Loaded") {
-            setHeaderStatus("Loading SymSpell dictionary...", 60_000);
-            setSpellCheckStatus("Loading...");
-            invoke("init_spellcheck").then((res) => {
-                setSpellCheckStatus("Loaded");
-                setHeaderStatus(res as string);
-            }).catch((err) => {
-                setSpellCheckStatus("Error");
-                setHeaderStatus("SymSpell failed: " + err, 5000);
+        if (llmStatus !== "Not Downloaded") return;
+        let unlisten: (() => void) | undefined;
+        listen("models-changed", () => {
+            invoke("check_grammar_llm_available").then((available) => {
+                if (available) setLlmStatus("Not Loaded");
             });
-        } else if (!enableSpellCheck && spellCheckStatus === "Loaded") {
-            setSpellCheckStatus("Loading...");
-            invoke("unload_spellcheck").then(() => {
-                setSpellCheckStatus("Not Loaded");
-                setHeaderStatus("SymSpell unloaded");
-            }).catch((e) => {
-                setSpellCheckStatus("Error");
-                setHeaderStatus(`Failed to unload: ${e}`, 5000);
-            });
-        }
-    }, [enableSpellCheck, spellCheckStatus, settingsLoaded]);
+        }).then((fn) => { unlisten = fn; });
+        return () => { unlisten?.(); };
+    }, [llmStatus]);
+
 
     return {
         llmStatus,
@@ -176,16 +182,15 @@ export function usePostProcessing(setHeaderStatus: (msg: string, dur?: number, i
         transcriptionStyle,
         setTranscriptionStyle,
         transcriptionStyleRef,
-        enableSpellCheck,
-        setEnableSpellCheck,
-        enableSpellCheckRef,
-        spellCheckStatus,
         enableDenoise,
         setEnableDenoise,
         enableDenoiseRef,
         enableOverlay,
         setEnableOverlay,
         enableOverlayRef,
+        muteBackgroundAudio,
+        setMuteBackgroundAudio,
+        muteBackgroundAudioRef,
         llmBackend,
         setLlmBackend,
         asrBackend,

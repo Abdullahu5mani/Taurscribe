@@ -1,4 +1,6 @@
 use crossbeam_channel::Sender;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 // Wrapper struct to make the Audio Stream "moveable" between threads.
 // By default, raw pointers/streams aren't thread-safe.
@@ -15,6 +17,8 @@ pub struct RecordingHandle {
     pub whisper_tx: Sender<Vec<f32>>, // Pipe to send audio to the "Whisper AI" thread
     pub writer_thread: std::thread::JoinHandle<()>,
     pub transcriber_thread: std::thread::JoinHandle<()>,
+    pub level_stop: Arc<AtomicBool>,  // Signal the level-emitter thread to exit
+    pub level_thread: std::thread::JoinHandle<()>,
     #[allow(dead_code)]
     pub sample_rate: u32, // Sample rate of the recording (needed for silence padding)
 }

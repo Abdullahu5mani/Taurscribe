@@ -18,11 +18,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
 tauri-plugin-opener = "2"
-tauri-plugin-fs = "2"                                            # For accessing AppData directories
+tauri-plugin-fs = "2"                                                        # For accessing AppData directories
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
 cpal = "0.15"
 crossbeam-channel = "0.5"
 hound = "3.5"
@@ -53,8 +54,6 @@ encoding_rs = "0.8"
 anyhow = "1.0"
 ndarray = "0.15"
 
-# SymSpell - Fast spell checking
-symspell = "0.4"
 
 # RNNoise noise suppression (pure Rust, no C deps, CPU-only, cross-platform)
 nnnoiseless = "0.5"
@@ -81,7 +80,6 @@ reqwest = { version = "0.13.1", default-features = false, features = [
 ] }
 sha2 = "0.10.9"
 hex = "0.4.3"
-sha1 = "0.10.6"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # llama-cpp-2: llama.cpp bindings for Rust (replaces Candle)
 
@@ -114,7 +112,11 @@ core-foundation = "0.9"
 # XNNPACK: CPU optimization
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
-
+windows = { version = "0.58", features = [
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_Com",
+] }
 
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "cuda",

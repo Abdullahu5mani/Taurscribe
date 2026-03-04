@@ -242,6 +242,162 @@
   box-shadow: none;
 }
 
+/* ── Verification in-progress animation ─────────────────────────── */
+
+.verify-pulse {
+  display: inline-block;
+  animation: verifyPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes verifyPulse {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.5;
+    transform: scale(1.15);
+  }
+}
+
+.verify-bar-track {
+  height: 6px;
+  width: 100%;
+  background: rgba(6, 182, 212, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.verify-bar-shimmer {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(6, 182, 212, 0.55) 40%,
+      rgba(6, 182, 212, 0.8) 50%,
+      rgba(6, 182, 212, 0.55) 60%,
+      transparent 100%);
+  animation: verifyShimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes verifyShimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* ── Delete in-progress animation ───────────────────────────────── */
+
+.delete-bar-track {
+  height: 6px;
+  width: 100%;
+  background: rgba(239, 68, 68, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.delete-bar-shimmer {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg,
+      transparent 0%,
+      rgba(239, 68, 68, 0.55) 40%,
+      rgba(239, 68, 68, 0.8) 50%,
+      rgba(239, 68, 68, 0.55) 60%,
+      transparent 100%);
+  animation: verifyShimmer 1.4s ease-in-out infinite;
+}
+
+/* ── Inline delete confirmation prompt ──────────────────────────── */
+
+.delete-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: fadeSlideIn 0.2s ease-out;
+}
+
+.delete-confirm-label {
+  font-size: 0.82rem;
+  font-family: 'Barlow', sans-serif;
+  font-weight: 600;
+  color: #f87171;
+}
+
+.delete-confirm-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-family: 'Barlow', sans-serif;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid;
+}
+
+.delete-confirm-btn--yes {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #f87171;
+}
+
+.delete-confirm-btn--yes:hover {
+  background: #ef4444;
+  color: #fff;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+}
+
+.delete-confirm-btn--no {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #94a3b8;
+}
+
+.delete-confirm-btn--no:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ededef;
+}
+
+/* ── Deleted confirmation badge ─────────────────────────────────── */
+
+.delete-confirmed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-family: 'Barlow', sans-serif;
+  font-weight: 600;
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  animation: fadeSlideIn 0.25s ease-out;
+}
+
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 @keyframes settingsFadeIn {
   from {
     opacity: 0;
@@ -276,7 +432,7 @@
   border-radius: 10px;
 }
 
-.settings-modal .switch input:focus-visible + .slider {
+.settings-modal .switch input:focus-visible+.slider {
   box-shadow: 0 0 0 2px #131316, 0 0 0 4px #e09f3e;
 }
 

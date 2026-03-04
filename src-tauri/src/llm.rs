@@ -1,5 +1,5 @@
 //! LLM engine for transcript grammar correction.
-//! Loads from taurscribe-runtime/models/qwen_finetuned_gguf (GGUF Q4_K_M).
+//! Loads FlowScribe Qwen 2.5 0.5B (GGUF Q4_K_M) from %LOCALAPPDATA%\Taurscribe\models\qwen_finetuned_gguf.
 //! n_gpu_layers=0 forces CPU; change to -1 or layer count for GPU.
 
 use anyhow::{Error, Result};
@@ -13,20 +13,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 const GGUF_FILENAME: &str = "model_q4_k_m.gguf";
 
-/// Hardcoded path for the GGUF grammar model.
-const GRAMMAR_LLM_PATH: &str =
-    r"C:\Users\abdul\OneDrive\Desktop\Taurscribe\taurscribe-runtime\models\qwen_finetuned_gguf";
-
 /// Global backend instance (initialized once)
 static BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 
-/// Grammar LLM model path: hardcoded path, or GRAMMAR_LLM_DIR env override, or AppData fallback.
+/// Grammar LLM model path: GRAMMAR_LLM_DIR env override, or AppData default.
 pub fn get_grammar_llm_dir() -> Result<std::path::PathBuf, String> {
-    // 0. Hardcoded path
-    let hardcoded = std::path::PathBuf::from(GRAMMAR_LLM_PATH);
-    if hardcoded.join(GGUF_FILENAME).exists() {
-        return Ok(hardcoded);
-    }
     // 1. Explicit path from env override
     if let Ok(dir) = std::env::var("GRAMMAR_LLM_DIR") {
         let path = std::path::PathBuf::from(&dir);
@@ -34,7 +25,7 @@ pub fn get_grammar_llm_dir() -> Result<std::path::PathBuf, String> {
             return Ok(path);
         }
     }
-    // 2. Fallback: AppData/Taurscribe/models/qwen_finetuned_gguf
+    // 2. AppData/Taurscribe/models/qwen_finetuned_gguf
     let models_dir = crate::utils::get_models_dir()?;
     Ok(models_dir.join("qwen_finetuned_gguf"))
 }
@@ -65,8 +56,8 @@ impl LLMEngine {
 
         if !model_path.exists() {
             return Err(Error::msg(format!(
-                "Grammar LLM model not found. Expected at: {:?}\nPlace {} in taurscribe-runtime/models/qwen_finetuned_gguf",
-                model_path, GGUF_FILENAME
+                "Grammar LLM model not found. Expected at: {:?}\nDownload FlowScribe Qwen 2.5 0.5B via the Downloads tab.",
+                model_path
             )));
         }
 

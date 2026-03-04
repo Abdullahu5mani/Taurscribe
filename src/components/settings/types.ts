@@ -3,7 +3,7 @@
 export interface DownloadableModel {
     id: string;
     name: string;
-    type: 'Whisper' | 'Parakeet' | 'LLM' | 'Utility' | 'CoreML';
+    type: 'Whisper' | 'Parakeet' | 'LLM' | 'CoreML';
     size: string;
     description: string;
     downloaded: boolean;
@@ -54,12 +54,8 @@ export const MODELS: DownloadableModel[] = [
     { id: 'parakeet-nemotron', name: 'Nemotron Streaming', type: 'Parakeet', size: '1.2 GB', description: 'Ultra-low latency streaming. English only.', downloaded: true },
 
     // --- LLM ---
-    { id: 'qwen2.5-0.5b-safetensors', name: 'Qwen 2.5 0.5B (GPU)', type: 'LLM', size: '~1 GB', description: 'Safetensors model for CUDA/CPU. Best for grammar correction.', downloaded: false },
-    { id: 'qwen2.5-0.5b-instruct', name: 'Qwen 2.5 0.5B (Instruct, GGUF)', type: 'LLM', size: '429 MB', description: 'Quantized Q4_K_M. Use if you prefer smaller size.', downloaded: false },
-    { id: 'qwen2.5-0.5b-instruct-tokenizer', name: 'Qwen 2.5 Tokenizer Files', type: 'LLM', size: '11.5 MB', description: 'Required for GGUF Instruct model only.', downloaded: false },
+    { id: 'flowscribe-qwen2.5-0.5b', name: 'FlowScribe Qwen 2.5 0.5B', type: 'LLM', size: '398 MB', description: 'Fine-tuned Q4_K_M GGUF for speech-to-text grammar correction.', downloaded: false },
 
-    // --- Utility ---
-    { id: 'symspell-en-82k', name: 'English Dictionary (SymSpell)', type: 'Utility', size: '1 MB', description: 'Fast spelling correction (82k words). English only.', downloaded: false },
 
     // --- CoreML Encoders (macOS Apple Silicon only) ---
     { id: 'whisper-tiny-coreml', name: 'Tiny CoreML Encoder', type: 'CoreML', size: '15 MB', description: 'Apple Neural Engine encoder for Tiny (multilingual). Pair with ggml-tiny.bin.', downloaded: false, macosOnly: true },

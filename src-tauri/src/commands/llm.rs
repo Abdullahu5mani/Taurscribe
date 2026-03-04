@@ -1,6 +1,17 @@
-use crate::llm::LLMEngine;
+use crate::llm::{get_grammar_llm_dir, LLMEngine};
 use crate::state::AudioState;
 use tauri::State;
+
+const GGUF_FILENAME: &str = "model_q4_k_m.gguf";
+
+/// Returns true if the grammar LLM model file exists and can be loaded.
+#[tauri::command]
+pub fn check_grammar_llm_available() -> bool {
+    match get_grammar_llm_dir() {
+        Ok(dir) => dir.join(GGUF_FILENAME).exists(),
+        Err(_) => false,
+    }
+}
 
 #[tauri::command]
 pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<String, String> {

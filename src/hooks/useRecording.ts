@@ -15,9 +15,9 @@ interface UseRecordingParams {
     setCurrentModel: (id: string) => void;
     setLoadedEngine: (engine: ASREngine) => void;
     enableGrammarLMRef: React.RefObject<boolean>;
-    enableSpellCheckRef: React.RefObject<boolean>;
     enableDenoiseRef: React.RefObject<boolean>;
     enableOverlayRef: React.RefObject<boolean>;
+    muteBackgroundAudioRef: React.RefObject<boolean>;
     transcriptionStyleRef: React.MutableRefObject<string>;
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
     setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
@@ -27,13 +27,15 @@ interface UseRecordingParams {
     playError?: () => void;
     dictionaryRef: React.RefObject<DictEntry[]>;
     snippetsRef: React.RefObject<SnippetEntry[]>;
+    /** Called after each successful save_transcript_history — lets the parent refresh the history UI. */
+    onHistorySaved?: () => void;
 }
 
 const MIN_RECORDING_MS = 1500;
 
 /**
  * Manages recording state and the start/stop recording handlers,
- * including post-processing (spell check, grammar LM).
+ * including post-processing (grammar LM).
  */
 export function useRecording({
     activeEngineRef,
@@ -44,9 +46,9 @@ export function useRecording({
     setCurrentModel,
     setLoadedEngine,
     enableGrammarLMRef,
-    enableSpellCheckRef,
     enableDenoiseRef,
     enableOverlayRef,
+    muteBackgroundAudioRef,
     transcriptionStyleRef,
     setHeaderStatus,
     setTrayState,
@@ -56,6 +58,7 @@ export function useRecording({
     playError,
     dictionaryRef,
     snippetsRef,
+    onHistorySaved,
 }: UseRecordingParams) {
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessingTranscript, setIsProcessingTranscript] = useState(false);
@@ -117,25 +120,41 @@ export function useRecording({
             await setTrayState("recording");
             setLiveTranscript("");
             setLatestLatency(null);
+            if (muteBackgroundAudioRef.current) {
+                await invoke("mute_system_audio").catch(e => console.warn("mute_system_audio failed:", e));
+            }
             const res = await invoke("start_recording", { denoise: enableDenoiseRef.current });
             setHeaderStatus(res as string);
             recordingStartTimeRef.current = Date.now();
             setIsRecording(true);
             isRecordingRef.current = true;
             if (fromHotkey) {
-                await invoke("show_overlay").catch(() => {});
-                await new Promise(r => setTimeout(r, 50));
-                emitTo("overlay", "overlay-state", { phase: "recording" }).catch(() => {});
+                // Show overlay reliably: retry once if needed, then emit state
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        await invoke("show_overlay");
+                        break;
+                    } catch {
+                        if (attempt === 1) console.warn("show_overlay failed after retry");
+                    }
+                }
+                await new Promise(r => setTimeout(r, 80));
+                emitTo("overlay", "overlay-state", { phase: "recording" }).catch(() => { });
             }
             playStart?.();
         } catch (e) {
+            const errStr = String(e);
+            if (errStr.includes("Already recording")) {
+                setHeaderStatus("Recording already in progress", 2000);
+                return;
+            }
             console.error("Start recording failed:", e);
             setHeaderStatus("Error: " + e, 5000);
             playError?.();
             await setTrayState("ready");
             setIsRecording(false);
             isRecordingRef.current = false;
-            if (fromHotkey) invoke("hide_overlay").catch(() => {});
+            if (fromHotkey) invoke("hide_overlay").catch(() => { });
         }
     };
 
@@ -143,19 +162,22 @@ export function useRecording({
         const currentEngine = activeEngineRef.current;
         const processingStartMs = Date.now();
         const isOverlay = hotkeySessionRef.current;
-        console.log("[STOP] handleStopRecording called. GrammarLM:", enableGrammarLMRef.current, "SpellCheck:", enableSpellCheckRef.current);
+        console.log("[STOP] handleStopRecording called. GrammarLM:", enableGrammarLMRef.current);
         setIsRecording(false);
         isRecordingRef.current = false;
         setIsProcessingTranscript(true);
-        if (isOverlay) emitTo("overlay", "overlay-state", { phase: "transcribing" }).catch(() => {});
+        if (isOverlay) {
+            invoke("show_overlay").catch(() => { }); // Re-show in case it was hidden
+            emitTo("overlay", "overlay-state", { phase: "transcribing" }).catch(() => { });
+        }
 
         try {
             await setTrayState("processing");
-            if (currentEngine === "whisper") setHeaderStatus("Processing transcription...", 60_000, true);
+            if (currentEngine === "whisper") setHeaderStatus("Processing transcription...", 15_000, true);
 
             let finalTrans = await invoke("stop_recording") as string;
 
-            // Apply custom dictionary substitutions (before spell check / grammar LLM)
+            // Apply custom dictionary substitutions (before grammar LLM)
             finalTrans = applyDictionary(finalTrans, dictionaryRef.current ?? []);
 
             const recordingDurationMs = Date.now() - recordingStartTimeRef.current;
@@ -166,30 +188,21 @@ export function useRecording({
                 setIsProcessingTranscript(false);
                 await setTrayState("ready");
                 if (isOverlay) {
-                    await emitTo("overlay", "overlay-state", { phase: "too_short" }).catch(() => {});
+                    invoke("show_overlay").catch(() => { });
+                    await emitTo("overlay", "overlay-state", { phase: "too_short" }).catch(() => { });
                     await new Promise(resolve => setTimeout(resolve, 1000));
-                    invoke("hide_overlay").catch(() => {});
-                    emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => {});
+                    invoke("hide_overlay").catch(() => { });
+                    emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
                 }
                 return;
             }
 
-            if (enableSpellCheckRef.current) {
-                setIsCorrecting(true);
-                if (isOverlay) emitTo("overlay", "overlay-state", { phase: "correcting" }).catch(() => {});
-                setHeaderStatus("Fixing spelling...", 60_000, true);
-                try {
-                    finalTrans = await invoke("correct_spelling", { text: finalTrans });
-                    if (!enableGrammarLMRef.current) {
-                        setHeaderStatus("Spelling corrected!");
-                    }
-                } catch (e) {
-                    setHeaderStatus("Spell check failed: " + e, 5000);
-                }
-            }
 
             if (enableGrammarLMRef.current) {
-                if (isOverlay) emitTo("overlay", "overlay-state", { phase: "correcting" }).catch(() => {});
+                if (isOverlay) {
+                    invoke("show_overlay").catch(() => { });
+                    emitTo("overlay", "overlay-state", { phase: "correcting" }).catch(() => { });
+                }
                 setHeaderStatus("Correcting grammar...", 60_000, true);
                 try {
                     const activeStyle = transcriptionStyleRef.current;
@@ -210,14 +223,38 @@ export function useRecording({
             setLiveTranscript(finalTrans);
 
             await invoke("type_text", { text: finalTrans });
+
+            // Clear the "Processing transcription..." status that was set at recording stop.
+            // The spell-check / grammar branches already set their own completion messages,
+            // so only clear here when neither ran (plain Whisper with no post-processing).
+            if (!enableGrammarLMRef.current) {
+                setHeaderStatus("Done!", 900);
+            }
+
+            // Persist a lightweight history entry for this transcription.
+            // We record which engine was used, how long the recording was,
+            // and whether the grammar LLM was enabled for this run.
+            try {
+                await invoke("save_transcript_history", {
+                    transcript: finalTrans,
+                    engine: currentEngine,
+                    durationMs: recordingDurationMs,        // Tauri v2: snake_case → camelCase
+                    grammarLlmUsed: enableGrammarLMRef.current, // Tauri v2: snake_case → camelCase
+                });
+                onHistorySaved?.();
+            } catch (e) {
+                console.warn("Failed to save transcript history:", e);
+            }
+
             playPaste?.();
 
             if (isOverlay) {
+                invoke("show_overlay").catch(() => { });
                 const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
-                await emitTo("overlay", "overlay-state", { phase: "done", text: preview });
+                await emitTo("overlay", "overlay-state", { phase: "done", text: preview, ms: totalMs });
                 setTimeout(() => {
-                    invoke("hide_overlay").catch(() => {});
-                    emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => {});
+                    invoke("hide_overlay").catch(() => { });
+                    emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
                 }, 1500);
             }
 
@@ -235,8 +272,12 @@ export function useRecording({
             setIsProcessingTranscript(false);
             await setTrayState("ready");
             if (isOverlay) {
-                invoke("hide_overlay").catch(() => {});
-                emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => {});
+                invoke("hide_overlay").catch(() => { });
+                emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+            }
+        } finally {
+            if (muteBackgroundAudioRef.current) {
+                invoke("unmute_system_audio").catch(e => console.warn("unmute_system_audio failed:", e));
             }
         }
         hotkeySessionRef.current = false;
