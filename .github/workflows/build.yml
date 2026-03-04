@@ -437,6 +437,8 @@ jobs:
         run: |
           if [ "${{ matrix.os_name }}" = "Windows" ]; then
             bun run tauri build --target ${{ matrix.target }} --bundles nsis
+          elif [ "${{ matrix.os_name }}" = "Linux" ]; then
+            bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm
           else
             bun run tauri build --target ${{ matrix.target }}
           fi
