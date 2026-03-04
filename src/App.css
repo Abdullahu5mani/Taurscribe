@@ -321,10 +321,25 @@ body {
   }
 }
 
+.app-title-container {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.app-title-logo {
+  width: 84px;
+  height: 84px;
+  user-select: none;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
+  margin-top: -8px;
+  /* Offset the bounce vertical height so it aligns with text baseline */
+}
+
 .app-title {
   margin: 0;
   font-family: 'Barlow Condensed', sans-serif;
-  font-size: 2rem;
+  font-size: 2.2rem;
   font-weight: 700;
   letter-spacing: 0.25em;
   text-transform: uppercase;

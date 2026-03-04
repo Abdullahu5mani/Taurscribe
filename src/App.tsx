@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
@@ -20,6 +20,44 @@ import { MODELS } from "./components/settings/types";
 import type { DownloadableModel } from "./components/settings/types";
 import "./components/TitleBar.css";
 import "./App.css";
+
+const ANIMATED_LOGOS = [
+  "animated_logo_assemble.svg",
+  "animated_logo_blueprint.svg",
+  "animated_logo_bottom_spin.svg",
+  "animated_logo_bounce.svg",
+  "animated_logo_flip.svg",
+  "animated_logo_grow.svg",
+  "animated_logo_scan_reveal.svg",
+  "animated_logo_shockwave.svg",
+  "animated_logo_slice.svg",
+  "animated_logo_squish.svg",
+  "animated_logo_stomp.svg",
+  "animated_logo_write.svg",
+  "animated_logo_pulse_reveal.svg",
+  "animated_logo_swing.svg",
+  "animated_logo_zigzag.svg",
+  "animated_logo_spiral.svg",
+  "animated_logo_breathe.svg",
+  "animated_logo_thin_air.svg",
+  "animated_logo_glitch.svg",
+  "animated_logo_orbit.svg",
+  "animated_logo_rubberband.svg",
+  "animated_logo_focus.svg",
+  "animated_logo_crt.svg",
+  "animated_logo_liquid.svg",
+  "animated_logo_hologram.svg",
+  "animated_logo_wiper.svg",
+  "animated_logo_heartbeat.svg",
+  "animated_logo_laser_trace.svg",
+  "animated_logo_split_door.svg",
+  "animated_logo_coaster.svg",
+  "animated_logo_ripple.svg",
+  "animated_logo_flare.svg",
+  "animated_logo_handwrite.svg",
+  "animated_logo_quantum_flip.svg",
+  "animated_logo_debris.svg"
+];
 
 // Ticker phrases defined outside the component so the array is never recreated on render
 type TickerHighlight = "accent" | "whisper" | "parakeet";
@@ -116,6 +154,10 @@ const beautifyModelName = (rawName: string) => {
 };
 
 function App() {
+  const randomLogo = useMemo(() => {
+    return ANIMATED_LOGOS[Math.floor(Math.random() * ANIMATED_LOGOS.length)];
+  }, []);
+
   const storeRef = useRef<Store | null>(null);
   const [backendInfo, setBackendInfo] = useState("Loading...");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -638,7 +680,10 @@ function App() {
         <main className="container">
           <div>
             <div className="app-header">
-              <h1 className="app-title">TAURSCRIBE</h1>
+              <div className="app-title-container">
+                <img src={`/logos/${randomLogo}`} alt="" className="app-title-logo" />
+                <h1 className="app-title">TAURSCRIBE</h1>
+              </div>
               <div className="header-status">
                 {headerStatusMessage !== null ? (
                   <span
