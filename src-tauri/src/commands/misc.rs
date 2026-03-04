@@ -155,6 +155,18 @@ pub fn get_system_info() -> SystemInfo {
     }
 }
 
+// ── System audio mute / unmute ────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn mute_system_audio() -> Result<(), String> {
+    crate::system_audio::mute()
+}
+
+#[tauri::command]
+pub fn unmute_system_audio() -> Result<(), String> {
+    crate::system_audio::unmute()
+}
+
 // ── GPU detection ─────────────────────────────────────────────────────────────
 
 fn detect_gpu() -> (String, bool, Option<f32>) {

@@ -13,6 +13,11 @@ import { useEngineSwitch } from "./hooks/useEngineSwitch";
 import { useRecording } from "./hooks/useRecording";
 import { useSounds } from "./hooks/useSounds";
 import { usePersonalization } from "./hooks/usePersonalization";
+import { TranscriptFeed } from "./components/TranscriptFeed";
+import { QuickSettings } from "./components/QuickSettings";
+import { useDownloads } from "./hooks/useDownloads";
+import { MODELS } from "./components/settings/types";
+import type { DownloadableModel } from "./components/settings/types";
 import "./components/TitleBar.css";
 import "./App.css";
 
@@ -25,7 +30,7 @@ const TICKER_PHRASES: { parts: { text: string; highlight?: TickerHighlight }[] }
   { parts: [{ text: "No cloud", highlight: "accent" }, { text: " · no API keys · no subscriptions" }] },
   { parts: [{ text: "Switch between " }, { text: "Whisper", highlight: "whisper" }, { text: " and " }, { text: "Parakeet", highlight: "parakeet" }, { text: " anytime" }] },
   { parts: [{ text: "Ctrl+Win", highlight: "accent" }, { text: " from anywhere to record" }] },
-  { parts: [{ text: "Grammar & spell check · optional " }, { text: "LLM", highlight: "accent" }, { text: "" }] },
+  { parts: [{ text: "Grammar correction · optional " }, { text: "LLM", highlight: "accent" }, { text: "" }] },
   { parts: [{ text: "Offline-first", highlight: "accent" }, { text: " · your data stays yours" }] },
   { parts: [{ text: "Pick your engine · " }, { text: "Whisper", highlight: "whisper" }, { text: " for OpenAI · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " for NVIDIA" }] },
   { parts: [{ text: "Studio-grade", highlight: "accent" }, { text: " · runs on your hardware" }] },
@@ -56,7 +61,7 @@ const TICKER_PHRASES: { parts: { text: string; highlight?: TickerHighlight }[] }
   { parts: [{ text: "Local AI · no data in the cloud" }] },
   { parts: [{ text: "Built for creators · built for you" }] },
   { parts: [{ text: "Switch engines mid-workflow" }] },
-  { parts: [{ text: "Spell check · grammar · optional" }] },
+  { parts: [{ text: "Grammar correction · optional" }] },
   { parts: [{ text: "Whisper", highlight: "whisper" }, { text: " for accuracy · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " for speed" }] },
   { parts: [{ text: "Your microphone · your transcript" }] },
   { parts: [{ text: "Download once · run anywhere" }] },
@@ -68,12 +73,11 @@ const TICKER_PHRASES: { parts: { text: string; highlight?: TickerHighlight }[] }
 ];
 
 const TONE_STYLES = [
-  { value: 'Auto',         label: 'Auto',         desc: 'Let the model decide' },
-  { value: 'Casual',       label: 'Casual',        desc: 'Relaxed, conversational tone' },
-  { value: 'Verbatim',     label: 'Verbatim',      desc: 'Minimal changes, preserve speech' },
-  { value: 'Enthusiastic', label: 'Enthusiastic',  desc: 'Energetic and expressive' },
-  { value: 'Software_Dev', label: 'Software Dev',  desc: 'Technical language, code terms' },
-  { value: 'Professional', label: 'Professional',  desc: 'Formal and polished' },
+  { value: 'Casual', label: 'Casual', icon: '💬', accent: '#6895d2', desc: 'Relaxed, conversational tone. Great for notes, emails, and quick messages.' },
+  { value: 'Verbatim', label: 'Verbatim', icon: '📝', accent: '#94a3b8', desc: 'Minimal changes. Keeps your original speech intact with filler words preserved.' },
+  { value: 'Enthusiastic', label: 'Enthusiastic', icon: '🎉', accent: '#f472b6', desc: 'Energetic and expressive. Perfect for pitches, presentations, and vlogs.' },
+  { value: 'Software_Dev', label: 'Software Dev', icon: '💻', accent: '#3ecfa5', desc: 'Technical language with proper code terms, casing, and dev conventions.' },
+  { value: 'Professional', label: 'Professional', icon: '👔', accent: '#e09f3e', desc: 'Formal and polished. Ideal for reports, documentation, and client work.' },
 ];
 
 const setTrayState = async (newState: "ready" | "recording" | "processing") => {
@@ -119,10 +123,10 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   /** null = not yet loaded from store; true = show wizard (first run); false = show main app */
   const [showSetupWizard, setShowSetupWizard] = useState<boolean | null>(null);
-  const [copyJustConfirmed, setCopyJustConfirmed] = useState(false);
-  const [copyJustReset, setCopyJustReset] = useState(false);
-  const copyConfirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const copyResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Incremented after each successful save_transcript_history; tells TranscriptFeed to reload. */
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+
+  const [settingsModels, setSettingsModels] = useState<DownloadableModel[]>(MODELS);
 
   // --- Custom Hooks ---
   const { headerStatusMessage, headerStatusIsProcessing, setHeaderStatus } = useHeaderStatus();
@@ -132,15 +136,60 @@ function App() {
     refreshModels,
   } = useModels(setHeaderStatus);
 
+  const onModelDownloadedImpl = async (id: string) => {
+    // Refresh the main-menu model lists immediately AND query verified status
+    // in parallel so the Whisper/Parakeet cards update without delay.
+    const [statuses] = await Promise.all([
+      invoke<any[]>("get_download_status", { modelIds: [id] }).catch(() => null),
+      refreshModels(false),
+    ]);
+    if (statuses) {
+      const s = statuses.find((x: any) => x.id === id);
+      setSettingsModels(prev => prev.map(m =>
+        m.id === id ? { ...m, downloaded: true, verified: s?.verified ?? false } : m
+      ));
+    } else {
+      setSettingsModels(prev => prev.map(m =>
+        m.id === id ? { ...m, downloaded: true, verified: false } : m
+      ));
+    }
+  };
+  // Keep a stable function reference so useDownloads doesn't re-subscribe its
+  // event listener on every render (which would cause missed events).
+  const onModelDownloadedRef = useRef(onModelDownloadedImpl);
+  useEffect(() => { onModelDownloadedRef.current = onModelDownloadedImpl; });
+  const onModelDownloaded = useCallback((id: string) => onModelDownloadedRef.current(id), []);
+
+  const { downloadProgress, handleDownload } = useDownloads(onModelDownloaded);
+
+  const handleDeleteModel = async (id: string, _name: string) => {
+    try {
+      await invoke("delete_model", { modelId: id });
+      setSettingsModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false, verified: false } : m));
+
+      // If the deleted model was the one currently loaded, turn off the LED.
+      if (currentModel === id || currentParakeetModel === id) {
+        setLoadedEngine(null);
+      }
+      if (currentModel === id) setCurrentModel(null);
+      if (currentParakeetModel === id) setCurrentParakeetModel(null);
+
+      await refreshModels(false);
+    } catch (e) {
+      console.error("Failed to delete model", e);
+      throw e; // re-throw so ModelRow can catch it
+    }
+  };
+
   const {
     llmStatus, enableGrammarLM, setEnableGrammarLM, enableGrammarLMRef,
-    enableSpellCheck, setEnableSpellCheck, enableSpellCheckRef, spellCheckStatus,
     enableDenoise, setEnableDenoise, enableDenoiseRef,
     enableOverlay, setEnableOverlay, enableOverlayRef,
+    muteBackgroundAudio, setMuteBackgroundAudio, muteBackgroundAudioRef,
     transcriptionStyle, setTranscriptionStyle, transcriptionStyleRef,
     llmBackend, setLlmBackend,
     asrBackend, setAsrBackend,
-  } = usePostProcessing(setHeaderStatus);
+  } = usePostProcessing(setHeaderStatus, () => setIsSettingsOpen(true));
 
   const {
     activeEngine, setActiveEngine, activeEngineRef,
@@ -163,26 +212,16 @@ function App() {
 
   const {
     isRecording, isRecordingRef, isProcessingTranscript, isCorrecting,
-    liveTranscript, latestLatency,
+    latestLatency,
     handleStartRecording, handleStopRecording,
   } = useRecording({
     activeEngineRef, models, parakeetModels, currentModel, currentParakeetModel,
-    setCurrentModel, setLoadedEngine, enableGrammarLMRef, enableSpellCheckRef,
-    enableDenoiseRef, enableOverlayRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
+    setCurrentModel, setLoadedEngine, enableGrammarLMRef,
+    enableDenoiseRef, enableOverlayRef, muteBackgroundAudioRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
     playStart, playPaste, playError,
     dictionaryRef, snippetsRef,
+    onHistorySaved: () => setHistoryRefreshKey(k => k + 1),
   });
-
-  // --- Copy reset animation ---
-  useEffect(() => {
-    if (!copyJustReset) return;
-    if (copyResetTimeoutRef.current) clearTimeout(copyResetTimeoutRef.current);
-    copyResetTimeoutRef.current = setTimeout(() => {
-      setCopyJustReset(false);
-      copyResetTimeoutRef.current = null;
-    }, 520);
-    return () => { if (copyResetTimeoutRef.current) clearTimeout(copyResetTimeoutRef.current); };
-  }, [copyJustReset]);
 
   // --- Transfer line fade ---
   const transferLineFadeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -196,6 +235,68 @@ function App() {
     return () => { if (transferLineFadeRef.current) clearTimeout(transferLineFadeRef.current); };
   }, [transferLineFadingOut]);
 
+  // --- CPU / GPU hot-swap: reload the currently active engine on the new backend immediately ---
+  const handleToggleAsrBackend = async (newBackend: "gpu" | "cpu") => {
+    if (newBackend === asrBackend) return;
+    if (isLoading || isLoadingRef.current) return;
+
+    // Persist the new preference first so any subsequent engine loads use it.
+    setAsrBackend(newBackend);
+
+    // Re-invoke the current engine's load command with the new useGpu value.
+    // We call the existing handlers which already manage all loading state
+    // but they read asrBackend from props which hasn't updated yet in this
+    // render — so we temporarily patch by doing a direct invoke pathway:
+    const useGpu = newBackend === "gpu";
+    const label = useGpu ? "GPU" : "CPU";
+    const engine = activeEngineRef.current;
+
+    // Fast-path: If the active engine has no loaded model, just update preference immediately.
+    const hasWhisperModel = engine === "whisper" && !!currentModel;
+    const hasParakeetModel = engine === "parakeet" && (currentParakeetModel || parakeetModels.length > 0);
+
+    if (!hasWhisperModel && !hasParakeetModel) {
+      setHeaderStatus(`ASR backend set to ${label}`);
+      return;
+    }
+
+    // Heavy-path: Reloading the actual model into memory
+    isLoadingRef.current = true;
+    setIsLoading(true);
+    setLoadedEngine(null);
+    setLoadingMessage(`Reloading on ${label}...`);
+    setHeaderStatus(`Reloading on ${label}...`, 60_000);
+
+    try {
+      await setTrayState("processing");
+
+      if (engine === "whisper") {
+        const displayName = models.find(m => m.id === currentModel)?.display_name || currentModel;
+        setLoadingMessage(`Reloading ${displayName} on ${label}...`);
+        await invoke("switch_model", { modelId: currentModel, useGpu });
+        setLoadedEngine("whisper");
+        const info = await invoke("get_backend_info");
+        setBackendInfo(info as string);
+        setHeaderStatus(`Whisper running on ${label}`);
+      } else if (engine === "parakeet") {
+        const targetModel = currentParakeetModel || parakeetModels[0]?.id;
+        await invoke("init_parakeet", { modelId: targetModel, useGpu });
+        setLoadedEngine("parakeet");
+        const info = await invoke("get_backend_info");
+        setBackendInfo(info as string);
+        setHeaderStatus(`Parakeet running on ${label}`);
+      }
+    } catch (e) {
+      setHeaderStatus(`Failed to switch to ${label}: ${e}`, 5000);
+    } finally {
+      isLoadingRef.current = false;
+      setIsLoading(false);
+      setLoadingMessage("");
+      setTransferLineFadingOut(true);
+      await setTrayState("ready");
+    }
+  };
+
   // --- Initial data load ---
   useEffect(() => {
     let cancelled = false;
@@ -205,6 +306,19 @@ function App() {
         const backend = await invoke("get_backend_info");
         if (cancelled) return;
         setBackendInfo(backend as string);
+
+        // Pre-fetch the download status of all models
+        try {
+          const statuses = await invoke<any[]>("get_download_status", { modelIds: MODELS.map(m => m.id) });
+          if (!cancelled) {
+            setSettingsModels(prev => prev.map(m => {
+              const s = statuses.find(x => x.id === m.id);
+              return s ? { ...m, downloaded: s.downloaded, verified: s.verified } : m;
+            }));
+          }
+        } catch (e) {
+          console.error("Failed to fetch initial model statuses:", e);
+        }
 
         const modelList = await invoke("list_models") as typeof models;
         if (cancelled) return;
@@ -236,13 +350,13 @@ function App() {
           // Restore saved hotkey binding so the listener uses the user's preference immediately.
           const savedHotkey = await loadedStore.get<{ keys: string[] }>("hotkey_binding");
           if (savedHotkey?.keys?.length && !cancelled) {
-            invoke("set_hotkey", { binding: savedHotkey }).catch(() => {});
+            invoke("set_hotkey", { binding: savedHotkey }).catch(() => { });
           }
 
           // Restore saved input device preference.
           const savedDevice = await loadedStore.get<string>("input_device");
           if (savedDevice && !cancelled) {
-            invoke("set_input_device", { name: savedDevice }).catch(() => {});
+            invoke("set_input_device", { name: savedDevice }).catch(() => { });
           }
 
           savedEngine = (await loadedStore.get<"whisper" | "parakeet">("active_engine")) || null;
@@ -297,7 +411,7 @@ function App() {
       } finally {
         if (!cancelled) {
           setIsInitialLoading(false);
-          invoke("show_main_window").catch(() => {});
+          invoke("show_main_window").catch(() => { });
         }
       }
     }
@@ -316,22 +430,58 @@ function App() {
     }
   }, [activeEngine, isInitialLoading]);
 
-  // --- File system watcher for models dir ---
+  // --- File system watcher for models dir & verification status ---
   const refreshModelsRef = useRef(refreshModels);
   useEffect(() => { refreshModelsRef.current = refreshModels; });
+
+  // Keep a ref to the latest downloadProgress so the FS watcher callback can
+  // skip models that currently have an active download, delete, or verify.
+  const downloadProgressRef = useRef(downloadProgress);
+  useEffect(() => { downloadProgressRef.current = downloadProgress; });
 
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;
+
+    const handleModelsChanged = async () => {
+      // Refresh backend model lists (Whisper + Parakeet)
+      refreshModelsRef.current(false);
+
+      // Also refresh AppMall status (downloaded / verified flags) so the UI
+      // reflects SHA-256 verification results as soon as they complete.
+      try {
+        const statuses = await invoke<any[]>("get_download_status", { modelIds: MODELS.map(m => m.id) });
+        if (!active) return;
+        const activeOps = downloadProgressRef.current;
+        setSettingsModels(prev =>
+          prev.map(m => {
+            // Don't overwrite state for models with an active operation
+            // (download, verify, delete) — the FS watcher sees partial
+            // files on disk and would prematurely report them as downloaded.
+            const op = activeOps[m.id];
+            if (op && ['starting', 'downloading', 'verifying', 'deleting'].includes(op.status)) {
+              return m;
+            }
+            const s = statuses.find(x => x.id === m.id);
+            return s ? { ...m, downloaded: s.downloaded, verified: s.verified } : m;
+          }),
+        );
+      } catch (e) {
+        console.error("Failed to refresh model statuses after models-changed:", e);
+      }
+    };
+
     const setup = async () => {
-      const unsub = await listen("models-changed", () => {
-        refreshModelsRef.current(false);
-      });
+      const unsub = await listen("models-changed", handleModelsChanged);
       if (active) unlisten = unsub;
       else unsub();
     };
+
     setup();
-    return () => { active = false; if (unlisten) unlisten(); };
+    return () => {
+      active = false;
+      if (unlisten) unlisten();
+    };
   }, []);
 
   // --- Hotkey listeners ---
@@ -344,29 +494,32 @@ function App() {
 
   const startingRecordingRef = useRef(false);
   const pendingStopRef = useRef(false);
+  const stopInProgressRef = useRef(false);
   const lastStartTime = useRef(0);
+  const lastStopTime = useRef(0);
+  const HOTKEY_DEBOUNCE_MS = 700;
 
   useEffect(() => {
     let active = true;
     let unlistenStart: (() => void) | undefined;
     let unlistenStop: (() => void) | undefined;
     let unlistenChunk: (() => void) | undefined;
-
     const setup = async () => {
       const unsub1 = await listen("hotkey-start-recording", async () => {
         const now = Date.now();
-        if (now - lastStartTime.current < 500) return;
+        if (now - lastStartTime.current < HOTKEY_DEBOUNCE_MS) return;
         lastStartTime.current = now;
 
-        if (!isRecordingRef.current && !startingRecordingRef.current) {
-          startingRecordingRef.current = true;
+        // Don't start if already recording, starting, or processing a previous stop
+        if (isRecordingRef.current || startingRecordingRef.current || stopInProgressRef.current) return;
+
+        startingRecordingRef.current = true;
+        pendingStopRef.current = false;
+        await handleStartRecordingRef.current(true);
+        startingRecordingRef.current = false;
+        if (pendingStopRef.current) {
           pendingStopRef.current = false;
-          await handleStartRecordingRef.current(true);
-          startingRecordingRef.current = false;
-          if (pendingStopRef.current) {
-            pendingStopRef.current = false;
-            setTimeout(async () => { await handleStopRecordingRef.current(); }, 200);
-          }
+          setTimeout(async () => { await handleStopRecordingRef.current(); }, 250);
         }
       });
 
@@ -375,8 +528,21 @@ function App() {
           pendingStopRef.current = true;
           return;
         }
-        if (isRecordingRef.current) {
+        if (stopInProgressRef.current) return;
+        if (!isRecordingRef.current) return;
+
+        stopInProgressRef.current = true;
+        const now = Date.now();
+        if (now - lastStopTime.current < HOTKEY_DEBOUNCE_MS) {
+          stopInProgressRef.current = false;
+          return;
+        }
+        lastStopTime.current = now;
+
+        try {
           await handleStopRecordingRef.current();
+        } finally {
+          stopInProgressRef.current = false;
         }
       });
 
@@ -419,7 +585,15 @@ function App() {
   );
 
   // --- Derived UI state ---
-  const noModel = (activeEngine === "whisper" && models.length === 0) || (activeEngine === "parakeet" && parakeetModels.length === 0);
+  const noWhisperModel = models.length === 0;
+  const noParakeetModel = parakeetModels.length === 0;
+  const noAnyAsrModel = noWhisperModel && noParakeetModel;
+  const activeEngineHasNoModel =
+    (activeEngine === "whisper" && noWhisperModel) ||
+    (activeEngine === "parakeet" && noParakeetModel);
+  const noModel = activeEngineHasNoModel;
+  const noLlm = llmStatus === "Not Downloaded";
+
   const recordBtnBusy = isLoading || isCorrecting || isProcessingTranscript;
   const recordBtnClass =
     noModel ? "record-btn disabled" :
@@ -460,293 +634,358 @@ function App() {
   return (
     <>
       <TitleBar />
-      <main className="container">
-        <div>
-          <div className="app-header">
-            <h1 className="app-title">TAURSCRIBE</h1>
-            <div className="header-status">
-              {headerStatusMessage !== null ? (
-                <span
-                  className={`header-status-message ${headerStatusIsProcessing ? "header-status-message--processing" : ""}`}
-                  key={headerStatusMessage}
-                >
-                  {headerStatusMessage}
-                </span>
-              ) : (
-                <div className="header-ticker header-ticker-fade-in" aria-hidden="true">
-                  <div className="header-ticker-track">
-                    <span className="header-ticker-segment">{tickerContent}</span>
-                    <span className="header-ticker-segment" aria-hidden="true">{tickerContent}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-            <button
-              type="button"
-              className="settings-btn"
-              onClick={() => setIsSettingsOpen(true)}
-              title="Settings"
-              aria-label="Settings"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-            </button>
-          </div>
-          <div className="hardware-bar">
-            <span>Hardware: <span>{backendInfo}</span></span>
-            <div className="backend-toggle-inline">
-              <button
-                className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
-                onClick={() => setAsrBackend('gpu')}
-              >⚡ GPU</button>
-              <button
-                className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
-                onClick={() => setAsrBackend('cpu')}
-              >🔋 CPU</button>
-            </div>
-          </div>
-        </div>
-
-        <div className="status-bar-container">
-          {(isLoading || transferLineFadingOut) && (
-            <div
-              className={`status-bar-transfer-line ${transferLineFadingOut ? "status-bar-transfer-line--fade-out" : ""}`}
-              aria-hidden="true"
-            />
-          )}
-          <div
-            className={`status-card whisper ${activeEngine === "whisper" ? "active" : ""}`}
-            onClick={handleSwitchToWhisper}
-            style={isLoading ? { pointerEvents: 'none' } : {}}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => e.key === "Enter" && handleSwitchToWhisper()}
-          >
-            <div className="status-card-header">
-              <span className="engine-badge">Whisper</span>
-              <span
-                className={`led-dot ${loadingTargetEngine === "whisper" ? "loading" :
-                  loadedEngine === "whisper" ? "loaded" : "unloaded"
-                  }`}
-                aria-label={loadingTargetEngine === "whisper" ? "Loading" : loadedEngine === "whisper" ? "Loaded" : "Unloaded"}
-              />
-            </div>
-            <div className="status-item">
-              <span className="status-label">Model</span>
-              <span className={`status-value ${models.length === 0 ? "error" : ""}`}>
-                {models.length === 0 ? "Download required" : (currentModel ? beautifyModelName(models.find(m => m.id === currentModel)?.display_name || currentModel) : "None")}
-              </span>
-            </div>
-          </div>
-
-          <div
-            className={`status-card parakeet ${activeEngine === "parakeet" ? "active" : ""}`}
-            onClick={handleSwitchToParakeet}
-            style={isLoading ? { pointerEvents: 'none' } : {}}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => e.key === "Enter" && handleSwitchToParakeet()}
-          >
-            <div className="status-card-header">
-              <span className="engine-badge">Parakeet</span>
-              <span
-                className={`led-dot ${loadingTargetEngine === "parakeet" ? "loading" :
-                  loadedEngine === "parakeet" ? "loaded" : "unloaded"
-                  }`}
-                aria-label={loadingTargetEngine === "parakeet" ? "Loading" : loadedEngine === "parakeet" ? "Loaded" : "Unloaded"}
-              />
-            </div>
-            <div className="status-item">
-              <span className="status-label">Model</span>
-              <span className={`status-value ${parakeetModels.length === 0 ? "error" : ""}`}>
-                {parakeetModels.length === 0 ? "Download required" : (parakeetModels.find(m => m.id === currentParakeetModel) ?? parakeetModels[0]).display_name.split(' - ')[0].replace(/\s*\(.*?\)/g, '').trim()}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="model-row">
-          <div className="model-section">
-            <div key={activeEngine} className="model-content">
-              {activeEngine === "whisper" ? (
-                <>
-                  <label htmlFor="model-select" className="model-label">Active model</label>
-                  <select
-                    id="model-select"
-                    className="model-select"
-                    value={currentModel || ""}
-                    onChange={(e) => handleModelChange(e.target.value)}
-                    disabled={isRecording || isLoading || isInitialLoading}
-                  >
-                    {isInitialLoading && <option value="">Loading models...</option>}
-                    {!isInitialLoading && models.length === 0 && <option value="">No models — open Settings to download</option>}
-                    {models.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {beautifyModelName(model.display_name)} ({formatSize(model.size_mb)})
-                      </option>
-                    ))}
-                  </select>
-                </>
-              ) : (
-                <>
-                  <span className="model-label">Active model</span>
-                  <div
-                    className="model-select"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      cursor: 'default',
-                      background: parakeetModels.length === 0 ? 'rgba(220, 38, 38, 0.08)' : 'var(--bg-tertiary)',
-                      color: parakeetModels.length === 0 ? 'var(--error)' : 'inherit'
-                    }}
-                  >
-                    {isInitialLoading ? "Loading..." : (
-                      parakeetModels.length === 0
-                        ? "Download Nemotron from Settings"
-                        : `${beautifyModelName(parakeetModels[0]?.display_name || "Nemotron")} (${formatSize(parakeetModels[0]?.size_mb || 0)})`
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* ── LLM toggle + tone pills ── */}
-            <div className="llm-section">
-              <div className="llm-section-header">
-                <div className="llm-identity">
+      <div className="app-body">
+        <main className="container">
+          <div>
+            <div className="app-header">
+              <h1 className="app-title">TAURSCRIBE</h1>
+              <div className="header-status">
+                {headerStatusMessage !== null ? (
                   <span
-                    className="llm-status-dot"
-                    style={{
-                      background: !enableGrammarLM ? 'var(--text-muted)' :
-                        llmStatus === 'Loaded' ? 'var(--success)' :
-                          llmStatus === 'Loading...' ? 'var(--warning)' : 'var(--error)'
-                    }}
-                  />
-                  <span className="llm-name">Qwen 2.5 0.5B</span>
-                  <span className="llm-meta">fine-tuned · grammar & tone</span>
-                </div>
-                <label className="mini-toggle" title={enableGrammarLM ? 'Disable grammar LLM' : 'Enable grammar LLM'}>
-                  <input
-                    type="checkbox"
-                    checked={enableGrammarLM}
-                    onChange={e => setEnableGrammarLM(e.target.checked)}
-                    disabled={llmStatus === 'Loading...'}
-                  />
-                  <span className="mini-toggle-track" />
-                </label>
-              </div>
-              <div className={`tone-pills ${!enableGrammarLM ? 'tone-pills--off' : ''}`}>
-                {TONE_STYLES.map(s => (
-                  <button
-                    key={s.value}
-                    className={`tone-pill ${transcriptionStyle === s.value ? 'tone-pill--active' : ''}`}
-                    onClick={() => setTranscriptionStyle(s.value)}
-                    disabled={!enableGrammarLM || llmStatus !== 'Loaded'}
-                    title={s.desc}
+                    className={`header-status-message ${headerStatusIsProcessing ? "header-status-message--processing" : ""}`}
+                    key={headerStatusMessage}
                   >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="record-btn-wrap">
-            <button
-              type="button"
-              className={recordBtnClass}
-              disabled={!noModel && recordBtnDisabled}
-              onClick={onRecordClick}
-              title={noModel ? "Download a model first in Settings" : recordBtnBusy ? "Please wait…" : isRecording ? "Stop recording" : "Start recording"}
-            >
-              {recordBtnLabel}
-            </button>
-          </div>
-        </div>
-
-        {isInitialLoading && (
-          <div className="loading-overlay-backdrop" aria-busy="true" aria-live="polite">
-            <div className="loading-overlay">
-              <div className="loading-spinner" />
-              <span className="loading-text">{loadingMessage || "Loading..."}</span>
-            </div>
-          </div>
-        )}
-
-        <div className="output-area">
-          {isRecording ? (
-            <div className="live-transcript">
-              <p className="listening-placeholder">Listening...</p>
-            </div>
-          ) : liveTranscript ? (
-            <>
-              <div className="final-transcript-header">
-                {latestLatency !== null && (
-                  <span className="latency-badge">{latestLatency} ms</span>
+                    {headerStatusMessage}
+                  </span>
+                ) : (
+                  <div className="header-ticker header-ticker-fade-in" aria-hidden="true">
+                    <div className="header-ticker-track">
+                      <span className="header-ticker-segment">{tickerContent}</span>
+                      <span className="header-ticker-segment" aria-hidden="true">{tickerContent}</span>
+                    </div>
+                  </div>
                 )}
               </div>
-              <pre>{liveTranscript}</pre>
-              <div className="copy-container">
+              <button
+                type="button"
+                className="settings-btn"
+                onClick={() => setIsSettingsOpen(true)}
+                title="Settings"
+                aria-label="Settings"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+            </div>
+            <div className="hardware-bar">
+              <span>Hardware: <span>{backendInfo}</span></span>
+              <div className="backend-toggle-inline">
+                <button
+                  className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
+                  onClick={() => handleToggleAsrBackend('gpu')}
+                  disabled={isLoading}
+                >⚡ GPU</button>
+                <button
+                  className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
+                  onClick={() => handleToggleAsrBackend('cpu')}
+                  disabled={isLoading}
+                >🔋 CPU</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="status-bar-container">
+            {(isLoading || transferLineFadingOut) && (
+              <div
+                className={`status-bar-transfer-line ${transferLineFadingOut ? "status-bar-transfer-line--fade-out" : ""}`}
+                aria-hidden="true"
+              />
+            )}
+            <div
+              className={`status-card whisper ${activeEngine === "whisper" ? "active" : ""}`}
+              onClick={handleSwitchToWhisper}
+              style={isLoading ? { pointerEvents: 'none' } : {}}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && handleSwitchToWhisper()}
+            >
+              <div className="status-card-header">
+                <span className="engine-badge">Whisper</span>
+                <div className="status-card-header-right">
+                  <span className="info-icon" data-tooltip="OpenAI Whisper — general-purpose speech recognition. Supports multiple languages, sizes from Tiny to Large, and runs locally on CPU or GPU.">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                  </span>
+                  <span
+                    className={`led-dot ${loadingTargetEngine === "whisper" ? "loading" :
+                      loadedEngine === "whisper" ? "loaded" : "unloaded"
+                      }`}
+                    aria-label={loadingTargetEngine === "whisper" ? "Loading" : loadedEngine === "whisper" ? "Loaded" : "Unloaded"}
+                  />
+                </div>
+              </div>
+              <div className="status-item">
+                <span className="status-label">Model</span>
+                <span className={`status-value ${models.length === 0 ? "error" : ""}`}>
+                  {models.length === 0 ? "Download required" : (currentModel ? beautifyModelName(models.find(m => m.id === currentModel)?.display_name || currentModel) : "None")}
+                </span>
+              </div>
+            </div>
+
+            <div
+              className={`status-card parakeet ${activeEngine === "parakeet" ? "active" : ""}`}
+              onClick={handleSwitchToParakeet}
+              style={isLoading ? { pointerEvents: 'none' } : {}}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && handleSwitchToParakeet()}
+            >
+              <div className="status-card-header">
+                <span className="engine-badge">Parakeet</span>
+                <div className="status-card-header-right">
+                  <span className="info-icon" data-tooltip="NVIDIA Parakeet — fast streaming ASR optimized for English. Real-time transcription with low latency using CTC decoding.">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                  </span>
+                  <span
+                    className={`led-dot ${loadingTargetEngine === "parakeet" ? "loading" :
+                      loadedEngine === "parakeet" ? "loaded" : "unloaded"
+                      }`}
+                    aria-label={loadingTargetEngine === "parakeet" ? "Loading" : loadedEngine === "parakeet" ? "Loaded" : "Unloaded"}
+                  />
+                </div>
+              </div>
+              <div className="status-item">
+                <span className="status-label">Model</span>
+                <span className={`status-value ${parakeetModels.length === 0 ? "error" : ""}`}>
+                  {parakeetModels.length === 0 ? "Download required" : (parakeetModels.find(m => m.id === currentParakeetModel) ?? parakeetModels[0]).display_name.split(' - ')[0].replace(/\s*\(.*?\)/g, '').trim()}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="model-row">
+            <div className="model-section">
+              <div key={activeEngine} className="model-content">
+                {activeEngine === "whisper" ? (
+                  <>
+                    <label htmlFor="model-select" className="model-label">Active model</label>
+                    <select
+                      id="model-select"
+                      className="model-select"
+                      value={currentModel || ""}
+                      onChange={(e) => handleModelChange(e.target.value)}
+                      disabled={isRecording || isLoading || isInitialLoading}
+                    >
+                      {isInitialLoading && <option value="">Loading models...</option>}
+                      {!isInitialLoading && models.length === 0 && <option value="">No models — open Settings to download</option>}
+                      {models.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {beautifyModelName(model.display_name)} ({formatSize(model.size_mb)})
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                ) : (
+                  <>
+                    <span className="model-label">Active model</span>
+                    <div
+                      className="model-select"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'default',
+                        background: parakeetModels.length === 0 ? 'rgba(220, 38, 38, 0.08)' : 'var(--bg-tertiary)',
+                        color: parakeetModels.length === 0 ? 'var(--error)' : 'inherit'
+                      }}
+                    >
+                      {isInitialLoading ? "Loading..." : (
+                        parakeetModels.length === 0
+                          ? "Download Nemotron from Settings"
+                          : `${beautifyModelName(parakeetModels[0]?.display_name || "Nemotron")} (${formatSize(parakeetModels[0]?.size_mb || 0)})`
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* ── LLM toggle + tone pills ── */}
+              <div className="llm-section">
+                <div className="llm-section-header">
+                  <div className="llm-identity">
+                    <span
+                      className="llm-status-dot"
+                      style={{
+                        background: !enableGrammarLM ? 'var(--text-muted)' :
+                          llmStatus === 'Loaded' ? 'var(--success)' :
+                            llmStatus === 'Loading...' ? 'var(--warning)' : 'var(--error)'
+                      }}
+                    />
+                    <span className="llm-name">FlowScribe Qwen 2.5 0.5B</span>
+                    <span className="llm-meta">fine-tuned · grammar & tone</span>
+                  </div>
+                  <label className={`mini-toggle ${llmStatus === 'Not Downloaded' ? 'mini-toggle--disabled' : ''}`} title={llmStatus === 'Not Downloaded' ? 'Download FlowScribe Qwen from Settings > Models' : enableGrammarLM ? 'Disable grammar LLM' : 'Enable grammar LLM'}>
+                    <input
+                      type="checkbox"
+                      checked={enableGrammarLM}
+                      onChange={e => setEnableGrammarLM(e.target.checked)}
+                      disabled={llmStatus === 'Loading...' || llmStatus === 'Not Downloaded'}
+                    />
+                    <span className="mini-toggle-track" />
+                  </label>
+                </div>
+                {llmStatus === 'Not Downloaded' && (
+                  <p className="llm-section-hint" style={{ color: 'var(--error)', marginTop: '6px', fontSize: '0.8rem' }}>
+                    Model not downloaded. Download FlowScribe Qwen from Settings → Models.
+                  </p>
+                )}
+                <div className={`tone-tiles ${!enableGrammarLM ? 'tone-tiles--off' : ''}`}>
+                  {TONE_STYLES.map(s => {
+                    const isActive = transcriptionStyle === s.value;
+                    return (
+                      <button
+                        key={s.value}
+                        className={`tone-tile ${isActive ? 'tone-tile--active' : ''}`}
+                        onClick={() => setTranscriptionStyle(s.value)}
+                        disabled={!enableGrammarLM || llmStatus !== 'Loaded'}
+                        style={{
+                          '--tile-accent': s.accent,
+                          '--tile-accent-glow': `${s.accent}40`,
+                          '--tile-accent-bg': `${s.accent}14`,
+                        } as React.CSSProperties}
+                      >
+                        <div className="tone-tile-stripe" />
+                        <span className="tone-tile-icon">{s.icon}</span>
+                        <span className="tone-tile-label">{s.label}</span>
+                        <span className="tone-tile-desc">{s.desc}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="record-btn-wrap">
+              <button
+                type="button"
+                className={recordBtnClass}
+                disabled={!noModel && recordBtnDisabled}
+                onClick={onRecordClick}
+                title={noModel ? "Download a model first in Settings" : recordBtnBusy ? "Please wait…" : isRecording ? "Stop recording" : "Start recording"}
+              >
+                {recordBtnLabel}
+              </button>
+            </div>
+          </div>
+
+          {isInitialLoading && (
+            <div className="loading-overlay-backdrop" aria-busy="true" aria-live="polite">
+              <div className="loading-overlay">
+                <div className="loading-spinner" />
+                <span className="loading-text">{loadingMessage || "Loading..."}</span>
+              </div>
+            </div>
+          )}
+
+          <div className="output-area output-area--feed">
+            {activeEngineHasNoModel ? (
+              <div className="empty-state">
+                <div className="empty-state-icon" aria-hidden="true">
+                  {noAnyAsrModel ? "⬇" : activeEngine === "whisper" ? "🎙" : "⚡"}
+                </div>
+                <h2 className="empty-state-title">
+                  {noAnyAsrModel
+                    ? "No speech model downloaded"
+                    : activeEngine === "whisper"
+                      ? "No Whisper model downloaded"
+                      : "Parakeet not downloaded"}
+                </h2>
+                <p className="empty-state-body">
+                  {noAnyAsrModel ? (
+                    <>Download a <strong>Whisper</strong> or <strong>Parakeet</strong> model to start transcribing. Whisper Base is a good starting point — it's fast and accurate.</>
+                  ) : activeEngine === "whisper" ? (
+                    <>You're on the <strong>Whisper</strong> engine but haven't downloaded a model yet. Try <strong>Whisper Base</strong> — it's small and accurate. Or switch to Parakeet if you already have it.</>
+                  ) : (
+                    <>You're on the <strong>Parakeet</strong> engine but the Nemotron model isn't downloaded yet. Switch to Whisper if you already have a model, or download Parakeet from Settings.</>
+                  )}
+                </p>
+                {!noAnyAsrModel && (
+                  <p className="empty-state-hint">
+                    {activeEngine === "whisper" && !noParakeetModel
+                      ? "💡 You already have a Parakeet model — click the Parakeet card above to switch."
+                      : activeEngine === "parakeet" && !noWhisperModel
+                        ? "💡 You already have a Whisper model — click the Whisper card above to switch."
+                        : null}
+                  </p>
+                )}
                 <button
                   type="button"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(liveTranscript);
-                      if (copyConfirmTimeoutRef.current) clearTimeout(copyConfirmTimeoutRef.current);
-                      setCopyJustConfirmed(true);
-                      setHeaderStatus("Copied to clipboard");
-                      copyConfirmTimeoutRef.current = setTimeout(() => {
-                        setCopyJustConfirmed(false);
-                        setCopyJustReset(true);
-                        copyConfirmTimeoutRef.current = null;
-                      }, 2000);
-                    } catch (e) {
-                      setHeaderStatus("Copy failed", 5000);
-                    }
-                  }}
-                  className={`btn-copy ${copyJustConfirmed ? "btn-copy--confirmed" : ""} ${copyJustReset ? "btn-copy--resetting" : ""}`}
-                  title={copyJustConfirmed ? "Copied!" : "Copy to clipboard"}
-                  aria-label={copyJustConfirmed ? "Copied" : "Copy to clipboard"}
+                  className="empty-state-cta"
+                  onClick={() => setIsSettingsOpen(true)}
                 >
-                  {copyJustConfirmed ? (
-                    <span className="btn-copy-inner btn-copy-inner--confirmed">
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                      <span className="btn-copy-label">Copied</span>
-                    </span>
-                  ) : (
-                    <span className={`btn-copy-inner ${copyJustReset ? "btn-copy-inner--animate-in" : ""}`}>
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                      </svg>
-                    </span>
-                  )}
+                  Open Settings → Download Models
                 </button>
+                {noLlm && (
+                  <p className="empty-state-llm-hint">
+                    <span className="empty-state-llm-dot" />FlowScribe grammar LLM also not downloaded — optional but improves quality.
+                  </p>
+                )}
               </div>
-            </>
-          ) : (
-            <div className="output-area-empty" aria-hidden="true" />
-          )}
-        </div>
+            ) : (
+              <TranscriptFeed
+                refreshKey={historyRefreshKey}
+                isRecording={isRecording}
+                isProcessingTranscript={isProcessingTranscript}
+                isCorrecting={isCorrecting}
+                latestLatency={latestLatency}
+              />
+            )}
+          </div>
 
-        <SettingsModal
-          isOpen={isSettingsOpen}
-          onClose={() => setIsSettingsOpen(false)}
-          onModelDownloaded={refreshModels}
+          <SettingsModal
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            enableGrammarLM={enableGrammarLM}
+            setEnableGrammarLM={setEnableGrammarLM}
+            llmStatus={llmStatus}
+
+            enableDenoise={enableDenoise}
+            setEnableDenoise={setEnableDenoise}
+            muteBackgroundAudio={muteBackgroundAudio}
+            setMuteBackgroundAudio={setMuteBackgroundAudio}
+            enableOverlay={enableOverlay}
+            setEnableOverlay={setEnableOverlay}
+            transcriptionStyle={transcriptionStyle}
+            setTranscriptionStyle={setTranscriptionStyle}
+            llmBackend={llmBackend}
+            setLlmBackend={setLlmBackend}
+            soundVolume={volume}
+            soundMuted={muted}
+            setSoundVolume={setVolume}
+            setSoundMuted={setMuted}
+            dictionary={dictionary}
+            addDictEntry={addDictEntry}
+            updateDictEntry={updateDictEntry}
+            removeDictEntry={removeDictEntry}
+            snippets={snippets}
+            addSnippet={addSnippet}
+            updateSnippet={updateSnippet}
+            removeSnippet={removeSnippet}
+            settingsModels={settingsModels}
+            downloadProgress={downloadProgress}
+            onDownload={handleDownload}
+            onDelete={handleDeleteModel}
+          />
+        </main>
+
+        <QuickSettings
           enableGrammarLM={enableGrammarLM}
           setEnableGrammarLM={setEnableGrammarLM}
           llmStatus={llmStatus}
-          enableSpellCheck={enableSpellCheck}
-          setEnableSpellCheck={setEnableSpellCheck}
-          spellCheckStatus={spellCheckStatus}
           enableDenoise={enableDenoise}
           setEnableDenoise={setEnableDenoise}
           enableOverlay={enableOverlay}
           setEnableOverlay={setEnableOverlay}
+          muteBackgroundAudio={muteBackgroundAudio}
+          setMuteBackgroundAudio={setMuteBackgroundAudio}
           transcriptionStyle={transcriptionStyle}
           setTranscriptionStyle={setTranscriptionStyle}
           llmBackend={llmBackend}
@@ -755,16 +994,11 @@ function App() {
           soundMuted={muted}
           setSoundVolume={setVolume}
           setSoundMuted={setMuted}
-          dictionary={dictionary}
-          addDictEntry={addDictEntry}
-          updateDictEntry={updateDictEntry}
-          removeDictEntry={removeDictEntry}
-          snippets={snippets}
-          addSnippet={addSnippet}
-          updateSnippet={updateSnippet}
-          removeSnippet={removeSnippet}
+          dictionaryCount={dictionary.length}
+          snippetsCount={snippets.length}
+          onOpenSettings={() => setIsSettingsOpen(true)}
         />
-      </main>
+      </div>
     </>
   );
 }

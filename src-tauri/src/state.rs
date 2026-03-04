@@ -1,7 +1,6 @@
 use crate::audio::RecordingHandle;
 use crate::denoise::Denoiser;
 use crate::parakeet::ParakeetManager;
-use crate::spellcheck::SpellChecker;
 use crate::types::{ASREngine, AppState, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
@@ -38,9 +37,6 @@ pub struct AudioState {
     // The Gemma LLM engine (optional, loaded on demand)
     pub llm: Arc<Mutex<Option<crate::llm::LLMEngine>>>,
 
-    // SymSpell spell checker (optional, loaded on demand)
-    pub spellcheck: Arc<Mutex<Option<SpellChecker>>>,
-
     // The user-configured global hotkey binding (keyboard combo or mouse button).
     // Shared with the hotkey listener thread so changes take effect immediately.
     pub hotkey_config: Arc<Mutex<HotkeyBinding>>,
@@ -64,7 +60,6 @@ impl AudioState {
             active_engine: Mutex::new(ASREngine::Whisper),
             session_transcript: Arc::new(Mutex::new(String::new())),
             llm: Arc::new(Mutex::new(None)),
-            spellcheck: Arc::new(Mutex::new(None)),
             hotkey_config: Arc::new(Mutex::new(HotkeyBinding::default())),
             selected_input_device: Mutex::new(None),
             denoiser: Arc::new(Mutex::new(None)),

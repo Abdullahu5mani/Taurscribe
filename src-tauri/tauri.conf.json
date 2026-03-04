@@ -14,12 +14,13 @@
       {
         "label": "main",
         "title": "Taurscribe",
-        "width": 900,
-        "height": 819,
-        "minWidth": 886,
-        "minHeight": 819,
+        "width": 901,
+        "height": 850,
+        "minWidth": 901,
+        "minHeight": 850,
         "decorations": false,
-        "visible": false
+        "visible": false,
+        "devtools": true
       },
       {
         "label": "overlay",

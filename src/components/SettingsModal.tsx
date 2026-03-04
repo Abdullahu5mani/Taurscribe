@@ -1,8 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import './SettingsModal.css';
-import { toast } from 'sonner';
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { ModelsTab } from './settings/ModelsTab';
 import { PostProcessingTab } from './settings/PostProcessingTab';
 import { AudioTab } from './settings/AudioTab';
@@ -11,7 +8,6 @@ import { SoundTab } from './settings/SoundTab';
 import { AboutTab } from './settings/AboutTab';
 import { DictionaryTab } from './settings/DictionaryTab';
 import { SnippetsTab } from './settings/SnippetsTab';
-import { MODELS } from './settings/types';
 import type { DownloadableModel, DownloadProgress } from './settings/types';
 import type { DictEntry, SnippetEntry } from '../hooks/usePersonalization';
 
@@ -22,11 +18,10 @@ interface SettingsModalProps {
     enableGrammarLM: boolean;
     setEnableGrammarLM: (val: boolean) => void;
     llmStatus: string;
-    enableSpellCheck: boolean;
-    setEnableSpellCheck: (val: boolean) => void;
-    spellCheckStatus: string;
     enableDenoise: boolean;
     setEnableDenoise: (val: boolean) => void;
+    muteBackgroundAudio: boolean;
+    setMuteBackgroundAudio: (val: boolean) => void;
     enableOverlay: boolean;
     setEnableOverlay: (val: boolean) => void;
     llmBackend: "gpu" | "cpu";
@@ -45,15 +40,10 @@ interface SettingsModalProps {
     addSnippet: (entry: Omit<SnippetEntry, "id">) => void;
     updateSnippet: (id: string, updates: Partial<Omit<SnippetEntry, "id">>) => void;
     removeSnippet: (id: string) => void;
-}
-
-interface DownloadProgressPayload {
-    model_id: string;
-    total_bytes: number;
-    downloaded_bytes: number;
-    status: string;
-    current_file?: number;
-    total_files?: number;
+    settingsModels: DownloadableModel[];
+    downloadProgress: Record<string, DownloadProgress>;
+    onDownload: (id: string, name: string) => void;
+    onDelete: (id: string, name: string) => Promise<void>;
 }
 
 type Tab = 'models' | 'post-processing' | 'audio' | 'hotkey' | 'sound' | 'dictionary' | 'snippets' | 'about';
@@ -150,116 +140,29 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 
 export function SettingsModal({
-    isOpen, onClose, onModelDownloaded,
+    isOpen, onClose,
     enableGrammarLM, setEnableGrammarLM, llmStatus,
-    enableSpellCheck, setEnableSpellCheck, spellCheckStatus,
     enableDenoise, setEnableDenoise,
+    muteBackgroundAudio, setMuteBackgroundAudio,
     enableOverlay, setEnableOverlay,
     transcriptionStyle, setTranscriptionStyle,
     llmBackend, setLlmBackend,
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
     dictionary, addDictEntry, updateDictEntry, removeDictEntry,
     snippets, addSnippet, updateSnippet, removeSnippet,
+    settingsModels, downloadProgress, onDownload, onDelete,
 }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<Tab>('models');
-    const [models, setModels] = useState<DownloadableModel[]>(MODELS);
-    const [downloadProgress, setDownloadProgress] = useState<Record<string, DownloadProgress>>({});
-
-    useEffect(() => {
-        let unlisten: (() => void) | undefined;
-
-        const setupListener = async () => {
-            unlisten = await listen("download-progress", (event) => {
-                const payload = event.payload as DownloadProgressPayload;
-
-                setDownloadProgress(prev => ({
-                    ...prev,
-                    [payload.model_id]: {
-                        bytes: payload.downloaded_bytes,
-                        total: payload.total_bytes,
-                        status: payload.status,
-                        current_file: payload.current_file,
-                        total_files: payload.total_files,
-                    },
-                }));
-
-                if (payload.status === "done") {
-                    toast.success(`Downloaded: ${payload.model_id}`);
-                    setModels(prev => prev.map(m =>
-                        m.id === payload.model_id ? { ...m, downloaded: true, verified: false } : m
-                    ));
-                    setDownloadProgress(prev => {
-                        const next = { ...prev };
-                        delete next[payload.model_id];
-                        return next;
-                    });
-                    onModelDownloaded?.();
-                }
-            });
-        };
-
-        if (isOpen) {
-            setupListener();
-            invoke<any[]>("get_download_status", { modelIds: models.map(m => m.id) })
-                .then(statuses => {
-                    setModels(prev => prev.map(m => {
-                        const s = statuses.find((x: any) => x.id === m.id);
-                        return s ? { ...m, downloaded: s.downloaded, verified: s.verified } : m;
-                    }));
-                })
-                .catch(e => console.error("Failed to fetch model status", e));
-        }
-
-        return () => { if (unlisten) unlisten(); };
-    }, [isOpen]);
-
-    const handleDownload = async (id: string, name: string) => {
-        toast.info(`Starting download: ${name}`);
-        setDownloadProgress(prev => ({ ...prev, [id]: { bytes: 0, total: 100, status: 'starting' } }));
-        try {
-            await invoke("download_model", { modelId: id });
-        } catch (e) {
-            toast.error(`Download failed: ${e}`);
-            setDownloadProgress(prev => { const n = { ...prev }; delete n[id]; return n; });
-        }
-    };
-
-    const handleDelete = async (id: string, name: string) => {
-        if (!confirm(`Delete ${name}?`)) return;
-        try {
-            await invoke("delete_model", { modelId: id });
-            toast.success(`Deleted ${name}`);
-            setModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false } : m));
-            setDownloadProgress(prev => { const n = { ...prev }; delete n[id]; return n; });
-        } catch (e) {
-            toast.error(`Delete failed: ${e}`);
-        }
-    };
-
-    const handleVerify = async (id: string, name: string) => {
-        toast.info(`Verifying ${name}…`);
-        setDownloadProgress(prev => ({ ...prev, [id]: { bytes: 0, total: 100, status: 'verifying' } }));
-        try {
-            await invoke("verify_model_hash", { modelId: id });
-            toast.success(`Verified: ${name}`);
-            setModels(prev => prev.map(m => m.id === id ? { ...m, verified: true } : m));
-        } catch (e) {
-            toast.error(`Verification failed: ${e}`);
-        } finally {
-            setDownloadProgress(prev => { const n = { ...prev }; delete n[id]; return n; });
-        }
-    };
 
     const renderContent = () => {
         switch (activeTab) {
             case 'models':
                 return (
                     <ModelsTab
-                        models={models}
+                        models={settingsModels}
                         downloadProgress={downloadProgress}
-                        onDownload={handleDownload}
-                        onDelete={handleDelete}
-                        onVerify={handleVerify}
+                        onDownload={onDownload}
+                        onDelete={onDelete}
                     />
                 );
             case 'post-processing':
@@ -272,13 +175,10 @@ export function SettingsModal({
                         setLlmBackend={setLlmBackend}
                         transcriptionStyle={transcriptionStyle}
                         setTranscriptionStyle={setTranscriptionStyle}
-                        enableSpellCheck={enableSpellCheck}
-                        setEnableSpellCheck={setEnableSpellCheck}
-                        spellCheckStatus={spellCheckStatus}
                     />
                 );
             case 'audio':
-                return <AudioTab enableDenoise={enableDenoise} setEnableDenoise={setEnableDenoise} />;
+                return <AudioTab enableDenoise={enableDenoise} setEnableDenoise={setEnableDenoise} muteBackgroundAudio={muteBackgroundAudio} setMuteBackgroundAudio={setMuteBackgroundAudio} />;
             case 'hotkey':
                 return <HotkeyTab enableOverlay={enableOverlay} setEnableOverlay={setEnableOverlay} />;
             case 'sound':

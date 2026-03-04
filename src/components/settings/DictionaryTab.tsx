@@ -37,7 +37,7 @@ export function DictionaryTab({
             <div className="setting-card">
                 <p className="setting-card-desc">
                     Fix words the AI keeps getting wrong — proper nouns, names, technical terms.
-                    These replacements run <strong>before</strong> spell check and grammar correction.
+                    These replacements run <strong>before</strong> grammar correction.
                 </p>
 
                 {/* ── Add entry row ───────────────────────────────────── */}
