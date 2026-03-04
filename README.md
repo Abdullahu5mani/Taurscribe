@@ -200,29 +200,26 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - [x] MacOS CoreML optimization (Whisper.cpp)
 - [x] Nice Installer Screen (Custom Tauri Customization)
 - [x] Audio Lead-in & Tail Silence Padding
-- [ ] Brand Refresh (New Logo)
-- [ ] Toggle Recording Mode (Click-to-Record vs Hold)
+- [x] Brand Refresh (New Logo)
+- [x] Toggle Recording Mode (Click-to-Record vs Hold)
  - [x] Text Snippets / Macros
  - [x] Custom Dictionary (Proper Nouns)
-- [ ] Smart Fallback for Short Audio
-- [ ] Transcription History (Save & revisit past transcriptions)
-- [ ] Recording Duration Timer (Live `00:12` counter while recording)
+- [x] Smart Fallback for Short Audio
+- [x] Transcription History (Save & revisit past transcriptions)
+- [x] Recording Duration Timer (Live `00:12` counter while recording)
 - [ ] Multilingual / Language Selector (Whisper supports 90+ languages)
 - [ ] Auto-Start on Boot
  - [x] Minimize to System Tray
-- [ ] Live Transcript Display (Show streaming text while recording)
 - [ ] Export Options (`.txt`, `.srt`, `.md`)
-- [ ] Audio Waveform Visualizer
+- [x] Audio Waveform Visualizer
  - [x] Extended Keyboard Shortcuts
-- [ ] Recording Playback (Listen back to saved `.wav` files)
-- [ ] Speaker Diarization (Label transcript by speaker)
 - [ ] File / Audio Import (Drag-and-drop `.wav`, `.mp3`, `.m4a`)
  - [x] Smart Punctuation & Formatting
 - [ ] Auto-Update Mechanism (Tauri updater plugin)
-- [ ] Accessibility (Screen reader, keyboard navigation, high-contrast)
-- [ ] First Launch & Guide Screen (Onboarding flow)
-- [ ] Overlay Recording Mode (Press and hold to record, release to stop)
-- [ ] Context-aware Paste (Text/Image detection on clipboard)
+- [x] Accessibility (Screen reader, keyboard navigation, high-contrast)
+- [x] First Launch & Guide Screen (Onboarding flow)
+- [x] Overlay Recording Mode (Press and hold to record, release to stop)
+- [x] Context-aware Paste (Text/Image detection on clipboard)
  - [x] Visual Listening Overlay
 
 ---
