@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    <linearGradient id="layerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f6d365" />
+      <stop offset="100%" stop-color="#fda085" />
+    </linearGradient>
+
+    <!-- Invisible path for the pencil to ride along like a rollercoaster -->
+    <path id="coasterPath" d="M 120,-200 C 150,-100 -100,-50 -70,30 C -40,110 50,50 0,0" fill="none" />
+  </defs>
+
+  <g transform="translate(250, 165) scale(1.55)" fill="url(#layerGrad)" stroke="#181514" stroke-width="3.8" stroke-linejoin="round">
+    
+    <g opacity="0">
+      <animate attributeName="opacity" values="0;1" begin="0.2s" dur="0.8s" fill="freeze" />
+      <polygon points="0,180 120,120 0,60 -120,120" opacity="0.3" />
+    </g>
+    
+    <g opacity="0">
+      <animate attributeName="opacity" values="0;1" begin="0.4s" dur="0.8s" fill="freeze" />
+      <polygon points="0,140 120,80 0,20 -120,80" opacity="0.6" />
+    </g>
+    
+    <g opacity="0">
+      <animate attributeName="opacity" values="0;1" begin="0.6s" dur="0.8s" fill="freeze" />
+      <polygon points="0,100 120,40 0,-20 -120,40" />
+    </g>
+
+    <g stroke="#ffffff" stroke-width="2.5" opacity="0">
+      <animate attributeName="opacity" values="0;1" begin="0.6s" dur="0.1s" fill="freeze" />
+      
+      <!-- Follow the coaster path, auto-rotating to face the tangent of the curve -->
+      <animateMotion dur="1.2s" begin="0.6s" calcMode="spline" keySplines="0.4 0 0.2 1" fill="freeze" rotate="auto-reverse" path="M 120,-200 C 150,-100 -100,-50 -70,30 C -40,110 50,50 0,0" />
+      
+      <g>
+        <path d="M -16,-45 L -16,-62 Q -16,-74 0,-74 Q 16,-74 16,-62 L 16,-45 Z" fill="#FF8D9E" />
+        <polygon points="-16,-45 16,-45 16,-20 -16,-20" fill="#94A3B8" />
+        <line x1="-16" y1="-32.5" x2="16" y2="-32.5" />
+        <polygon points="-16,-20 0,-20 0,140 -16,140" fill="#FBBF24" />
+        <polygon points="0,-20 16,-20 16,140 0,140" fill="#F59E0B" />
+        <polygon points="-16,140 0,140 0,190" fill="#FDE68A" />
+        <polygon points="0,140 16,140 0,190" fill="#FCD34D" />
+        <polygon points="-6.4,170 6.4,170 0,190" fill="#181514" />
+      </g>
+    </g>
+  </g>
+</svg>
