@@ -429,6 +429,12 @@ jobs:
           fi
         shell: bash
 
+      # macOS: Run dylibbundler before tauri build. Tauri validates bundle.macOS.frameworks
+      # paths during cargo build; the dylibs must exist.
+      - name: Pre-bundle macOS dylibs (dylibbundler)
+        if: contains(matrix.platform, 'macos')
+        run: TAURI_BUILD_TARGET=${{ matrix.target }} bun scripts/bundle-macos-dylibs.ts
+
       # Bundle the application (frontend and binary already built, tauri build will detect and skip rebuild)
       # On Windows, build only NSIS to avoid WiX/light.exe failures in CI (MSI can fail with path or tool issues).
       # --- Bundle the application ---
