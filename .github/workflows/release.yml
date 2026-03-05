@@ -1,0 +1,450 @@
+name: Release
+
+# Trigger when a version tag is pushed (e.g. git tag v0.1.0 && git push --tags)
+on:
+  push:
+    tags: ['v*']
+
+# Cancel in-progress runs for the same tag
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Build all platforms ───────────────────────────────────────────────────
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            name: 'macOS (Apple Silicon)'
+            target: 'aarch64-apple-darwin'
+            cuda: false
+            os_name: 'macOS'
+            arch: 'ARM64'
+
+          - platform: 'windows-latest'
+            name: 'Windows (x86_64)'
+            target: 'x86_64-pc-windows-msvc'
+            cuda: true
+            os_name: 'Windows'
+            arch: 'x86_64'
+
+          - platform: 'windows-latest'
+            name: 'Windows (ARM64)'
+            target: 'aarch64-pc-windows-msvc'
+            cuda: false
+            os_name: 'Windows'
+            arch: 'ARM64'
+
+          - platform: 'ubuntu-24.04'
+            name: 'Linux (x86_64)'
+            target: 'x86_64-unknown-linux-gnu'
+            cuda: true
+            os_name: 'Linux'
+            arch: 'x86_64'
+
+    runs-on: ${{ matrix.platform }}
+    name: Build - ${{ matrix.name }}
+
+    steps:
+      - name: Enable long paths for Git
+        run: git config --global core.longpaths true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── CUDA Setup ──
+      - name: Install CUDA Toolkit (Linux)
+        if: contains(matrix.platform, 'ubuntu') && matrix.cuda == true
+        run: |
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get -y install cuda-toolkit-12-6
+          echo "CUDA_PATH=/usr/local/cuda-12.6" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "PATH=/usr/local/cuda-12.6/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Install CUDA Toolkit (Windows)
+        if: contains(matrix.platform, 'windows') && matrix.cuda == true
+        uses: Jimver/cuda-toolkit@v0.2.21
+        id: cuda-toolkit
+        with:
+          cuda: '12.5.1'
+          method: 'network'
+          use-github-cache: false
+          use-local-cache: false
+
+      - name: Show CUDA Info
+        if: matrix.cuda == true
+        run: |
+          nvcc --version
+          echo "CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}"
+
+      # ── System Dependencies ──
+      - name: Install Xcode Command Line Tools
+        if: contains(matrix.platform, 'macos')
+        run: xcode-select --install || true
+
+      - name: Install CMake (macOS)
+        if: contains(matrix.platform, 'macos')
+        run: brew install cmake
+
+      - name: Install Linux System Dependencies
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev \
+            build-essential \
+            curl wget file \
+            libssl-dev \
+            libgtk-3-dev \
+            cmake \
+            libvulkan-dev \
+            pkg-config
+
+      - name: Install Vulkan SDK (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
+
+      - name: Export Vulkan Library Path (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          echo "LD_LIBRARY_PATH=${VULKAN_SDK}/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=${VULKAN_SDK}/lib:${LIBRARY_PATH}" >> $GITHUB_ENV
+
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.platform == 'windows-latest' && matrix.arch == 'x86_64'
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
+
+      - name: Install Windows Build Dependencies
+        if: contains(matrix.platform, 'windows')
+        run: |
+          choco install llvm nasm ninja -y
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: Remove Git's link.exe (Windows)
+        if: contains(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          $gitLink = "C:\Program Files\Git\usr\bin\link.exe"
+          if (Test-Path $gitLink) {
+            echo "Removing conflicting linker: $gitLink"
+            Remove-Item -Force $gitLink
+          }
+
+      - name: Configure Clang for ARM64 (Windows)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+           echo "CC=clang-cl" >> $env:GITHUB_ENV
+           echo "CXX=clang-cl" >> $env:GITHUB_ENV
+           echo "CXXFLAGS=-EHsc" >> $env:GITHUB_ENV
+           echo "CMAKE_GENERATOR=Ninja" >> $env:GITHUB_ENV
+
+      # ── Rust Setup ──
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Clean local paths from cargo config (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $workspace = '${{ github.workspace }}' -replace '\\', '/'
+          (Get-Content src-tauri/.cargo/config.toml) -replace 'C:/Users/abdul/OneDrive/Desktop/Taurscribe', $workspace | Set-Content src-tauri/.cargo/config.toml
+          (Get-Content src-tauri/.cargo/config.toml) | Where-Object { $_ -notmatch 'WHISPER_LIB_DIR' } | Set-Content src-tauri/.cargo/config.toml
+
+      - name: Clean Windows-specific paths from cargo config on Unix
+        if: runner.os != 'Windows'
+        run: |
+          sed -i.bak '/\[target\.x86_64-pc-windows-msvc\]/,/^$/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/\[target\.x86_64-pc-windows-gnu\]/,/^$/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/WHISPER_LIB_DIR/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/VULKAN_SDK.*VulkanSDK/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/LIBCLANG_PATH.*Microsoft/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/target-dir.*C:\/bld/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/CFLAGS.*\/MD/d' src-tauri/.cargo/config.toml || true
+          sed -i.bak '/CXXFLAGS.*\/MD/d' src-tauri/.cargo/config.toml || true
+
+      # ── JS/Frontend ──
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Clean CMake Cache
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: |
+          Get-ChildItem -Path C:\bld -Recurse -Filter CMakeCache.txt -ErrorAction SilentlyContinue | Remove-Item -Force
+          Get-ChildItem -Path C:\bld -Recurse -Filter CMakeFiles -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+
+      # ── Build ──
+      - name: Enable Long File Paths (Windows)
+        if: contains(matrix.platform, 'windows')
+        run: |
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWord -Force
+          git config --system core.longpaths true
+          echo "CARGO_TARGET_DIR=C:\bld" >> $env:GITHUB_ENV
+
+      - name: Setup MSVC Developer Command Prompt
+        if: contains(matrix.platform, 'windows')
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Create dummy m.lib (Windows x64)
+        if: contains(matrix.platform, 'windows') && matrix.arch == 'x86_64'
+        shell: cmd
+        run: |
+          cd %TEMP%
+          echo // > empty.c
+          cl /c empty.c
+          lib /out:"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\lib\x64\m.lib" /machine:x64 empty.obj
+
+      - name: Create dummy m.lib (Windows ARM64)
+        if: contains(matrix.platform, 'windows') && matrix.arch == 'ARM64'
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsamd64_arm64.bat"
+          cd %TEMP%
+          echo // > empty.c
+          cl /c empty.c
+          lib /out:"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\lib\arm64\m.lib" /machine:ARM64 empty.obj
+
+      - name: Clean Build Artifacts
+        if: contains(matrix.platform, 'windows')
+        run: |
+          if (Test-Path C:\bld) { Remove-Item -Recurse -Force C:\bld }
+          if (Test-Path src-tauri/target/debug/build) { Remove-Item -Recurse -Force src-tauri/target/debug/build }
+
+      - name: Disable ccache in CMake
+        if: contains(matrix.platform, 'windows')
+        run: |
+          echo "CMAKE_C_COMPILER_LAUNCHER=" >> $env:GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=" >> $env:GITHUB_ENV
+          echo "CMAKE_DISABLE_FIND_PACKAGE_Ccache=TRUE" >> $env:GITHUB_ENV
+
+      - name: Build Rust binary
+        run: |
+          cd src-tauri
+          cargo build --release --target ${{ matrix.target }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CCACHE_DISABLE: "1"
+          CMAKE_C_COMPILER_LAUNCHER: ""
+          CMAKE_CXX_COMPILER_LAUNCHER: ""
+          CMAKE_DISABLE_FIND_PACKAGE_Ccache: "TRUE"
+          MSBUILDDISABLENODEREUSE: 1
+          TRACKFILEACCESS: "false"
+          RUST_BACKTRACE: 1
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
+          CMAKE_VERBOSE_MAKEFILE: "ON"
+          GGML_CCACHE: ${{ contains(matrix.platform, 'windows') && 'OFF' || 'ON' }}
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
+          CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && '' || '' }}
+          WHISPER_NO_AVX: "0"
+          WHISPER_NO_AVX2: "0"
+          GGML_AVX: "ON"
+          GGML_AVX2: "ON"
+          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          VULKAN_SDK: ${{ env.VULKAN_SDK }}
+          VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
+          VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
+          LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+
+      - name: Build frontend
+        run: bun run build
+
+      - name: Copy binary to expected location
+        run: |
+          cd src-tauri
+          mkdir -p target/release
+          if [ -f "target/${{ matrix.target }}/release/taurscribe" ]; then
+            cp "target/${{ matrix.target }}/release/taurscribe" "target/release/taurscribe"
+            chmod +x "target/release/taurscribe"
+          fi
+          if [ -f "target/${{ matrix.target }}/release/taurscribe.exe" ]; then
+            cp "target/${{ matrix.target }}/release/taurscribe.exe" "target/release/taurscribe.exe"
+          fi
+        shell: bash
+
+      # ── Bundle ──
+      - name: Bundle application
+        run: |
+          if [ "${{ matrix.os_name }}" = "Windows" ]; then
+            bun run tauri build --target ${{ matrix.target }} --bundles nsis
+          elif [ "${{ matrix.os_name }}" = "Linux" ]; then
+            bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm
+          else
+            bun run tauri build --target ${{ matrix.target }}
+          fi
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CCACHE_DISABLE: "1"
+          CMAKE_C_COMPILER_LAUNCHER: ""
+          CMAKE_CXX_COMPILER_LAUNCHER: ""
+          CMAKE_DISABLE_FIND_PACKAGE_Ccache: "TRUE"
+          MSBUILDDISABLENODEREUSE: 1
+          TRACKFILEACCESS: "false"
+          RUST_BACKTRACE: 1
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
+          CMAKE_VERBOSE_MAKEFILE: "ON"
+          GGML_CCACHE: ${{ contains(matrix.platform, 'windows') && 'OFF' || 'ON' }}
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
+          CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && '' || '' }}
+          WHISPER_NO_AVX: "0"
+          WHISPER_NO_AVX2: "0"
+          GGML_AVX: "ON"
+          GGML_AVX2: "ON"
+          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          VULKAN_SDK: ${{ env.VULKAN_SDK }}
+          VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
+          VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
+          LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          NO_STRIP: "true"
+
+      # ── Create portable ZIP (Windows only) ──
+      - name: Create portable ZIP (Windows)
+        if: matrix.os_name == 'Windows'
+        shell: pwsh
+        run: |
+          $target = "${{ matrix.target }}"
+          $arch = if ("${{ matrix.arch }}" -eq "ARM64") { "arm64" } else { "x64" }
+          $tag = "${{ github.ref_name }}"  # e.g. v0.1.0
+          $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $releaseDir = "$targetDir/$target/release"
+          $binaryPath = "$releaseDir/taurscribe.exe"
+          
+          if (Test-Path $binaryPath) {
+            $portableDir = "taurscribe-portable"
+            New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+            Copy-Item $binaryPath "$portableDir/"
+            Get-ChildItem "$releaseDir/*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$portableDir/"
+            Compress-Archive -Path "$portableDir/*" -DestinationPath "taurscribe-$tag-windows-$arch-portable.zip"
+            echo "PORTABLE_ZIP=taurscribe-$tag-windows-$arch-portable.zip" >> $env:GITHUB_ENV
+          }
+
+      # ── Rename artifacts for clean release names ──
+      - name: Prepare release artifacts
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          mkdir -p release-assets
+
+          # Windows NSIS
+          if [ "${{ matrix.os_name }}" = "Windows" ]; then
+            ARCH=$([ "${{ matrix.arch }}" = "ARM64" ] && echo "arm64" || echo "x64")
+            # Check both possible target dirs
+            for dir in "C:/bld" "src-tauri/target"; do
+              for f in "$dir/${{ matrix.target }}/release/bundle/nsis/"*.exe; do
+                if [ -f "$f" ]; then
+                  cp "$f" "release-assets/taurscribe-${TAG}-windows-${ARCH}-setup.exe"
+                  break 2
+                fi
+              done
+            done
+            # Portable zip
+            if [ -f "${{ env.PORTABLE_ZIP }}" ]; then
+              cp "${{ env.PORTABLE_ZIP }}" "release-assets/"
+            fi
+          fi
+
+          # macOS DMG
+          if [ "${{ matrix.os_name }}" = "macOS" ]; then
+            for f in src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg; do
+              if [ -f "$f" ]; then
+                cp "$f" "release-assets/taurscribe-${TAG}-macos-arm64.dmg"
+              fi
+            done
+          fi
+
+          # Linux DEB + RPM
+          if [ "${{ matrix.os_name }}" = "Linux" ]; then
+            for f in src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb; do
+              if [ -f "$f" ]; then
+                cp "$f" "release-assets/taurscribe-${TAG}-linux-amd64.deb"
+              fi
+            done
+            for f in src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm; do
+              if [ -f "$f" ]; then
+                cp "$f" "release-assets/taurscribe-${TAG}-linux-x86_64.rpm"
+              fi
+            done
+          fi
+
+          echo "=== Release assets ==="
+          ls -la release-assets/
+
+      # ── Upload artifacts (so the release job can download them) ──
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: release-assets/*
+          if-no-files-found: warn
+
+  # ── Create GitHub Release ─────────────────────────────────────────────────
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-assets
+          pattern: release-*
+          merge-multiple: true
+
+      - name: List all assets
+        run: |
+          echo "=== All release assets ==="
+          ls -la all-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Taurscribe ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          files: all-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
