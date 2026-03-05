@@ -283,6 +283,35 @@ jobs:
       - name: Build frontend
         run: bun run build
 
+      # macOS: Build binary and run dylibbundler BEFORE tauri build. Tauri validates
+      # bundle.macOS.frameworks paths during cargo build; the dylibs must exist.
+      - name: Pre-bundle macOS dylibs (build binary + dylibbundler)
+        if: contains(matrix.platform, 'macos')
+        run: |
+          cd src-tauri
+          cargo build --release --target ${{ matrix.target }}
+          cd ..
+          TAURI_BUILD_TARGET=${{ matrix.target }} bun scripts/bundle-macos-dylibs.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CCACHE_DISABLE: "1"
+          CMAKE_C_COMPILER_LAUNCHER: ""
+          CMAKE_CXX_COMPILER_LAUNCHER: ""
+          CMAKE_DISABLE_FIND_PACKAGE_Ccache: "TRUE"
+          MSBUILDDISABLENODEREUSE: 1
+          TRACKFILEACCESS: "false"
+          RUST_BACKTRACE: 1
+          CMAKE_BUILD_PARALLEL_LEVEL: "4"
+          CMAKE_VERBOSE_MAKEFILE: "ON"
+          GGML_CCACHE: "ON"
+          CMAKE_GENERATOR: "Unix Makefiles"
+          WHISPER_NO_AVX: "0"
+          WHISPER_NO_AVX2: "0"
+          GGML_AVX: "ON"
+          GGML_AVX2: "ON"
+          MACOSX_DEPLOYMENT_TARGET: "13.4"
+          CMAKE_OSX_DEPLOYMENT_TARGET: "13.4"
+
       - name: Copy binary to expected location
         run: |
           cd src-tauri
