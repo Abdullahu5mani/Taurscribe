@@ -2,31 +2,66 @@ use crate::types::AppState;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
-// Macros to load icon images into the executable at compile time.
-// This is faster and safer than loading from disk at runtime.
-macro_rules! tray_icon_green {
-    () => {
-        tauri::include_image!("icons/emoji-green_circle.ico")
-    };
+// ---------------------------------------------------------------------------
+// Platform-aware tray-icon macros
+// ---------------------------------------------------------------------------
+// macOS menu-bar icons should be monochrome "template" images so the OS can
+// automatically tint them for light / dark mode.  We use small 22×22 PNGs
+// with black-on-transparent artwork.
+//
+// Windows / Linux tray icons can be full-colour.  We use 32×32 coloured
+// circle PNGs (green = ready, red = recording, yellow = processing).
+// ---------------------------------------------------------------------------
+
+// ── Ready (green / hollow circle) ──────────────────────────────────────────
+macro_rules! tray_icon_ready {
+    () => {{
+        #[cfg(target_os = "macos")]
+        {
+            tauri::include_image!("icons/tray-readyTemplate@2x.png")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            tauri::include_image!("icons/tray-green.png")
+        }
+    }};
 }
-macro_rules! tray_icon_red {
-    () => {
-        tauri::include_image!("icons/emoji-red_circle.ico")
-    };
+
+// ── Recording (red / filled circle) ────────────────────────────────────────
+macro_rules! tray_icon_recording {
+    () => {{
+        #[cfg(target_os = "macos")]
+        {
+            tauri::include_image!("icons/tray-recordingTemplate@2x.png")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            tauri::include_image!("icons/tray-red.png")
+        }
+    }};
 }
-macro_rules! tray_icon_yellow {
-    () => {
-        tauri::include_image!("icons/emoji-yellow_circle.ico")
-    };
+
+// ── Processing (yellow / circle-with-dot) ──────────────────────────────────
+macro_rules! tray_icon_processing {
+    () => {{
+        #[cfg(target_os = "macos")]
+        {
+            tauri::include_image!("icons/tray-processingTemplate@2x.png")
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            tauri::include_image!("icons/tray-yellow.png")
+        }
+    }};
 }
 
 /// Helper function to physically change the tray icon
 pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> {
     // Pick the right image macro based on state
     let icon = match state {
-        AppState::Ready => tray_icon_green!(),
-        AppState::Recording => tray_icon_red!(),
-        AppState::Processing => tray_icon_yellow!(),
+        AppState::Ready => tray_icon_ready!(),
+        AppState::Recording => tray_icon_recording!(),
+        AppState::Processing => tray_icon_processing!(),
     };
 
     // Pick the right hover text
@@ -59,7 +94,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show_item, &separator, &quit_item])?;
 
-    let icon = tray_icon_green!();
+    let icon = tray_icon_ready!();
 
     let _tray = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
@@ -104,7 +139,7 @@ pub fn setup_tray_from_handle(app: &AppHandle) -> Result<(), Box<dyn std::error:
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show_item, &separator, &quit_item])?;
 
-    let icon = tray_icon_green!();
+    let icon = tray_icon_ready!();
 
     let _tray = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
