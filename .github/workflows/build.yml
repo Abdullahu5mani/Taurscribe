@@ -495,3 +495,86 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: "1"
           # Preserve debug symbols so __TAURI_BUNDLE_TYPE is found by the bundler.
           NO_STRIP: "true"
+
+      # --- Create portable ZIP for Windows (no installer needed) ---
+      - name: Create portable ZIP (Windows)
+        if: matrix.os_name == 'Windows'
+        shell: pwsh
+        run: |
+          $target = "${{ matrix.target }}"
+          $arch = if ("${{ matrix.arch }}" -eq "ARM64") { "arm64" } else { "x64" }
+          
+          # On Windows, CARGO_TARGET_DIR is set to C:\bld to shorten paths
+          $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $releaseDir = "$targetDir/$target/release"
+          $binaryPath = "$releaseDir/taurscribe.exe"
+          
+          if (Test-Path $binaryPath) {
+            $portableDir = "taurscribe-portable-windows-$arch"
+            New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+            Copy-Item $binaryPath "$portableDir/"
+            
+            # Copy WebView2Loader if present
+            $webview2 = "$releaseDir/WebView2Loader.dll"
+            if (Test-Path $webview2) { Copy-Item $webview2 "$portableDir/" }
+            
+            # Copy any sidecar DLLs
+            Get-ChildItem "$releaseDir/*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$portableDir/"
+            
+            Compress-Archive -Path "$portableDir/*" -DestinationPath "taurscribe-0.1.0-windows-$arch-portable.zip"
+            echo "Created: taurscribe-0.1.0-windows-$arch-portable.zip"
+          } else {
+            echo "WARNING: Binary not found at $binaryPath"
+          }
+
+      # --- Upload Artifacts ---
+      
+      # Windows: NSIS installer (.exe)
+      - name: Upload NSIS installer (Windows)
+        if: matrix.os_name == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: taurscribe-windows-${{ matrix.arch }}-setup
+          path: |
+            C:\bld\${{ matrix.target }}\release\bundle\nsis\*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+
+      # Windows: Portable ZIP
+      - name: Upload portable ZIP (Windows)
+        if: matrix.os_name == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: taurscribe-windows-${{ matrix.arch }}-portable
+          path: taurscribe-*-portable.zip
+          if-no-files-found: warn
+
+      # macOS: DMG
+      - name: Upload DMG (macOS)
+        if: matrix.os_name == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: taurscribe-macos-${{ matrix.arch }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: warn
+
+      # Linux: DEB
+      - name: Upload DEB (Linux)
+        if: matrix.os_name == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: taurscribe-linux-deb
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+          if-no-files-found: warn
+
+      # Linux: RPM
+      - name: Upload RPM (Linux)
+        if: matrix.os_name == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: taurscribe-linux-rpm
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+          if-no-files-found: warn
