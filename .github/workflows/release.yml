@@ -88,9 +88,9 @@ jobs:
         if: contains(matrix.platform, 'macos')
         run: xcode-select --install || true
 
-      - name: Install CMake (macOS)
+      - name: Install macOS build dependencies
         if: contains(matrix.platform, 'macos')
-        run: brew install cmake
+        run: brew install cmake dylibbundler
 
       - name: Install Linux System Dependencies
         if: contains(matrix.platform, 'ubuntu')
