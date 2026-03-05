@@ -92,6 +92,10 @@ All frontend↔backend communication uses Tauri's IPC:
 5. Parakeet: streaming ring-buffer approach (≤0.5s latency, continuous CTC decoding)
 6. After `stop_recording`, the final transcript goes through: optional SymSpell → optional grammar LLM → `type_text` (Enigo keyboard automation to paste into active window)
 
+### macOS App Bundle (dylib bundling)
+
+`llama-cpp-2` uses `dynamic-link`, so the binary depends on `libllama.dylib` (and possibly `libggml.dylib`). Tauri does not auto-bundle these; without them, users get `dyld: Library not loaded`. The `scripts/bundle-macos-dylibs.sh` script (invoked via `beforeBundleCommand`) runs `dylibbundler` to copy dylibs into `macos-dylibs/` and fix `@rpath`; `tauri.conf.json` `bundle.macOS.frameworks` lists them so Tauri copies them into `Contents/Frameworks/`. CI installs `dylibbundler` on macOS runners.
+
 ### Key Constraints
 
 - **Whisper and Parakeet are mutually exclusive** in VRAM; switching unloads the other
