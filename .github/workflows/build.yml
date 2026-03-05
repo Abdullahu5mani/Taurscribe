@@ -125,7 +125,7 @@ jobs:
 
       - name: Install CMake (macOS)
         if: contains(matrix.platform, 'macos')
-        run: brew install cmake
+        run: brew install cmake dylibbundler
 
       - name: Verify macOS Build Tools
         if: contains(matrix.platform, 'macos')
