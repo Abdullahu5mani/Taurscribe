@@ -42,19 +42,25 @@ if [ -z "$TARGET_TRIPLE" ]; then
   TARGET_TRIPLE=$(rustc -vV 2>/dev/null | grep 'host:' | cut -d' ' -f2)
 fi
 
-BINARY="$TARGET_DIR/$TARGET_TRIPLE/release/taurscribe"
+# Cargo puts host builds at target/release/; cross-builds at target/$TRIPLE/release/
+BINARY_HOST="$TARGET_DIR/release/taurscribe"
+BINARY_CROSS="$TARGET_DIR/$TARGET_TRIPLE/release/taurscribe"
 DYLIB_DIR="$SRC_TAURI/macos-dylibs"
 
-if [ ! -f "$BINARY" ]; then
-  echo "bundle-macos-dylibs: Binary not found at $BINARY, skipping"
+if [ -f "$BINARY_HOST" ]; then
+  BINARY="$BINARY_HOST"
+elif [ -f "$BINARY_CROSS" ]; then
+  BINARY="$BINARY_CROSS"
+else
+  echo "bundle-macos-dylibs: Binary not found at $BINARY_HOST or $BINARY_CROSS, skipping"
   exit 0
 fi
 
-# dylibbundler required on macOS for proper .app bundling
+# dylibbundler required on macOS; without it the app crashes at launch (libggml-base, libllama)
 if ! command -v dylibbundler &>/dev/null; then
-  echo "bundle-macos-dylibs: dylibbundler not found. Install with: brew install dylibbundler"
-  echo "bundle-macos-dylibs: Skipping dylib bundling - app may fail to run if it uses dynamic libs"
-  exit 0
+  echo "bundle-macos-dylibs: ERROR - dylibbundler not found."
+  echo "The app will crash at launch without bundled dylibs. Install with: brew install dylibbundler"
+  exit 1
 fi
 
 mkdir -p "$DYLIB_DIR"
@@ -63,9 +69,19 @@ rm -f "$DYLIB_DIR"/*.dylib 2>/dev/null || true
 # -od: use @executable_path; -b: bundle (copy) deps; -x: binary; -d: output dir; -p: rpath prefix
 dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks"
 
-# List what we bundled (for debugging)
+# Generate tauri.macos.conf.json with framework paths (Tauri validates these at build time;
+# we create this file here so it only exists when dylibs exist, avoiding "Library not found").
 if ls "$DYLIB_DIR"/*.dylib 1>/dev/null 2>&1; then
   echo "bundle-macos-dylibs: Bundled dylibs:"
   ls -la "$DYLIB_DIR"/*.dylib
-  echo "bundle-macos-dylibs: If the app fails to start with 'Library not loaded', add missing dylibs to tauri.conf.json bundle.macOS.frameworks"
+  FRAMEWORKS_JSON="["
+  for f in "$DYLIB_DIR"/*.dylib; do
+    [ -f "$f" ] || continue
+    bn=$(basename "$f")
+    FRAMEWORKS_JSON="$FRAMEWORKS_JSON\"./macos-dylibs/$bn\","
+  done
+  FRAMEWORKS_JSON="${FRAMEWORKS_JSON%,}]"
+  MACOS_CONF="$SRC_TAURI/tauri.macos.conf.json"
+  echo "{\"bundle\":{\"macOS\":{\"frameworks\":$FRAMEWORKS_JSON}}}" > "$MACOS_CONF"
+  echo "bundle-macos-dylibs: Wrote $MACOS_CONF"
 fi
