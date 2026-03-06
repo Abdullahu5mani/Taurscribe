@@ -94,7 +94,11 @@ All frontend↔backend communication uses Tauri's IPC:
 
 ### macOS App Bundle (dylib bundling)
 
-`llama-cpp-2` uses `dynamic-link`, so the binary depends on `libllama.dylib` (and possibly `libggml.dylib`). Tauri does not auto-bundle these; without them, users get `dyld: Library not loaded`. The `scripts/bundle-macos-dylibs.sh` script (invoked via `beforeBundleCommand`) runs `dylibbundler` to copy dylibs into `macos-dylibs/` and fix `@rpath`; `tauri.conf.json` `bundle.macOS.frameworks` lists them so Tauri copies them into `Contents/Frameworks/`. CI installs `dylibbundler` on macOS runners.
+`llama-cpp-2` uses `dynamic-link`, so the binary depends on `libllama.dylib` and `libggml-base.0.dylib`. Tauri does not auto-bundle these; without them, the app crashes at launch with `dyld: Library not loaded: @rpath/libggml-base.0.dylib`.
+
+**Local build:** Use `bun run build:macos` (not `tauri build`). Tauri loads config at startup, so `tauri.macos.conf.json` must exist before `tauri build` runs. The `build:macos` script builds the binary, runs `dylibbundler`, creates `tauri.macos.conf.json`, then runs `tauri build`.
+
+**Requirements:** `brew install dylibbundler` before building for macOS.
 
 ### Key Constraints
 
