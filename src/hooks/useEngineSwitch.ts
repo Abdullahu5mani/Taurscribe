@@ -55,6 +55,7 @@ export function useEngineSwitch({
         }
 
         isLoadingRef.current = true;
+        setTransferLineFadingOut(false);
         setIsLoading(true);
         setLoadedEngine(null);
         setLoadingTargetEngine("whisper");
@@ -65,6 +66,8 @@ export function useEngineSwitch({
         console.log("[LOADING] Loading Whisper model " + modelId);
 
         try {
+            // Small yield to ensure React paints the loading indicators BEFORE the heavy invoke starts
+            await new Promise(resolve => setTimeout(resolve, 30));
             await setTrayState("processing");
             await invoke("switch_model", { modelId, useGpu: asrBackend === "gpu" });
             if (activeEngine !== "whisper") {
@@ -134,6 +137,7 @@ export function useEngineSwitch({
         const targetModel = currentParakeetModel || parakeetModels[0].id;
 
         isLoadingRef.current = true;
+        setTransferLineFadingOut(false);
         setIsLoading(true);
         setLoadedEngine(null);
         setLoadingTargetEngine("parakeet");
@@ -143,6 +147,8 @@ export function useEngineSwitch({
         console.log("[LOADING] Loading Parakeet (" + targetModel + ")");
 
         try {
+            // Small yield to ensure React paints the loading indicators BEFORE the heavy invoke starts
+            await new Promise(resolve => setTimeout(resolve, 30));
             await setTrayState("processing");
             await invoke("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
 

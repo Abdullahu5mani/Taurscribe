@@ -79,5 +79,5 @@ rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
 linker = "C:\\msys64\\ucrt64\\bin\\gcc.exe"
 ar = "C:\\msys64\\ucrt64\\bin\\ar.exe"
 
-[build]
-target-dir = "C:/bld"
+# target-dir: Windows CI sets CARGO_TARGET_DIR=C:\bld in env. Do not set here
+# or macOS will use C:/bld and corrupt DYLD_FALLBACK_LIBRARY_PATH.
