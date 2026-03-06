@@ -1,1 +1,0 @@
-{"bundle":{"macOS":{"frameworks":["./macos-dylibs/libggml-base.0.9.5.dylib","./macos-dylibs/libggml-cpu.0.9.5.dylib","./macos-dylibs/libggml-metal.0.9.5.dylib","./macos-dylibs/libggml.0.9.5.dylib","./macos-dylibs/libllama.0.0.0.dylib"]}}}
