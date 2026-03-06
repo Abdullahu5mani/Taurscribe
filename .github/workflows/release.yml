@@ -337,6 +337,7 @@ jobs:
           fi
         shell: bash
         env:
+          CI: "true"                    # Tauri expects CI=true (not CI=1) for non-interactive DMG on macOS
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"
           CMAKE_C_COMPILER_LAUNCHER: ""
