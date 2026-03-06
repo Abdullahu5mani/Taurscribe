@@ -52,11 +52,7 @@
     ],
     "resources": [],
     "macOS": {
-      "minimumSystemVersion": "13.4",
-      "frameworks": [
-        "./macos-dylibs/libllama.dylib",
-        "./macos-dylibs/libggml.dylib"
-      ]
+      "minimumSystemVersion": "13.4"
     }
   }
 }
