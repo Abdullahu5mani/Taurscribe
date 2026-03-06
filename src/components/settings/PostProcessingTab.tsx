@@ -1,3 +1,5 @@
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { IconBolt, IconCpu } from "../Icons";
 
 interface PostProcessingTabProps {
@@ -29,6 +31,14 @@ export function PostProcessingTab({
     enableGrammarLM, setEnableGrammarLM, llmStatus, llmBackend, setLlmBackend,
     transcriptionStyle, setTranscriptionStyle,
 }: PostProcessingTabProps) {
+    const [platform, setPlatform] = useState("");
+
+    useEffect(() => {
+        invoke<string>("get_platform").then(setPlatform).catch(() => { });
+    }, []);
+
+    const isMac = platform === "macos";
+
     const llmLoading = llmStatus === 'Loading...';
     const llmLoaded = llmStatus === 'Loaded';
     const llmNotDownloaded = llmStatus === 'Not Downloaded';
@@ -72,32 +82,36 @@ export function PostProcessingTab({
                     <span className="status-badge" style={{ color: statusColor(llmStatus, true) }}>{llmStatus}</span>
                 </div>
 
-                <div className="setting-row">
-                    <span className="setting-row-label">
-                        Backend
-                        {llmBackendLocked && (
-                            <span style={{ display: 'block', fontSize: '0.72rem', color: '#4b4b55', marginTop: '2px' }}>
-                                disable LLM to change
-                            </span>
-                        )}
-                    </span>
-                    <div className={`backend-toggle ${llmBackendLocked ? 'backend-toggle--locked' : ''}`}>
-                        <button
-                            className={`backend-toggle-btn ${llmBackend === 'gpu' ? 'active' : ''}`}
-                            onClick={() => setLlmBackend('gpu')}
-                            disabled={llmBackendLocked}
-                        >
-                            <IconBolt size={12} style={{ color: '#facc15' }} /> GPU
-                        </button>
-                        <button
-                            className={`backend-toggle-btn ${llmBackend === 'cpu' ? 'active' : ''}`}
-                            onClick={() => setLlmBackend('cpu')}
-                            disabled={llmBackendLocked}
-                        >
-                            <IconCpu size={12} /> CPU
-                        </button>
+                {!isMac && (
+                    <div className="setting-row">
+                        <span className="setting-row-label">
+                            Backend
+                            {llmBackendLocked && (
+                                <span style={{ display: 'block', fontSize: '0.72rem', color: '#4b4b55', marginTop: '2px' }}>
+                                    disable LLM to change
+                                </span>
+                            )}
+                        </span>
+                        <div className={`backend-toggle ${llmBackendLocked ? 'backend-toggle--locked' : ''}`}>
+                            <button
+                                className={`backend-toggle-btn ${llmBackend === 'gpu' ? 'active' : ''}`}
+                                onClick={() => setLlmBackend('gpu')}
+                                disabled={llmBackendLocked}
+                            >
+                                <IconBolt size={12} style={{ color: '#facc15' }} /> GPU
+                                <span className="qs-backend-tag">NVIDIA/AMD</span>
+                            </button>
+                            <button
+                                className={`backend-toggle-btn ${llmBackend === 'cpu' ? 'active' : ''}`}
+                                onClick={() => setLlmBackend('cpu')}
+                                disabled={llmBackendLocked}
+                            >
+                                <IconCpu size={12} /> CPU
+                                <span className="qs-backend-tag">Processor</span>
+                            </button>
+                        </div>
                     </div>
-                </div>
+                )}
             </div>
 
             {/* ── Transcription Style ─────────────────────────────── */}

@@ -15,31 +15,49 @@ pub fn show_main_window(app: tauri::AppHandle) {
 
 #[tauri::command]
 pub fn show_overlay(app: tauri::AppHandle) {
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        let monitor = cursor_monitor(&app)
-            .or_else(|| overlay.primary_monitor().ok().flatten());
+    // macOS: Multi-threaded window & monitor access can occasionally panic during focus transitions.
+    // We move the entire logic to the main thread to ensure absolute stability.
+    let app_c = app.clone();
+    app.run_on_main_thread(move || {
+        if let Some(overlay) = app_c.get_webview_window("overlay") {
+            let monitor = cursor_monitor(&app_c)
+                .or_else(|| overlay.primary_monitor().ok().flatten())
+                .or_else(|| {
+                    app_c
+                        .get_webview_window("main")
+                        .and_then(|w| w.primary_monitor().ok().flatten())
+                });
 
-        if let Some(monitor) = monitor {
-            let monitor_size = monitor.size();
-            let monitor_pos  = monitor.position();
-            let overlay_size = overlay.outer_size().unwrap_or(tauri::PhysicalSize::new(80, 80));
-            let x = monitor_pos.x + ((monitor_size.width as i32 - overlay_size.width as i32) / 2);
-            let bottom_margin = (120.0 * monitor.scale_factor()) as i32;
-            let y = monitor_pos.y + monitor_size.height as i32 - overlay_size.height as i32 - bottom_margin;
-            let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
+            if let Some(monitor) = monitor {
+                let monitor_size = monitor.size();
+                let monitor_pos = monitor.position();
+                let overlay_size = overlay
+                    .outer_size()
+                    .unwrap_or(tauri::PhysicalSize::new(80, 80));
+
+                let scale = monitor.scale_factor();
+                let x =
+                    monitor_pos.x + ((monitor_size.width as i32 - overlay_size.width as i32) / 2);
+                let bottom_margin = (120.0 * scale) as i32;
+                let y = monitor_pos.y + monitor_size.height as i32
+                    - overlay_size.height as i32
+                    - bottom_margin;
+
+                let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
+            }
+            let _ = overlay.set_always_on_top(true);
+            let _ = overlay.set_ignore_cursor_events(true);
+            let _ = overlay.show();
         }
-        let _ = overlay.set_always_on_top(true);
-        let _ = overlay.set_ignore_cursor_events(true);
-        let _ = overlay.show();
-    }
+    })
+    .ok();
 }
 
 /// Returns the monitor the mouse cursor is currently on.
-/// Uses GetCursorPos (Win32 FFI) on Windows; returns None on other platforms.
 fn cursor_monitor(app: &tauri::AppHandle) -> Option<tauri::Monitor> {
     let (cx, cy) = cursor_pos()?;
     app.available_monitors().ok()?.into_iter().find(|m| {
-        let pos  = m.position();
+        let pos = m.position();
         let size = m.size();
         cx >= pos.x
             && cx < pos.x + size.width as i32
@@ -51,13 +69,56 @@ fn cursor_monitor(app: &tauri::AppHandle) -> Option<tauri::Monitor> {
 #[cfg(target_os = "windows")]
 fn cursor_pos() -> Option<(i32, i32)> {
     #[repr(C)]
-    struct POINT { x: i32, y: i32 }
-    extern "system" { fn GetCursorPos(lp: *mut POINT) -> i32; }
+    struct POINT {
+        x: i32,
+        y: i32,
+    }
+    extern "system" {
+        fn GetCursorPos(lp: *mut POINT) -> i32;
+    }
     let mut pt = POINT { x: 0, y: 0 };
-    if unsafe { GetCursorPos(&mut pt) } != 0 { Some((pt.x, pt.y)) } else { None }
+    if unsafe { GetCursorPos(&mut pt) } != 0 {
+        Some((pt.x, pt.y))
+    } else {
+        None
+    }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn cursor_pos() -> Option<(i32, i32)> {
+    // macOS CoreGraphics FFI to get global cursor position.
+    // This fixes "busted monitor detection" on Mac.
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    extern "C" {
+        fn CGEventSourceCreate(state: i32) -> *mut std::ffi::c_void;
+        fn CGEventCreate(source: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CGPoint;
+        fn CFRelease(obj: *mut std::ffi::c_void);
+    }
+
+    unsafe {
+        let source = CGEventSourceCreate(0); // kCGEventSourceStateCombinedSessionState
+        let event = CGEventCreate(source);
+        if event.is_null() {
+            if !source.is_null() {
+                CFRelease(source);
+            }
+            return None;
+        }
+        let location = CGEventGetLocation(event);
+        CFRelease(event);
+        if !source.is_null() {
+            CFRelease(source);
+        }
+        Some((location.x as i32, location.y as i32))
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn cursor_pos() -> Option<(i32, i32)> {
     None
 }
@@ -88,13 +149,21 @@ pub fn greet(name: &str) -> String {
 #[tauri::command]
 pub fn get_platform() -> &'static str {
     #[cfg(target_os = "macos")]
-    { "macos" }
+    {
+        "macos"
+    }
     #[cfg(target_os = "windows")]
-    { "windows" }
+    {
+        "windows"
+    }
     #[cfg(target_os = "linux")]
-    { "linux" }
+    {
+        "linux"
+    }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    { "unknown" }
+    {
+        "unknown"
+    }
 }
 
 #[derive(Serialize)]
@@ -130,14 +199,20 @@ pub fn get_system_info() -> SystemInfo {
         "CUDA".to_string()
     } else {
         #[cfg(target_os = "macos")]
-        { "Metal".to_string() }
+        {
+            "Metal".to_string()
+        }
         #[cfg(not(target_os = "macos"))]
         {
             if gpu_name != "Unknown" {
                 #[cfg(target_os = "windows")]
-                { "DirectML / Vulkan".to_string() }
+                {
+                    "DirectML / Vulkan".to_string()
+                }
                 #[cfg(not(target_os = "windows"))]
-                { "Vulkan".to_string() }
+                {
+                    "Vulkan".to_string()
+                }
             } else {
                 "CPU".to_string()
             }
@@ -198,7 +273,10 @@ fn detect_gpu() -> (String, bool, Option<f32>) {
 
 fn try_nvidia_smi() -> Option<(String, f32)> {
     let out = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
         .ok()?;
 
@@ -259,5 +337,8 @@ fn try_lspci_gpu() -> Option<String> {
     // "01:00.0 VGA compatible controller: NVIDIA Corporation GeForce ..."
     // We want everything after the second ':'
     let after_addr = line.splitn(2, ' ').nth(1)?;
-    after_addr.splitn(2, ':').nth(1).map(|s| s.trim().to_string())
+    after_addr
+        .splitn(2, ':')
+        .nth(1)
+        .map(|s| s.trim().to_string())
 }

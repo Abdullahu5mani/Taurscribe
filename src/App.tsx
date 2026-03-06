@@ -158,6 +158,13 @@ function App() {
   }, []);
 
   const [randomLogo, setRandomLogo] = useState(pickRandomLogo);
+  const [platform, setPlatform] = useState("");
+
+  useEffect(() => {
+    invoke<string>("get_platform").then(setPlatform).catch(() => { });
+  }, []);
+
+  const isMac = platform === "macos";
 
   // Re-randomize the logo animation when the window is restored from the tray
   useEffect(() => {
@@ -314,12 +321,15 @@ function App() {
 
     // Heavy-path: Reloading the actual model into memory
     isLoadingRef.current = true;
+    setTransferLineFadingOut(false);
     setIsLoading(true);
     setLoadedEngine(null);
     setLoadingMessage(`Reloading on ${label}...`);
     setHeaderStatus(`Reloading on ${label}...`, 60_000);
 
     try {
+      // Small yield to ensure React paints the loading indicators BEFORE the heavy invoke starts
+      await new Promise(resolve => setTimeout(resolve, 30));
       await setTrayState("processing");
 
       if (engine === "whisper") {
@@ -726,18 +736,26 @@ function App() {
             </div>
             <div className="hardware-bar">
               <span>Hardware: <span>{backendInfo}</span></span>
-              <div className="backend-toggle-inline">
-                <button
-                  className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
-                  onClick={() => handleToggleAsrBackend('gpu')}
-                  disabled={isLoading}
-                ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
-                <button
-                  className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
-                  onClick={() => handleToggleAsrBackend('cpu')}
-                  disabled={isLoading}
-                ><IconCpu size={11} /> CPU</button>
-              </div>
+              {!isMac && (
+                <div className="backend-toggle-inline">
+                  <button
+                    className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
+                    onClick={() => handleToggleAsrBackend('gpu')}
+                    disabled={isLoading}
+                  >
+                    <IconBolt size={11} style={{ color: '#facc15' }} /> GPU
+                    <span className="qs-backend-tag">NVIDIA/AMD</span>
+                  </button>
+                  <button
+                    className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
+                    onClick={() => handleToggleAsrBackend('cpu')}
+                    disabled={isLoading}
+                  >
+                    <IconCpu size={11} /> CPU
+                    <span className="qs-backend-tag">Processor</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

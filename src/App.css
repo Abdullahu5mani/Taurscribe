@@ -407,6 +407,10 @@ body {
   border: none;
   cursor: pointer;
   transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
 }
 
 .backend-toggle-inline-btn:first-child {
@@ -421,6 +425,14 @@ body {
 .backend-toggle-inline-btn.active {
   color: var(--accent-primary);
   background: rgba(224, 159, 62, 0.08);
+}
+
+.backend-toggle-inline-btn.active .qs-backend-tag {
+  color: rgba(224, 159, 62, 0.6);
+}
+
+.backend-toggle-inline-btn:hover:not(.active) .qs-backend-tag {
+  color: var(--text-secondary);
 }
 
 /* ---- Engine cards (hardware modules) ---- */
@@ -2300,6 +2312,25 @@ body {
   border-color: rgba(224, 159, 62, 0.5);
   background: rgba(224, 159, 62, 0.08);
 }
+
+.qs-backend-tag {
+  display: block;
+  font-size: 0.6rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  margin-top: 1px;
+}
+
+.qs-backend-btn:hover .qs-backend-tag {
+  color: var(--text-secondary);
+}
+
+.qs-backend-btn--active .qs-backend-tag {
+  color: rgba(224, 159, 62, 0.6);
+}
+
 
 /* ── Volume ── */
 .qs-volume-row {

@@ -1,19 +1,26 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::unbounded;
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU32, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, Ordering},
+    Arc,
+};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::{RecordingHandle, SendStream};
+use crate::context::get_active_context;
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
 use crate::types::{ASREngine, TranscriptionChunk};
-use crate::context::get_active_context;
 use crate::utils::{clean_transcript, get_recordings_dir, normalize_audio};
 
 /// COMMAND: START RECORDING
 /// This initializes the microphone, files, and processing threads.
 #[tauri::command]
-pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise: Option<bool>) -> Result<String, String> {
+pub fn start_recording(
+    app_handle: AppHandle,
+    state: State<AudioState>,
+    denoise: Option<bool>,
+) -> Result<String, String> {
     // Guard: reject if already recording (e.g. spam hotkey)
     {
         let handle = state.recording_handle.lock().unwrap();
@@ -34,7 +41,10 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
     } else {
         host.default_input_device().ok_or("No input device")?
     };
-    println!("[INFO] Using input device: {}", device.name().unwrap_or_default());
+    println!(
+        "[INFO] Using input device: {}",
+        device.name().unwrap_or_default()
+    );
     let config: cpal::StreamConfig = device
         .default_input_config()
         .map_err(|e| e.to_string())?
@@ -132,7 +142,9 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
                     let vad_chunk: Vec<f32> = if sample_rate != 16000 {
                         let ratio = sample_rate as f64 / 16000.0;
                         let out_len = (chunk.len() as f64 / ratio) as usize;
-                        (0..out_len).map(|i| chunk[(i as f64 * ratio) as usize]).collect()
+                        (0..out_len)
+                            .map(|i| chunk[(i as f64 * ratio) as usize])
+                            .collect()
                     } else {
                         chunk.clone()
                     };
@@ -325,8 +337,7 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
                 // Only compute every ~5 callbacks to avoid unnecessary work.
                 let cnt = level_counter_clone.fetch_add(1, Ordering::Relaxed);
                 if cnt % 5 == 0 && !data.is_empty() {
-                    let rms = (data.iter().map(|&s| s * s).sum::<f32>()
-                        / data.len() as f32).sqrt();
+                    let rms = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
                     let level = (rms / 0.015_f32).min(1.0_f32).sqrt();
                     audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
                 }
@@ -391,7 +402,10 @@ fn clipboard_paste(text: &str) {
 
     let mut clipboard = match Clipboard::new() {
         Ok(c) => c,
-        Err(e) => { eprintln!("[INSERT] Clipboard init failed: {}", e); return; }
+        Err(e) => {
+            eprintln!("[INSERT] Clipboard init failed: {}", e);
+            return;
+        }
     };
 
     let previous = clipboard.get_text().ok();
@@ -406,7 +420,10 @@ fn clipboard_paste(text: &str) {
 
     let mut enigo = match Enigo::new(&Settings::default()) {
         Ok(e) => e,
-        Err(e) => { eprintln!("[INSERT] Enigo init failed: {:?}", e); return; }
+        Err(e) => {
+            eprintln!("[INSERT] Enigo init failed: {:?}", e);
+            return;
+        }
     };
 
     #[cfg(target_os = "macos")]
@@ -435,8 +452,8 @@ fn clipboard_paste(text: &str) {
 #[cfg(target_os = "macos")]
 fn ax_insert(text: &str) -> bool {
     use accessibility_sys::{
-        AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
-        AXUIElementSetAttributeValue, kAXErrorSuccess,
+        kAXErrorSuccess, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
+        AXUIElementSetAttributeValue,
     };
     use core_foundation::{
         base::{CFRelease, CFTypeRef, TCFType},
@@ -554,7 +571,9 @@ pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
             let mut clean = Vec::with_capacity(audio_data.len());
             if timestamps.is_empty() {
                 // VAD found nothing — let Whisper decide rather than hard-failing
-                println!("[VAD] No speech segments found, passing full audio to Whisper as fallback");
+                println!(
+                    "[VAD] No speech segments found, passing full audio to Whisper as fallback"
+                );
                 clean.extend_from_slice(&audio_data);
             }
             for (start, end) in timestamps {
