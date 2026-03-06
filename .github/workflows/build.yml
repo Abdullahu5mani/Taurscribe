@@ -454,6 +454,7 @@ jobs:
         # Actions runners (Ubuntu 22.04+) don't have FUSE installed. This flag makes
         # linuxdeploy extract to a temp dir instead, which is the standard CI workaround.
         env:
+          CI: "true"                    # Tauri expects CI=true (not CI=1) for non-interactive DMG on macOS
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues
           CMAKE_C_COMPILER_LAUNCHER: ""  # Explicitly no launcher (override any cached ccache)
