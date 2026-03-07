@@ -423,12 +423,14 @@ impl WhisperManager {
             };
 
             if needs_new {
+                // sinc_len 64 + oversampling 32 are more than sufficient for 16kHz
+                // speech and are ~5x faster than the audiophile-grade 256/128 defaults.
                 let params = SincInterpolationParameters {
-                    sinc_len: 256,
+                    sinc_len: 64,
                     f_cutoff: 0.95,
                     interpolation: SincInterpolationType::Linear,
                     window: WindowFunction::BlackmanHarris2,
-                    oversampling_factor: 128,
+                    oversampling_factor: 32,
                 };
                 let resampler = SincFixedIn::<f32>::new(
                     16000_f64 / input_sample_rate as f64,
@@ -460,7 +462,14 @@ impl WhisperManager {
         // "Greedy" strategy picks the most likely word immediately (fastest)
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
-        params.set_n_threads(4); // Use 4 CPU threads
+        // Dynamically pick thread count: half the logical cores (min 4, max 8)
+        // so audio capture threads aren't starved during live chunked transcription.
+        let n_threads = (std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4) / 2)
+            .max(4)
+            .min(8) as i32;
+        params.set_n_threads(n_threads);
         params.set_translate(false); // Don't translate to English, just transcribe
         params.set_language(Some("en")); // Assume English for now
         params.set_print_special(false); // Don't print <SOT>, <EOT>, etc.
@@ -543,7 +552,11 @@ impl WhisperManager {
 
         // Use offline parameters (same as transcribe_file)
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_n_threads(8);
+        // Post-recording final pass: use all available cores (no audio capture to compete with).
+        let n_threads = std::thread::available_parallelism()
+            .map(|n| n.get().min(12) as i32)
+            .unwrap_or(8);
+        params.set_n_threads(n_threads);
         params.set_translate(false);
         params.set_language(Some("en"));
         params.set_print_special(false);
@@ -627,11 +640,11 @@ impl WhisperManager {
         // Resample
         if spec.sample_rate != 16000 {
             let params = SincInterpolationParameters {
-                sinc_len: 256,
+                sinc_len: 64,
                 f_cutoff: 0.95,
                 interpolation: SincInterpolationType::Linear,
                 window: WindowFunction::BlackmanHarris2,
-                oversampling_factor: 128,
+                oversampling_factor: 32,
             };
 
             let chunk_size = 1024 * 10;

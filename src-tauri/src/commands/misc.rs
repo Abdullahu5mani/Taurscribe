@@ -432,3 +432,60 @@ fn try_lspci_gpu() -> Option<String> {
     let after_addr = line.splitn(2, ' ').nth(1)?;
     after_addr.splitn(2, ':').nth(1).map(|s| s.trim().to_string())
 }
+
+// ── Accessibility / Input Monitoring permission ───────────────────────────────
+
+/// Returns true if this process is trusted for Accessibility (and therefore
+/// Input Monitoring) on macOS. On all other platforms returns true immediately.
+#[tauri::command]
+pub fn check_accessibility_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos_accessibility_trusted_query()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// Opens the macOS System Settings pane for Privacy & Security → Accessibility
+/// so the user can grant permission without hunting for it. No-op on other OSes.
+#[tauri::command]
+pub fn open_accessibility_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        // x-apple.systempreferences: deep-link opens directly to the right pane.
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+    }
+}
+
+/// Relaunches the application process. Used after the user grants a permission
+/// that requires a restart (e.g. Accessibility on macOS) to take effect.
+#[tauri::command]
+pub fn relaunch_app(app: tauri::AppHandle) {
+    app.restart();
+}
+
+/// Non-prompting accessibility check used by the command (no dialog pop-up).
+#[cfg(target_os = "macos")]
+fn macos_accessibility_trusted_query() -> bool {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
+    extern "C" {
+        fn AXIsProcessTrustedWithOptions(
+            options: core_foundation::base::CFTypeRef,
+        ) -> bool;
+    }
+
+    let key = CFString::new("AXTrustedCheckOptionPrompt");
+    let value = CFBoolean::false_value(); // do NOT prompt here — wizard controls when to prompt
+    let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
+
+    unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) }
+}

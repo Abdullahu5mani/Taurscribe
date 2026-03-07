@@ -270,11 +270,13 @@ impl ParakeetManager {
                 .map_or(true, |(r, s, _)| *r != sample_rate || *s != samples.len());
 
             if needs_new_resampler {
+                // sinc_len 64 + oversampling 32 are more than sufficient for 16kHz
+                // speech and are ~5x faster than the audiophile-grade 256/256 defaults.
                 let params = SincInterpolationParameters {
-                    sinc_len: 256,
+                    sinc_len: 64,
                     f_cutoff: 0.95,
                     interpolation: SincInterpolationType::Linear,
-                    oversampling_factor: 256,
+                    oversampling_factor: 32,
                     window: WindowFunction::BlackmanHarris2,
                 };
                 let resampler = SincFixedIn::<f32>::new(

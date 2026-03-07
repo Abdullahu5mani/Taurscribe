@@ -24,7 +24,7 @@ interface StepEntry {
   key: number;
 }
 
-const STEPS = 5;
+const STEPS = 6;
 
 export function SetupWizard({ onComplete }: Props) {
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
@@ -71,7 +71,8 @@ export function SetupWizard({ onComplete }: Props) {
       case 1: return <StepHardware sysInfo={sysInfo} platform={platform} onNext={next} onBack={back} />;
       case 2: return <StepEngines onNext={next} onBack={back} platform={platform} />;
       case 3: return <StepHotkey onNext={next} onBack={back} platform={platform} />;
-      case 4: return <StepReady onComplete={onComplete} />;
+      case 4: return <StepPermissions onNext={next} onBack={back} platform={platform} />;
+      case 5: return <StepReady onComplete={onComplete} />;
       default: return null;
     }
   };
@@ -176,7 +177,7 @@ function StepHardware({
 
   return (
     <>
-      <p className="setup-eyebrow">Step 2 of 5</p>
+      <p className="setup-eyebrow">Step 2 of 6</p>
       <h2 className="setup-heading">System Analysis</h2>
       <p className="setup-sub">Checking your hardware for AI readiness.</p>
 
@@ -242,7 +243,7 @@ function StepHardware({
 function StepEngines({ onNext, onBack, platform }: { onNext: () => void; onBack: () => void; platform: string }) {
   return (
     <>
-      <p className="setup-eyebrow">Step 3 of 5</p>
+      <p className="setup-eyebrow">Step 3 of 6</p>
       <h2 className="setup-heading">Two Engines</h2>
       <p className="setup-sub">Both are included. Download models for either in Settings.</p>
 
@@ -304,7 +305,7 @@ function StepHotkey({ onNext, onBack, platform }: { onNext: () => void; onBack: 
 
   return (
     <>
-      <p className="setup-eyebrow">Step 4 of 5</p>
+      <p className="setup-eyebrow">Step 4 of 6</p>
       <h2 className="setup-heading">One Hotkey</h2>
       <p className="setup-sub">Use Taurscribe from anywhere, without switching windows.</p>
 
@@ -340,7 +341,149 @@ function StepHotkey({ onNext, onBack, platform }: { onNext: () => void; onBack: 
 }
 
 // ─────────────────────────────────────────────────────────────────
-// STEP 4 — READY
+// STEP 4 — PERMISSIONS
+// ─────────────────────────────────────────────────────────────────
+function StepPermissions({
+  onNext,
+  onBack,
+  platform,
+}: {
+  onNext: () => void;
+  onBack: () => void;
+  platform: string;
+}) {
+  const isMac = platform === 'macos';
+
+  const [micStatus, setMicStatus] = useState<string>('checking');
+  const [accGranted, setAccGranted] = useState<boolean | null>(null);
+  const [restartNeeded, setRestartNeeded] = useState(false);
+  const [micRequesting, setMicRequesting] = useState(false);
+  const initialAccRef = useRef<boolean | null>(null);
+
+  // Non-macOS: no permissions ceremony needed — skip this step instantly.
+  useEffect(() => {
+    if (platform !== '' && !isMac) onNext();
+  }, [platform, isMac, onNext]);
+
+  const checkStatuses = useCallback(async () => {
+    try {
+      const mic = await invoke<string>('check_microphone_permission');
+      setMicStatus(mic);
+    } catch { setMicStatus('undetermined'); }
+    try {
+      const acc = await invoke<boolean>('check_accessibility_permission');
+      setAccGranted(acc);
+      if (initialAccRef.current === false && acc === true) {
+        setRestartNeeded(true);
+      }
+    } catch { setAccGranted(false); }
+  }, []);
+
+  useEffect(() => {
+    if (!isMac) return;
+    invoke<boolean>('check_accessibility_permission')
+      .then(v => { initialAccRef.current = v; })
+      .catch(() => { initialAccRef.current = false; });
+    checkStatuses();
+    const timer = setInterval(checkStatuses, 1500);
+    return () => clearInterval(timer);
+  }, [isMac, checkStatuses]);
+
+  const requestMic = async () => {
+    setMicRequesting(true);
+    try { await invoke('request_microphone_permission'); } catch {}
+    setMicRequesting(false);
+    checkStatuses();
+  };
+
+  const openAccessibility = async () => {
+    try { await invoke('open_accessibility_settings'); } catch {}
+  };
+
+  const relaunchApp = async () => {
+    try { await invoke('relaunch_app'); } catch {}
+  };
+
+  if (!isMac) return null;
+
+  const micOk = micStatus === 'granted';
+  const accOk = accGranted === true;
+
+  return (
+    <>
+      <p className="setup-eyebrow">Step 5 of 6</p>
+      <h2 className="setup-heading">Permissions</h2>
+      <p className="setup-sub">Taurscribe needs these two permissions to work properly.</p>
+
+      <div className="perm-list">
+        {/* ── Microphone ─────────────────────────────── */}
+        <div className={`perm-row${micOk ? ' perm-row--granted' : ''}`}>
+          <div className="perm-icon">
+            {micOk
+              ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+              : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" /></svg>
+            }
+          </div>
+          <div className="perm-info">
+            <div className="perm-name">Microphone</div>
+            <div className="perm-desc">Record audio for transcription</div>
+          </div>
+          <div className="perm-action">
+            {micOk
+              ? <span className="perm-badge perm-badge--ok">Granted</span>
+              : micStatus === 'denied'
+                ? <span className="perm-badge perm-badge--denied">Denied — open System Settings</span>
+                : <button className="setup-btn setup-btn--primary perm-btn" onClick={requestMic} disabled={micRequesting}>
+                    {micRequesting ? 'Requesting…' : 'Grant Access'}
+                  </button>
+            }
+          </div>
+        </div>
+
+        {/* ── Accessibility / Input Monitoring ────────── */}
+        <div className={`perm-row${accOk ? ' perm-row--granted' : ''}`}>
+          <div className="perm-icon">
+            {accOk
+              ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+              : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>
+            }
+          </div>
+          <div className="perm-info">
+            <div className="perm-name">Accessibility</div>
+            <div className="perm-desc">Required for the global hotkey to work in all apps</div>
+          </div>
+          <div className="perm-action">
+            {accOk
+              ? <span className="perm-badge perm-badge--ok">Granted</span>
+              : <button className="setup-btn setup-btn--primary perm-btn" onClick={openAccessibility}>
+                  Open Settings
+                </button>
+            }
+          </div>
+        </div>
+      </div>
+
+      {restartNeeded && (
+        <div className="perm-restart-notice">
+          <strong>Restart required.</strong> Accessibility permission was granted — restart Taurscribe so the global hotkey activates.
+          <button className="setup-btn setup-btn--primary perm-restart-btn" onClick={relaunchApp}>
+            Restart Now
+          </button>
+        </div>
+      )}
+
+      <div className="setup-nav setup-nav--spread">
+        <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
+        <button className="setup-btn setup-btn--primary" onClick={onNext}>
+          {micOk && accOk ? 'Continue →' : 'Skip for now →'}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// STEP 5 — READY
 // ─────────────────────────────────────────────────────────────────
 function StepReady({
   onComplete,

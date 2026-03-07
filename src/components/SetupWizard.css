@@ -640,3 +640,132 @@
   background: rgba(224, 159, 62, 0.18);
   border-color: rgba(224, 159, 62, 0.5);
 }
+
+/* ═══════════════════════════════════════════════════════════
+   STEP 4 — PERMISSIONS
+   ═══════════════════════════════════════════════════════════ */
+
+.perm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 480px;
+  margin: 18px 0 16px;
+}
+
+.perm-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+
+.perm-row--granted {
+  background: rgba(62, 207, 165, 0.05);
+  border-color: rgba(62, 207, 165, 0.2);
+}
+
+.perm-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary, #6b6b76);
+  transition: color 0.25s ease;
+}
+
+.perm-row--granted .perm-icon {
+  background: rgba(62, 207, 165, 0.1);
+  border-color: rgba(62, 207, 165, 0.25);
+  color: var(--success, #3ecfa5);
+}
+
+.perm-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.perm-name {
+  font-family: 'Barlow', sans-serif;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary, #e2e8f0);
+  letter-spacing: 0.01em;
+}
+
+.perm-desc {
+  font-family: 'Barlow', sans-serif;
+  font-size: 0.78rem;
+  color: var(--text-muted, #44444d);
+  margin-top: 2px;
+}
+
+.perm-action {
+  flex-shrink: 0;
+}
+
+.perm-btn {
+  font-size: 0.78rem;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+
+.perm-badge {
+  font-family: 'Barlow', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  letter-spacing: 0.02em;
+}
+
+.perm-badge--ok {
+  background: rgba(62, 207, 165, 0.12);
+  color: var(--success, #3ecfa5);
+  border: 1px solid rgba(62, 207, 165, 0.25);
+}
+
+.perm-badge--denied {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.perm-restart-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 480px;
+  background: rgba(224, 159, 62, 0.07);
+  border: 1px solid rgba(224, 159, 62, 0.25);
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-family: 'Barlow', sans-serif;
+  font-size: 0.83rem;
+  color: var(--text-secondary, #6b6b76);
+  text-align: center;
+  animation: fadeUp 0.3s ease forwards;
+}
+
+.perm-restart-notice strong {
+  color: var(--accent-primary, #e09f3e);
+}
+
+.perm-restart-btn {
+  width: 100%;
+  max-width: 220px;
+  font-size: 0.82rem;
+  padding: 7px 16px;
+}

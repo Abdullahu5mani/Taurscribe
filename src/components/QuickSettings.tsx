@@ -1,7 +1,7 @@
 
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { IconBolt, IconCpu, IconVolumeHigh, IconVolumeLow, IconVolumeMuted } from "./Icons";
+import { IconBolt, IconCpu, IconVolumeHigh, IconVolumeLow, IconVolumeMuted, InfoTooltip } from "./Icons";
 
 interface QuickSettingsProps {
     // Post-processing toggles
@@ -53,17 +53,25 @@ function Toggle({
     );
 }
 
-function Section({ label }: { label: string }) {
-    return <div className="qs-section-label">{label}</div>;
+function Section({ label, info }: { label: string; info?: string }) {
+    return (
+        <div className="qs-section-label">
+            {label}
+            {info && <InfoTooltip text={info} size={10} />}
+        </div>
+    );
 }
 
 function Row({
-    label, children, hint,
-}: { label: string; children: React.ReactNode; hint?: string }) {
+    label, children, hint, info,
+}: { label: string; children: React.ReactNode; hint?: string; info?: string }) {
     return (
         <div className="qs-row">
             <div className="qs-row-left">
-                <span className="qs-row-label">{label}</span>
+                <div className="qs-row-label-wrap">
+                    <span className="qs-row-label">{label}</span>
+                    {info && <InfoTooltip text={info} size={11} />}
+                </div>
                 {hint && <span className="qs-row-hint">{hint}</span>}
             </div>
             <div className="qs-row-right">{children}</div>
@@ -117,7 +125,8 @@ export function QuickSettings({
                 {/* ── Post-processing ─────────────────────────── */}
                 <Section label="Post-processing" />
 
-                <Row label="Grammar LLM" hint={llmHint}>
+                <Row label="Grammar LLM" hint={llmHint}
+                    info="Runs a local AI model to fix grammar, punctuation, and tone after each recording stops. Requires the FlowScribe Qwen model (download from Settings → Models).">
                     <Toggle
                         id="qs-grammar"
                         checked={enableGrammarLM}
@@ -127,7 +136,8 @@ export function QuickSettings({
                 </Row>
 
 
-                <Row label="Denoise">
+                <Row label="Denoise"
+                    info="Real-time background noise reduction using RNNoise. Only affects the AI engine — your saved WAV recording always keeps the original audio.">
                     <Toggle
                         id="qs-denoise"
                         checked={enableDenoise}
@@ -135,7 +145,8 @@ export function QuickSettings({
                     />
                 </Row>
 
-                <Row label="Overlay">
+                <Row label="Overlay"
+                    info="Shows a floating transcript window on screen so you can see words appear as you speak during a recording.">
                     <Toggle
                         id="qs-overlay"
                         checked={enableOverlay}
@@ -143,7 +154,8 @@ export function QuickSettings({
                     />
                 </Row>
 
-                <Row label="Mute mic BG">
+                <Row label="Mute mic BG"
+                    info="Silences system audio output while recording to prevent background sounds bleeding into your microphone.">
                     <Toggle
                         id="qs-mute-bg"
                         checked={muteBackgroundAudio}
@@ -156,7 +168,7 @@ export function QuickSettings({
                     Apple Silicon uses Metal automatically, no user choice needed. */}
                 {!isMac && (
                   <>
-                    <Section label="LLM Backend" />
+                    <Section label="LLM Backend" info="Choose whether the grammar correction LLM runs on your GPU (faster, uses VRAM) or CPU (slower, no VRAM needed)." />
                     <div className="qs-backend-row">
                         <button
                             type="button"
@@ -173,7 +185,7 @@ export function QuickSettings({
                 )}
 
                 {/* ── Sound ───────────────────────────────────── */}
-                <Section label="Sound" />
+                <Section label="Sound" info="Volume for in-app feedback sounds: recording start, stop, and error beeps. Does not affect your system volume." />
                 <div className="qs-volume-row">
                     <button
                         type="button"

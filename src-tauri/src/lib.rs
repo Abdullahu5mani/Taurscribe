@@ -175,6 +175,9 @@ pub fn run() {
             commands::unmute_system_audio,
             commands::check_microphone_permission,
             commands::request_microphone_permission,
+            commands::check_accessibility_permission,
+            commands::open_accessibility_settings,
+            commands::relaunch_app,
             commands::get_close_behavior,
             commands::set_close_behavior
         ])
