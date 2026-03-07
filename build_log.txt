@@ -1,0 +1,1736 @@
+$ tauri dev
+     Running BeforeDevCommand (`bun run dev`)
+$ vite
+
+  [32m[1mVITE[22m v7.3.0[39m  [2mready in [0m[1m248[22m[2m[0m ms[22m
+
+  [32mΓ₧£[39m  [1mLocal[22m:   [36mhttp://localhost:[1m1420[22m/[39m
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri for changes...
+   Compiling whisper-rs-sys v0.14.1 (https://codeberg.org/tazz4843/whisper-rs.git#d38738df)
+    Building [=======================> ] 655/661: whisperΓÇª
+                                                            
+error: failed to run custom build command for `whisper-rs-sys v0.14.1 (https://codeberg.org/tazz4843/whisper-rs.git#d38738df)`
+note: To improve backtraces for build dependencies, set the CARGO_PROFILE_DEV_BUILD_OVERRIDE_DEBUG=true environment variable to enable debug information generation.
+
+Caused by:
+  process didn't exit successfully: `C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-2485d815414c7c53\build-script-build` (exit code: 101)
+  --- stdout
+  cargo:rustc-link-lib=cublas
+  cargo:rustc-link-lib=cudart
+  cargo:rustc-link-lib=cublasLt
+  cargo:rustc-link-lib=cuda
+  cargo:rustc-link-search=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\lib/x64
+  cargo:rerun-if-changed=wrapper.h
+  cargo:rerun-if-env-changed=TARGET
+  cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS_x86_64-pc-windows-msvc
+  cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS_x86_64_pc_windows_msvc
+  cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS
+  cargo:rerun-if-changed=wrapper.h
+  cargo:rerun-if-changed=whisper.cpp/ggml/include/ggml-vulkan.h
+  cargo:rerun-if-changed=./whisper.cpp\include/whisper.h
+  cargo:rerun-if-changed=./whisper.cpp/ggml/include\ggml.h
+  cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\stdbool.h
+  cargo:rerun-if-changed=C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt\stddef.h
+  cargo:rerun-if-changed=C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt\corecrt.h
+  cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\vcruntime.h
+  cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\sal.h
+  cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\concurrencysal.h
+  cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\vadefs.h
+  cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\stdint.h
+  cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\vcruntime.h
+  cargo:rerun-if-changed=C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt\stdio.h
+  cargo:rerun-if-changed=C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt\corecrt.h
+  cargo:rerun-if-changed=C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt\corecrt_wstdio.h
+  cargo:rerun-if-changed=C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt\corecrt.h
+  cargo:rerun-if-changed=C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt\corecrt_stdio_config.h
+  cargo:rerun-if-changed=C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt\corecrt.h
+  cargo:rerun-if-changed=./whisper.cpp/ggml/include\ggml-cpu.h
+  cargo:rerun-if-changed=./whisper.cpp/ggml/include\ggml.h
+  cargo:rerun-if-changed=./whisper.cpp/ggml/include\ggml-backend.h
+  cargo:rerun-if-changed=./whisper.cpp/ggml/include\ggml.h
+  cargo:rerun-if-changed=./whisper.cpp/ggml/include\ggml-alloc.h
+  cargo:rerun-if-changed=./whisper.cpp/ggml/include\ggml.h
+  cargo:rerun-if-changed=C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt\stddef.h
+  cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\stdint.h
+  cargo:rerun-if-changed=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\stdbool.h
+  cargo:rerun-if-changed=./whisper.cpp\ggml/include/ggml.h
+  cargo:rerun-if-changed=./whisper.cpp/ggml/include\ggml-vulkan.h
+  cargo:rerun-if-changed=whisper.cpp/ggml/include\ggml.h
+  cargo:rerun-if-changed=whisper.cpp/ggml/include\ggml-backend.h
+  cargo:rerun-if-changed=whisper.cpp/ggml/include\ggml.h
+  cargo:rerun-if-changed=whisper.cpp/ggml/include\ggml-backend.h
+  cargo:rustc-link-lib=advapi32
+  cargo:rerun-if-env-changed=VULKAN_SDK
+  cargo:rustc-link-lib=vulkan-1
+  cargo:rustc-link-search=C:\VulkanSDK\1.4.335.0\Lib
+  CMAKE_TOOLCHAIN_FILE_x86_64-pc-windows-msvc = None
+  CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_msvc = None
+  HOST_CMAKE_TOOLCHAIN_FILE = None
+  CMAKE_TOOLCHAIN_FILE = None
+  CMAKE_GENERATOR_x86_64-pc-windows-msvc = None
+  CMAKE_GENERATOR_x86_64_pc_windows_msvc = None
+  HOST_CMAKE_GENERATOR = None
+  CMAKE_GENERATOR = None
+  CMAKE_PREFIX_PATH_x86_64-pc-windows-msvc = None
+  CMAKE_PREFIX_PATH_x86_64_pc_windows_msvc = None
+  HOST_CMAKE_PREFIX_PATH = None
+  CMAKE_PREFIX_PATH = None
+  CMAKE_x86_64-pc-windows-msvc = None
+  CMAKE_x86_64_pc_windows_msvc = None
+  HOST_CMAKE = None
+  CMAKE = None
+  Running with debug output on.
+  -- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.26200.
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/CMakeLists.txt
+  -- Warning: ccache not found - consider installing it for faster compilation or disable this warning with GGML_CCACHE=OFF
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  -- CMAKE_SYSTEM_PROCESSOR: AMD64
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  -- CMAKE_GENERATOR_PLATFORM: x64
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  -- GGML_SYSTEM_ARCH: x86
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  -- Including CPU backend
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  -- x86 detected
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cpu/CMakeLists.txt
+  -- Adding CPU backend variant ggml-cpu: /arch:AVX512 GGML_AVX512
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cpu/CMakeLists.txt
+  -- CUDA Toolkit found
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  -- Using CUDA architectures: native
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  -- Including CUDA backend
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  -- Vulkan found
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  -- GL_KHR_cooperative_matrix supported by glslc
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  -- GL_NV_cooperative_matrix2 supported by glslc
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  -- GL_EXT_integer_dot_product supported by glslc
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  -- GL_EXT_bfloat16 supported by glslc
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  -- Including Vulkan backend
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  -- ggml version: 0.9.4-dirty
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/CMakeLists.txt
+  -- ggml commit:  a88b93f8
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/CMakeLists.txt
+  -- Configuring done (2.3s)
+  -- Generating C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/CMakeLists.txt
+  -- Generating C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build/ggml
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/CMakeLists.txt
+  -- Generating C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build/ggml/src
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  -- Generating C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build/ggml/src/ggml-cpu
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cpu/CMakeLists.txt
+  -- Generating C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build/ggml/src/ggml-cuda
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  -- Generating C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build/ggml/src/ggml-vulkan
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  -- Generating C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build/src
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  -- Generating done (0.2s)
+  -- Build files have been written to: C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build
+  Change Dir: 'C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build'
+
+  Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" install.vcxproj /p:Configuration=Release /p:Platform=x64 /p:VisualStudioVersion=17.0 /m:16 /v:n
+  MSBuild version 17.14.40+3e7442088 for .NET Framework
+  Build started 3/6/2026 7:27:08 PM.
+
+       1>Project "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\install.vcxproj" on node 1 (default targets).
+       1>Project "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\install.vcxproj" (1) is building "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ZERO_CHECK.vcxproj" (2) on node 1 (default targets).
+       2>PrepareForBuild:
+           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+         InitializeBuildStatus:
+           Creating "x64\Release\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild" because "AlwaysCreate" was specified.
+           Touching "x64\Release\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild".
+         PreBuildEvent:
+           Checking File Globs
+           setlocal
+           C:\msys64\ucrt64\bin\cmake.exe -P C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/build/CMakeFiles/VerifyGlobs.cmake
+           if %errorlevel% neq 0 goto :cmEnd
+           :cmEnd
+           endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+           :cmErrorLevel
+           exit /b %1
+           :cmDone
+           if %errorlevel% neq 0 goto :VCEnd
+           :VCEnd
+         CustomBuild:
+           All outputs are up-to-date.
+         FinalizeBuildStatus:
+           Deleting file "x64\Release\ZERO_CHECK\ZERO_CHECK.tlog\unsuccessfulbuild".
+           Touching "x64\Release\ZERO_CHECK\ZERO_CHECK.tlog\ZERO_CHECK.lastbuildstate".
+       2>Done Building Project "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ZERO_CHECK.vcxproj" (default targets).
+       1>Project "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\install.vcxproj" (1) is building "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ALL_BUILD.vcxproj" (3) on node 2 (default targets).
+       3>Project "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ALL_BUILD.vcxproj" (3) is building "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen.vcxproj" (4) on node 2 (default targets).
+       4>PrepareForBuild:
+           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+         InitializeBuildStatus:
+           Touching "x64\Release\vulkan-shaders-gen\vulkan-s.D2D8D88F.tlog\unsuccessfulbuild".
+         CustomBuild:
+           "The build of 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\c6829fb554361b615796fe6f2ba7fe10\vulkan-shaders-gen-build.rule' depends on 'C:\USERS\ABDUL\ONEDRIVE\DESKTOP\TAURSCRIBE\SRC-TAURI\TARGET\DEBUG\BUILD\WHISPER-RS-SYS-08254DAFA9F358B6\OUT\BUILD\GGML\SRC\GGML-VULKAN\VULKAN-SHADERS-GEN-PREFIX\SRC\VULKAN-SHADERS-GEN-STAMP\RELEASE\VULKAN-SHADERS-GEN-CONFIGURE' which is produced by the build of 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\c6829fb554361b615796fe6f2ba7fe10\vulkan-shaders-gen-configure.rule'. The items cannot be built in parallel."
+           "The build of 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\c6829fb554361b615796fe6f2ba7fe10\vulkan-shaders-gen-install.rule' depends on 'C:\USERS\ABDUL\ONEDRIVE\DESKTOP\TAURSCRIBE\SRC-TAURI\TARGET\DEBUG\BUILD\WHISPER-RS-SYS-08254DAFA9F358B6\OUT\BUILD\GGML\SRC\GGML-VULKAN\VULKAN-SHADERS-GEN-PREFIX\SRC\VULKAN-SHADERS-GEN-STAMP\RELEASE\VULKAN-SHADERS-GEN-BUILD' which is produced by the build of 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\c6829fb554361b615796fe6f2ba7fe10\vulkan-shaders-gen-build.rule'. The items cannot be built in parallel."
+           "The build of 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\d97482a3de8d0bbbb7b15c9154b16c2f\vulkan-shaders-gen-complete.rule' depends on 'C:\USERS\ABDUL\ONEDRIVE\DESKTOP\TAURSCRIBE\SRC-TAURI\TARGET\DEBUG\BUILD\WHISPER-RS-SYS-08254DAFA9F358B6\OUT\BUILD\GGML\SRC\GGML-VULKAN\VULKAN-SHADERS-GEN-PREFIX\SRC\VULKAN-SHADERS-GEN-STAMP\RELEASE\VULKAN-SHADERS-GEN-INSTALL' which is produced by the build of 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\c6829fb554361b615796fe6f2ba7fe10\vulkan-shaders-gen-install.rule'. The items cannot be built in parallel."
+           "The build of 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\f24b24ca84670a0c6af2f53a11baa841\vulkan-shaders-gen.rule' depends on 'C:\USERS\ABDUL\ONEDRIVE\DESKTOP\TAURSCRIBE\SRC-TAURI\TARGET\DEBUG\BUILD\WHISPER-RS-SYS-08254DAFA9F358B6\OUT\BUILD\GGML\SRC\GGML-VULKAN\CMAKEFILES\RELEASE\VULKAN-SHADERS-GEN-COMPLETE' which is produced by the build of 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\d97482a3de8d0bbbb7b15c9154b16c2f\vulkan-shaders-gen-complete.rule'. The items cannot be built in parallel."
+           1>Performing configure step for 'vulkan-shaders-gen'
+           -- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.26200.
+           -- The C compiler identification is unknown
+           -- The CXX compiler identification is unknown
+           CMake Error at CMakeLists.txt:2 (project):
+             No CMAKE_C_COMPILER could be found.
+           
+           
+           
+           CMake Error at CMakeLists.txt:2 (project):
+             No CMAKE_CXX_COMPILER could be found.
+           
+           
+           
+           -- Configuring incomplete, errors occurred!
+           The system cannot find the batch label specified - VCEnd
+       4>C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\Microsoft.CppCommon.targets(237,5): error MSB8066: Custom build for 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\c6829fb554361b615796fe6f2ba7fe10\vulkan-shaders-gen-configure.rule' exited with code 1. [C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen.vcxproj]
+       4>Done Building Project "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen.vcxproj" (default targets) -- FAILED.
+       3>Done Building Project "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ALL_BUILD.vcxproj" (default targets) -- FAILED.
+       1>Done Building Project "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\install.vcxproj" (default targets) -- FAILED.
+
+  Build FAILED.
+
+         "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\install.vcxproj" (default target) (1) ->
+         "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ALL_BUILD.vcxproj" (default target) (3) ->
+         "C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen.vcxproj" (default target) (4) ->
+         (CustomBuild target) -> 
+           C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Microsoft\VC\v170\Microsoft.CppCommon.targets(237,5): error MSB8066: Custom build for 'C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\CMakeFiles\c6829fb554361b615796fe6f2ba7fe10\vulkan-shaders-gen-configure.rule' exited with code 1. [C:\Users\abdul\OneDrive\Desktop\Taurscribe\src-tauri\target\debug\build\whisper-rs-sys-08254dafa9f358b6\out\build\ggml\src\ggml-vulkan\vulkan-shaders-gen.vcxproj]
+
+      0 Warning(s)
+      1 Error(s)
+
+  Time Elapsed 00:00:02.74
+
+
+  --- stderr
+  running: "cmake" "-Wdev" "--debug-output" "C:\\Users\\abdul\\OneDrive\\Desktop\\Taurscribe\\src-tauri\\target\\debug\\build\\whisper-rs-sys-08254dafa9f358b6\\out\\whisper.cpp" "-B" "C:\\Users\\abdul\\OneDrive\\Desktop\\Taurscribe\\src-tauri\\target\\debug\\build\\whisper-rs-sys-08254dafa9f358b6\\out\\build" "-G" "Visual Studio 17 2022" "-Thost=x64" "-Ax64" "-DBUILD_SHARED_LIBS=OFF" "-DWHISPER_ALL_WARNINGS=OFF" "-DWHISPER_ALL_WARNINGS_3RD_PARTY=OFF" "-DWHISPER_BUILD_TESTS=OFF" "-DWHISPER_BUILD_EXAMPLES=OFF" "-DGGML_CUDA=ON" "-DCMAKE_POSITION_INDEPENDENT_CODE=ON" "-DCMAKE_CUDA_FLAGS=-Xcompiler=-fPIC" "-DGGML_VULKAN=ON" "-DGGML_METAL=OFF" "-DCMAKE_BUILD_TYPE=Release" "-DGGML_OPENMP=OFF" "-DCMAKE_INSTALL_PREFIX=C:\\Users\\abdul\\OneDrive\\Desktop\\Taurscribe\\src-tauri\\target\\debug\\build\\whisper-rs-sys-08254dafa9f358b6\\out" "-DCMAKE_C_FLAGS= -nologo -MD -Brepro -W0 -MD" "-DCMAKE_C_FLAGS_RELEASE= -nologo -MD -Brepro -W0 -MD" "-DCMAKE_CXX_FLAGS= /utf-8 -nologo -MD -Brepro -W0 -MD" "-DCMAKE_CXX_FLAGS_RELEASE= /utf-8 -nologo -MD -Brepro -W0 -MD" "-DCMAKE_ASM_FLAGS= -nologo -MD -Brepro -W0 -MD" "-DCMAKE_ASM_FLAGS_RELEASE= -nologo -MD -Brepro -W0 -MD" "-DCMAKE_VERBOSE_MAKEFILE:BOOL=ON"
+  CMake Deprecation Warning at CMakeLists.txt:1 (cmake_minimum_required):
+    Compatibility with CMake < 3.10 will be removed from a future version of
+    CMake.
+
+    Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+    to tell CMake that the project requires at least <min> but has been updated
+    to work with policies introduced by <max> or earlier.
+
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/CMakeLists.txt
+     Entering             C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/CMakeLists.txt
+     Entering             C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/CMakeLists.txt
+     Entering             C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cpu
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+     Returning to         C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+     Entering             C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+     Returning to         C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+     Entering             C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+     Returning to         C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src
+     Called from: [2]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+                  [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+     Returning to         C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/CMakeLists.txt
+     Returning to         C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/CMakeLists.txt
+     Entering             C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/CMakeLists.txt
+     Returning to         C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/CMakeLists.txt
+  CMake Warning (dev) in ggml/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Threads::Threads" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart_static_deps"
+    selected configuration "(none)", but would select configuration "DEBUG"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Threads::Threads" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Threads::Threads" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Threads::Threads" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart_static_deps"
+    selected configuration "(none)", but would select configuration "RELEASE"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart_static_deps"
+    selected configuration "(none)", but would select configuration
+    "MINSIZEREL" under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart_static_deps"
+    selected configuration "(none)", but would select configuration
+    "RELWITHDEBINFO" under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+  CMake Warning (dev) in CMakeLists.txt:
+    Policy CMP0082 is not set: Install rules from add_subdirectory() are
+    interleaved with those in caller.  Run "cmake --help-policy CMP0082" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:196 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:196 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:196 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:196 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-cpu/CMakeLists.txt:22 (ggml_add_backend_library)
+    ggml/src/CMakeLists.txt:409 (ggml_add_cpu_backend_variant_impl)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-cpu/CMakeLists.txt:22 (ggml_add_backend_library)
+    ggml/src/CMakeLists.txt:409 (ggml_add_cpu_backend_variant_impl)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-cpu/CMakeLists.txt:22 (ggml_add_backend_library)
+    ggml/src/CMakeLists.txt:409 (ggml_add_cpu_backend_variant_impl)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-cpu/CMakeLists.txt:22 (ggml_add_backend_library)
+    ggml/src/CMakeLists.txt:409 (ggml_add_cpu_backend_variant_impl)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:224 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:224 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:224 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:224 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-cuda/CMakeLists.txt:69 (ggml_add_backend_library)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-cuda/CMakeLists.txt:69 (ggml_add_backend_library)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-cuda/CMakeLists.txt:69 (ggml_add_backend_library)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-cuda/CMakeLists.txt:69 (ggml_add_backend_library)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-cuda/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-vulkan/CMakeLists.txt:57 (ggml_add_backend_library)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-vulkan/CMakeLists.txt:57 (ggml_add_backend_library)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-vulkan/CMakeLists.txt:57 (ggml_add_backend_library)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  CMake Warning (dev) at ggml/src/CMakeLists.txt:259 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  Call Stack (most recent call first):
+    ggml/src/ggml-vulkan/CMakeLists.txt:57 (ggml_add_backend_library)
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/ggml/src/ggml-vulkan/CMakeLists.txt
+  CMake Warning (dev) in src/CMakeLists.txt:
+    Policy CMP0128 is not set: Selection of language standard and extension
+    flags improved.  Run "cmake --help-policy CMP0128" for policy details.  Use
+    the cmake_policy command to set the policy and suppress this warning.
+
+    For compatibility with older versions of CMake, compiler extensions won't
+    be enabled.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in src/CMakeLists.txt:
+    Policy CMP0128 is not set: Selection of language standard and extension
+    flags improved.  Run "cmake --help-policy CMP0128" for policy details.  Use
+    the cmake_policy command to set the policy and suppress this warning.
+
+    For compatibility with older versions of CMake, compiler extensions won't
+    be enabled.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in src/CMakeLists.txt:
+    Policy CMP0128 is not set: Selection of language standard and extension
+    flags improved.  Run "cmake --help-policy CMP0128" for policy details.  Use
+    the cmake_policy command to set the policy and suppress this warning.
+
+    For compatibility with older versions of CMake, compiler extensions won't
+    be enabled.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in src/CMakeLists.txt:
+    Policy CMP0128 is not set: Selection of language standard and extension
+    flags improved.  Run "cmake --help-policy CMP0128" for policy details.  Use
+    the cmake_policy command to set the policy and suppress this warning.
+
+    For compatibility with older versions of CMake, compiler extensions won't
+    be enabled.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) at src/CMakeLists.txt:105 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "DEBUG" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) at src/CMakeLists.txt:105 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "RELEASE" under the
+    NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) at src/CMakeLists.txt:105 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "MINSIZEREL" under
+    the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) at src/CMakeLists.txt:105 (add_library):
+    Policy CMP0156 is not set: De-duplicate libraries on link lines based on
+    linker capabilities.  Run "cmake --help-policy CMP0156" for policy details.
+    Use the cmake_policy command to set the policy and suppress this warning.
+
+    Since the policy is not set, legacy libraries de-duplication strategy will
+    be applied.
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cudart" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublas" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cublasLt" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-cuda/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "CUDA::cuda_driver" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  CMake Warning (dev) in ggml/src/ggml-vulkan/CMakeLists.txt:
+    Policy CMP0200 is not set: Location and configuration selection for
+    imported targets is more consistent.  Run "cmake --help-policy CMP0200" for
+    policy details.  Use the cmake_policy command to set the policy and
+    suppress this warning.
+
+    Configuration selection for imported target "Vulkan::Vulkan" selected
+    configuration "(none)", but would select configuration "RELWITHDEBINFO"
+    under the NEW policy.
+
+  This warning is for project developers.  Use -Wno-dev to suppress it.
+
+     Called from: [1]	C:/Users/abdul/OneDrive/Desktop/Taurscribe/src-tauri/target/debug/build/whisper-rs-sys-08254dafa9f358b6/out/whisper.cpp/src/CMakeLists.txt
+  running: "cmake" "--build" "C:\\Users\\abdul\\OneDrive\\Desktop\\Taurscribe\\src-tauri\\target\\debug\\build\\whisper-rs-sys-08254dafa9f358b6\\out\\build" "--target" "install" "--config" "Release" "--parallel" "16"
+
+  thread 'main' (3680) panicked at C:\Users\abdul\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\cmake-0.1.57\src\lib.rs:1132:5:
+
+  command did not execute successfully, got: exit code: 1
+
+  build script failed, must exit now
+  stack backtrace:
+     0: std::panicking::panic_handler
+               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library\std\src\panicking.rs:689
+     1: core::panicking::panic_fmt
+               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library\core\src\panicking.rs:80
+     2: alloc::raw_vec::RawVecInner<A>::reserve::do_reserve_and_handle
+     3: alloc::fmt::format
+     4: cmake::Config::build
+     5: build_script_build::main
+     6: std::rt::lang_start::{{closure}}
+     7: std::rt::lang_start::{{closure}}
+     8: std::rt::lang_start_internal::closure$0
+               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library\std\src\rt.rs:175
+     9: std::panicking::catch_unwind::do_call
+               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library\std\src\panicking.rs:581
+    10: std::panicking::catch_unwind
+               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library\std\src\panicking.rs:544
+    11: std::panic::catch_unwind
+               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library\std\src\panic.rs:359
+    12: std::rt::lang_start_internal
+               at /rustc/254b59607d4417e9dffbc307138ae5c86280fe4c/library\std\src\rt.rs:171
+    13: main
+    14: invoke_main
+               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:78
+    15: __scrt_common_main_seh
+               at D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl:288
+    16: BaseThreadInitThunk
+    17: RtlUserThreadStart
+  note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+error: script "dev" exited with code 255
+error: script "tauri" exited with code 101
