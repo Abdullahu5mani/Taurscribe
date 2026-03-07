@@ -150,6 +150,7 @@ pub fn run() {
             commands::set_hotkey,
             commands::list_input_devices,
             commands::get_input_device,
+            commands::get_active_input_device,
             commands::set_input_device,
             commands::show_overlay,
             commands::hide_overlay,
