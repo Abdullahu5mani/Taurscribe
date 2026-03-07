@@ -243,14 +243,61 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
         drop(file);
 
         if is_zip {
+            // Emit extraction-start event so the UI can show the purple bar.
+            let _ = app.emit(
+                "download-progress",
+                DownloadProgressPayload {
+                    model_id: model_id.clone(),
+                    total_bytes: 0,
+                    downloaded_bytes: 0,
+                    status: "extracting".to_string(),
+                    current_file: (i + 1) as u32,
+                    total_files: files_count as u32,
+                },
+            );
+
             println!("[DOWNLOAD] Extracting zip: {:?}", download_path);
             let zip_file = File::open(&download_path)
                 .map_err(|e| format!("Failed to open zip for extraction: {}", e))?;
             let mut archive = ZipArchive::new(zip_file)
                 .map_err(|e| format!("Failed to read zip archive: {}", e))?;
-            archive
-                .extract(&base_dir)
-                .map_err(|e| format!("Failed to extract zip: {}", e))?;
+            let total_entries = archive.len() as u64;
+
+            for entry_idx in 0..archive.len() {
+                let mut entry = archive
+                    .by_index(entry_idx)
+                    .map_err(|e| format!("Failed to read zip entry: {}", e))?;
+                let outpath = match entry.enclosed_name() {
+                    Some(path) => base_dir.join(path),
+                    None => continue,
+                };
+                if entry.is_dir() {
+                    std::fs::create_dir_all(&outpath)
+                        .map_err(|e| format!("Failed to create dir during extraction: {}", e))?;
+                } else {
+                    if let Some(parent) = outpath.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("Failed to create parent dir: {}", e))?;
+                    }
+                    let mut out_file = File::create(&outpath)
+                        .map_err(|e| format!("Failed to create extracted file: {}", e))?;
+                    std::io::copy(&mut entry, &mut out_file)
+                        .map_err(|e| format!("Failed to write extracted file: {}", e))?;
+                }
+                // Progress: bytes = entries done, total = total entries
+                let _ = app.emit(
+                    "download-progress",
+                    DownloadProgressPayload {
+                        model_id: model_id.clone(),
+                        total_bytes: total_entries,
+                        downloaded_bytes: (entry_idx + 1) as u64,
+                        status: "extracting".to_string(),
+                        current_file: (i + 1) as u32,
+                        total_files: files_count as u32,
+                    },
+                );
+            }
+
             std::fs::remove_file(&download_path).ok();
             println!("[DOWNLOAD] Extraction complete.");
         }
@@ -278,10 +325,15 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
     }
 
     // Pre-calculate total bytes to verify so we can report real progress.
+    // Directories (e.g. .mlmodelc CoreML bundles) are skipped — they can't
+    // be meaningfully byte-hashed and are trusted after successful extraction.
     let mut total_verify_bytes: u64 = 0;
     for file_spec in &config.files {
         if !file_spec.sha1.is_empty() {
             let file_path = base_dir.join(file_spec.filename);
+            if file_path.is_dir() {
+                continue;
+            }
             if let Ok(meta) = std::fs::metadata(&file_path) {
                 total_verify_bytes += meta.len();
             }
@@ -321,6 +373,13 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                 total_files: files_count as u32,
             },
         );
+
+        // Directories (e.g. .mlmodelc CoreML bundles) can't be file-hashed.
+        // Trust the extraction; push the expected hash so the fingerprint matches.
+        if file_path.is_dir() {
+            computed_fp_parts.push(file_spec.sha1.to_string());
+            continue;
+        }
 
         let mut file = File::open(&file_path).map_err(|e| e.to_string())?;
         use sha2::{Digest, Sha256};

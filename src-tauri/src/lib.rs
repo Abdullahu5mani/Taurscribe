@@ -162,6 +162,7 @@ pub fn run() {
             commands::get_download_status,
             commands::delete_model,
             commands::get_platform,
+            commands::is_apple_silicon,
             commands::get_hotkey,
             commands::set_hotkey,
             commands::list_input_devices,

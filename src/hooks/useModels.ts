@@ -6,6 +6,7 @@ export interface ModelInfo {
     display_name: string;
     file_name: string;
     size_mb: number;
+    has_coreml: boolean;
 }
 
 export interface ParakeetModelInfo {

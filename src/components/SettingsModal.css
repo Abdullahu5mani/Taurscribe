@@ -718,6 +718,29 @@
   line-height: 1.5;
 }
 
+/* CoreML inline header (inside the Whisper group, above .bin rows) */
+.coreml-inline-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 6px;
+}
+
+.settings-section-subtitle {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #a855f7;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: 'Martian Mono', monospace;
+}
+
+.coreml-divider {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin: 14px 0;
+}
+
 /* Whisper tier tabs */
 .tier-tabs {
   display: flex;
