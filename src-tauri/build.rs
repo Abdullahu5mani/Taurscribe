@@ -12,6 +12,10 @@ fn main() {
         
         // Also set CMAKE_OSX_DEPLOYMENT_TARGET for CMake-based dependencies (whisper-rs-sys)
         std::env::set_var("CMAKE_OSX_DEPLOYMENT_TARGET", "13.4");
+
+        // Link AVFoundation so the ObjC runtime can resolve AVCaptureDevice
+        // (used by check_microphone_permission to query mic authorization status).
+        println!("cargo:rustc-link-lib=framework=AVFoundation");
     }
 
     // CUSTOM: Force Clang for ARM64 Windows (whisper.cpp requirement)
