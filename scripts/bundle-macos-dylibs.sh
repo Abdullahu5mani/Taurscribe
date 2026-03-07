@@ -85,8 +85,21 @@ fi
 mkdir -p "$DYLIB_DIR"
 rm -f "$DYLIB_DIR"/*.dylib 2>/dev/null || true
 
+# Build search-path flags for dylibbundler.
+# llama-cpp-sys-2 builds libllama, libggml-base, libggml-cpu, libggml-metal etc.
+# as dynamic libraries. The hash in the build dir changes every build, so we
+# locate it dynamically and pass -s to dylibbundler so it doesn't prompt
+# interactively (which hangs CI).
+SEARCH_FLAGS=""
+LLAMA_LIB_DIR=$(find "$TARGET_DIR" -path "*/build/llama-cpp-sys-2-*/out/lib" -type d 2>/dev/null | head -1)
+if [ -n "$LLAMA_LIB_DIR" ]; then
+  echo "bundle-macos-dylibs: Found llama dylibs at $LLAMA_LIB_DIR"
+  SEARCH_FLAGS="-s $LLAMA_LIB_DIR"
+fi
+
 # -od: use @executable_path; -b: bundle (copy) deps; -x: binary; -d: output dir; -p: rpath prefix
-dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks"
+# -s: additional search path for dylibs that aren't in standard locations
+dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks" $SEARCH_FLAGS
 
 # Generate tauri.macos.conf.json with framework paths (Tauri validates these at build time;
 # we create this file here so it only exists when dylibs exist, avoiding "Library not found").
