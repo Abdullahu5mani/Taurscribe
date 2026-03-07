@@ -1,4 +1,6 @@
 
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { IconBolt, IconCpu, IconVolumeHigh, IconVolumeLow, IconVolumeMuted } from "./Icons";
 
 interface QuickSettingsProps {
@@ -81,6 +83,12 @@ export function QuickSettings({
     dictionaryCount, snippetsCount,
     onOpenSettingsTab,
 }: QuickSettingsProps) {
+    // macOS fix: Detect platform to hide the GPU/CPU backend toggle which
+    // is irrelevant on macOS (Apple Silicon uses Metal automatically).
+    const [platform, setPlatform] = useState('');
+    useEffect(() => { invoke<string>('get_platform').then(setPlatform).catch(() => {}); }, []);
+    const isMac = platform === 'macos';
+
     const llmHint =
         llmStatus === "Not Downloaded" ? "not downloaded" :
             llmStatus === "Loading..." ? "loading…" :
@@ -144,19 +152,25 @@ export function QuickSettings({
                 </Row>
 
                 {/* ── Hardware ────────────────────────────────── */}
-                <Section label="LLM Backend" />
-                <div className="qs-backend-row">
-                    <button
-                        type="button"
-                        className={`qs-backend-btn${llmBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
-                        onClick={() => setLlmBackend("gpu")}
-                    ><IconBolt size={12} style={{ color: '#facc15' }} /> GPU</button>
-                    <button
-                        type="button"
-                        className={`qs-backend-btn${llmBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
-                        onClick={() => setLlmBackend("cpu")}
-                    ><IconCpu size={12} /> CPU</button>
-                </div>
+                {/* macOS fix: Hide the LLM GPU/CPU backend toggle on macOS —
+                    Apple Silicon uses Metal automatically, no user choice needed. */}
+                {!isMac && (
+                  <>
+                    <Section label="LLM Backend" />
+                    <div className="qs-backend-row">
+                        <button
+                            type="button"
+                            className={`qs-backend-btn${llmBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
+                            onClick={() => setLlmBackend("gpu")}
+                        ><IconBolt size={12} style={{ color: '#facc15' }} /> GPU</button>
+                        <button
+                            type="button"
+                            className={`qs-backend-btn${llmBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
+                            onClick={() => setLlmBackend("cpu")}
+                        ><IconCpu size={12} /> CPU</button>
+                    </div>
+                  </>
+                )}
 
                 {/* ── Sound ───────────────────────────────────── */}
                 <Section label="Sound" />

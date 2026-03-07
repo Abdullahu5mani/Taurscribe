@@ -68,9 +68,9 @@ export function SetupWizard({ onComplete }: Props) {
   const renderStep = (idx: number) => {
     switch (idx) {
       case 0: return <StepWelcome onNext={next} />;
-      case 1: return <StepHardware sysInfo={sysInfo} onNext={next} onBack={back} />;
+      case 1: return <StepHardware sysInfo={sysInfo} platform={platform} onNext={next} onBack={back} />;
       case 2: return <StepEngines onNext={next} onBack={back} platform={platform} />;
-      case 3: return <StepHotkey onNext={next} onBack={back} />;
+      case 3: return <StepHotkey onNext={next} onBack={back} platform={platform} />;
       case 4: return <StepReady onComplete={onComplete} />;
       default: return null;
     }
@@ -147,14 +147,19 @@ function StepWelcome({ onNext }: { onNext: () => void }) {
 // ─────────────────────────────────────────────────────────────────
 function StepHardware({
   sysInfo,
+  platform,
   onNext,
   onBack,
 }: {
   sysInfo: SystemInfo | null;
+  platform: string;
   onNext: () => void;
   onBack: () => void;
 }) {
   const loading = sysInfo === null;
+  // macOS fix: On Apple Silicon, memory is unified (shared between CPU and GPU).
+  // Show "Unified Memory" instead of a separate VRAM row.
+  const isMac = platform === 'macos';
   const ramOk = (sysInfo?.ram_total_gb ?? 0) >= 8;
   const hasGpu = sysInfo?.gpu_name && sysInfo.gpu_name !== 'Unknown';
 
@@ -196,13 +201,21 @@ function StepHardware({
             </span>
             <span className={`hw-status ${hasGpu ? 'hw-status--ok' : 'hw-status--warn'}`} />
           </div>
-          {sysInfo!.vram_gb !== null && (
+          {/* macOS fix: Apple Silicon has unified memory shared between CPU
+              and GPU, so show a single "Unified" row instead of separate VRAM. */}
+          {isMac ? (
+            <div className="hw-row">
+              <span className="hw-label">Memory</span>
+              <span className="hw-value">{sysInfo!.ram_total_gb.toFixed(1)} GB Unified</span>
+              <span className="hw-status hw-status--ok" />
+            </div>
+          ) : sysInfo!.vram_gb !== null ? (
             <div className="hw-row">
               <span className="hw-label">VRAM</span>
               <span className="hw-value">{sysInfo!.vram_gb!.toFixed(1)} GB</span>
               <span className="hw-status hw-status--ok" />
             </div>
-          )}
+          ) : null}
           <div className="hw-row">
             <span className="hw-label">AI</span>
             <span className="hw-value">{sysInfo!.backend_hint}</span>
@@ -282,7 +295,13 @@ function StepEngines({ onNext, onBack, platform }: { onNext: () => void; onBack:
 // ─────────────────────────────────────────────────────────────────
 // STEP 3 — HOTKEY
 // ─────────────────────────────────────────────────────────────────
-function StepHotkey({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+function StepHotkey({ onNext, onBack, platform }: { onNext: () => void; onBack: () => void; platform: string }) {
+  // macOS default: Ctrl + Option (Cmd is intercepted by the OS)
+  // Windows/Linux default: Ctrl + Win/Super
+  const isMac = platform === 'macos';
+  const modifierLabel = isMac ? 'Option' : 'Win';
+  const comboLabel = `Ctrl + ${modifierLabel}`;
+
   return (
     <>
       <p className="setup-eyebrow">Step 4 of 5</p>
@@ -292,15 +311,15 @@ function StepHotkey({ onNext, onBack }: { onNext: () => void; onBack: () => void
       <div className="hotkey-keys">
         <div className="hotkey-key">Ctrl</div>
         <div className="hotkey-plus">+</div>
-        <div className="hotkey-key">Win</div>
+        <div className="hotkey-key">{modifierLabel}</div>
       </div>
 
       <div className="hotkey-steps">
         {[
           'Focus any text field in any app',
-          'Press Ctrl + Win to start recording',
+          `Press ${comboLabel} to start recording`,
           'Speak naturally',
-          'Press Ctrl + Win again to stop',
+          `Press ${comboLabel} again to stop`,
           'Text appears at your cursor instantly',
         ].map((text, i) => (
           <div className="hotkey-step" key={i}>

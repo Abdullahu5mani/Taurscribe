@@ -8,10 +8,16 @@ use std::sync::{Arc, Mutex};
 
 /// The Global "Brain" of the application.
 /// This struct holds all the data that needs to live as long as the app runs.
+///
+/// macOS fix: Fields that were previously plain `Mutex<T>` are now wrapped in
+/// `Arc<Mutex<T>>` so they can be `.clone()`'d into `spawn_blocking` closures.
+/// Tauri 2 runs synchronous commands on the macOS AppKit main thread, so all
+/// heavy work must be offloaded to background threads via async + spawn_blocking.
+/// Arc wrapping enables moving owned handles into those closures.
 pub struct AudioState {
-    // Holds the active recording stream. If None, we are not recording.
-    // Use Mutex because we need to change it (start/stop) safely.
-    pub recording_handle: Mutex<Option<RecordingHandle>>,
+    // macOS fix: Arc-wrapped so it can be cloned into spawn_blocking closures
+    // in start_recording / stop_recording async commands.
+    pub recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
 
     // The Whisper AI engine. Wrapped in Arc<Mutex<>> so it can be shared and used by multiple threads.
     pub whisper: Arc<Mutex<WhisperManager>>,
@@ -22,14 +28,14 @@ pub struct AudioState {
     // The Voice Activity Detector. Also shared.
     pub vad: Arc<Mutex<VADManager>>,
 
-    // Remembers where we saved the last WAV file so we can process it when recording stops.
-    pub last_recording_path: Mutex<Option<String>>,
+    // macOS fix: Arc-wrapped so async commands can clone it into spawn_blocking.
+    pub last_recording_path: Arc<Mutex<Option<String>>>,
 
-    // Keeps track of whether we are Ready, Recording, or Processing.
-    pub current_app_state: Mutex<AppState>,
+    // macOS fix: Arc-wrapped for async command access.
+    pub current_app_state: Arc<Mutex<AppState>>,
 
-    // Which ASR engine is currently active?
-    pub active_engine: Mutex<ASREngine>,
+    // macOS fix: Arc-wrapped for async command access.
+    pub active_engine: Arc<Mutex<ASREngine>>,
 
     // Accumulates the full transcript during a recording session (for Parakeet streaming reuse)
     pub session_transcript: Arc<Mutex<String>>,
@@ -41,8 +47,8 @@ pub struct AudioState {
     // Shared with the hotkey listener thread so changes take effect immediately.
     pub hotkey_config: Arc<Mutex<HotkeyBinding>>,
 
-    // The name of the preferred input device. None means use the system default.
-    pub selected_input_device: Mutex<Option<String>>,
+    // macOS fix: Arc-wrapped for async command access.
+    pub selected_input_device: Arc<Mutex<Option<String>>>,
 
     // RNNoise denoiser (created fresh per recording session, None when idle)
     pub denoiser: Arc<Mutex<Option<Denoiser>>>,
@@ -51,17 +57,17 @@ pub struct AudioState {
 impl AudioState {
     pub fn new(whisper: WhisperManager, parakeet: ParakeetManager, vad: VADManager) -> Self {
         Self {
-            recording_handle: Mutex::new(None),
+            recording_handle: Arc::new(Mutex::new(None)),
             whisper: Arc::new(Mutex::new(whisper)),
             parakeet: Arc::new(Mutex::new(parakeet)),
             vad: Arc::new(Mutex::new(vad)),
-            last_recording_path: Mutex::new(None),
-            current_app_state: Mutex::new(AppState::Ready),
-            active_engine: Mutex::new(ASREngine::Whisper),
+            last_recording_path: Arc::new(Mutex::new(None)),
+            current_app_state: Arc::new(Mutex::new(AppState::Ready)),
+            active_engine: Arc::new(Mutex::new(ASREngine::Whisper)),
             session_transcript: Arc::new(Mutex::new(String::new())),
             llm: Arc::new(Mutex::new(None)),
             hotkey_config: Arc::new(Mutex::new(HotkeyBinding::default())),
-            selected_input_device: Mutex::new(None),
+            selected_input_device: Arc::new(Mutex::new(None)),
             denoiser: Arc::new(Mutex::new(None)),
         }
     }

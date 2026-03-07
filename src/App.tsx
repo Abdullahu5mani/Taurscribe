@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
@@ -177,6 +177,28 @@ function App() {
   const [showSetupWizard, setShowSetupWizard] = useState<boolean | null>(null);
   /** Incremented after each successful save_transcript_history; tells TranscriptFeed to reload. */
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+
+  // macOS fix: Detect the runtime platform so we can hide/adjust UI elements
+  // that don't apply on macOS (e.g. GPU/CPU toggle, VRAM display).
+  const [platform, setPlatform] = useState('');
+  // macOS fix: Tracks whether macOS Accessibility/Input Monitoring permission
+  // is missing. The Rust backend emits an "accessibility-missing" event on
+  // launch if AXIsProcessTrustedWithOptions returns false — without it,
+  // rdev's global hotkey listener silently receives zero key events.
+  const [accessibilityMissing, setAccessibilityMissing] = useState(false);
+  // macOS fix: Track microphone permission so we can show a banner when denied.
+  const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'undetermined' | null>(null);
+  useEffect(() => { invoke<string>('get_platform').then(setPlatform).catch(() => {}); }, []);
+  const isMac = platform === 'macos';
+
+  // macOS fix: Check microphone permission on launch so the user sees a
+  // prompt before attempting to record.
+  useEffect(() => {
+    if (!isMac) return;
+    invoke<string>('check_microphone_permission')
+      .then((status) => setMicPermission(status as 'granted' | 'denied' | 'undetermined'))
+      .catch(() => {});
+  }, [isMac]);
 
   const [settingsModels, setSettingsModels] = useState<DownloadableModel[]>(MODELS);
 
@@ -556,6 +578,7 @@ function App() {
     let unlistenStart: (() => void) | undefined;
     let unlistenStop: (() => void) | undefined;
     let unlistenChunk: (() => void) | undefined;
+    let unlistenAccessibility: (() => void) | undefined;
     const setup = async () => {
       const unsub1 = await listen("hotkey-start-recording", async () => {
         const now = Date.now();
@@ -602,12 +625,20 @@ function App() {
         // Live chunks not displayed; only final transcript shown
       });
 
+      // macOS fix: Listen for accessibility-missing event from the Rust backend.
+      // Shows a dismissible warning banner prompting the user to grant
+      // Accessibility & Input Monitoring permissions in System Settings.
+      const unsub4 = await listen("accessibility-missing", () => {
+        setAccessibilityMissing(true);
+      });
+
       if (active) {
         unlistenStart = unsub1;
         unlistenStop = unsub2;
         unlistenChunk = unsub3;
+        unlistenAccessibility = unsub4;
       } else {
-        unsub1(); unsub2(); unsub3();
+        unsub1(); unsub2(); unsub3(); unsub4();
       }
     };
 
@@ -617,13 +648,27 @@ function App() {
       if (unlistenStart) unlistenStart();
       if (unlistenStop) unlistenStop();
       if (unlistenChunk) unlistenChunk();
+      if (unlistenAccessibility) unlistenAccessibility();
     };
   }, []);
 
   // --- Ticker ---
+  // macOS fix: Filter ticker phrases to remove "CUDA" from the scrolling
+  // ticker on macOS, since CUDA is not available on Apple Silicon.
+  const filteredTickerPhrases = useMemo(() => {
+    if (!isMac) return TICKER_PHRASES;
+    return TICKER_PHRASES.map(phrase => {
+      const flat = phrase.parts.map(p => p.text).join('');
+      if (flat === 'CUDA · CPU · Metal · flexible backends') {
+        return { parts: [{ text: 'Metal · CPU · flexible backends' }] };
+      }
+      return phrase;
+    });
+  }, [isMac]);
+
   const tickerContent = (
     <>
-      {TICKER_PHRASES.flatMap((phrase, i) => [
+      {filteredTickerPhrases.flatMap((phrase, i) => [
         i > 0 ? <span key={`sep-${i}`} className="ticker-sep"> — </span> : null,
         <span key={i} className="header-ticker-phrase">
           {phrase.parts.map((p, j) => {
@@ -726,19 +771,70 @@ function App() {
             </div>
             <div className="hardware-bar">
               <span>Hardware: <span>{backendInfo}</span></span>
-              <div className="backend-toggle-inline">
-                <button
-                  className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
-                  onClick={() => handleToggleAsrBackend('gpu')}
-                  disabled={isLoading}
-                ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
-                <button
-                  className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
-                  onClick={() => handleToggleAsrBackend('cpu')}
-                  disabled={isLoading}
-                ><IconCpu size={11} /> CPU</button>
-              </div>
+              {/* macOS fix: Hide the GPU/CPU toggle on macOS — Apple Silicon uses
+                  Metal automatically and there is no discrete GPU to switch. */}
+              {!isMac && (
+                <div className="backend-toggle-inline">
+                  <button
+                    className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
+                    onClick={() => handleToggleAsrBackend('gpu')}
+                    disabled={isLoading}
+                  ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
+                  <button
+                    className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
+                    onClick={() => handleToggleAsrBackend('cpu')}
+                    disabled={isLoading}
+                  ><IconCpu size={11} /> CPU</button>
+                </div>
+              )}
             </div>
+
+            {/* macOS fix: Show a warning banner when Accessibility permission
+                is not granted. Without it, the global hotkey listener (rdev)
+                silently fails to receive any key events. */}
+            {accessibilityMissing && (
+              <div className="accessibility-banner">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                <span>Hotkeys disabled — grant <strong>Accessibility</strong> &amp; <strong>Input Monitoring</strong> permission in System Settings → Privacy &amp; Security, then restart the app.</span>
+                <button type="button" className="accessibility-banner-dismiss" onClick={() => setAccessibilityMissing(false)} aria-label="Dismiss">✕</button>
+              </div>
+            )}
+
+            {/* macOS fix: Show a banner when microphone permission is not granted.
+                "undetermined" → prompt the user to grant access (triggers the OS dialog).
+                "denied" → direct the user to System Settings. */}
+            {isMac && micPermission && micPermission !== 'granted' && (
+              <div className="mic-banner">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="23" />
+                  <line x1="8" y1="23" x2="16" y2="23" />
+                </svg>
+                {micPermission === 'undetermined' ? (
+                  <span>
+                    Microphone access is required for recording.{' '}
+                    <button
+                      type="button"
+                      className="mic-banner-action"
+                      onClick={async () => {
+                        const status = await invoke<string>('request_microphone_permission');
+                        setMicPermission(status as 'granted' | 'denied' | 'undetermined');
+                      }}
+                    >
+                      Grant Access
+                    </button>
+                  </span>
+                ) : (
+                  <span>Microphone access denied — open <strong>System Settings → Privacy &amp; Security → Microphone</strong> and enable Taurscribe, then restart the app.</span>
+                )}
+                <button type="button" className="mic-banner-dismiss" onClick={() => setMicPermission(null)} aria-label="Dismiss">✕</button>
+              </div>
+            )}
           </div>
 
           <div className="status-bar-container">
@@ -876,7 +972,9 @@ function App() {
                       }}
                     />
                     <span className="llm-name">FlowScribe Qwen 2.5 0.5B</span>
-                    {llmStatus === 'Loaded' && (
+                    {/* macOS fix: Hide the GPU/CPU backend badge on macOS since
+                        there is no GPU/CPU choice — Metal is used automatically. */}
+                    {llmStatus === 'Loaded' && !isMac && (
                       <span className={`llm-backend-badge llm-backend-badge--${llmBackend}`}>
                         {llmBackend === 'gpu' ? <><IconBolt size={10} style={{ color: '#facc15' }} /> GPU</> : <><IconCpu size={10} /> CPU</>}
                       </span>

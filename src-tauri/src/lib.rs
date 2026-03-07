@@ -154,7 +154,9 @@ pub fn run() {
             commands::show_overlay,
             commands::hide_overlay,
             commands::mute_system_audio,
-            commands::unmute_system_audio
+            commands::unmute_system_audio,
+            commands::check_microphone_permission,
+            commands::request_microphone_permission
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -34,7 +34,7 @@ chrono = "0.4"
 # --- General Dependencies (Required on ALL platforms) ---
 rubato = "0.14"
 dirs = "6.0.0"
-rdev = "0.5"
+rdev = { git = "https://github.com/rustdesk-org/rdev.git" }
 regex = "1.12.2"
 tauri-plugin-store = "2.4.2"
 enigo = "0.6.1"
@@ -104,6 +104,8 @@ llama-cpp-sys-2 = "=0.1.134"
 # macOS Accessibility API for native text insertion (kAXSelectedTextAttribute)
 accessibility-sys = "0.1"
 core-foundation = "0.9"
+# CGEvent-based key simulation (thread-safe, unlike enigo's TSM calls)
+core-graphics = "0.23"
 # 3. Windows (x86_64) -> CUDA + DirectML + TensorRT
 # CUDA: NVIDIA GPU acceleration (primary)
 # DirectML: Universal Windows GPU acceleration (AMD/Intel fallback)
