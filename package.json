@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:macos": "bun scripts/build-macos.ts",
-    "check": "cd src-tauri && cargo check"
+    "check": "cd src-tauri && cargo check",
+    "reset": "rm -rf ~/Library/Application\\ Support/taurscribe/settings.json ~/Library/Application\\ Support/Taurscribe/transcripts.db && echo 'Settings and history reset.'"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.0",
