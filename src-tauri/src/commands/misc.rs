@@ -86,6 +86,31 @@ pub async fn list_input_devices() -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// Returns the name of the microphone that will actually be used for the next recording.
+/// If the user has selected a specific device, returns that; otherwise returns the system default.
+#[tauri::command]
+pub async fn get_active_input_device(state: tauri::State<'_, crate::state::AudioState>) -> Result<String, String> {
+    let preferred = state.selected_input_device.lock().unwrap().clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let host = cpal::default_host();
+        if let Some(name) = preferred {
+            // Verify the preferred device still exists
+            if let Ok(devices) = host.input_devices() {
+                if devices.into_iter().any(|d| d.name().ok().as_deref() == Some(name.as_str())) {
+                    return Ok(name);
+                }
+            }
+        }
+        // Fall back to system default
+        host.default_input_device()
+            .and_then(|d| d.name().ok())
+            .ok_or_else(|| "No microphone found".to_string())
+    })
+    .await
+    .map_err(|e| format!("{}", e))?
+}
+
 // Simple test command to see if Rust is working
 #[tauri::command]
 pub fn greet(name: &str) -> String {
