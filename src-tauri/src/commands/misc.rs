@@ -206,25 +206,48 @@ pub async fn check_microphone_permission() -> String {
 #[cfg(target_os = "macos")]
 fn check_microphone_permission_blocking() -> String {
     // AVAuthorizationStatus: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
-    // AVMediaType.audio raw value = "soun"
+    // We call [AVCaptureDevice authorizationStatusForMediaType:@"soun"] via objc runtime.
+    use std::ffi::CStr;
+
     extern "C" {
-        // [AVCaptureDevice authorizationStatusForMediaType:]
-        fn AVCaptureDeviceAuthorizationStatusForMediaType(
-            media_type: core_foundation::string::CFStringRef,
-        ) -> i64;
+        fn objc_getClass(name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+        fn sel_registerName(name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+        fn objc_msgSend(receiver: *mut std::ffi::c_void, sel: *mut std::ffi::c_void, ...) -> i64;
     }
 
-    use core_foundation::base::TCFType;
-    use core_foundation::string::CFString;
+    unsafe {
+        let cls = objc_getClass(
+            CStr::from_bytes_with_nul_unchecked(b"AVCaptureDevice\0").as_ptr(),
+        );
+        if cls.is_null() {
+            return "undetermined".to_string();
+        }
+        let sel = sel_registerName(
+            CStr::from_bytes_with_nul_unchecked(b"authorizationStatusForMediaType:\0").as_ptr(),
+        );
 
-    let media_audio = CFString::new("soun");
-    let status =
-        unsafe { AVCaptureDeviceAuthorizationStatusForMediaType(media_audio.as_concrete_TypeRef()) };
+        // AVMediaTypeAudio = @"soun" — create an NSString via stringWithUTF8String:
+        let nsstring_cls = objc_getClass(
+            CStr::from_bytes_with_nul_unchecked(b"NSString\0").as_ptr(),
+        );
+        let string_sel = sel_registerName(
+            CStr::from_bytes_with_nul_unchecked(b"stringWithUTF8String:\0").as_ptr(),
+        );
+        let media_audio: *mut std::ffi::c_void = std::mem::transmute(
+            (std::mem::transmute::<_, extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *const std::ffi::c_char) -> *mut std::ffi::c_void>(
+                objc_msgSend as *const () as *mut std::ffi::c_void
+            ))(nsstring_cls, string_sel, b"soun\0".as_ptr() as *const std::ffi::c_char)
+        );
 
-    match status {
-        3 => "granted".to_string(),
-        2 | 1 => "denied".to_string(),
-        _ => "undetermined".to_string(),
+        let status = (std::mem::transmute::<_, extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void) -> i64>(
+            objc_msgSend as *const () as *mut std::ffi::c_void
+        ))(cls, sel, media_audio);
+
+        match status {
+            3 => "granted".to_string(),
+            2 | 1 => "denied".to_string(),
+            _ => "undetermined".to_string(),
+        }
     }
 }
 
