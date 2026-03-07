@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:macos": "bun scripts/build-macos.ts",
+    "build:windows-portable": "npm run tauri build -- --target x86_64-pc-windows-msvc --config '{\"bundle\":{\"targets\":[\"nsis\"],\"windows\":{\"nsis\":{\"installMode\":\"portable\"}}}}'",
     "check": "cd src-tauri && cargo check",
     "reset": "rm -rf ~/Library/Application\\ Support/taurscribe/settings.json ~/Library/Application\\ Support/Taurscribe/transcripts.db && echo 'Settings and history reset.'"
   },
