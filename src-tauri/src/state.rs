@@ -52,6 +52,11 @@ pub struct AudioState {
 
     // RNNoise denoiser (created fresh per recording session, None when idle)
     pub denoiser: Arc<Mutex<Option<Denoiser>>>,
+
+    // What happens when the user clicks the window close button.
+    // "tray"  → hide to system tray (default)
+    // "quit"  → exit the process
+    pub close_behavior: Arc<Mutex<String>>,
 }
 
 impl AudioState {
@@ -69,6 +74,7 @@ impl AudioState {
             hotkey_config: Arc::new(Mutex::new(HotkeyBinding::default())),
             selected_input_device: Arc::new(Mutex::new(None)),
             denoiser: Arc::new(Mutex::new(None)),
+            close_behavior: Arc::new(Mutex::new("tray".to_string())),
         }
     }
 }

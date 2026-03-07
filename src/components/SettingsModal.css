@@ -1423,3 +1423,59 @@
 .snippet-trigger-input {
   max-width: 200px;
 }
+
+/* ── General tab — close behavior radio cards ──────────────────────── */
+
+.close-behavior-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.close-behavior-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.close-behavior-option:hover {
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.close-behavior-option--active {
+  border-color: rgba(99, 102, 241, 0.55);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.close-behavior-option input[type="radio"] {
+  margin-top: 3px;
+  accent-color: #6366f1;
+  flex-shrink: 0;
+}
+
+.close-behavior-option-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.close-behavior-option-title {
+  font-family: 'Barlow', sans-serif;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: #ededef;
+}
+
+.close-behavior-option-desc {
+  font-size: 0.8rem;
+  color: #6b6b76;
+  line-height: 1.45;
+}
