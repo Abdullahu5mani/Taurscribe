@@ -129,6 +129,15 @@ pub fn get_platform() -> &'static str {
     { "unknown" }
 }
 
+/// Returns true when running on macOS with an Apple Silicon chip (M-series, aarch64).
+#[tauri::command]
+pub fn is_apple_silicon() -> bool {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    { true }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    { false }
+}
+
 #[derive(Serialize)]
 pub struct SystemInfo {
     pub cpu_name: String,

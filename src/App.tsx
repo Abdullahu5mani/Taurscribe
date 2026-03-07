@@ -194,7 +194,11 @@ function App() {
   const [inputDevices, setInputDevices] = useState<string[]>([]);
   // Close-button behavior: 'tray' = hide to tray (default), 'quit' = exit process
   const [closeBehavior, setCloseBehavior] = useState<'tray' | 'quit'>('tray');
-  useEffect(() => { invoke<string>('get_platform').then(setPlatform).catch(() => {}); }, []);
+  const [isAppleSilicon, setIsAppleSilicon] = useState(false);
+  useEffect(() => {
+    invoke<string>('get_platform').then(setPlatform).catch(() => {});
+    invoke<boolean>('is_apple_silicon').then(setIsAppleSilicon).catch(() => {});
+  }, []);
   const isMac = platform === 'macos';
 
   // Fetch the active mic and the full device list on launch (all platforms).
@@ -262,6 +266,32 @@ function App() {
   const onModelDownloaded = useCallback((id: string) => onModelDownloadedRef.current(id), []);
 
   const { downloadProgress, handleDownload } = useDownloads(onModelDownloaded);
+
+  // On Apple Silicon, automatically download the matching CoreML encoder alongside any Whisper model.
+  const WHISPER_TO_COREML: Record<string, string> = {
+    'whisper-tiny-en': 'whisper-tiny-en-coreml',       'whisper-tiny-en-q5_1': 'whisper-tiny-en-coreml',
+    'whisper-tiny': 'whisper-tiny-coreml',              'whisper-tiny-q5_1': 'whisper-tiny-coreml',
+    'whisper-base-en': 'whisper-base-en-coreml',        'whisper-base-en-q5_1': 'whisper-base-en-coreml',
+    'whisper-base': 'whisper-base-coreml',              'whisper-base-q5_1': 'whisper-base-coreml',
+    'whisper-small-en': 'whisper-small-en-coreml',      'whisper-small-en-q5_1': 'whisper-small-en-coreml',
+    'whisper-small': 'whisper-small-coreml',            'whisper-small-q5_1': 'whisper-small-coreml',
+    'whisper-medium-en': 'whisper-medium-en-coreml',    'whisper-medium-en-q5_0': 'whisper-medium-en-coreml',
+    'whisper-medium': 'whisper-medium-coreml',          'whisper-medium-q5_0': 'whisper-medium-coreml',
+    'whisper-large-v3-turbo': 'whisper-large-v3-turbo-coreml', 'whisper-large-v3-turbo-q5_0': 'whisper-large-v3-turbo-coreml',
+    'whisper-large-v3': 'whisper-large-v3-coreml',      'whisper-large-v3-q5_0': 'whisper-large-v3-coreml',
+  };
+  const handleDownloadWithCoreml = (id: string, name: string) => {
+    handleDownload(id, name);
+    if (isAppleSilicon) {
+      const coremlId = WHISPER_TO_COREML[id];
+      if (coremlId) {
+        const coremlModel = settingsModels.find(m => m.id === coremlId);
+        if (coremlModel && !coremlModel.downloaded) {
+          handleDownload(coremlId, coremlModel.name);
+        }
+      }
+    }
+  };
 
   const handleDeleteModel = async (id: string, _name: string) => {
     try {
@@ -984,12 +1014,20 @@ function App() {
                       disabled={isRecording || isLoading || isInitialLoading}
                     >
                       {isInitialLoading && <option value="">Loading models...</option>}
-                      {!isInitialLoading && models.length === 0 && <option value="">No models — open Settings to download</option>}
-                      {models.map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {beautifyModelName(model.display_name)} ({formatSize(model.size_mb)})
+                      {!isInitialLoading && models.filter(m => !downloadProgress['whisper-' + m.id.replace('.', '-')]).length === 0 && (
+                        <option value="">
+                          {Object.keys(downloadProgress).some(k => k.startsWith('whisper-'))
+                            ? 'Downloading model...'
+                            : 'No models — open Settings to download'}
                         </option>
-                      ))}
+                      )}
+                      {models
+                        .filter(m => !downloadProgress['whisper-' + m.id.replace('.', '-')])
+                        .map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {beautifyModelName(model.display_name)} ({formatSize(model.size_mb)}){model.has_coreml ? ' ⚡' : ''}
+                          </option>
+                        ))}
                     </select>
                   </>
                 ) : (
@@ -1195,7 +1233,7 @@ function App() {
             removeSnippet={removeSnippet}
             settingsModels={settingsModels}
             downloadProgress={downloadProgress}
-            onDownload={handleDownload}
+            onDownload={handleDownloadWithCoreml}
             onDelete={handleDeleteModel}
             closeBehavior={closeBehavior}
             setCloseBehavior={setCloseBehavior}

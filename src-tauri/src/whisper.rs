@@ -40,6 +40,7 @@ pub struct ModelInfo {
     pub display_name: String, // Pretty name, e.g., "Tiny English (Q5_1)"
     pub file_name: String,    // Proper filename, e.g., "ggml-tiny.en-q5_1.bin"
     pub size_mb: f32,         // How big it is in Megabytes
+    pub has_coreml: bool,     // Whether a matching CoreML encoder (.mlmodelc) is present
 }
 
 /// The Manager that controls the Whisper AI
@@ -130,12 +131,22 @@ impl WhisperManager {
                         // Create a formatted nice name
                         let display_name = Self::format_model_name(&id);
 
+                        // Check whether a matching CoreML encoder bundle is present.
+                        // Convention: ggml-{stem}-encoder.mlmodelc  (directory)
+                        // Strip any quantization suffix (e.g. "-q5_1", "-q5_0", "-q4_0")
+                        // so that "small.en-q5_1" looks for "ggml-small.en-encoder.mlmodelc",
+                        // not the non-existent "ggml-small.en-q5_1-encoder.mlmodelc".
+                        let base_id = if let Some(pos) = id.find("-q") { &id[..pos] } else { &id };
+                        let encoder_dir_name = format!("ggml-{}-encoder.mlmodelc", base_id);
+                        let has_coreml = models_dir.join(&encoder_dir_name).is_dir();
+
                         // Add to our list
                         models.push(ModelInfo {
                             id,
                             display_name,
                             file_name: file_name.to_string(),
                             size_mb,
+                            has_coreml,
                         });
                     }
                 }

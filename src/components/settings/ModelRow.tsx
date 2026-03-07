@@ -90,6 +90,22 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                             }} />
                         </div>
                     </div>
+                ) : progress?.status === 'extracting' ? (
+                    /* ── Extraction in-progress — purple bar ─────────── */
+                    <div style={{ width: '100%' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: '#a855f7' }}>
+                            <span>Extracting...</span>
+                            <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
+                        </div>
+                        <div style={{ height: '6px', width: '100%', background: 'rgba(168, 85, 247, 0.12)', borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{
+                                height: '100%',
+                                width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%`,
+                                background: 'linear-gradient(90deg, #a855f7, #c084fc)',
+                                transition: 'width 0.1s ease-out',
+                            }} />
+                        </div>
+                    </div>
                 ) : progress && !model.downloaded ? (
                     /* ── Download progress bar ──────────────────────────── */
                     <div style={{ width: '100%' }}>
