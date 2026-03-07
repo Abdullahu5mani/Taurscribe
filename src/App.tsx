@@ -192,6 +192,8 @@ function App() {
   // home view so the user can switch mics without opening Settings.
   const [activeMic, setActiveMic] = useState<string | null>(null);
   const [inputDevices, setInputDevices] = useState<string[]>([]);
+  // Close-button behavior: 'tray' = hide to tray (default), 'quit' = exit process
+  const [closeBehavior, setCloseBehavior] = useState<'tray' | 'quit'>('tray');
   useEffect(() => { invoke<string>('get_platform').then(setPlatform).catch(() => {}); }, []);
   const isMac = platform === 'macos';
 
@@ -456,6 +458,13 @@ function App() {
           const savedDevice = await loadedStore.get<string>("input_device");
           if (savedDevice && !cancelled) {
             invoke("set_input_device", { name: savedDevice }).catch(() => { });
+          }
+
+          // Restore close-button behavior preference.
+          const savedCloseBehavior = await loadedStore.get<'tray' | 'quit'>("close_behavior");
+          if (savedCloseBehavior && !cancelled) {
+            setCloseBehavior(savedCloseBehavior);
+            invoke("set_close_behavior", { behavior: savedCloseBehavior }).catch(() => { });
           }
 
           savedEngine = (await loadedStore.get<"whisper" | "parakeet">("active_engine")) || null;
@@ -1188,6 +1197,8 @@ function App() {
             downloadProgress={downloadProgress}
             onDownload={handleDownload}
             onDelete={handleDeleteModel}
+            closeBehavior={closeBehavior}
+            setCloseBehavior={setCloseBehavior}
           />
         </main>
 

@@ -111,9 +111,22 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
-                println!("[INFO] Window minimized to tray");
+                // Check the user's preferred close behavior (persisted in settings.json
+                // and applied to AudioState at startup via set_close_behavior command).
+                // "tray" (default) → hide to system tray, keep process alive.
+                // "quit"           → exit the process immediately.
+                let behavior = {
+                    let state = window.app_handle().state::<AudioState>();
+                    state.close_behavior.lock().unwrap().clone()
+                };
+                if behavior == "quit" {
+                    println!("[INFO] Window close → quit (close_behavior=quit)");
+                    window.app_handle().exit(0);
+                } else {
+                    let _ = window.hide();
+                    api.prevent_close();
+                    println!("[INFO] Window close → hide to tray (close_behavior=tray)");
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -157,7 +170,9 @@ pub fn run() {
             commands::mute_system_audio,
             commands::unmute_system_audio,
             commands::check_microphone_permission,
-            commands::request_microphone_permission
+            commands::request_microphone_permission,
+            commands::get_close_behavior,
+            commands::set_close_behavior
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

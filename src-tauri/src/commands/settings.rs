@@ -66,6 +66,24 @@ pub fn set_input_device(state: State<AudioState>, name: Option<String>) {
     *state.selected_input_device.lock().unwrap() = name;
 }
 
+/// Return the current close-button behavior ("tray" or "quit")
+#[tauri::command]
+pub fn get_close_behavior(state: State<AudioState>) -> String {
+    state.close_behavior.lock().unwrap().clone()
+}
+
+/// Set the close-button behavior. "tray" hides to tray; "quit" exits the process.
+#[tauri::command]
+pub fn set_close_behavior(state: State<AudioState>, behavior: String) -> Result<(), String> {
+    match behavior.as_str() {
+        "tray" | "quit" => {
+            *state.close_behavior.lock().unwrap() = behavior;
+            Ok(())
+        }
+        _ => Err(format!("Unknown close behavior: {}", behavior)),
+    }
+}
+
 /// Update the system tray icon manually from the frontend
 #[tauri::command]
 pub fn set_tray_state(
