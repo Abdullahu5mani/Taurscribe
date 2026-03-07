@@ -52,7 +52,9 @@
     ],
     "resources": [],
     "macOS": {
-      "minimumSystemVersion": "13.4"
+      "minimumSystemVersion": "13.4",
+      "entitlements": "Entitlements.plist",
+      "infoPlist": "Info.plist"
     }
   }
 }
