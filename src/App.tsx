@@ -188,8 +188,33 @@ function App() {
   const [accessibilityMissing, setAccessibilityMissing] = useState(false);
   // macOS fix: Track microphone permission so we can show a banner when denied.
   const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'undetermined' | null>(null);
+  // Active microphone name and full device list — shown as a dropdown on the
+  // home view so the user can switch mics without opening Settings.
+  const [activeMic, setActiveMic] = useState<string | null>(null);
+  const [inputDevices, setInputDevices] = useState<string[]>([]);
   useEffect(() => { invoke<string>('get_platform').then(setPlatform).catch(() => {}); }, []);
   const isMac = platform === 'macos';
+
+  // Fetch the active mic and the full device list on launch (all platforms).
+  useEffect(() => {
+    invoke<string>('get_active_input_device').then(setActiveMic).catch(() => {});
+    invoke<string[]>('list_input_devices').then(setInputDevices).catch(() => {});
+  }, []);
+
+  // Handle mic selection from the hardware bar dropdown.
+  const handleMicChange = async (name: string) => {
+    const value = name || null; // empty string = system default
+    setActiveMic(name || null);
+    try {
+      await invoke('set_input_device', { name: value });
+      const store = await Store.load('settings.json');
+      if (value) { await store.set('input_device', value); }
+      else { await store.delete('input_device'); }
+      await store.save();
+      // Re-resolve the actual device name (in case "default" mapped to a real name)
+      invoke<string>('get_active_input_device').then(setActiveMic).catch(() => {});
+    } catch (e) { console.error('Failed to set input device:', e); }
+  };
 
   // macOS fix: Check microphone permission on launch so the user sees a
   // prompt before attempting to record.
@@ -789,6 +814,29 @@ function App() {
               )}
             </div>
 
+            {/* Microphone selector — sits right below the hardware bar so the
+                user can see and switch the active mic without opening Settings.
+                The dropdown lists all available input devices; selecting one
+                persists the choice to settings.json and updates the backend. */}
+            <div className="mic-selector-bar">
+              <svg className="mic-selector-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+              <select
+                className="mic-selector-dropdown"
+                value={activeMic ?? ''}
+                onChange={(e) => handleMicChange(e.target.value)}
+              >
+                <option value="">System Default</option>
+                {inputDevices.map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            </div>
+
             {/* macOS fix: Show a warning banner when Accessibility permission
                 is not granted. Without it, the global hotkey listener (rdev)
                 silently fails to receive any key events. */}
@@ -1103,7 +1151,12 @@ function App() {
 
           <SettingsModal
             isOpen={isSettingsOpen}
-            onClose={() => setIsSettingsOpen(false)}
+            onClose={() => {
+              setIsSettingsOpen(false);
+              // Refresh the mic dropdown in case the user changed the device in Settings.
+              invoke<string>('get_active_input_device').then(setActiveMic).catch(() => {});
+              invoke<string[]>('list_input_devices').then(setInputDevices).catch(() => {});
+            }}
             initialTab={settingsInitialTab as Parameters<typeof SettingsModal>[0]['initialTab']}
             enableGrammarLM={enableGrammarLM}
             setEnableGrammarLM={setEnableGrammarLM}
