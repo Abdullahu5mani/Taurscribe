@@ -14,9 +14,10 @@ use whisper_rs::{
 /// Determines which hardware is powering the AI
 #[derive(Debug, Clone)]
 pub enum GpuBackend {
-    Cuda,   // NVIDIA GPUs (Very Fast)
-    Vulkan, // AMD/Intel/Other GPUs (Fast)
-    Cpu,    // Processor (Slow fallback)
+    Cuda,    // NVIDIA GPUs (Very Fast)
+    CoreML,  // macOS Apple Silicon / Neural Engine
+    Vulkan,  // AMD/Intel/Other GPUs (Fast)
+    Cpu,     // Processor (Slow fallback)
 }
 
 // Allow printing the backend name nicely (e.g. "CUDA" instead of "Cuda")
@@ -24,6 +25,7 @@ impl std::fmt::Display for GpuBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GpuBackend::Cuda => write!(f, "CUDA"),
+            GpuBackend::CoreML => write!(f, "CoreML"),
             GpuBackend::Vulkan => write!(f, "Vulkan"),
             GpuBackend::Cpu => write!(f, "CPU"),
         }
@@ -351,7 +353,13 @@ impl WhisperManager {
             return GpuBackend::Cuda;
         }
 
-        // Otherwise assume Vulkan (AMD/Intel/Apple)
+        // macOS: whisper-rs is compiled with the "coreml" feature, so the
+        // backend is CoreML (Apple Neural Engine / GPU) not Vulkan.
+        if cfg!(target_os = "macos") {
+            return GpuBackend::CoreML;
+        }
+
+        // Windows/Linux without NVIDIA → Vulkan (AMD/Intel)
         GpuBackend::Vulkan
     }
 
