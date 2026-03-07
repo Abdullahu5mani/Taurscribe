@@ -120,9 +120,9 @@ windows = { version = "0.58", features = [
     "Win32_System_Com",
 ] }
 
+# vulkan temporarily removed for Windows build
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "cuda",
-    "vulkan",
 ] }
 parakeet-rs = { version = "=0.3.0", features = ["cuda", "directml"] }
 ort = { version = "2.0.0-rc.11", features = [
