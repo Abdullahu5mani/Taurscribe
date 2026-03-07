@@ -117,7 +117,10 @@ pub fn run() {
                 // "quit"           → exit the process immediately.
                 let behavior = {
                     let state = window.app_handle().state::<AudioState>();
-                    state.close_behavior.lock().unwrap().clone()
+                    // Explicitly bind the clone so the MutexGuard is dropped
+                    // before the block closes (avoiding E0597 borrow error).
+                    let b = state.close_behavior.lock().unwrap().clone();
+                    b
                 };
                 if behavior == "quit" {
                     println!("[INFO] Window close → quit (close_behavior=quit)");
