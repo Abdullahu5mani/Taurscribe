@@ -56,6 +56,25 @@ else
   exit 0
 fi
 
+BINARY_DIR="$(dirname "$BINARY")"
+
+# dylibbundler looks for dylibs next to the binary (or in system paths). In CI and when
+# using --target, llama-cpp-sys-2 builds libggml-base*.dylib and libllama.dylib into
+# target/<triple>/release/build/llama-cpp-sys-2-*/out/, so they are not beside the binary.
+# Copy them into BINARY_DIR so dylibbundler can find them and avoid interactive "Please
+# specify the directory" prompts (which break CI).
+LLAMA_OUT=""
+for candidate in "$TARGET_DIR/release/build/llama-cpp-sys-2-"*/out "$TARGET_DIR/$TARGET_TRIPLE/release/build/llama-cpp-sys-2-"*/out; do
+  if [ -d "$candidate" ]; then
+    LLAMA_OUT="$candidate"
+    break
+  fi
+done
+if [ -n "$LLAMA_OUT" ] && [ -d "$LLAMA_OUT" ]; then
+  echo "bundle-macos-dylibs: Copying llama-cpp dylibs from $LLAMA_OUT to $BINARY_DIR"
+  cp -f "$LLAMA_OUT"/*.dylib "$BINARY_DIR/" 2>/dev/null || true
+fi
+
 # dylibbundler required on macOS; without it the app crashes at launch (libggml-base, libllama)
 if ! command -v dylibbundler &>/dev/null; then
   echo "bundle-macos-dylibs: ERROR - dylibbundler not found."
