@@ -43,36 +43,40 @@ if [ -z "$TARGET_TRIPLE" ]; then
 fi
 
 # Cargo puts host builds at target/release/; cross-builds at target/$TRIPLE/release/
+# IMPORTANT: Check the cross path first. CI uses `tauri build --target aarch64-apple-darwin`
+# which always uses the triple-prefixed directory, even if it matches the host.
 BINARY_HOST="$TARGET_DIR/release/taurscribe"
 BINARY_CROSS="$TARGET_DIR/$TARGET_TRIPLE/release/taurscribe"
 DYLIB_DIR="$SRC_TAURI/macos-dylibs"
 
-if [ -f "$BINARY_HOST" ]; then
-  BINARY="$BINARY_HOST"
-elif [ -f "$BINARY_CROSS" ]; then
+if [ -f "$BINARY_CROSS" ]; then
   BINARY="$BINARY_CROSS"
+elif [ -f "$BINARY_HOST" ]; then
+  BINARY="$BINARY_HOST"
 else
-  echo "bundle-macos-dylibs: Binary not found at $BINARY_HOST or $BINARY_CROSS, skipping"
+  echo "bundle-macos-dylibs: Binary not found at $BINARY_CROSS or $BINARY_HOST, skipping"
   exit 0
 fi
 
+echo "bundle-macos-dylibs: Using binary at $BINARY"
 BINARY_DIR="$(dirname "$BINARY")"
 
 # dylibbundler looks for dylibs next to the binary (or in system paths). In CI and when
 # using --target, llama-cpp-sys-2 builds libggml-base*.dylib and libllama.dylib into
-# target/<triple>/release/build/llama-cpp-sys-2-*/out/, so they are not beside the binary.
+# target/<triple>/release/build/llama-cpp-sys-2-*/out/lib/, so they are not beside the binary.
 # Copy them into BINARY_DIR so dylibbundler can find them and avoid interactive "Please
 # specify the directory" prompts (which break CI).
-LLAMA_OUT=""
-for candidate in "$TARGET_DIR/release/build/llama-cpp-sys-2-"*/out "$TARGET_DIR/$TARGET_TRIPLE/release/build/llama-cpp-sys-2-"*/out; do
+LLAMA_LIB_DIR=""
+for candidate in "$TARGET_DIR/$TARGET_TRIPLE/release/build/llama-cpp-sys-2-"*/out/lib "$TARGET_DIR/release/build/llama-cpp-sys-2-"*/out/lib; do
   if [ -d "$candidate" ]; then
-    LLAMA_OUT="$candidate"
+    LLAMA_LIB_DIR="$candidate"
     break
   fi
 done
-if [ -n "$LLAMA_OUT" ] && [ -d "$LLAMA_OUT" ]; then
-  echo "bundle-macos-dylibs: Copying llama-cpp dylibs from $LLAMA_OUT to $BINARY_DIR"
-  cp -f "$LLAMA_OUT"/*.dylib "$BINARY_DIR/" 2>/dev/null || true
+if [ -n "$LLAMA_LIB_DIR" ]; then
+  echo "bundle-macos-dylibs: Copying llama-cpp dylibs from $LLAMA_LIB_DIR to $BINARY_DIR"
+  cp -f "$LLAMA_LIB_DIR"/*.dylib "$BINARY_DIR/" 2>/dev/null || true
+  ls -la "$BINARY_DIR"/lib{ggml,llama}*.dylib 2>/dev/null || true
 fi
 
 # dylibbundler required on macOS; without it the app crashes at launch (libggml-base, libllama)
@@ -86,16 +90,17 @@ mkdir -p "$DYLIB_DIR"
 rm -f "$DYLIB_DIR"/*.dylib 2>/dev/null || true
 
 # Build search-path flags for dylibbundler.
-# llama-cpp-sys-2 builds libllama, libggml-base, libggml-cpu, libggml-metal etc.
-# as dynamic libraries. The hash in the build dir changes every build, so we
-# locate it dynamically and pass -s to dylibbundler so it doesn't prompt
-# interactively (which hangs CI).
-SEARCH_FLAGS=""
-LLAMA_LIB_DIR=$(find "$TARGET_DIR" -path "*/build/llama-cpp-sys-2-*/out/lib" -type d 2>/dev/null | head -1)
+# We pass -s for both:
+#   (a) the llama-cpp-sys-2 build output dir (canonical location of libggml-*, libllama)
+#   (b) the BINARY_DIR (where we copied the dylibs above)
+# This ensures dylibbundler can resolve both direct and transitive @rpath deps
+# without prompting interactively (which hangs CI).
+SEARCH_FLAGS="-s $BINARY_DIR"
 if [ -n "$LLAMA_LIB_DIR" ]; then
-  echo "bundle-macos-dylibs: Found llama dylibs at $LLAMA_LIB_DIR"
-  SEARCH_FLAGS="-s $LLAMA_LIB_DIR"
+  SEARCH_FLAGS="$SEARCH_FLAGS -s $LLAMA_LIB_DIR"
 fi
+
+echo "bundle-macos-dylibs: Running dylibbundler with search flags: $SEARCH_FLAGS"
 
 # -od: use @executable_path; -b: bundle (copy) deps; -x: binary; -d: output dir; -p: rpath prefix
 # -s: additional search path for dylibs that aren't in standard locations
