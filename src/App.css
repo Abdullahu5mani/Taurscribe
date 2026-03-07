@@ -418,6 +418,59 @@ body {
   background: rgba(255, 255, 255, 0.03);
 }
 
+/* Microphone selector row — sits directly below the hardware bar.
+   Shows a mic icon and a native <select> dropdown so users can pick
+   the active input device without opening the full Settings modal.
+   Stretches with the window width on resize. */
+.mic-selector-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.mic-selector-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.mic-selector-dropdown {
+  flex: 1;
+  min-width: 0;
+  font-family: 'Martian Mono', monospace;
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  /* Dropdown arrow via inline SVG */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.mic-selector-dropdown:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.mic-selector-dropdown:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
 /* macOS fix: Warning banner shown when Accessibility / Input Monitoring
    permission is not granted. Without this permission, rdev's global hotkey
    listener silently fails. Users must enable it in System Settings. */
