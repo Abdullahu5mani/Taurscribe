@@ -126,7 +126,7 @@ export function QuickSettings({
                 <Section label="Post-processing" />
 
                 <Row label="Grammar LLM" hint={llmHint}
-                    info="Runs a local AI model to fix grammar, punctuation, and tone after each recording stops. Requires the FlowScribe Qwen model (download from Settings → Models).">
+                    info="FlowScribe 2.5 0.5B fixes grammar, punctuation, and tone after each recording.">
                     <Toggle
                         id="qs-grammar"
                         checked={enableGrammarLM}
@@ -137,7 +137,7 @@ export function QuickSettings({
 
 
                 <Row label="Denoise"
-                    info="Real-time background noise reduction using RNNoise. Only affects the AI engine — your saved WAV recording always keeps the original audio.">
+                    info="Background noise reduction. Only affects the AI input — saved WAV keeps original audio.">
                     <Toggle
                         id="qs-denoise"
                         checked={enableDenoise}
@@ -146,7 +146,7 @@ export function QuickSettings({
                 </Row>
 
                 <Row label="Overlay"
-                    info="Shows a floating transcript window on screen so you can see words appear as you speak during a recording.">
+                    info="Floating transcript window — see words appear as you speak.">
                     <Toggle
                         id="qs-overlay"
                         checked={enableOverlay}
@@ -155,7 +155,7 @@ export function QuickSettings({
                 </Row>
 
                 <Row label="Mute mic BG"
-                    info="Silences system audio output while recording to prevent background sounds bleeding into your microphone.">
+                    info="Mutes system audio while recording to prevent bleed-in.">
                     <Toggle
                         id="qs-mute-bg"
                         checked={muteBackgroundAudio}
@@ -168,7 +168,7 @@ export function QuickSettings({
                     Apple Silicon uses Metal automatically, no user choice needed. */}
                 {!isMac && (
                   <>
-                    <Section label="LLM Backend" info="Choose whether the grammar correction LLM runs on your GPU (faster, uses VRAM) or CPU (slower, no VRAM needed)." />
+                    <Section label="LLM Backend" info="Grammar LLM on GPU (faster, uses VRAM) or CPU." />
                     <div className="qs-backend-row">
                         <button
                             type="button"
@@ -185,7 +185,7 @@ export function QuickSettings({
                 )}
 
                 {/* ── Sound ───────────────────────────────────── */}
-                <Section label="Sound" info="Volume for in-app feedback sounds: recording start, stop, and error beeps. Does not affect your system volume." />
+                <Section label="Sound" info="Volume for in-app sounds (start, stop, error beeps)." />
                 <div className="qs-volume-row">
                     <button
                         type="button"

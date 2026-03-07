@@ -535,16 +535,28 @@ jobs:
           }
 
       # --- Upload Artifacts ---
-      
+
+      # Windows: copy installer into workspace first (CARGO_TARGET_DIR=C:\bld is outside workspace,
+      # and upload-artifact@v4 requires files to be inside the workspace root)
+      - name: Collect Windows installer into workspace
+        if: matrix.os_name == 'Windows'
+        shell: pwsh
+        run: |
+          $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $arch = if ("${{ matrix.arch }}" -eq "ARM64") { "arm64" } else { "x64" }
+          New-Item -ItemType Directory -Force -Path "dist-windows" | Out-Null
+          $src = "$targetDir\${{ matrix.target }}\release\bundle\nsis"
+          if (Test-Path $src) {
+            Get-ChildItem "$src\*.exe" | Copy-Item -Destination "dist-windows\"
+          }
+
       # Windows: NSIS installer (.exe)
       - name: Upload NSIS installer (Windows)
         if: matrix.os_name == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: taurscribe-windows-${{ matrix.arch }}-setup
-          path: |
-            C:\bld\${{ matrix.target }}\release\bundle\nsis\*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+          path: dist-windows/*.exe
           if-no-files-found: warn
 
       # Windows: Portable ZIP
