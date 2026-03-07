@@ -696,6 +696,61 @@ body {
   transform: translateY(0);
 }
 
+/* ── InfoTooltip React component (position:fixed, escapes overflow clips) ── */
+.info-tooltip-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(148, 163, 184, 0.55);   /* clearly visible but not loud */
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 50%;
+  padding: 1px;
+  cursor: help;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.info-tooltip-anchor:hover {
+  color: var(--accent-primary);
+  background: rgba(224, 159, 62, 0.12);
+  border-color: rgba(224, 159, 62, 0.45);
+}
+
+.info-tooltip-popup {
+  position: fixed;
+  z-index: 9999;
+  width: 220px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(22, 22, 30, 0.97);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--text-secondary);
+  font-family: 'Barlow', sans-serif;
+  font-size: 0.7rem;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  white-space: normal;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  pointer-events: none;
+  animation: tooltipFadeIn 0.15s ease;
+}
+
+@keyframes tooltipFadeIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* qs-row label+icon wrapper */
+.qs-row-label-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* LED dot — smooth fade between states */
 .led-dot {
   width: 8px;
@@ -2288,6 +2343,9 @@ body {
 
 /* Section divider label */
 .qs-section-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-family: 'Barlow Condensed', sans-serif;
   font-size: 0.64rem;
   font-weight: 700;

@@ -95,16 +95,17 @@ rm -f "$DYLIB_DIR"/*.dylib 2>/dev/null || true
 #   (b) the BINARY_DIR (where we copied the dylibs above)
 # This ensures dylibbundler can resolve both direct and transitive @rpath deps
 # without prompting interactively (which hangs CI).
-SEARCH_FLAGS="-s $BINARY_DIR"
+# Build search flags as an array so paths with spaces are handled correctly.
+SEARCH_FLAGS=(-s "$BINARY_DIR")
 if [ -n "$LLAMA_LIB_DIR" ]; then
-  SEARCH_FLAGS="$SEARCH_FLAGS -s $LLAMA_LIB_DIR"
+  SEARCH_FLAGS+=(-s "$LLAMA_LIB_DIR")
 fi
 
-echo "bundle-macos-dylibs: Running dylibbundler with search flags: $SEARCH_FLAGS"
+echo "bundle-macos-dylibs: Running dylibbundler with search flags: ${SEARCH_FLAGS[*]}"
 
 # -od: use @executable_path; -b: bundle (copy) deps; -x: binary; -d: output dir; -p: rpath prefix
 # -s: additional search path for dylibs that aren't in standard locations
-dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks" $SEARCH_FLAGS
+dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks" "${SEARCH_FLAGS[@]}"
 
 # Generate tauri.macos.conf.json with framework paths (Tauri validates these at build time;
 # we create this file here so it only exists when dylibs exist, avoiding "Library not found").
