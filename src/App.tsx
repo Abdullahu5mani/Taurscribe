@@ -849,7 +849,7 @@ function App() {
                     onClick={() => handleToggleAsrBackend('cpu')}
                     disabled={isLoading}
                   ><IconCpu size={11} /> CPU</button>
-                  <InfoTooltip size={11} text="Run the speech-to-text engine on your GPU for maximum speed, or CPU if you have no compatible GPU or want to conserve VRAM." />
+                  <InfoTooltip size={11} text="GPU for max speed; CPU if no GPU or to save VRAM." />
                 </div>
               )}
             </div>
@@ -875,7 +875,7 @@ function App() {
                   <option key={d} value={d}>{d}</option>
                 ))}
               </select>
-              <InfoTooltip size={11} text="The microphone Taurscribe records from. 'System Default' follows your OS setting. Changes take effect on the next recording." />
+              <InfoTooltip size={11} text="Input device. Changes apply on next recording." />
             </div>
 
             {/* macOS fix: Show a warning banner when Accessibility permission
@@ -1007,10 +1007,7 @@ function App() {
               <div key={activeEngine} className="model-content">
                 {activeEngine === "whisper" ? (
                   <>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '5px' }}>
-                      <label htmlFor="model-select" className="model-label">Active model</label>
-                      <InfoTooltip size={11} text="The transcription model to use. Larger models are more accurate but slower and heavier on memory. Tiny/Base are ideal for fast everyday use." />
-                    </div>
+                    <label htmlFor="model-select" className="model-label">Active model</label>
                     <select
                       id="model-select"
                       className="model-select"
@@ -1037,10 +1034,7 @@ function App() {
                   </>
                 ) : (
                   <>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: '5px' }}>
-                      <span className="model-label">Active model</span>
-                      <InfoTooltip size={11} text="The transcription model to use. Larger models are more accurate but slower and heavier on memory. Tiny/Base are ideal for fast everyday use." />
-                    </div>
+                    <span className="model-label">Active model</span>
                     <div
                       className="model-select"
                       style={{
@@ -1074,8 +1068,8 @@ function App() {
                             llmStatus === 'Loading...' ? 'var(--warning)' : 'var(--error)'
                       }}
                     />
-                    <span className="llm-name">FlowScribe Qwen 2.5 0.5B</span>
-                    <InfoTooltip size={11} text="A local AI that rewrites your transcript with correct grammar, punctuation, and your chosen tone style. Runs after recording stops. Download from Settings → Models." />
+                    <span className="llm-name">FlowScribe 2.5 0.5B</span>
+                    <InfoTooltip size={11} text="Fine-tuned Qwen 2.5 0.5B. Fixes grammar, punctuation & tone after each recording." />
                     {/* macOS fix: Hide the GPU/CPU backend badge on macOS since
                         there is no GPU/CPU choice — Metal is used automatically. */}
                     {llmStatus === 'Loaded' && !isMac && (

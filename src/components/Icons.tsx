@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useRef } from "react";
+import { createPortal } from "react-dom";
 
 interface IconProps extends React.SVGProps<SVGSVGElement> {
     size?: number | string;
@@ -267,11 +268,16 @@ export function InfoTooltip({ text, size = 12 }: { text: string; size?: number }
     const [pos, setPos] = useState({ top: 0, left: 0 });
     const ref = useRef<HTMLSpanElement>(null);
 
+    const TOOLTIP_HEIGHT = 80; // generous estimate for flip calculation
     const show = () => {
         if (ref.current) {
             const r = ref.current.getBoundingClientRect();
+            const spaceBelow = window.innerHeight - r.bottom;
+            const top = spaceBelow < TOOLTIP_HEIGHT + 12
+                ? r.top - TOOLTIP_HEIGHT - 6   // flip above
+                : r.bottom + 6;
             setPos({
-                top: r.bottom + 6,
+                top,
                 left: Math.max(8, Math.min(r.right - 220, window.innerWidth - 228)),
             });
         }
@@ -300,13 +306,14 @@ export function InfoTooltip({ text, size = 12 }: { text: string; size?: number }
                 <line x1="12" y1="16" x2="12" y2="12" />
                 <line x1="12" y1="8" x2="12.01" y2="8" />
             </svg>
-            {visible && (
+            {visible && createPortal(
                 <div
                     className="info-tooltip-popup"
                     style={{ top: pos.top, left: pos.left }}
                 >
                     {text}
-                </div>
+                </div>,
+                document.body
             )}
         </span>
     );
