@@ -586,7 +586,7 @@ body {
     gap 0.35s ease,
     border-radius 0.35s ease;
   position: relative;
-  overflow: hidden;
+  overflow: visible; /* allow info-icon tooltip to extend outside card */
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -655,14 +655,12 @@ body {
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
-  opacity: 0.35;
   cursor: help;
-  transition: opacity 0.2s ease, color 0.2s ease;
+  transition: color 0.2s ease;
   z-index: 10;
 }
 
 .info-icon:hover {
-  opacity: 0.9;
   color: var(--text-primary);
 }
 
