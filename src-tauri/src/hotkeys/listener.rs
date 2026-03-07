@@ -43,6 +43,24 @@ pub fn start_hotkey_listener(
 ) {
     use tauri::Emitter;
 
+    // macOS fix: Check Accessibility (Input Monitoring) permission on launch.
+    // rdev uses CGEventTap under the hood, which silently receives zero events
+    // if the app is not trusted. Without this check the hotkey listener starts
+    // but never fires, with no error message. If permission is missing we emit
+    // an "accessibility-missing" event so the React frontend can show a banner
+    // telling the user to grant permission in System Settings.
+    #[cfg(target_os = "macos")]
+    {
+        let trusted = macos_accessibility_trusted(true);
+        if !trusted {
+            eprintln!("[WARN] Accessibility permission NOT granted — hotkey listener will not receive key events.");
+            eprintln!("[WARN] Grant Taurscribe access in System Settings → Privacy & Security → Input Monitoring (and Accessibility).");
+            let _ = app_handle.emit("accessibility-missing", ());
+        } else {
+            println!("[INFO] Accessibility permission granted");
+        }
+    }
+
     let recording_active = Arc::new(AtomicBool::new(false));
     let held_keys: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     // Prevents keyboard auto-repeat from firing the action multiple times per physical press.
@@ -118,4 +136,28 @@ pub fn start_hotkey_listener(
     if let Err(e) = listen(callback) {
         eprintln!("[ERROR] Hotkey listener error: {:?}", e);
     }
+}
+
+/// macOS fix: Check whether this process has Accessibility / Input Monitoring trust.
+/// Uses the private AXIsProcessTrustedWithOptions API. When `prompt` is true,
+/// macOS shows the system permission dialog if the user hasn't decided yet.
+/// This is required because rdev's CGEventTap silently fails without it.
+#[cfg(target_os = "macos")]
+fn macos_accessibility_trusted(prompt: bool) -> bool {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
+    extern "C" {
+        fn AXIsProcessTrustedWithOptions(
+            options: core_foundation::base::CFTypeRef,
+        ) -> bool;
+    }
+
+    let key = CFString::new("AXTrustedCheckOptionPrompt");
+    let value = if prompt { CFBoolean::true_value() } else { CFBoolean::false_value() };
+    let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
+
+    unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) }
 }

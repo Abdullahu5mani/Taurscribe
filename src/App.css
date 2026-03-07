@@ -418,6 +418,96 @@ body {
   background: rgba(255, 255, 255, 0.03);
 }
 
+/* macOS fix: Warning banner shown when Accessibility / Input Monitoring
+   permission is not granted. Without this permission, rdev's global hotkey
+   listener silently fails. Users must enable it in System Settings. */
+.accessibility-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: 6px;
+  border-radius: 8px;
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  color: #eab308;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.accessibility-banner strong {
+  color: #facc15;
+}
+
+.accessibility-banner-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #eab308;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 2px 4px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.accessibility-banner-dismiss:hover {
+  opacity: 1;
+}
+
+/* macOS fix: Microphone permission banner — blue-tinted to distinguish
+   from the yellow accessibility banner. */
+.mic-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-top: 6px;
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: #60a5fa;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.mic-banner strong {
+  color: #93bbfd;
+}
+
+.mic-banner-action {
+  background: none;
+  border: none;
+  color: #93bbfd;
+  cursor: pointer;
+  font-weight: 600;
+  text-decoration: underline;
+  padding: 0;
+  font-size: inherit;
+}
+
+.mic-banner-action:hover {
+  color: #bdd4fe;
+}
+
+.mic-banner-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #60a5fa;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 2px 4px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.mic-banner-dismiss:hover {
+  opacity: 1;
+}
+
 .backend-toggle-inline-btn.active {
   color: var(--accent-primary);
   background: rgba(224, 159, 62, 0.08);

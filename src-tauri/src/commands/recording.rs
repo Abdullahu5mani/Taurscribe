@@ -1,19 +1,31 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::unbounded;
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU32, Ordering}};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, Ordering},
+    Arc,
+};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::{RecordingHandle, SendStream};
+use crate::context::get_active_context;
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
 use crate::types::{ASREngine, TranscriptionChunk};
-use crate::context::get_active_context;
 use crate::utils::{clean_transcript, get_recordings_dir, normalize_audio};
 
 /// COMMAND: START RECORDING
 /// This initializes the microphone, files, and processing threads.
+///
+/// macOS fix: Made async with spawn_blocking because Tauri 2 dispatches
+/// synchronous `#[tauri::command]` handlers on the main (AppKit) thread.
+/// cpal device enumeration and stream creation block that thread, freezing
+/// the entire window. Async commands run on the tokio runtime instead.
 #[tauri::command]
-pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise: Option<bool>) -> Result<String, String> {
+pub async fn start_recording(
+    app_handle: AppHandle,
+    state: State<'_, AudioState>,
+    denoise: Option<bool>,
+) -> Result<String, String> {
     // Guard: reject if already recording (e.g. spam hotkey)
     {
         let handle = state.recording_handle.lock().unwrap();
@@ -22,22 +34,82 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
         }
     }
 
+    // macOS fix: Clone all Arc state so it can be moved into spawn_blocking.
+    // Fields were changed from Mutex<T> to Arc<Mutex<T>> in state.rs to
+    // allow cloning into the background closure.
+    let recording_handle_arc = state.recording_handle.clone();
+    let selected_input_device_arc = state.selected_input_device.clone();
+    let active_engine_arc = state.active_engine.clone();
+    let whisper_arc = state.whisper.clone();
+    let parakeet_arc = state.parakeet.clone();
+    let vad_arc = state.vad.clone();
+    let last_recording_path_arc = state.last_recording_path.clone();
+    let session_transcript_arc = state.session_transcript.clone();
+    let denoiser_state_arc = state.denoiser.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        start_recording_blocking(
+            app_handle,
+            denoise,
+            recording_handle_arc,
+            selected_input_device_arc,
+            active_engine_arc,
+            whisper_arc,
+            parakeet_arc,
+            vad_arc,
+            last_recording_path_arc,
+            session_transcript_arc,
+            denoiser_state_arc,
+        )
+    })
+    .await
+    .map_err(|e| format!("start_recording task failed: {}", e))?
+}
+
+/// The blocking core of start_recording, run inside spawn_blocking.
+#[allow(clippy::too_many_arguments)]
+fn start_recording_blocking(
+    app_handle: AppHandle,
+    denoise: Option<bool>,
+    recording_handle_arc: Arc<std::sync::Mutex<Option<RecordingHandle>>>,
+    selected_input_device_arc: Arc<std::sync::Mutex<Option<String>>>,
+    active_engine_arc: Arc<std::sync::Mutex<ASREngine>>,
+    whisper_arc: Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
+    parakeet_arc: Arc<std::sync::Mutex<crate::parakeet::ParakeetManager>>,
+    vad_arc: Arc<std::sync::Mutex<crate::vad::VADManager>>,
+    last_recording_path_arc: Arc<std::sync::Mutex<Option<String>>>,
+    session_transcript_arc: Arc<std::sync::Mutex<String>>,
+    denoiser_state_arc: Arc<std::sync::Mutex<Option<Denoiser>>>,
+) -> Result<String, String> {
     let denoise_enabled = denoise.unwrap_or(false);
     // 1. Setup Microphone
     let host = cpal::default_host();
-    let preferred = state.selected_input_device.lock().unwrap().clone();
+    let preferred = selected_input_device_arc.lock().unwrap().clone();
     let device = if let Some(ref name) = preferred {
         host.input_devices()
             .map_err(|e| e.to_string())?
             .find(|d| d.name().ok().as_deref() == Some(name))
             .ok_or_else(|| format!("Input device '{}' not found", name))?
     } else {
-        host.default_input_device().ok_or("No input device")?
+        host.default_input_device()
+            .ok_or("No input device found. Check that a microphone is connected.")?
     };
-    println!("[INFO] Using input device: {}", device.name().unwrap_or_default());
+    println!(
+        "[INFO] Using input device: {}",
+        device.name().unwrap_or_default()
+    );
     let config: cpal::StreamConfig = device
         .default_input_config()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| {
+            // macOS: permission denial often surfaces as a vague
+            // CoreAudio error during config or stream creation.
+            let msg = e.to_string();
+            if msg.contains("permission") || msg.contains("denied") || msg.contains("not supported") {
+                "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+            } else {
+                format!("Failed to get audio config: {}", msg)
+            }
+        })?
         .into();
 
     // 2. Prepare Output File
@@ -48,24 +120,24 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
     println!("[INFO] Saving recording to: {}", path.display());
 
     // 3. Reset AI Context (Start fresh for new recording)
-    let active_engine = *state.active_engine.lock().unwrap();
+    let active_engine = *active_engine_arc.lock().unwrap();
     if active_engine == ASREngine::Whisper {
-        state.whisper.lock().unwrap().clear_context();
+        whisper_arc.lock().unwrap().clear_context();
     } else {
-        state.parakeet.lock().unwrap().clear_context();
+        parakeet_arc.lock().unwrap().clear_context();
     }
     // Reset Silero VAD LSTM state so prior session context doesn't bleed in
-    state.vad.lock().unwrap().reset_state();
+    vad_arc.lock().unwrap().reset_state();
 
-    *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
-    state.session_transcript.lock().unwrap().clear();
+    *last_recording_path_arc.lock().unwrap() = Some(path.to_string_lossy().into_owned());
+    session_transcript_arc.lock().unwrap().clear();
 
     // Create a fresh denoiser for this session (RNNoise GRU state must not leak across sessions)
     if denoise_enabled {
-        *state.denoiser.lock().unwrap() = Some(Denoiser::new());
+        *denoiser_state_arc.lock().unwrap() = Some(Denoiser::new());
         println!("[INFO] RNNoise denoiser enabled for this session");
     } else {
-        *state.denoiser.lock().unwrap() = None;
+        *denoiser_state_arc.lock().unwrap() = None;
     }
 
     // 4. Create proper WAV header settings
@@ -87,10 +159,39 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
 
     let sample_rate = config.sample_rate.0;
 
+    let level_stop = Arc::new(AtomicBool::new(false));
+    let level_stop_clone1 = level_stop.clone();
+    let level_stop_clone2 = level_stop.clone();
+    let level_stop_clone3 = level_stop.clone();
+
     // 6. SPAWN THREAD 1: THE FILE SAVER
     let writer_thread = std::thread::spawn(move || {
         let mut writer = writer;
-        while let Ok(samples) = file_rx.recv() {
+        loop {
+            match file_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(samples) => {
+                    for sample in samples {
+                        writer.write_sample(sample).ok();
+                    }
+                    // macOS fix: CoreAudio may keep the audio callback alive
+                    // briefly after Stream::drop() when called from a non-main
+                    // thread, so the channel stays open and we never hit the
+                    // Timeout branch. Check the stop signal here too.
+                    if level_stop_clone1.load(Ordering::Relaxed) {
+                        break;
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    if level_stop_clone1.load(Ordering::Relaxed) {
+                        break;
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        // Drain any remaining
+        while let Ok(samples) = file_rx.try_recv() {
             for sample in samples {
                 writer.write_sample(sample).ok();
             }
@@ -100,11 +201,11 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
     });
 
     // Get shared references to our AI tools
-    let whisper = state.whisper.clone();
-    let parakeet_manager = state.parakeet.clone();
-    let vad = state.vad.clone();
-    let active_engine = *state.active_engine.lock().unwrap();
-    let session_transcript = state.session_transcript.clone();
+    let whisper = whisper_arc.clone();
+    let parakeet_manager = parakeet_arc.clone();
+    let vad = vad_arc.clone();
+    let active_engine = *active_engine_arc.lock().unwrap();
+    let session_transcript = session_transcript_arc.clone();
 
     // 7. SPAWN THREAD 2: THE REAL-TIME TRANSCRIBER
     let app_clone = app_handle.clone();
@@ -117,7 +218,12 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
             active_engine
         );
 
-        while let Ok(samples) = whisper_rx.recv() {
+        while !level_stop_clone2.load(Ordering::Relaxed) {
+            let samples = match whisper_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(s) => s,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            };
             if active_engine == ASREngine::Whisper {
                 buffer.extend(samples);
 
@@ -132,7 +238,9 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
                     let vad_chunk: Vec<f32> = if sample_rate != 16000 {
                         let ratio = sample_rate as f64 / 16000.0;
                         let out_len = (chunk.len() as f64 / ratio) as usize;
-                        (0..out_len).map(|i| chunk[(i as f64 * ratio) as usize]).collect()
+                        (0..out_len)
+                            .map(|i| chunk[(i as f64 * ratio) as usize])
+                            .collect()
                     } else {
                         chunk.clone()
                     };
@@ -224,6 +332,15 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
         }
 
         println!("[INFO] Recording stopped, processing remaining audio...");
+        // Fast drain any remaining audio chunks from the queue
+        while let Ok(samples) = whisper_rx.try_recv() {
+            if active_engine == ASREngine::Whisper {
+                buffer.extend(samples);
+            } else {
+                buffer.extend(samples);
+            }
+        }
+
         while buffer.len() >= chunk_size {
             let chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
             if active_engine == ASREngine::Whisper {
@@ -270,7 +387,7 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
     });
 
     let channels = config.channels as usize;
-    let denoiser_arc = state.denoiser.clone();
+    let denoiser_arc = denoiser_state_arc.clone();
 
     // Audio level metering: the cpal callback writes a float (as AtomicU32 bits)
     // and a dedicated thread reads it every 50ms to emit the Tauri event.
@@ -281,12 +398,10 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
     let level_counter = Arc::new(AtomicU32::new(0));
     let level_counter_clone = level_counter.clone();
 
-    let level_stop = Arc::new(AtomicBool::new(false));
-    let level_stop_clone = level_stop.clone();
     let app_for_level = app_handle.clone();
 
     let level_thread = std::thread::spawn(move || {
-        while !level_stop_clone.load(Ordering::Relaxed) {
+        while !level_stop_clone3.load(Ordering::Relaxed) {
             std::thread::sleep(std::time::Duration::from_millis(50));
             let bits = audio_level.load(Ordering::Relaxed);
             let level = f32::from_bits(bits);
@@ -325,8 +440,7 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
                 // Only compute every ~5 callbacks to avoid unnecessary work.
                 let cnt = level_counter_clone.fetch_add(1, Ordering::Relaxed);
                 if cnt % 5 == 0 && !data.is_empty() {
-                    let rms = (data.iter().map(|&s| s * s).sum::<f32>()
-                        / data.len() as f32).sqrt();
+                    let rms = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
                     let level = (rms / 0.015_f32).min(1.0_f32).sqrt();
                     audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
                 }
@@ -338,11 +452,25 @@ pub fn start_recording(app_handle: AppHandle, state: State<AudioState>, denoise:
             },
             None,
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("permission") || msg.contains("denied") {
+                "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+            } else {
+                format!("Failed to open audio stream: {}", msg)
+            }
+        })?;
 
-    stream.play().map_err(|e| e.to_string())?;
+    stream.play().map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("permission") || msg.contains("denied") {
+            "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+        } else {
+            format!("Failed to start audio stream: {}", msg)
+        }
+    })?;
 
-    *state.recording_handle.lock().unwrap() = Some(RecordingHandle {
+    *recording_handle_arc.lock().unwrap() = Some(RecordingHandle {
         stream: SendStream(stream),
         file_tx,
         whisper_tx,
@@ -374,11 +502,23 @@ pub fn type_text(text: String) {
 fn insert_text(text: &str) {
     #[cfg(target_os = "macos")]
     {
-        if ax_insert(text) {
-            println!("[INSERT] AXUIElement succeeded");
-            return;
+        // macOS fix: After the hotkey is released, the OS needs a moment to
+        // settle focus back to the target app's text field. Without this
+        // delay, AXFocusedUIElement often returns null or a stale element.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // macOS fix: Retry AXUIElement insertion up to 3 times — focus can
+        // take a variable amount of time to settle after hotkey release.
+        for attempt in 0..3 {
+            if ax_insert(text) {
+                println!("[INSERT] AXUIElement succeeded (attempt {})", attempt + 1);
+                return;
+            }
+            if attempt < 2 {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
         }
-        eprintln!("[INSERT] AXUIElement failed, falling back to clipboard+Cmd+V");
+        eprintln!("[INSERT] AXUIElement failed after 3 attempts, falling back to clipboard+Cmd+V");
     }
     clipboard_paste(text);
 }
@@ -387,11 +527,13 @@ fn insert_text(text: &str) {
 /// Saves and restores the previous clipboard content.
 fn clipboard_paste(text: &str) {
     use arboard::Clipboard;
-    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
     let mut clipboard = match Clipboard::new() {
         Ok(c) => c,
-        Err(e) => { eprintln!("[INSERT] Clipboard init failed: {}", e); return; }
+        Err(e) => {
+            eprintln!("[INSERT] Clipboard init failed: {}", e);
+            return;
+        }
     };
 
     let previous = clipboard.get_text().ok();
@@ -404,19 +546,27 @@ fn clipboard_paste(text: &str) {
     // arboard's set_text is synchronous; a short yield lets the OS finalise the write
     std::thread::sleep(std::time::Duration::from_millis(10));
 
-    let mut enigo = match Enigo::new(&Settings::default()) {
-        Ok(e) => e,
-        Err(e) => { eprintln!("[INSERT] Enigo init failed: {:?}", e); return; }
-    };
-
     #[cfg(target_os = "macos")]
     {
-        let _ = enigo.key(Key::Meta, Direction::Press);
-        let _ = enigo.key(Key::Unicode('v'), Direction::Click);
-        let _ = enigo.key(Key::Meta, Direction::Release);
+        // macOS fix: Use CGEvent directly instead of enigo. Enigo internally
+        // calls TSMGetInputSourceProperty (via HIToolbox) which asserts it
+        // runs on the main dispatch queue. Since type_text spawns a
+        // std::thread (background thread), that assertion fails with
+        // EXC_BREAKPOINT (SIGTRAP), crashing the app. CGEvent's
+        // CGEventPost works safely from any thread.
+        simulate_cmd_v_cgevent();
     }
+
     #[cfg(not(target_os = "macos"))]
     {
+        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+        let mut enigo = match Enigo::new(&Settings::default()) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("[INSERT] Enigo init failed: {:?}", e);
+                return;
+            }
+        };
         let _ = enigo.key(Key::Control, Direction::Press);
         let _ = enigo.key(Key::Unicode('v'), Direction::Click);
         let _ = enigo.key(Key::Control, Direction::Release);
@@ -429,14 +579,48 @@ fn clipboard_paste(text: &str) {
     }
 }
 
-/// macOS only: insert text at the cursor via the Accessibility API.
-/// Equivalent to kAXSelectedTextAttribute — replaces the current selection
-/// or inserts at the caret if nothing is selected. No clipboard involved.
+/// macOS fix: Simulate Cmd+V using CGEvent instead of enigo.
+/// Enigo's key simulation calls HIToolbox TSMGetInputSourceProperty which
+/// requires the main dispatch queue and crashes from background threads.
+/// CGEvent's CGEventPost has no such restriction and is thread-safe.
+#[cfg(target_os = "macos")]
+fn simulate_cmd_v_cgevent() {
+    use core_graphics::event::{CGEvent, CGEventFlags, CGKeyCode};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    // kVK_ANSI_V = 0x09
+    const VK_V: CGKeyCode = 0x09;
+
+    let source = match CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("[INSERT] CGEventSource creation failed");
+            return;
+        }
+    };
+
+    if let (Ok(key_down), Ok(key_up)) = (
+        CGEvent::new_keyboard_event(source.clone(), VK_V, true),
+        CGEvent::new_keyboard_event(source, VK_V, false),
+    ) {
+        key_down.set_flags(CGEventFlags::CGEventFlagCommand);
+        key_up.set_flags(CGEventFlags::CGEventFlagCommand);
+        key_down.post(core_graphics::event::CGEventTapLocation::HID);
+        key_up.post(core_graphics::event::CGEventTapLocation::HID);
+    } else {
+        eprintln!("[INSERT] Failed to create CGEvent for Cmd+V");
+    }
+}
+
+/// macOS only: Insert text at the cursor via the Accessibility API.
+/// Uses kAXSelectedTextAttribute — replaces the current selection or
+/// inserts at the caret if nothing is selected. Avoids clipboard entirely.
+/// Requires Accessibility permission in System Settings → Privacy & Security.
 #[cfg(target_os = "macos")]
 fn ax_insert(text: &str) -> bool {
     use accessibility_sys::{
-        AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
-        AXUIElementSetAttributeValue, kAXErrorSuccess,
+        kAXErrorSuccess, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
+        AXUIElementSetAttributeValue,
     };
     use core_foundation::{
         base::{CFRelease, CFTypeRef, TCFType},
@@ -478,119 +662,166 @@ fn ax_insert(text: &str) -> bool {
     }
 }
 
-/// COMMAND: STOP RECORDING
-#[tauri::command]
-pub fn stop_recording(state: State<AudioState>) -> Result<String, String> {
-    // Release denoiser state (GRU context must not leak across sessions)
-    *state.denoiser.lock().unwrap() = None;
+/// macOS fix: Extracted the heavy blocking core of stop_recording into a
+/// separate function so it can be dispatched via spawn_blocking. This keeps
+/// the macOS AppKit main thread free during thread joins, VAD processing,
+/// and Whisper inference which would otherwise freeze the window.
+fn stop_recording_blocking(
+    recording: crate::audio::RecordingHandle,
+    active_engine: ASREngine,
+    session_transcript: Arc<std::sync::Mutex<String>>,
+    last_recording_path: Option<String>,
+    whisper_arc: Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
+    vad_arc: Arc<std::sync::Mutex<crate::vad::VADManager>>,
+) -> Result<String, String> {
+    use cpal::traits::StreamTrait;
 
-    let mut handle = state.recording_handle.lock().unwrap();
-    if let Some(recording) = handle.take() {
-        // Tail capture: keep mic open briefly to capture the last syllable
-        // (e.g. "LLM design?" — "design?" often gets cut when releasing the hotkey)
-        std::thread::sleep(std::time::Duration::from_millis(220));
+    // Tail capture: keep mic open briefly to capture the last syllable
+    // (e.g. "LLM design?" — "design?" often gets cut when releasing the hotkey)
+    std::thread::sleep(std::time::Duration::from_millis(220));
 
-        drop(recording.stream);
-        drop(recording.file_tx);
-        drop(recording.whisper_tx);
+    // macOS fix: Explicitly pause the audio unit before dropping the stream.
+    // On macOS, CoreAudio may keep the render callback alive after
+    // Stream::drop() if called from a non-main thread. pause() calls
+    // AudioOutputUnitStop() synchronously, ensuring the callback stops
+    // before the stream is dropped and preventing use-after-free.
+    let _ = recording.stream.0.pause();
+    drop(recording.stream);
+    drop(recording.file_tx);
+    drop(recording.whisper_tx);
 
-        // Signal the audio-level emitter thread to exit and join it.
-        recording.level_stop.store(true, Ordering::Relaxed);
-        if let Err(e) = recording.level_thread.join() {
-            eprintln!("[ERROR] Level thread panicked: {:?}", e);
-        }
+    // Signal the audio-level emitter thread to exit and join it.
+    recording.level_stop.store(true, Ordering::Relaxed);
+    if let Err(e) = recording.level_thread.join() {
+        eprintln!("[ERROR] Level thread panicked: {:?}", e);
+    }
 
-        // Join the threads to ensure they finish processing before we proceed.
-        // This is CRITICAL for Parakeet which relies on the transcript built by the thread.
-        println!("[INFO] Waiting for worker threads to finish...");
-        if let Err(e) = recording.writer_thread.join() {
-            eprintln!("[ERROR] Writer thread panicked: {:?}", e);
-        }
-        if let Err(e) = recording.transcriber_thread.join() {
-            eprintln!("[ERROR] Transcriber thread panicked: {:?}", e);
-        }
-        println!("[INFO] Worker threads finished.");
+    // Join the threads to ensure they finish processing before we proceed.
+    // This is CRITICAL for Parakeet which relies on the transcript built by the thread.
+    println!("[INFO] Waiting for worker threads to finish...");
+    if let Err(e) = recording.writer_thread.join() {
+        eprintln!("[ERROR] Writer thread panicked: {:?}", e);
+    }
+    if let Err(e) = recording.transcriber_thread.join() {
+        eprintln!("[ERROR] Transcriber thread panicked: {:?}", e);
+    }
+    println!("[INFO] Worker threads finished.");
 
-        let active_engine = *state.active_engine.lock().unwrap();
-
-        if active_engine == ASREngine::Parakeet {
-            println!("[PROCESSING] Skipping final pass (Parakeet streaming is sufficient)");
-            let transcript = state.session_transcript.lock().unwrap().clone();
-            let final_text = if transcript.trim().is_empty() {
-                String::new() // Don't return "Recording saved." — nothing to paste
-            } else {
-                clean_transcript(&transcript)
-            };
-            println!("[FINAL_TRANSCRIPT] (Raw)\n{}", final_text);
-            if let Some(path) = state.last_recording_path.lock().unwrap().as_ref() {
-                let _ = std::fs::remove_file(path);
-            }
-            return Ok(final_text);
-        }
-
-        let path_opt = state.last_recording_path.lock().unwrap().clone();
-        if let Some(path) = path_opt {
-            println!(
-                "[PROCESSING] Running final high-quality transcription with VAD on: {}",
-                path
-            );
-
-            // Snapshot active-app context BEFORE acquiring any locks
-            let app_context = get_active_context();
-            if let Some(ref ctx) = app_context {
-                println!("[CONTEXT] Active window: \"{}\"", ctx);
-            }
-
-            let whisper = state.whisper.lock().unwrap();
-            let mut audio_data = whisper.load_audio(&path)?;
-
-            // Normalize the full recording before VAD + final transcription
-            normalize_audio(&mut audio_data);
-
-            println!("[PROCESSING] Applying VAD filtering for Whisper...");
-            let mut vad = state.vad.lock().unwrap();
-            let timestamps = vad.get_speech_timestamps(&audio_data, 500)?;
-
-            let mut clean = Vec::with_capacity(audio_data.len());
-            if timestamps.is_empty() {
-                // VAD found nothing — let Whisper decide rather than hard-failing
-                println!("[VAD] No speech segments found, passing full audio to Whisper as fallback");
-                clean.extend_from_slice(&audio_data);
-            }
-            for (start, end) in timestamps {
-                let s = (start * 16000.0) as usize;
-                let e = (end * 16000.0) as usize;
-                clean.extend_from_slice(
-                    &audio_data[s.min(audio_data.len())..e.min(audio_data.len())],
-                );
-            }
-
-            // Release locks before transcription to avoid deadlock
-            drop(whisper);
-            drop(vad);
-
-            let result = {
-                let mut whisper = state.whisper.lock().unwrap();
-                whisper.transcribe_audio_data(&clean, app_context.as_deref())
-            };
-
-            let _ = std::fs::remove_file(&path);
-
-            match result {
-                Ok(raw_text) => {
-                    println!("[FINAL_TRANSCRIPT] (Raw)\n{}", raw_text);
-                    let final_text = clean_transcript(&raw_text);
-                    Ok(final_text)
-                }
-                Err(e) => {
-                    eprintln!("[ERROR] Final transcription failed: {}", e);
-                    Ok(format!("Recording saved, but transcription failed: {}", e))
-                }
-            }
+    if active_engine == ASREngine::Parakeet {
+        println!("[PROCESSING] Skipping final pass (Parakeet streaming is sufficient)");
+        let transcript = session_transcript.lock().unwrap().clone();
+        let final_text = if transcript.trim().is_empty() {
+            String::new()
         } else {
-            Ok("Recording saved.".to_string())
+            clean_transcript(&transcript)
+        };
+        println!("[FINAL_TRANSCRIPT] (Raw)\n{}", final_text);
+        if let Some(path) = last_recording_path.as_ref() {
+            let _ = std::fs::remove_file(path);
+        }
+        return Ok(final_text);
+    }
+
+    if let Some(path) = last_recording_path {
+        println!(
+            "[PROCESSING] Running final high-quality transcription with VAD on: {}",
+            path
+        );
+
+        // Snapshot active-app context BEFORE acquiring any locks
+        let app_context = get_active_context();
+        if let Some(ref ctx) = app_context {
+            println!("[CONTEXT] Active window: \"{}\"", ctx);
+        }
+
+        let whisper = whisper_arc.lock().unwrap();
+        let mut audio_data = whisper.load_audio(&path)?;
+
+        // Normalize the full recording before VAD + final transcription
+        normalize_audio(&mut audio_data);
+
+        println!("[PROCESSING] Applying VAD filtering for Whisper...");
+        let mut vad = vad_arc.lock().unwrap();
+        let timestamps = vad.get_speech_timestamps(&audio_data, 500)?;
+
+        let mut clean = Vec::with_capacity(audio_data.len());
+        if timestamps.is_empty() {
+            // VAD found nothing — let Whisper decide rather than hard-failing
+            println!(
+                "[VAD] No speech segments found, passing full audio to Whisper as fallback"
+            );
+            clean.extend_from_slice(&audio_data);
+        }
+        for (start, end) in timestamps {
+            let s = (start * 16000.0) as usize;
+            let e = (end * 16000.0) as usize;
+            clean.extend_from_slice(
+                &audio_data[s.min(audio_data.len())..e.min(audio_data.len())],
+            );
+        }
+
+        // Release locks before transcription to avoid deadlock
+        drop(whisper);
+        drop(vad);
+
+        let result = {
+            let mut whisper = whisper_arc.lock().unwrap();
+            whisper.transcribe_audio_data(&clean, app_context.as_deref())
+        };
+
+        let _ = std::fs::remove_file(&path);
+
+        match result {
+            Ok(raw_text) => {
+                println!("[FINAL_TRANSCRIPT] (Raw)\n{}", raw_text);
+                let final_text = clean_transcript(&raw_text);
+                Ok(final_text)
+            }
+            Err(e) => {
+                eprintln!("[ERROR] Final transcription failed: {}", e);
+                Ok(format!("Recording saved, but transcription failed: {}", e))
+            }
         }
     } else {
-        Err("Not recording".to_string())
+        Ok("Recording saved.".to_string())
     }
+}
+
+/// COMMAND: STOP RECORDING
+///
+/// On macOS this must be async because Tauri 2 runs synchronous commands on the
+/// main (AppKit) thread — blocking it with thread joins + Whisper inference
+/// freezes the entire window. Async commands are dispatched to the tokio runtime
+/// instead, keeping the UI responsive.
+///
+/// On Windows/Linux synchronous commands already run on a thread pool so the
+/// original blocking behaviour is fine, but async is harmless there too.
+#[tauri::command]
+pub async fn stop_recording(state: State<'_, AudioState>) -> Result<String, String> {
+    // --- Quick state access (non-blocking, just mutex snapshots) ---
+    *state.denoiser.lock().unwrap() = None;
+
+    let recording = state.recording_handle.lock().unwrap().take()
+        .ok_or_else(|| "Not recording".to_string())?;
+
+    let active_engine = *state.active_engine.lock().unwrap();
+    let session_transcript = state.session_transcript.clone();
+    let last_recording_path = state.last_recording_path.lock().unwrap().clone();
+    let whisper_arc = state.whisper.clone();
+    let vad_arc = state.vad.clone();
+
+    // --- Heavy work: dispatched off the main thread via spawn_blocking so the
+    //     macOS AppKit event loop stays responsive (thread joins, VAD, Whisper). ---
+    tauri::async_runtime::spawn_blocking(move || {
+        stop_recording_blocking(
+            recording,
+            active_engine,
+            session_transcript,
+            last_recording_path,
+            whisper_arc,
+            vad_arc,
+        )
+    })
+    .await
+    .map_err(|e| format!("stop_recording task failed: {}", e))?
 }
