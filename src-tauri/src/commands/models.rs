@@ -18,20 +18,25 @@ pub fn get_current_model(state: State<AudioState>) -> Result<Option<String>, Str
 }
 
 /// Command to swap the AI model (e.g. from Tiny to Large)
+///
+/// macOS fix: Made async with spawn_blocking because loading/unloading heavy
+/// ML models blocks for seconds. Tauri 2 runs sync commands on the macOS
+/// AppKit main thread, which would freeze the entire window.
 #[tauri::command]
-pub fn switch_model(
-    state: State<AudioState>,
+pub async fn switch_model(
+    state: State<'_, AudioState>,
     model_id: String,
     use_gpu: Option<bool>,
 ) -> Result<String, String> {
     let force_cpu = !use_gpu.unwrap_or(true);
 
     // 1. Safety Check: Don't switch models while recording!
-    let handle = state.recording_handle.lock().unwrap();
-    if handle.is_some() {
-        return Err("Cannot switch models while recording".to_string());
+    {
+        let handle = state.recording_handle.lock().unwrap();
+        if handle.is_some() {
+            return Err("Cannot switch models while recording".to_string());
+        }
     }
-    drop(handle);
 
     println!(
         "[INFO] Switching to model: {}{}",
@@ -39,17 +44,26 @@ pub fn switch_model(
         if force_cpu { " [CPU-only]" } else { "" }
     );
 
-    // 2. Unload Parakeet if loaded (Exclusive Mode)
-    state.parakeet.lock().unwrap().unload();
+    let parakeet_arc = state.parakeet.clone();
+    let whisper_arc = state.whisper.clone();
+    let active_engine_arc = state.active_engine.clone();
+    let mid = model_id.clone();
 
-    // 3. Initialize the new model
-    let mut whisper = state.whisper.lock().unwrap();
-    let res = whisper.initialize(Some(&model_id), force_cpu);
+    tauri::async_runtime::spawn_blocking(move || {
+        // 2. Unload Parakeet if loaded (Exclusive Mode)
+        parakeet_arc.lock().unwrap().unload();
 
-    // Update active engine
-    *state.active_engine.lock().unwrap() = ASREngine::Whisper;
+        // 3. Initialize the new model
+        let mut whisper = whisper_arc.lock().unwrap();
+        let res = whisper.initialize(Some(&mid), force_cpu);
 
-    res
+        // Update active engine
+        *active_engine_arc.lock().unwrap() = ASREngine::Whisper;
+
+        res
+    })
+    .await
+    .map_err(|e| format!("switch_model task failed: {}", e))?
 }
 
 /// List Parakeet models
@@ -59,25 +73,37 @@ pub fn list_parakeet_models() -> Result<Vec<parakeet::ParakeetModelInfo>, String
 }
 
 /// Initialize Parakeet
+///
+/// macOS fix: Made async with spawn_blocking because loading Parakeet's ONNX
+/// models blocks for seconds. Without this, the macOS AppKit main thread
+/// freezes and the window becomes unresponsive.
 #[tauri::command]
-pub fn init_parakeet(
-    state: State<AudioState>,
+pub async fn init_parakeet(
+    state: State<'_, AudioState>,
     model_id: Option<String>,
     use_gpu: Option<bool>,
 ) -> Result<String, String> {
     let force_cpu = !use_gpu.unwrap_or(true);
 
-    // 1. Unload Whisper if loaded (Exclusive Mode)
-    state.whisper.lock().unwrap().unload();
+    let whisper_arc = state.whisper.clone();
+    let parakeet_arc = state.parakeet.clone();
+    let active_engine_arc = state.active_engine.clone();
 
-    // 2. Load Parakeet
-    let mut parakeet = state.parakeet.lock().unwrap();
-    let result = parakeet.initialize(model_id.as_deref(), force_cpu)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // 1. Unload Whisper if loaded (Exclusive Mode)
+        whisper_arc.lock().unwrap().unload();
 
-    // Auto-switch to parakeet if initialized
-    *state.active_engine.lock().unwrap() = ASREngine::Parakeet;
+        // 2. Load Parakeet
+        let mut parakeet = parakeet_arc.lock().unwrap();
+        let result = parakeet.initialize(model_id.as_deref(), force_cpu)?;
 
-    Ok(result)
+        // Auto-switch to parakeet if initialized
+        *active_engine_arc.lock().unwrap() = ASREngine::Parakeet;
+
+        Ok(result)
+    })
+    .await
+    .map_err(|e| format!("init_parakeet task failed: {}", e))?
 }
 
 /// Ask for Parakeet status (Model, Type, Backend)

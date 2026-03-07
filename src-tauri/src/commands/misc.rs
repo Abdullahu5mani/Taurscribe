@@ -71,12 +71,19 @@ pub fn hide_overlay(app: tauri::AppHandle) {
 }
 
 /// Returns the names of all available audio input devices on this machine.
+///
+/// macOS fix: Async with spawn_blocking because cpal device enumeration
+/// touches CoreAudio, which can block and freeze the AppKit main thread.
 #[tauri::command]
-pub fn list_input_devices() -> Vec<String> {
-    let host = cpal::default_host();
-    host.input_devices()
-        .map(|devices| devices.filter_map(|d| d.name().ok()).collect())
-        .unwrap_or_default()
+pub async fn list_input_devices() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let host = cpal::default_host();
+        host.input_devices()
+            .map(|devices| devices.filter_map(|d| d.name().ok()).collect())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 // Simple test command to see if Rust is working
@@ -109,8 +116,17 @@ pub struct SystemInfo {
 }
 
 /// Returns CPU, RAM, and GPU info for the first-launch setup screen.
+///
+/// macOS fix: Async with spawn_blocking because sysinfo + GPU detection
+/// shell out to external commands and can block the AppKit main thread.
 #[tauri::command]
-pub fn get_system_info() -> SystemInfo {
+pub async fn get_system_info() -> Result<SystemInfo, String> {
+    tauri::async_runtime::spawn_blocking(get_system_info_blocking)
+        .await
+        .map_err(|e| format!("get_system_info task failed: {}", e))
+}
+
+fn get_system_info_blocking() -> SystemInfo {
     let mut sys = System::new_all();
     sys.refresh_all();
 
@@ -157,14 +173,112 @@ pub fn get_system_info() -> SystemInfo {
 
 // ── System audio mute / unmute ────────────────────────────────────────────────
 
+/// macOS fix: Async with spawn_blocking — system audio control
+/// may involve CoreAudio calls that block.
 #[tauri::command]
-pub fn mute_system_audio() -> Result<(), String> {
-    crate::system_audio::mute()
+pub async fn mute_system_audio() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| crate::system_audio::mute())
+        .await
+        .map_err(|e| format!("mute_system_audio task failed: {}", e))?
 }
 
+/// macOS fix: Async with spawn_blocking — system audio control
+/// may involve CoreAudio calls that block.
 #[tauri::command]
-pub fn unmute_system_audio() -> Result<(), String> {
-    crate::system_audio::unmute()
+pub async fn unmute_system_audio() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| crate::system_audio::unmute())
+        .await
+        .map_err(|e| format!("unmute_system_audio task failed: {}", e))?
+}
+
+// ── Microphone permission check ───────────────────────────────────────────────
+
+/// Returns "granted", "denied", or "undetermined" for microphone access.
+/// On macOS, this queries AVCaptureDevice authorization status.
+/// On non-macOS platforms, always returns "granted" (no permission gate).
+#[tauri::command]
+pub async fn check_microphone_permission() -> String {
+    tauri::async_runtime::spawn_blocking(check_microphone_permission_blocking)
+        .await
+        .unwrap_or_else(|_| "denied".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn check_microphone_permission_blocking() -> String {
+    // AVAuthorizationStatus: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
+    // AVMediaType.audio raw value = "soun"
+    extern "C" {
+        // [AVCaptureDevice authorizationStatusForMediaType:]
+        fn AVCaptureDeviceAuthorizationStatusForMediaType(
+            media_type: core_foundation::string::CFStringRef,
+        ) -> i64;
+    }
+
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+
+    let media_audio = CFString::new("soun");
+    let status =
+        unsafe { AVCaptureDeviceAuthorizationStatusForMediaType(media_audio.as_concrete_TypeRef()) };
+
+    match status {
+        3 => "granted".to_string(),
+        2 | 1 => "denied".to_string(),
+        _ => "undetermined".to_string(),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn check_microphone_permission_blocking() -> String {
+    "granted".to_string()
+}
+
+/// macOS only: Requests microphone permission by briefly opening an audio input
+/// stream. This triggers the system permission dialog if status is "undetermined".
+/// Returns the updated permission status after the attempt.
+#[tauri::command]
+pub async fn request_microphone_permission() -> String {
+    tauri::async_runtime::spawn_blocking(request_microphone_permission_blocking)
+        .await
+        .unwrap_or_else(|_| "denied".to_string())
+}
+
+fn request_microphone_permission_blocking() -> String {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let host = cpal::default_host();
+    let device = match host.default_input_device() {
+        Some(d) => d,
+        None => return "denied".to_string(),
+    };
+    let config = match device.default_input_config() {
+        Ok(c) => c,
+        Err(_) => return "denied".to_string(),
+    };
+    let config: cpal::StreamConfig = config.into();
+
+    // Open a short-lived stream to trigger the macOS mic permission dialog
+    let stream = device.build_input_stream(
+        &config,
+        move |_data: &[f32], _: &_| {},
+        move |_err| {},
+        None,
+    );
+    match stream {
+        Ok(s) => {
+            let _ = s.play();
+            // Keep stream alive briefly so macOS registers the request
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            drop(s);
+
+            // Re-check permission status
+            #[cfg(target_os = "macos")]
+            { return check_microphone_permission_blocking(); }
+            #[cfg(not(target_os = "macos"))]
+            { return "granted".to_string(); }
+        }
+        Err(_) => "denied".to_string(),
+    }
 }
 
 // ── GPU detection ─────────────────────────────────────────────────────────────

@@ -99,7 +99,11 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete }: Mo
                     })}
                 </div>
 
-                <p className="tier-description">{TIER_DESCRIPTIONS[activeTier]}</p>
+                <p className="tier-description">
+                    {/* macOS fix: Replace "RAM/VRAM" with just "RAM" since Apple
+                        Silicon has unified memory — no separate VRAM concept. */}
+                    {isMac ? TIER_DESCRIPTIONS[activeTier].replace('RAM/VRAM', 'RAM') : TIER_DESCRIPTIONS[activeTier]}
+                </p>
 
                 <div className="model-list">
                     {tierModels.map(m => (

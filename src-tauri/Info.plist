@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- macOS: Usage description shown in the system permission dialog when the
+         app first tries to access the microphone. Without this key, macOS
+         silently denies microphone access and cpal gets no audio data. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Taurscribe needs microphone access to transcribe your speech into text.</string>
+</dict>
+</plist>
