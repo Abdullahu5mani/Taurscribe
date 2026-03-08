@@ -2,6 +2,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 
+// Disable right-click context menu app-wide (native desktop app behaviour)
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+
 const isOverlay = window.location.hash === "#overlay";
 
 if (isOverlay) {
