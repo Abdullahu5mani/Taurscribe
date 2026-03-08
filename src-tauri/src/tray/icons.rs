@@ -112,9 +112,13 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            use tauri::tray::TrayIconEvent;
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
             use tauri::Emitter;
-            if let TrayIconEvent::Click { .. } = event {
+            // Only open the window on left-click. Right-click is handled by
+            // the context menu (.show_menu_on_left_click(false) already gates
+            // menu display, but we must not intercept right-click here or
+            // Windows never shows the menu).
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 if let Some(window) = tray.app_handle().get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -157,9 +161,9 @@ pub fn setup_tray_from_handle(app: &AppHandle) -> Result<(), Box<dyn std::error:
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            use tauri::tray::TrayIconEvent;
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
             use tauri::Emitter;
-            if let TrayIconEvent::Click { .. } = event {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 if let Some(window) = tray.app_handle().get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();

@@ -1,6 +1,26 @@
 /* Taurscribe — Dark Studio Hardware Theme */
 
-@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=Martian+Mono:wght@400;500&display=swap');
+@font-face {
+  font-family: 'Zodiak';
+  src: url('./assets/fonts/Zodiak-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Zodiak';
+  src: url('./assets/fonts/Zodiak-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Zodiak';
+  src: url('./assets/fonts/Zodiak-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
 
 :root {
   /* Base — warm near-black */
@@ -100,6 +120,8 @@ body {
   min-height: 100dvh;
   height: 100dvh;
   overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
   /* no page-level scroll — only feed scrolls */
   background:
     radial-gradient(ellipse 80% 50% at 50% -10%, rgba(224, 159, 62, 0.06) 0%, transparent 50%),
@@ -236,10 +258,10 @@ body {
 
 /* Ticker tape strip (idle): fades in when returning from message */
 .header-ticker {
-  width: 100%;
+  width: 100%;  
   overflow: hidden;
-  mask-image: linear-gradient(to right, transparent 0%, black 8%, black 92%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 8%, black 92%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0%, black 6%, black 94%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 6%, black 94%, transparent 100%);
 }
 
 .header-ticker-fade-in {
@@ -258,7 +280,8 @@ body {
   flex-shrink: 0;
   padding: 0 1.5em;
   font-size: 0.8rem;
-  color: var(--text-muted);
+  color: rgba(160, 160, 175, 0.75);
+  letter-spacing: 0.01em;
 }
 
 .header-ticker-phrase {
@@ -285,8 +308,7 @@ body {
 
 /* Separator between phrases – subtle gray so it doesn’t compete with content */
 .ticker-sep {
-  color: var(--text-muted);
-  opacity: 0.4;
+  color: rgba(255, 255, 255, 0.18);
   font-weight: 300;
   user-select: none;
 }

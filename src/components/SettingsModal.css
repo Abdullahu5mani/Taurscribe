@@ -58,7 +58,7 @@
 
 .settings-header h2 {
   margin: 0;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Zodiak', serif;
   font-size: 1.35rem;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -113,7 +113,7 @@
   color: #6b6b76;
   cursor: pointer;
   transition: all 0.2s;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 500;
   font-size: 0.95rem;
 }
@@ -138,7 +138,7 @@
 }
 
 .settings-section-title {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Zodiak', serif;
   font-size: 1.2rem;
   font-weight: 700;
   margin-bottom: 24px;
@@ -184,7 +184,7 @@
 
 .model-info h3 {
   margin: 0 0 6px 0;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-size: 1rem;
   font-weight: 600;
   color: #ededef;
@@ -195,7 +195,7 @@
   font-size: 0.85rem;
   display: flex;
   gap: 12px;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
 }
 
 .model-tag {
@@ -203,7 +203,7 @@
   padding: 3px 8px;
   border-radius: 6px;
   font-size: 0.72rem;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
   color: #6b6b76;
 }
 
@@ -213,7 +213,7 @@
   color: #e09f3e;
   padding: 8px 16px;
   border-radius: 8px;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 600;
   font-size: 0.9rem;
   cursor: pointer;
@@ -330,7 +330,7 @@
 
 .delete-confirm-label {
   font-size: 0.82rem;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 600;
   color: #f87171;
 }
@@ -339,7 +339,7 @@
   padding: 6px 14px;
   border-radius: 6px;
   font-size: 0.82rem;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
@@ -378,7 +378,7 @@
   padding: 8px 16px;
   border-radius: 8px;
   font-size: 0.85rem;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 600;
   color: #f87171;
   background: rgba(239, 68, 68, 0.08);
@@ -541,14 +541,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 600;
   font-size: 0.95rem;
   color: #ededef;
 }
 
 .setting-card-label-plain {
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 600;
   font-size: 0.95rem;
   color: #ededef;
@@ -556,7 +556,7 @@
 
 .setting-card-meta {
   font-size: 0.72rem;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
   color: #4b4b55;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -593,7 +593,7 @@
 
 .status-badge {
   font-size: 0.8rem;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
   font-weight: 600;
 }
 
@@ -613,7 +613,7 @@
   padding: 6px 10px;
   cursor: pointer;
   outline: none;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
 }
 
 .select-input:disabled {
@@ -639,7 +639,7 @@
   border-radius: 6px;
   padding: 5px 12px;
   font-size: 0.8rem;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -698,7 +698,7 @@
 .model-group-sub {
   font-size: 0.78rem;
   color: #4b4b55;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
 }
 
 .model-group-badge {
@@ -708,7 +708,7 @@
   color: #e09f3e;
   border-radius: 4px;
   padding: 2px 7px;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
 }
 
 .model-group-desc {
@@ -732,7 +732,7 @@
   color: #a855f7;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
 }
 
 .coreml-divider {
@@ -758,7 +758,7 @@
   border: 1px solid rgba(255, 255, 255, 0.07);
   color: #6b6b76;
   font-size: 0.85rem;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
@@ -786,7 +786,7 @@
   font-size: 0.82rem;
   color: #4b4b55;
   margin: 0 0 16px;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
 }
 
 /* Recommended wrapper */
@@ -812,7 +812,7 @@
   left: 16px;
   transform: translateY(-50%);
   font-size: 0.68rem;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -843,7 +843,7 @@
   border: 1px solid rgba(255, 255, 255, 0.07);
   color: #6b6b76;
   font-size: 0.82rem;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   cursor: pointer;
   transition: all 0.15s;
   text-align: center;
@@ -889,7 +889,7 @@
 .backend-toggle-btn {
   padding: 6px 14px;
   font-size: 0.82rem;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 500;
   color: #6b6b76;
   background: transparent;
@@ -960,7 +960,7 @@
   cursor: pointer;
   font: inherit;
   font-size: 13px;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   transition: background 0.15s, color 0.15s;
 }
 
@@ -1010,7 +1010,7 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #ededef;
   font-size: 0.8rem;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
   letter-spacing: 0.03em;
 }
 
@@ -1076,7 +1076,7 @@
 }
 
 .hotkey-step-num {
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
   font-size: 0.72rem;
   color: #4b4b55;
   min-width: 20px;
@@ -1110,7 +1110,7 @@
   color: #6b6b76;
   min-width: 34px;
   text-align: right;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
 }
 
 .sound-events {
@@ -1134,7 +1134,7 @@
 .sound-event-file {
   font-size: 0.75rem;
   color: #4b4b55;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
 }
 
 /* ── About tab ─────────────────────────────────────────────────────── */
@@ -1152,7 +1152,7 @@
 }
 
 .about-app-name {
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 700;
   font-size: 1.3rem;
   color: #ededef;
@@ -1162,7 +1162,7 @@
 
 .about-version {
   font-size: 0.78rem;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
   color: #4b4b55;
 }
 
@@ -1193,7 +1193,7 @@
 
 .about-path {
   font-size: 0.75rem;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
   color: #e09f3e;
   word-break: break-all;
   text-align: right;
@@ -1231,7 +1231,7 @@
 .dict-field-label {
   font-size: 0.72rem;
   color: #6b6b76;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1244,7 +1244,7 @@
   font-size: 0.875rem;
   padding: 9px 12px;
   outline: none;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   transition: border-color 0.15s;
   width: 100%;
   box-sizing: border-box;
@@ -1371,7 +1371,7 @@
   font-size: 0.875rem;
   padding: 9px 12px;
   outline: none;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   transition: border-color 0.15s;
   width: 100%;
   box-sizing: border-box;
@@ -1437,7 +1437,7 @@
 .snippet-label {
   font-size: 0.72rem;
   color: #6b6b76;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'Zodiak', serif;
   text-transform: uppercase;
   flex-shrink: 0;
   min-width: 28px;
@@ -1491,7 +1491,7 @@
 }
 
 .close-behavior-option-title {
-  font-family: 'Barlow', sans-serif;
+  font-family: 'Zodiak', serif;
   font-weight: 600;
   font-size: 0.88rem;
   color: #ededef;
