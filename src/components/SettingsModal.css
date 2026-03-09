@@ -59,7 +59,7 @@
 .settings-header h2 {
   margin: 0;
   font-family: 'Zodiak', serif;
-  font-size: 1.35rem;
+  font-size: var(--font-md);
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -69,8 +69,8 @@
 .close-btn {
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.06);
-  color: #6b6b76;
-  font-size: 1.25rem;
+  color: var(--text-secondary);
+  font-size: var(--font-md);
   cursor: pointer;
   padding: 8px;
   border-radius: 10px;
@@ -110,12 +110,12 @@
   gap: 12px;
   padding: 12px 16px;
   border-radius: 10px;
-  color: #6b6b76;
+  color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.2s;
   font-family: 'Zodiak', serif;
   font-weight: 500;
-  font-size: 0.95rem;
+  font-size: var(--font-base);
 }
 
 .settings-nav-item:hover {
@@ -139,7 +139,7 @@
 
 .settings-section-title {
   font-family: 'Zodiak', serif;
-  font-size: 1.2rem;
+  font-size: var(--font-md);
   font-weight: 700;
   margin-bottom: 24px;
   color: #ededef;
@@ -185,14 +185,14 @@
 .model-info h3 {
   margin: 0 0 6px 0;
   font-family: 'Zodiak', serif;
-  font-size: 1rem;
+  font-size: var(--font-base);
   font-weight: 600;
   color: #ededef;
 }
 
 .model-meta {
-  color: #6b6b76;
-  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
   display: flex;
   gap: 12px;
   font-family: 'Zodiak', serif;
@@ -202,9 +202,9 @@
   background: rgba(255, 255, 255, 0.06);
   padding: 3px 8px;
   border-radius: 6px;
-  font-size: 0.72rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
-  color: #6b6b76;
+  color: var(--text-secondary);
 }
 
 .download-btn {
@@ -215,7 +215,7 @@
   border-radius: 8px;
   font-family: 'Zodiak', serif;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: var(--font-base);
   cursor: pointer;
   transition: all 0.2s;
   display: flex;
@@ -329,7 +329,7 @@
 }
 
 .delete-confirm-label {
-  font-size: 0.82rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   font-weight: 600;
   color: #f87171;
@@ -338,7 +338,7 @@
 .delete-confirm-btn {
   padding: 6px 14px;
   border-radius: 6px;
-  font-size: 0.82rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   font-weight: 600;
   cursor: pointer;
@@ -377,7 +377,7 @@
   gap: 6px;
   padding: 8px 16px;
   border-radius: 8px;
-  font-size: 0.85rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   font-weight: 600;
   color: #f87171;
@@ -490,7 +490,7 @@
   width: 18px;
   left: 2px;
   bottom: 2px;
-  background: #6b6b76;
+  background: var(--text-muted);
   transition: 0.25s ease;
   border-radius: 50%;
 }
@@ -543,19 +543,19 @@
   gap: 8px;
   font-family: 'Zodiak', serif;
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: var(--font-base);
   color: #ededef;
 }
 
 .setting-card-label-plain {
   font-family: 'Zodiak', serif;
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: var(--font-base);
   color: #ededef;
 }
 
 .setting-card-meta {
-  font-size: 0.72rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   color: #4b4b55;
   background: rgba(255, 255, 255, 0.04);
@@ -565,8 +565,8 @@
 }
 
 .setting-card-desc {
-  font-size: 0.875rem;
-  color: #6b6b76;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
   margin: 0 0 14px;
   line-height: 1.55;
 }
@@ -580,8 +580,8 @@
 }
 
 .setting-row-label {
-  font-size: 0.82rem;
-  color: #6b6b76;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
 }
 
 .status-dot {
@@ -592,13 +592,13 @@
 }
 
 .status-badge {
-  font-size: 0.8rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   font-weight: 600;
 }
 
 .saved-confirm {
-  font-size: 0.78rem;
+  font-size: var(--font-sm);
   color: #3ecfa5;
 }
 
@@ -609,7 +609,7 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: #ededef;
   border-radius: 8px;
-  font-size: 0.85rem;
+  font-size: var(--font-sm);
   padding: 6px 10px;
   cursor: pointer;
   outline: none;
@@ -624,7 +624,7 @@
 .select-input--full {
   width: 100%;
   padding: 10px 12px;
-  font-size: 0.875rem;
+  font-size: var(--font-sm);
 }
 
 /* ── Ghost button ──────────────────────────────────────────────────── */
@@ -638,7 +638,7 @@
   color: #94a3b8;
   border-radius: 6px;
   padding: 5px 12px;
-  font-size: 0.8rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   cursor: pointer;
   transition: all 0.15s;
@@ -696,13 +696,13 @@
 }
 
 .model-group-sub {
-  font-size: 0.78rem;
+  font-size: var(--font-sm);
   color: #4b4b55;
   font-family: 'Zodiak', serif;
 }
 
 .model-group-badge {
-  font-size: 0.7rem;
+  font-size: var(--font-xs);
   background: rgba(224, 159, 62, 0.1);
   border: 1px solid rgba(224, 159, 62, 0.25);
   color: #e09f3e;
@@ -712,8 +712,8 @@
 }
 
 .model-group-desc {
-  font-size: 0.85rem;
-  color: #6b6b76;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
   margin: 8px 0 14px;
   line-height: 1.5;
 }
@@ -727,7 +727,7 @@
 }
 
 .settings-section-subtitle {
-  font-size: 0.8rem;
+  font-size: var(--font-sm);
   font-weight: 600;
   color: #a855f7;
   text-transform: uppercase;
@@ -756,8 +756,8 @@
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  color: #6b6b76;
-  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   font-weight: 500;
   cursor: pointer;
@@ -783,7 +783,7 @@
 }
 
 .tier-description {
-  font-size: 0.82rem;
+  font-size: var(--font-sm);
   color: #4b4b55;
   margin: 0 0 16px;
   font-family: 'Zodiak', serif;
@@ -811,7 +811,7 @@
   top: 0;
   left: 16px;
   transform: translateY(-50%);
-  font-size: 0.68rem;
+  font-size: var(--font-xs);
   font-family: 'Zodiak', serif;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -841,8 +841,8 @@
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  color: #6b6b76;
-  font-size: 0.82rem;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   cursor: pointer;
   transition: all 0.15s;
@@ -866,14 +866,14 @@
 }
 
 .pp-tab-note {
-  font-size: 0.8rem;
+  font-size: var(--font-sm);
   color: #4b4b55;
   margin-top: 24px;
   text-align: center;
 }
 
 .pp-tab-note strong {
-  color: #6b6b76;
+  color: var(--text-secondary);
 }
 
 /* ── Backend toggle (GPU / CPU segmented control) ─────────────────── */
@@ -888,10 +888,10 @@
 
 .backend-toggle-btn {
   padding: 6px 14px;
-  font-size: 0.82rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   font-weight: 500;
-  color: #6b6b76;
+  color: var(--text-secondary);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -930,13 +930,13 @@
 }
 
 .audio-detecting {
-  font-size: 0.85rem;
+  font-size: var(--font-sm);
   color: #4b4b55;
 }
 
 .audio-no-devices {
   margin-top: 10px;
-  font-size: 0.8rem;
+  font-size: var(--font-sm);
   color: #ef4444;
 }
 
@@ -959,7 +959,7 @@
   border: none;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   transition: background 0.15s, color 0.15s;
 }
@@ -1009,7 +1009,7 @@
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: #ededef;
-  font-size: 0.8rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   letter-spacing: 0.03em;
 }
@@ -1027,8 +1027,8 @@
 }
 
 .hotkey-capture-hint {
-  font-size: 0.82rem;
-  color: #6b6b76;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
   margin: 0;
   line-height: 1.5;
 }
@@ -1047,7 +1047,7 @@
 }
 
 .hotkey-capture-placeholder {
-  font-size: 0.8rem;
+  font-size: var(--font-sm);
   color: #4b4b55;
 }
 
@@ -1057,7 +1057,7 @@
 }
 
 .hotkey-supported-keys {
-  font-size: 0.74rem;
+  font-size: var(--font-sm);
   color: #4b4b55;
   margin: 0;
 }
@@ -1077,7 +1077,7 @@
 
 .hotkey-step-num {
   font-family: 'Zodiak', serif;
-  font-size: 0.72rem;
+  font-size: var(--font-sm);
   color: #4b4b55;
   min-width: 20px;
 }
@@ -1106,8 +1106,8 @@
 }
 
 .volume-pct {
-  font-size: 0.78rem;
-  color: #6b6b76;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
   min-width: 34px;
   text-align: right;
   font-family: 'Zodiak', serif;
@@ -1127,12 +1127,12 @@
 }
 
 .sound-event-name {
-  font-size: 0.85rem;
+  font-size: var(--font-sm);
   color: #ededef;
 }
 
 .sound-event-file {
-  font-size: 0.75rem;
+  font-size: var(--font-sm);
   color: #4b4b55;
   font-family: 'Zodiak', serif;
 }
@@ -1154,14 +1154,14 @@
 .about-app-name {
   font-family: 'Zodiak', serif;
   font-weight: 700;
-  font-size: 1.3rem;
+  font-size: var(--font-md);
   color: #ededef;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
 .about-version {
-  font-size: 0.78rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   color: #4b4b55;
 }
@@ -1180,19 +1180,19 @@
 }
 
 .about-row-label {
-  font-size: 0.82rem;
-  color: #6b6b76;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 
 .about-row-value {
-  font-size: 0.82rem;
+  font-size: var(--font-sm);
   color: #ededef;
   text-align: right;
 }
 
 .about-path {
-  font-size: 0.75rem;
+  font-size: var(--font-sm);
   font-family: 'Zodiak', serif;
   color: #e09f3e;
   word-break: break-all;
@@ -1229,8 +1229,8 @@
 }
 
 .dict-field-label {
-  font-size: 0.72rem;
-  color: #6b6b76;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
   font-family: 'Zodiak', serif;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1241,7 +1241,7 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: #ededef;
   border-radius: 8px;
-  font-size: 0.875rem;
+  font-size: var(--font-sm);
   padding: 9px 12px;
   outline: none;
   font-family: 'Zodiak', serif;
@@ -1260,20 +1260,20 @@
 
 .dict-input--inline {
   padding: 7px 10px;
-  font-size: 0.82rem;
+  font-size: var(--font-sm);
 }
 
 .dict-arrow,
 .dict-arrow-sm {
   color: #4b4b55;
-  font-size: 1.1rem;
+  font-size: var(--font-md);
   font-weight: 600;
   flex-shrink: 0;
   padding-bottom: 6px;
 }
 
 .dict-arrow-sm {
-  font-size: 0.9rem;
+  font-size: var(--font-base);
   padding-bottom: 0;
 }
 
@@ -1301,7 +1301,7 @@
 .dict-delete {
   background: transparent;
   border: 1px solid rgba(239, 68, 68, 0.15);
-  color: #6b6b76;
+  color: var(--text-secondary);
   border-radius: 6px;
   padding: 6px;
   cursor: pointer;
@@ -1324,23 +1324,23 @@
   gap: 10px;
   padding: 24px 16px;
   color: #4b4b55;
-  font-size: 0.85rem;
+  font-size: var(--font-sm);
   justify-content: center;
 }
 
 .dict-empty-icon {
-  font-size: 1.2rem;
+  font-size: var(--font-md);
 }
 
 .dict-tab-note {
-  font-size: 0.8rem;
+  font-size: var(--font-sm);
   color: #4b4b55;
   margin-top: 16px;
   text-align: center;
 }
 
 .dict-tab-note strong {
-  color: #6b6b76;
+  color: var(--text-secondary);
 }
 
 /* ── Snippets tab ─────────────────────────────────────────────────── */
@@ -1368,7 +1368,7 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: #ededef;
   border-radius: 8px;
-  font-size: 0.875rem;
+  font-size: var(--font-sm);
   padding: 9px 12px;
   outline: none;
   font-family: 'Zodiak', serif;
@@ -1390,7 +1390,7 @@
 
 .snippet-textarea--inline {
   padding: 7px 10px;
-  font-size: 0.82rem;
+  font-size: var(--font-sm);
   flex: 1;
 }
 
@@ -1435,8 +1435,8 @@
 }
 
 .snippet-label {
-  font-size: 0.72rem;
-  color: #6b6b76;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
   font-family: 'Zodiak', serif;
   text-transform: uppercase;
   flex-shrink: 0;
@@ -1493,12 +1493,12 @@
 .close-behavior-option-title {
   font-family: 'Zodiak', serif;
   font-weight: 600;
-  font-size: 0.88rem;
+  font-size: var(--font-sm);
   color: #ededef;
 }
 
 .close-behavior-option-desc {
-  font-size: 0.8rem;
-  color: #6b6b76;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
   line-height: 1.45;
 }

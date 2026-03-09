@@ -216,6 +216,8 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - [ ] File / Audio Import (Drag-and-drop `.wav`, `.mp3`, `.m4a`)
  - [x] Smart Punctuation & Formatting
 - [ ] Auto-Update Mechanism (Tauri updater plugin)
+- [ ] VAD Sensitivity Controller (Adjustable threshold slider + Auto-calibration mode like Discord's automatic voice detection)
+- [ ] DeepFilterNet3 Noise Suppression (Replace RNNoise with state-of-the-art deep learning denoiser for dramatically cleaner audio in noisy environments)
 - [x] Accessibility (Screen reader, keyboard navigation, high-contrast)
 - [x] First Launch & Guide Screen (Onboarding flow)
 - [x] Overlay Recording Mode (Press and hold to record, release to stop)

@@ -23,9 +23,9 @@
 
 /* ---- macOS: traffic lights left, title center ---- */
 .titlebar--mac {
-  height: 38px;
+  height: 2.375rem;   /* 38px at 16px root — scales with fluid font-size */
   padding-left: 0;
-  padding-right: 12px;
+  padding-right: 0.75rem;
   justify-content: flex-start;
 }
 
@@ -47,7 +47,7 @@
 
 .titlebar-title {
   font-family: "Zodiak", serif;
-  font-size: 0.8rem;
+  font-size: var(--font-sm);
   font-weight: 700;
   letter-spacing: 0.05em;
   color: var(--text-secondary);
@@ -90,8 +90,8 @@
 
 /* ---- Windows: title left, controls right ---- */
 .titlebar--win {
-  height: 32px;
-  padding: 0 0 0 12px;
+  height: 2rem;      /* 32px at 16px root — scales with fluid font-size */
+  padding: 0 0 0 0.75rem;
   justify-content: space-between;
 }
 
@@ -109,8 +109,8 @@
 }
 
 .titlebar--win .titlebar-btn {
-  width: 46px;
-  height: 32px;
+  width: 2.875rem;
+  height: 2rem;
   border: none;
   padding: 0;
   cursor: pointer;

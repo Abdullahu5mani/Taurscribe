@@ -137,31 +137,39 @@ llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
     "dynamic-link",
 ] }
 llama-cpp-sys-2 = "=0.1.134"
-# 3b. Linux (x86_64) -> CUDA + TensorRT
-# CUDA: NVIDIA GPU acceleration (primary)
-# TensorRT: NVIDIA optimized inference
-# WebGPU: Cross-platform GPU (AMD/Intel fallback)
-# XNNPACK: CPU optimization
+# 3b. Linux (x86_64) — CPU / GPU build
+# -------------------------------------------------------------------------
+# DEFAULT: CPU-only. Works on any Linux machine (AMD, Intel, NVIDIA without CUDA).
+# FOR GPU BUILD: uncomment the cuda/vulkan/tensorrt features below.
+#
+# Prerequisites for GPU build:
+#   - CUDA Toolkit 12.x:  https://developer.nvidia.com/cuda-downloads
+#   - Vulkan SDK:         sudo apt install vulkan-tools libvulkan-dev
+#   Then: export CARGO_FEATURES="cuda" before running tauri build
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
+# GPU: replace the line above with:
+# whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = ["cuda", "vulkan"] }
 
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
-    "cuda",
-    "vulkan",
-] }
-parakeet-rs = { version = "=0.3.0", features = ["cuda"] }
+parakeet-rs = { version = "=0.3.0" }
+# GPU: replace the line above with:
+# parakeet-rs = { version = "=0.3.0", features = ["cuda"] }
+
 ort = { version = "2.0.0-rc.11", features = [
     "download-binaries",
-    "cuda",
-    "tensorrt",
     "xnnpack",
 ] }
-# llama-cpp-2 with CUDA + dynamic-link for LLM GPU acceleration
+# GPU: replace the line above with:
+# ort = { version = "2.0.0-rc.11", features = ["download-binaries", "cuda", "tensorrt", "xnnpack"] }
+
 llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
     "dynamic-link",
-    "cuda",
 ] }
+# GPU: replace the line above with:
+# llama-cpp-2 = { version = "=0.1.134", default-features = false, features = ["dynamic-link", "cuda"] }
+
 llama-cpp-sys-2 = "=0.1.134"
 # 4. Windows (ARM64) -> DirectML + XNNPACK# DirectML: Hardware-accelerated on Qualcomm Snapdragon X ARM processors
 # XNNPACK: Cross-platform CPU optimization
