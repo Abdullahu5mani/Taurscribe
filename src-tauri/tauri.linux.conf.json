@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": ["linux-libs/*"],
+    "linux": {
+      "deb": {
+        "depends": ["libgtk-3-0", "libwebkit2gtk-4.1-0", "libssl3", "libayatana-appindicator3-1"]
+      },
+      "rpm": {
+        "depends": ["gtk3", "webkit2gtk4.1", "openssl", "libappindicator-gtk3"]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  }
+}
