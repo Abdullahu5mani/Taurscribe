@@ -357,6 +357,16 @@ jobs:
           echo "CMAKE_CXX_COMPILER_LAUNCHER=" >> $env:GITHUB_ENV
           echo "CMAKE_DISABLE_FIND_PACKAGE_Ccache=TRUE" >> $env:GITHUB_ENV
 
+      # llama-cpp-sys-2 build.rs creates .so symlinks without checking if they exist first.
+      # When rust-cache restores stale symlinks from a previous run, the build script
+      # panics with Os { code: 17, AlreadyExists }. Remove the stale build dir so it
+      # starts fresh each time.
+      - name: Clean stale llama-cpp-sys-2 build cache (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          find src-tauri/target -maxdepth 6 -type d -name 'llama-cpp-sys-2-*' \
+            -path '*/release/build/*' -exec rm -rf {} + 2>/dev/null || true
+
       # Build Rust binary first (with target flag)
       - name: Build Rust binary
         run: |
@@ -371,12 +381,13 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
-          # Windows: serial CMake builds to avoid whisper-rs-sys vs llama-cpp-sys-2 ggml.c race (LNK1181). Others: parallel.
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
+          # Serial CMake builds on Windows and Linux to avoid whisper-rs-sys vs llama-cpp-sys-2
+          # ggml.c race condition (LNK1181 on Windows, duplicate symbol errors on Linux).
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ (contains(matrix.platform, 'windows') || contains(matrix.platform, 'ubuntu')) && '1' || '4' }}
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
-          # Disable ggml/ccache on Windows to fix path mismatch; allow on macOS/Linux.
-          GGML_CCACHE: ${{ contains(matrix.platform, 'windows') && 'OFF' || 'ON' }}
+          # CCACHE_DISABLE=1 is set globally; keep GGML_CCACHE=OFF everywhere to stay consistent.
+          GGML_CCACHE: "OFF"
           
           # Windows: use Ninja (simpler, avoids MSBuild/ExternalProject path issues). macOS/Linux: Unix Makefiles.
           CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
@@ -463,12 +474,13 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
-          # Windows: serial CMake builds to avoid whisper-rs-sys vs llama-cpp-sys-2 ggml.c race (LNK1181). Others: parallel.
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
+          # Serial CMake builds on Windows and Linux to avoid whisper-rs-sys vs llama-cpp-sys-2
+          # ggml.c race condition.
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ (contains(matrix.platform, 'windows') || contains(matrix.platform, 'ubuntu')) && '1' || '4' }}
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
-          # Disable ggml/ccache on Windows to fix path mismatch; allow on macOS/Linux.
-          GGML_CCACHE: ${{ contains(matrix.platform, 'windows') && 'OFF' || 'ON' }}
+          # CCACHE_DISABLE=1 is set globally; keep GGML_CCACHE=OFF everywhere to stay consistent.
+          GGML_CCACHE: "OFF"
           
           # Windows: use Ninja (simpler, avoids MSBuild/ExternalProject path issues). macOS/Linux: Unix Makefiles.
           CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
