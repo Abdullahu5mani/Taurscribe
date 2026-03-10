@@ -7,7 +7,7 @@
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "bun run build",
-    "beforeBundleCommand": "bun scripts/copy-dlls.ts && bun scripts/bundle-macos-dylibs.ts",
+    "beforeBundleCommand": "bun scripts/bundle-macos-dylibs.ts",
     "frontendDist": "../dist"
   },
   "app": {
@@ -50,16 +50,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "../target/release/DirectML.dll": ".",
-      "../target/release/ggml-base.dll": ".",
-      "../target/release/ggml-cpu.dll": ".",
-      "../target/release/ggml.dll": ".",
-      "../target/release/llama.dll": ".",
-      "../target/release/onnxruntime_providers_cuda.dll": ".",
-      "../target/release/onnxruntime_providers_shared.dll": ".",
-      "../target/release/onnxruntime_providers_tensorrt.dll": "."
-    },
+    "resources": [],
     "macOS": {
       "minimumSystemVersion": "13.4",
       "entitlements": "Entitlements.plist",

@@ -45,7 +45,11 @@ if (platform() === "darwin") {
   });
   process.exit(result.status ?? 0);
 } else if (platform() === "win32") {
-  bundleWindowsDlls();
+  // Windows DLL bundling is handled by scripts/copy-dlls.ts
+  // which runs first in the beforeBundleCommand chain and updates
+  // tauri.conf.json + tauri.windows.conf.json with the correct
+  // resource map (DLLs → root install directory).
+  process.exit(0);
 } else {
   process.exit(0);
 }
