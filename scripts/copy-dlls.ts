@@ -1,59 +1,61 @@
-#!/usr/bin/env bun
-// Windows DLL bundling script - runs BEFORE Tauri bundles the installer
-// Ensures all runtime DLLs are next to the .exe so Tauri includes them
-
-import { existsSync, copyFileSync } from "fs";
+#!/usr/bin/env node
+import { existsSync, readdirSync, writeFileSync } from "fs";
 import { join } from "path";
 
-// Platform check - only run on Windows
-const isWindows = process.platform === "win32";
-if (!isWindows) {
-  console.log("⊘ Skipping DLL bundling (not Windows)");
+// Only run on Windows
+const platform = process.platform;
+if (platform !== "win32") {
+  console.log("⏭ Skipping DLL bundling (not Windows)");
   process.exit(0);
 }
 
 const releaseDir = join(process.cwd(), "src-tauri", "target", "release");
-const exePath = join(releaseDir, "taurscribe.exe");
+const configPath = join(process.cwd(), "src-tauri", "tauri.conf.json");
 
-// Only run if the exe has been built
-if (!existsSync(exePath)) {
-  console.log("⊘ Skipping DLL bundling (taurscribe.exe not built yet)");
+// Expected DLL patterns to bundle
+const dllPatterns = [
+  /^llama\.dll$/,
+  /^ggml.*\.dll$/,
+  /^DirectML\.dll$/,
+  /^onnxruntime.*\.dll$/,
+];
+
+// Scan release directory for matching DLLs
+if (!existsSync(releaseDir)) {
+  console.error(`❌ Release directory not found: ${releaseDir}`);
+  console.error("   Run 'cargo build --release' first");
+  process.exit(1);
+}
+
+const allFiles = readdirSync(releaseDir);
+const foundDlls = allFiles.filter((file) =>
+  dllPatterns.some((pattern) => pattern.test(file))
+);
+
+if (foundDlls.length === 0) {
+  console.warn("⚠ No DLLs found to bundle");
   process.exit(0);
 }
 
-// List of DLLs to bundle
-const dlls = [
-  "llama.dll",
-  "ggml.dll",
-  "ggml-base.dll",
-  "ggml-cpu.dll",
-  "DirectML.dll",
-  "onnxruntime_providers_shared.dll",
-  "onnxruntime_providers_cuda.dll",
-  "onnxruntime_providers_tensorrt.dll",
-];
+console.log(`📦 Found ${foundDlls.length} DLL(s) to bundle:`);
+foundDlls.forEach((dll) => console.log(`   - ${dll}`));
 
-console.log("📦 Ensuring DLLs are bundled with taurscribe.exe...\n");
+// Read current tauri.conf.json
+const config = JSON.parse(
+  require("fs").readFileSync(configPath, "utf8")
+);
 
-// All DLLs should already be in releaseDir (built by cargo)
-// Just verify they exist - Tauri will automatically include them
-let found = 0;
-let missing = 0;
-
-dlls.forEach((dll) => {
-  const dllPath = join(releaseDir, dll);
-  if (existsSync(dllPath)) {
-    console.log(`✓ Found ${dll}`);
-    found++;
-  } else {
-    console.warn(`⚠ Missing ${dll} (will not be bundled)`);
-    missing++;
-  }
+// Build resources map: { "src": "dest" }
+const resources = {};
+foundDlls.forEach((dll) => {
+  resources[`../target/release/${dll}`] = ".";
 });
 
-console.log(`\n✓ DLL check complete: ${found} found, ${missing} missing`);
-if (missing > 0) {
-  console.warn("\n⚠ Some DLLs are missing. The app may not work correctly.");
-}
+// Update config
+config.bundle.resources = resources;
 
-process.exit(0);
+// Write back to tauri.conf.json
+writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+
+console.log(`✓ Updated tauri.conf.json with ${foundDlls.length} resource(s)`);
+console.log("✓ DLL bundling configuration complete");
