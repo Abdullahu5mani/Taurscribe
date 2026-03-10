@@ -11,6 +11,7 @@ if (platform !== "win32") {
 
 const releaseDir = join(process.cwd(), "src-tauri", "target", "release");
 const configPath = join(process.cwd(), "src-tauri", "tauri.conf.json");
+const windowsConfigPath = join(process.cwd(), "src-tauri", "tauri.windows.conf.json");
 
 // Expected DLL patterns to bundle
 const dllPatterns = [
@@ -57,5 +58,13 @@ config.bundle.resources = resources;
 // Write back to tauri.conf.json
 writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 
+// Also update tauri.windows.conf.json
+const windowsConfig = JSON.parse(
+  require("fs").readFileSync(windowsConfigPath, "utf8")
+);
+windowsConfig.bundle.resources = resources;
+writeFileSync(windowsConfigPath, JSON.stringify(windowsConfig, null, 2) + "\n");
+
 console.log(`✓ Updated tauri.conf.json with ${foundDlls.length} resource(s)`);
+console.log(`✓ Updated tauri.windows.conf.json with ${foundDlls.length} resource(s)`);
 console.log("✓ DLL bundling configuration complete");
