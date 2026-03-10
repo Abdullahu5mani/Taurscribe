@@ -376,7 +376,9 @@ jobs:
             \( -name 'libllama*' -o -name 'libggml*' \) -delete 2>/dev/null || true
 
       # Build Rust binary first (with target flag)
+      # On Windows, this is handled by build-windows.ts in the Bundle step
       - name: Build Rust binary
+        if: matrix.os_name != 'Windows'
         run: |
           cd src-tauri
           cargo build --release --target ${{ matrix.target }}
@@ -461,7 +463,8 @@ jobs:
         # Remove the extra "--" before --bundles
         run: |
           if [ "${{ matrix.os_name }}" = "Windows" ]; then
-            bun run tauri build --target ${{ matrix.target }} --bundles nsis
+            # Use build-windows.ts which handles DLL bundling
+            bun scripts/build-windows.ts --bundles nsis
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
             bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm
           else

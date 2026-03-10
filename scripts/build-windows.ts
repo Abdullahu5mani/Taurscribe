@@ -33,7 +33,17 @@ import { spawnSync } from "child_process";
 
 const root = join(import.meta.dir, "..");
 const srcTauri = join(root, "src-tauri");
-const releaseDir = join(srcTauri, "target", "release");
+
+// Parse CLI args to get target triple (e.g. --target x86_64-pc-windows-msvc)
+const args = process.argv.slice(2);
+const targetIdx = args.indexOf("--target");
+const targetTriple = targetIdx !== -1 && args[targetIdx + 1] ? args[targetIdx + 1] : null;
+
+// Determine release directory based on whether --target was specified
+const releaseDir = targetTriple
+  ? join(srcTauri, "target", targetTriple, "release")
+  : join(srcTauri, "target", "release");
+
 const windowsConfPath = join(srcTauri, "tauri.windows.conf.json");
 
 // DLL patterns to bundle
@@ -73,7 +83,12 @@ process.on("SIGINT", () => {
 
 // ── Step 1: Build Rust binary ────────────────────────────────
 console.log("\n🔨 Step 1: Building Rust binary...\n");
-const cargoBuild = spawnSync("cargo", ["build", "--release"], {
+const cargoArgs = ["build", "--release"];
+if (targetTriple) {
+  cargoArgs.push("--target", targetTriple);
+  console.log(`Building for target: ${targetTriple}`);
+}
+const cargoBuild = spawnSync("cargo", cargoArgs, {
   stdio: "inherit",
   cwd: srcTauri,
   shell: true,
