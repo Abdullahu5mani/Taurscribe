@@ -76,6 +76,18 @@ pub fn run() {
 
     // 4. Build the Tauri App
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // This callback is called when a second instance tries to launch.
+            // Instead of allowing it, we bring the existing window to the front.
+            println!("[INFO] Second instance detected - focusing existing window");
+            
+            let windows = app.webview_windows();
+            if let Some(window) = windows.values().next() {
+                let _ = window.show();
+                let _ = window.set_focus();
+                let _ = window.unminimize();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AudioState::new(whisper, parakeet, vad))
