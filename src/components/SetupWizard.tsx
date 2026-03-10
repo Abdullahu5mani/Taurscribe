@@ -71,7 +71,12 @@ export function SetupWizard({ onComplete }: Props) {
       case 1: return <StepHardware sysInfo={sysInfo} platform={platform} onNext={next} onBack={back} />;
       case 2: return <StepEngines onNext={next} onBack={back} platform={platform} />;
       case 3: return <StepHotkey onNext={next} onBack={back} platform={platform} />;
-      case 4: return <StepPermissions onNext={next} onBack={back} platform={platform} />;
+      case 4: 
+        // Skip permissions step on non-macOS platforms
+        if (platform !== 'macos') {
+          return <StepReady onComplete={onComplete} />;
+        }
+        return <StepPermissions onNext={next} onBack={back} platform={platform} />;
       case 5: return <StepReady onComplete={onComplete} />;
       default: return null;
     }
@@ -360,11 +365,6 @@ function StepPermissions({
   const [micRequesting, setMicRequesting] = useState(false);
   const initialAccRef = useRef<boolean | null>(null);
 
-  // Non-macOS: no permissions ceremony needed — skip this step instantly.
-  useEffect(() => {
-    if (platform !== '' && !isMac) onNext();
-  }, [platform, isMac, onNext]);
-
   const checkStatuses = useCallback(async () => {
     try {
       const mic = await invoke<string>('check_microphone_permission');
@@ -403,8 +403,6 @@ function StepPermissions({
   const relaunchApp = async () => {
     try { await invoke('relaunch_app'); } catch {}
   };
-
-  if (!isMac) return null;
 
   const micOk = micStatus === 'granted';
   const accOk = accGranted === true;
