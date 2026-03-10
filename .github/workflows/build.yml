@@ -357,15 +357,23 @@ jobs:
           echo "CMAKE_CXX_COMPILER_LAUNCHER=" >> $env:GITHUB_ENV
           echo "CMAKE_DISABLE_FIND_PACKAGE_Ccache=TRUE" >> $env:GITHUB_ENV
 
-      # llama-cpp-sys-2 build.rs creates .so symlinks without checking if they exist first.
-      # When rust-cache restores stale symlinks from a previous run, the build script
-      # panics with Os { code: 17, AlreadyExists }. Remove the stale build dir so it
-      # starts fresh each time.
+      # llama-cpp-sys-2 build.rs hard-links .so files from its out/lib/ into
+      # target/<triple>/release/ and deps/. On Linux with shared libs, cmake
+      # installs versioned symlinks (libllama.so -> libllama.so.0). hard_link()
+      # on a symlink creates a hard link to the symlink inode, producing a broken
+      # symlink in the target dir (the relative target like "libllama.so.0" doesn't
+      # exist there). When rust-cache restores these broken symlinks, the build.rs
+      # check `if !dst.exists()` passes (broken symlinks return false), but
+      # hard_link() panics with Os { code: 17, AlreadyExists } because the path
+      # entry still exists. Fix: remove both the build dirs AND the stale .so
+      # entries from the target profile directories.
       - name: Clean stale llama-cpp-sys-2 build cache (Linux)
         if: contains(matrix.platform, 'ubuntu')
         run: |
           find src-tauri/target -maxdepth 6 -type d -name 'llama-cpp-sys-2-*' \
             -path '*/release/build/*' -exec rm -rf {} + 2>/dev/null || true
+          find src-tauri/target -maxdepth 5 -path '*/release/*' ! -path '*/build/*' \
+            \( -name 'libllama*' -o -name 'libggml*' \) -delete 2>/dev/null || true
 
       # Build Rust binary first (with target flag)
       - name: Build Rust binary
