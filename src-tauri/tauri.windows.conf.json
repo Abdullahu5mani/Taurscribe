@@ -1,7 +1,5 @@
 {
   "bundle": {
-    "resources": {
-      "windows-dlls/*.dll": "."
-    }
+    "resources": ["windows-dlls/*"]
   }
 }
