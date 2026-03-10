@@ -383,7 +383,10 @@ jobs:
             $portableDir = "taurscribe-portable"
             New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
             Copy-Item $binaryPath "$portableDir/"
-            Get-ChildItem "$releaseDir/*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$portableDir/"
+            # DLLs are staged to src-tauri/windows-dlls/ by beforeBundleCommand.
+            # Also check the release dir as a fallback (in case Cargo copied them there).
+            Get-ChildItem "src-tauri/windows-dlls/*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$portableDir/"
+            Get-ChildItem "$releaseDir/*.dll" -ErrorAction SilentlyContinue | Where-Object { -not (Test-Path "$portableDir/$($_.Name)") } | Copy-Item -Destination "$portableDir/"
             Compress-Archive -Path "$portableDir/*" -DestinationPath "taurscribe-$tag-windows-$arch-portable.zip"
             echo "PORTABLE_ZIP=taurscribe-$tag-windows-$arch-portable.zip" >> $env:GITHUB_ENV
           }
