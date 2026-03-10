@@ -525,8 +525,10 @@ jobs:
             $webview2 = "$releaseDir/WebView2Loader.dll"
             if (Test-Path $webview2) { Copy-Item $webview2 "$portableDir/" }
             
-            # Copy any sidecar DLLs
-            Get-ChildItem "$releaseDir/*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$portableDir/"
+            # DLLs (llama.dll, ggml.dll) are staged to src-tauri/windows-dlls/ by beforeBundleCommand.
+            # Also check the release dir as a fallback.
+            Get-ChildItem "src-tauri/windows-dlls/*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$portableDir/"
+            Get-ChildItem "$releaseDir/*.dll" -ErrorAction SilentlyContinue | Where-Object { -not (Test-Path "$portableDir/$($_.Name)") } | Copy-Item -Destination "$portableDir/"
             
             Compress-Archive -Path "$portableDir/*" -DestinationPath "taurscribe-0.1.0-windows-$arch-portable.zip"
             echo "Created: taurscribe-0.1.0-windows-$arch-portable.zip"
