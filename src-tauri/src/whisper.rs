@@ -376,8 +376,16 @@ impl WhisperManager {
 
     /// Check for NVIDIA drivers
     fn is_cuda_available(&self) -> bool {
-        std::process::Command::new("nvidia-smi")
-            .output()
+        let mut cmd = std::process::Command::new("nvidia-smi");
+        
+        // Windows: Hide console window to prevent flashing
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW flag
+        }
+        
+        cmd.output()
             .map(|output| output.status.success()) // True if command ran successfully
             .unwrap_or(false) // False if command failed/not found
     }
