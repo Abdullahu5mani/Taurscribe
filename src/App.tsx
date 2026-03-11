@@ -59,7 +59,7 @@ const ANIMATED_LOGOS = [
 ];
 
 // Ticker phrases defined outside the component so the array is never recreated on render
-type TickerHighlight = "accent" | "whisper" | "parakeet";
+type TickerHighlight = "accent" | "whisper" | "parakeet" | "granite";
 const TICKER_PHRASES: { parts: { text: string; highlight?: TickerHighlight }[] }[] = [
   { parts: [{ text: "100% " }, { text: "local", highlight: "accent" }, { text: " · nothing leaves your machine" }] },
   { parts: [{ text: "OpenAI " }, { text: "Whisper", highlight: "whisper" }, { text: " & NVIDIA " }, { text: "Parakeet", highlight: "parakeet" }, { text: " · GPU-accelerated" }] },
@@ -238,6 +238,7 @@ function App() {
   const {
     models, setModels, currentModel, setCurrentModel,
     parakeetModels, setParakeetModels, currentParakeetModel, setCurrentParakeetModel,
+    graniteModels, setGraniteModels, currentGraniteModel, setCurrentGraniteModel,
     refreshModels,
   } = useModels(setHeaderStatus);
 
@@ -299,11 +300,12 @@ function App() {
       setSettingsModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false, verified: false } : m));
 
       // If the deleted model was the one currently loaded, turn off the LED.
-      if (currentModel === id || currentParakeetModel === id) {
+      if (currentModel === id || currentParakeetModel === id || currentGraniteModel === id) {
         setLoadedEngine(null);
       }
       if (currentModel === id) setCurrentModel(null);
       if (currentParakeetModel === id) setCurrentParakeetModel(null);
+      if (currentGraniteModel === id) setCurrentGraniteModel(null);
 
       await refreshModels(false);
     } catch (e) {
@@ -327,11 +329,12 @@ function App() {
     loadedEngine, setLoadedEngine,
     isLoading, setIsLoading, isLoadingRef,
     loadingTargetEngine, transferLineFadingOut, setTransferLineFadingOut,
-    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet,
+    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToGranite,
   } = useEngineSwitch({
-    models, parakeetModels, currentModel, currentParakeetModel,
-    setCurrentModel, setCurrentParakeetModel, setBackendInfo,
-    storeRef, setHeaderStatus, setTrayState, asrBackend,
+    models, parakeetModels, graniteModels,
+    currentModel, currentParakeetModel, currentGraniteModel,
+    setCurrentModel, setCurrentParakeetModel, setCurrentGraniteModel,
+    setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
   });
 
   const { volume, muted, setVolume, setMuted, playStart, playPaste, playError } = useSounds();
@@ -385,8 +388,9 @@ function App() {
     // Fast-path: If the active engine has no loaded model, just update preference immediately.
     const hasWhisperModel = engine === "whisper" && !!currentModel;
     const hasParakeetModel = engine === "parakeet" && (currentParakeetModel || parakeetModels.length > 0);
+    const hasGraniteModel = engine === "granite_speech" && graniteModels.length > 0;
 
-    if (!hasWhisperModel && !hasParakeetModel) {
+    if (!hasWhisperModel && !hasParakeetModel && !hasGraniteModel) {
       setHeaderStatus(`ASR backend set to ${label}`);
       return;
     }
@@ -416,6 +420,12 @@ function App() {
         const info = await invoke("get_backend_info");
         setBackendInfo(info as string);
         setHeaderStatus(`Parakeet running on ${label}`);
+      } else if (engine === "granite_speech") {
+        await invoke("init_granite_speech", { forceCpu: !useGpu });
+        setLoadedEngine("granite_speech");
+        const info = await invoke("get_backend_info");
+        setBackendInfo(info as string);
+        setHeaderStatus(`Granite Speech running on ${label}`);
       }
     } catch (e) {
       setHeaderStatus(`Failed to switch to ${label}: ${e}`, 5000);
@@ -468,7 +478,12 @@ function App() {
         if (cancelled) return;
         setCurrentParakeetModel(pStatus.model_id ?? "");
 
-        let savedEngine: "whisper" | "parakeet" | null = null;
+        const gModels = await invoke("list_granite_models") as typeof graniteModels;
+        if (cancelled) return;
+        setGraniteModels(gModels);
+        if (gModels.length > 0) setCurrentGraniteModel(gModels[0].id);
+
+        let savedEngine: "whisper" | "parakeet" | "granite_speech" | null = null;
         try {
           const loadedStore = await Store.load("settings.json");
           if (cancelled) return;
@@ -497,7 +512,7 @@ function App() {
             invoke("set_close_behavior", { behavior: savedCloseBehavior }).catch(() => { });
           }
 
-          savedEngine = (await loadedStore.get<"whisper" | "parakeet">("active_engine")) || null;
+          savedEngine = (await loadedStore.get<"whisper" | "parakeet" | "granite_speech">("active_engine")) || null;
           if (savedEngine) {
             setActiveEngine(savedEngine);
             activeEngineRef.current = savedEngine;
@@ -523,6 +538,27 @@ function App() {
             } catch (e) {
               if (cancelled) return;
               setHeaderStatus(`Failed to auto-load Parakeet: ${e}`, 5000);
+            } finally {
+              if (!cancelled) {
+                isLoadingRef.current = false;
+                setIsLoading(false);
+                setLoadingMessage("");
+              }
+            }
+          } else if (savedEngine === "granite_speech" && gModels.length > 0) {
+            isLoadingRef.current = true;
+            setIsLoading(true);
+            setLoadingMessage("Loading Granite Speech...");
+            try {
+              if (cancelled) return;
+              await invoke("init_granite_speech", {});
+              if (cancelled) return;
+              setCurrentGraniteModel(gModels[0].id);
+              setLoadedEngine("granite_speech");
+              setHeaderStatus("Granite Speech model loaded");
+            } catch (e) {
+              if (cancelled) return;
+              setHeaderStatus(`Failed to auto-load Granite Speech: ${e}`, 5000);
             } finally {
               if (!cancelled) {
                 isLoadingRef.current = false;
@@ -737,7 +773,7 @@ function App() {
         <span key={i} className="header-ticker-phrase">
           {phrase.parts.map((p, j) => {
             if (!p.highlight) return p.text;
-            const cls = p.highlight === "whisper" ? "ticker-whisper" : p.highlight === "parakeet" ? "ticker-parakeet" : "ticker-accent";
+            const cls = p.highlight === "whisper" ? "ticker-whisper" : p.highlight === "parakeet" ? "ticker-parakeet" : p.highlight === "granite" ? "ticker-granite" : "ticker-accent";
             return <span key={j} className={cls}>{p.text}</span>;
           })}
         </span>,
@@ -748,10 +784,12 @@ function App() {
   // --- Derived UI state ---
   const noWhisperModel = models.length === 0;
   const noParakeetModel = parakeetModels.length === 0;
-  const noAnyAsrModel = noWhisperModel && noParakeetModel;
+  const noGraniteModel = graniteModels.length === 0;
+  const noAnyAsrModel = noWhisperModel && noParakeetModel && noGraniteModel;
   const activeEngineHasNoModel =
     (activeEngine === "whisper" && noWhisperModel) ||
-    (activeEngine === "parakeet" && noParakeetModel);
+    (activeEngine === "parakeet" && noParakeetModel) ||
+    (activeEngine === "granite_speech" && noGraniteModel);
   const noModel = activeEngineHasNoModel;
   const noLlm = llmStatus === "Not Downloaded";
 
@@ -1000,6 +1038,40 @@ function App() {
                 </span>
               </div>
             </div>
+
+            <div
+              className={`status-card granite ${activeEngine === "granite_speech" ? "active" : ""}`}
+              onClick={handleSwitchToGranite}
+              style={isLoading ? { pointerEvents: 'none' } : {}}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === "Enter" && handleSwitchToGranite()}
+            >
+              <div className="status-card-header">
+                <span className="engine-badge">Granite</span>
+                <div className="status-card-header-right">
+                  <span className="info-icon" data-tooltip="IBM Granite 4.0 1B Speech — encoder-decoder ONNX model. English speech recognition.">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="16" x2="12" y2="12" />
+                      <line x1="12" y1="8" x2="12.01" y2="8" />
+                    </svg>
+                  </span>
+                  <span
+                    className={`led-dot ${loadingTargetEngine === "granite_speech" ? "loading" :
+                      loadedEngine === "granite_speech" ? "loaded" : "unloaded"
+                      }`}
+                    aria-label={loadingTargetEngine === "granite_speech" ? "Loading" : loadedEngine === "granite_speech" ? "Loaded" : "Unloaded"}
+                  />
+                </div>
+              </div>
+              <div className="status-item">
+                <span className="status-label">Model</span>
+                <span className={`status-value ${graniteModels.length === 0 ? "error" : ""}`}>
+                  {graniteModels.length === 0 ? "Download required" : (graniteModels.find(m => m.id === currentGraniteModel) ?? graniteModels[0]).display_name}
+                </span>
+              </div>
+            </div>
           </div>
 
           <div className="model-row">
@@ -1032,7 +1104,7 @@ function App() {
                         ))}
                     </select>
                   </>
-                ) : (
+                ) : activeEngine === "parakeet" ? (
                   <>
                     <span className="model-label">Active model</span>
                     <div
@@ -1050,6 +1122,27 @@ function App() {
                         parakeetModels.length === 0
                           ? "Download Nemotron from Settings"
                           : `${beautifyModelName(parakeetModels[0]?.display_name || "Nemotron")} (${formatSize(parakeetModels[0]?.size_mb || 0)})`
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <span className="model-label">Active model</span>
+                    <div
+                      className="model-select"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'default',
+                        background: graniteModels.length === 0 ? 'rgba(220, 38, 38, 0.08)' : 'var(--bg-tertiary)',
+                        color: graniteModels.length === 0 ? 'var(--error)' : 'inherit'
+                      }}
+                    >
+                      {isInitialLoading ? "Loading..." : (
+                        graniteModels.length === 0
+                          ? "Download Granite Speech from Settings"
+                          : `${graniteModels[0]?.display_name} (${formatSize(graniteModels[0]?.size_mb || 0)})`
                       )}
                     </div>
                   </>
@@ -1155,15 +1248,19 @@ function App() {
                     ? "No speech model downloaded"
                     : activeEngine === "whisper"
                       ? "No Whisper model downloaded"
-                      : "Parakeet not downloaded"}
+                      : activeEngine === "parakeet"
+                        ? "Parakeet not downloaded"
+                        : "Granite Speech not downloaded"}
                 </h2>
                 <p className="empty-state-body">
                   {noAnyAsrModel ? (
-                    <>Download a <strong>Whisper</strong> or <strong>Parakeet</strong> model to start transcribing. Whisper Base is a good starting point — it's fast and accurate.</>
+                    <>Download a <strong>Whisper</strong>, <strong>Parakeet</strong>, or <strong>Granite Speech</strong> model to start transcribing. Whisper Base is a good starting point — it's fast and accurate.</>
                   ) : activeEngine === "whisper" ? (
                     <>You're on the <strong>Whisper</strong> engine but haven't downloaded a model yet. Try <strong>Whisper Base</strong> — it's small and accurate. Or switch to Parakeet if you already have it.</>
-                  ) : (
+                  ) : activeEngine === "parakeet" ? (
                     <>You're on the <strong>Parakeet</strong> engine but the Nemotron model isn't downloaded yet. Switch to Whisper if you already have a model, or download Parakeet from Settings.</>
+                  ) : (
+                    <>You're on the <strong>Granite Speech</strong> engine but the model isn't downloaded yet. Switch to Whisper or Parakeet if you already have a model, or download Granite Speech from Settings.</>
                   )}
                 </p>
                 {!noAnyAsrModel && (
@@ -1172,7 +1269,9 @@ function App() {
                       ? <><IconLightbulb size={14} /> You already have a Parakeet model — click the Parakeet card above to switch.</>
                       : activeEngine === "parakeet" && !noWhisperModel
                         ? <><IconLightbulb size={14} /> You already have a Whisper model — click the Whisper card above to switch.</>
-                        : null}
+                        : activeEngine === "granite_speech" && !noWhisperModel
+                          ? <><IconLightbulb size={14} /> You already have a Whisper model — click the Whisper card above to switch.</>
+                          : null}
                   </p>
                 )}
                 <button

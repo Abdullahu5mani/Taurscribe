@@ -34,6 +34,7 @@ chrono = "0.4"
 # NOTE: Disabled CUDA/Vulkan for now - enable if you have CUDA Toolkit and Vulkan SDK installed
 # --- General Dependencies (Required on ALL platforms) ---
 rubato = "0.14"
+half = "2"
 dirs = "6.0.0"
 rdev = { git = "https://github.com/rustdesk-org/rdev.git" }
 regex = "1.12.2"
@@ -54,6 +55,10 @@ llama-cpp-sys-2 = "=0.1.134"
 encoding_rs = "0.8"
 anyhow = "1.0"
 ndarray = "0.15"
+# FFT for Granite Speech mel-spectrogram computation
+rustfft = "6.2"
+# HuggingFace tokenizer for Granite Speech BPE token encoding/decoding
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
 
 # RNNoise noise suppression (pure Rust, no C deps, CPU-only, cross-platform)
@@ -69,7 +74,7 @@ notify = "6.1"
 # -------------------------------------------------------------------------
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 parakeet-rs = { version = "=0.3.0" }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "half"] }
 # Downloader & Verification
 futures-util = "0.3.31"
 reqwest = { version = "0.13.1", default-features = false, features = [
@@ -96,7 +101,7 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "coreml",
 ] }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack", "half"] }
 # llama-cpp-2: Uses Metal automatically on macOS (no special feature needed)
 llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
     "dynamic-link",
@@ -132,6 +137,7 @@ ort = { version = "2.0.0-rc.11", features = [
     "directml",
     "tensorrt",
     "xnnpack",
+    "half",
 ] }
 # llama-cpp-2 with dynamic-link (CPU-only LLM on Windows to avoid CUDA build issues)
 llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
@@ -162,6 +168,7 @@ ort = { version = "2.0.0-rc.11", features = [
     "cuda",
     "tensorrt",
     "xnnpack",
+    "half",
 ] }
 
 llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
@@ -183,6 +190,7 @@ ort = { version = "2.0.0-rc.11", features = [
     "download-binaries",
     "directml",
     "xnnpack",
+    "half",
 ] }
 parakeet-rs = { version = "=0.3.0", features = ["directml"] }
 
@@ -192,7 +200,7 @@ parakeet-rs = { version = "=0.3.0", features = ["directml"] }
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 parakeet-rs = { version = "=0.3.0" }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack"] }
+ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack", "half"] }
 
 # Speed up dev builds by optimizing dependencies but not your code
 [profile.dev]

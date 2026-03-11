@@ -12,6 +12,7 @@ pub enum AppState {
 pub enum ASREngine {
     Whisper,
     Parakeet,
+    GraniteSpeech,
 }
 
 /// Recording mode: hold keys down the whole time, or press once to start / again to stop.

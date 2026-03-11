@@ -16,6 +16,12 @@ export interface ParakeetModelInfo {
     size_mb: number;
 }
 
+export interface GraniteSpeechModelInfo {
+    id: string;
+    display_name: string;
+    size_mb: number;
+}
+
 export interface ParakeetStatus {
     loaded: boolean;
     model_id: string | null;
@@ -31,6 +37,8 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
     const [currentModel, setCurrentModel] = useState<string | null>(null);
     const [parakeetModels, setParakeetModels] = useState<ParakeetModelInfo[]>([]);
     const [currentParakeetModel, setCurrentParakeetModel] = useState<string | null>(null);
+    const [graniteModels, setGraniteModels] = useState<GraniteSpeechModelInfo[]>([]);
+    const [currentGraniteModel, setCurrentGraniteModel] = useState<string | null>(null);
 
     const refreshModels = async (showToast = true) => {
         try {
@@ -41,11 +49,17 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
             const pModels = await invoke("list_parakeet_models") as ParakeetModelInfo[];
             setParakeetModels(pModels);
 
+            const gModels = await invoke("list_granite_models") as GraniteSpeechModelInfo[];
+            setGraniteModels(gModels);
+
             if (modelList.length > 0) {
                 setCurrentModel(prev => prev ?? modelList[0].id);
             }
             if (pModels.length > 0) {
                 setCurrentParakeetModel(prev => prev ?? pModels[0].id);
+            }
+            if (gModels.length > 0) {
+                setCurrentGraniteModel(prev => prev ?? gModels[0].id);
             }
 
             if (showToast) {
@@ -65,6 +79,10 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
         setParakeetModels,
         currentParakeetModel,
         setCurrentParakeetModel,
+        graniteModels,
+        setGraniteModels,
+        currentGraniteModel,
+        setCurrentGraniteModel,
         refreshModels,
     };
 }

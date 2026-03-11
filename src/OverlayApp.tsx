@@ -5,7 +5,7 @@ import "./OverlayApp.css";
 type Phase = "recording" | "transcribing" | "correcting" | "done" | "too_short";
 interface Payload { phase: Phase | "hidden"; text?: string; ms?: number; }
 
-const BAR_COUNT = 16;
+const BAR_COUNT = 17;
 const ATTACK = 0.35;  // rise speed  (0 = frozen, 1 = instant)
 const DECAY  = 0.12;  // fall speed  (lower = slower fade-out)
 
@@ -53,14 +53,36 @@ export function OverlayApp() {
         listen<number>("audio-level", (e) => {
             const raw = e.payload;
             const prev = smoothedRef.current;
-            // Shift buffer and append new value
-            const shifted = [...prev.slice(1), raw];
-            // Apply asymmetric EMA: fast attack, slow decay
-            const smoothed = shifted.map((val, i) => {
-                const old = prev[i < prev.length - 1 ? i + 1 : i];
+            // Put newest value in the centre bar and push older samples
+            // outward to the left and right.  This keeps the “current” level
+            // visually centred instead of continually drifting right.
+            const mid = Math.floor(BAR_COUNT / 2);
+            const centred = [...prev];
+            // shift left half one step toward the left edge
+            for (let i = 0; i < mid; i++) {
+                centred[i] = prev[i + 1];
+            }
+            // shift right half one step toward the right edge
+            for (let i = mid + 1; i < BAR_COUNT; i++) {
+                centred[i] = prev[i - 1];
+            }
+            centred[mid] = raw;
+
+            // apply the same asymmetric EMA smoothing used previously
+            const smoothed = centred.map((val, i) => {
+                // determine the corresponding “old” value in the prior buffer
+                let old;
+                if (i === mid) {
+                    old = prev[mid];
+                } else if (i < mid) {
+                    old = prev[i + 1];
+                } else {
+                    old = prev[i - 1];
+                }
                 const alpha = val > old ? ATTACK : DECAY;
                 return old + alpha * (val - old);
             });
+
             smoothedRef.current = smoothed;
             setLevels(smoothed);
         }).then(fn => { unlisten = fn; });

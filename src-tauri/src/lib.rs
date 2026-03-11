@@ -3,6 +3,8 @@ mod audio;
 mod commands;
 mod context;
 mod denoise;
+mod granite_features;
+mod granite_speech;
 mod hotkeys;
 mod llm;
 mod parakeet;
@@ -17,6 +19,7 @@ mod watcher;
 mod whisper;
 
 // Imports
+use granite_speech::GraniteSpeechManager;
 use parakeet::ParakeetManager;
 use state::AudioState;
 use tauri::Manager;
@@ -74,6 +77,10 @@ pub fn run() {
     // NOTE: Parakeet is NOT lazy-loaded at startup anymore to save VRAM.
     // It will be loaded on demand when the user switches to it.
 
+    // 3b. Initialize Granite Speech (lazy-loaded on demand)
+    println!("[INFO] Initializing Granite Speech ASR manager...");
+    let granite_speech = GraniteSpeechManager::new();
+
     // 4. Build the Tauri App
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -90,7 +97,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .manage(AudioState::new(whisper, parakeet, vad))
+        .manage(AudioState::new(whisper, parakeet, vad, granite_speech))
         .setup(|app| {
             // Safety: if the app crashed mid-recording while system audio was
             // muted, restore it now so the user doesn't start with no sound.
@@ -191,7 +198,10 @@ pub fn run() {
             commands::open_accessibility_settings,
             commands::relaunch_app,
             commands::get_close_behavior,
-            commands::set_close_behavior
+            commands::set_close_behavior,
+            commands::init_granite_speech,
+            commands::get_granite_speech_status,
+            commands::list_granite_models
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

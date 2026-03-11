@@ -46,6 +46,7 @@ pub async fn start_recording(
     let last_recording_path_arc = state.last_recording_path.clone();
     let session_transcript_arc = state.session_transcript.clone();
     let denoiser_state_arc = state.denoiser.clone();
+    let granite_speech_arc = state.granite_speech.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         start_recording_blocking(
@@ -60,6 +61,7 @@ pub async fn start_recording(
             last_recording_path_arc,
             session_transcript_arc,
             denoiser_state_arc,
+            granite_speech_arc,
         )
     })
     .await
@@ -80,6 +82,7 @@ fn start_recording_blocking(
     last_recording_path_arc: Arc<std::sync::Mutex<Option<String>>>,
     session_transcript_arc: Arc<std::sync::Mutex<String>>,
     denoiser_state_arc: Arc<std::sync::Mutex<Option<Denoiser>>>,
+    granite_speech_arc: Arc<std::sync::Mutex<crate::granite_speech::GraniteSpeechManager>>,
 ) -> Result<String, String> {
     let denoise_enabled = denoise.unwrap_or(false);
     // 1. Setup Microphone
@@ -121,10 +124,10 @@ fn start_recording_blocking(
 
     // 3. Reset AI Context (Start fresh for new recording)
     let active_engine = *active_engine_arc.lock().unwrap();
-    if active_engine == ASREngine::Whisper {
-        whisper_arc.lock().unwrap().clear_context();
-    } else {
-        parakeet_arc.lock().unwrap().clear_context();
+    match active_engine {
+        ASREngine::Whisper => whisper_arc.lock().unwrap().clear_context(),
+        ASREngine::Parakeet => parakeet_arc.lock().unwrap().clear_context(),
+        ASREngine::GraniteSpeech => { /* Granite Speech is stateless per chunk */ }
     }
     // Reset Silero VAD LSTM state so prior session context doesn't bleed in
     vad_arc.lock().unwrap().reset_state();
@@ -203,6 +206,7 @@ fn start_recording_blocking(
     // Get shared references to our AI tools
     let whisper = whisper_arc.clone();
     let parakeet_manager = parakeet_arc.clone();
+    let granite_speech = granite_speech_arc.clone();
     let vad = vad_arc.clone();
     let active_engine = *active_engine_arc.lock().unwrap();
     let session_transcript = session_transcript_arc.clone();
@@ -284,6 +288,68 @@ fn start_recording_blocking(
                         );
                     }
                 }
+            } else if active_engine == ASREngine::GraniteSpeech {
+                // Granite Speech: VAD-gated, chunk-based (same pattern as Whisper)
+                buffer.extend(samples);
+
+                while buffer.len() >= chunk_size {
+                    if buffer.len() > max_buffer_size {
+                        println!("[WARNING] Buffer full, dropping old audio to catch up");
+                        buffer.drain(..chunk_size);
+                    }
+                    let mut chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
+                    normalize_audio(&mut chunk);
+                    let vad_chunk: Vec<f32> = if sample_rate != 16000 {
+                        let ratio = sample_rate as f64 / 16000.0;
+                        let out_len = (chunk.len() as f64 / ratio) as usize;
+                        (0..out_len)
+                            .map(|i| chunk[(i as f64 * ratio) as usize])
+                            .collect()
+                    } else {
+                        chunk.clone()
+                    };
+                    let is_speech = vad.lock().unwrap().is_speech(&vad_chunk).unwrap_or(0.5);
+
+                    if is_speech > 0.35 {
+                        println!(
+                            "[PROCESSING] 🪨 Speech ({:.0}%) - Granite transcribing {:.2}s chunk...",
+                            is_speech * 100.0,
+                            6.0
+                        );
+                        let start_time = std::time::Instant::now();
+                        match granite_speech
+                            .lock()
+                            .unwrap()
+                            .transcribe_chunk(&chunk, sample_rate)
+                        {
+                            Ok(transcript) => {
+                                if !transcript.trim().is_empty() {
+                                    let elapsed = start_time.elapsed().as_millis() as u32;
+                                    println!(
+                                        "[TRANSCRIPT] 🪨 \"{}\" (took {}ms)",
+                                        transcript, elapsed
+                                    );
+                                    let _ = app_clone.emit(
+                                        "transcription-chunk",
+                                        TranscriptionChunk {
+                                            text: transcript.clone(),
+                                            processing_time_ms: elapsed,
+                                            method: "GraniteSpeech".to_string(),
+                                        },
+                                    );
+                                    let mut session = session_transcript.lock().unwrap();
+                                    session.push_str(&transcript);
+                                }
+                            }
+                            Err(e) => eprintln!("[ERROR] Granite Speech error: {}", e),
+                        }
+                    } else {
+                        println!(
+                            "[VAD] 🔇 Silence ({:.0}%) - Skipping Granite chunk",
+                            (1.0 - is_speech) * 100.0
+                        );
+                    }
+                }
             } else {
                 buffer.extend(samples);
 
@@ -349,6 +415,15 @@ fn start_recording_blocking(
                     .unwrap()
                     .transcribe_chunk(&chunk, sample_rate)
                     .ok();
+            } else if active_engine == ASREngine::GraniteSpeech {
+                let mut gs = granite_speech.lock().unwrap();
+                if let Ok(transcript) = gs.transcribe_chunk(&chunk, sample_rate) {
+                    if !transcript.is_empty() {
+                        let mut session = session_transcript.lock().unwrap();
+                        session.push_str(&transcript);
+                        println!("[TRANSCRIPT] 🪨 (Final) \"{}\"", transcript);
+                    }
+                }
             } else {
                 let mut p_manager = parakeet_manager.lock().unwrap();
                 if let Ok(transcript) = p_manager.transcribe_chunk(&chunk, sample_rate) {
@@ -370,6 +445,15 @@ fn start_recording_blocking(
                         .unwrap()
                         .transcribe_chunk(&buffer, sample_rate)
                         .ok();
+                } else if active_engine == ASREngine::GraniteSpeech {
+                    let mut gs = granite_speech.lock().unwrap();
+                    if let Ok(transcript) = gs.transcribe_chunk(&buffer, sample_rate) {
+                        if !transcript.is_empty() {
+                            let mut session = session_transcript.lock().unwrap();
+                            session.push_str(&transcript);
+                            println!("[TRANSCRIPT] 🪨 (Final Partial) \"{}\"", transcript);
+                        }
+                    }
                 } else {
                     let mut p_manager = parakeet_manager.lock().unwrap();
                     if let Ok(transcript) = p_manager.transcribe_chunk(&buffer, sample_rate) {
@@ -707,8 +791,9 @@ fn stop_recording_blocking(
     }
     println!("[INFO] Worker threads finished.");
 
-    if active_engine == ASREngine::Parakeet {
-        println!("[PROCESSING] Skipping final pass (Parakeet streaming is sufficient)");
+    if active_engine == ASREngine::Parakeet || active_engine == ASREngine::GraniteSpeech {
+        let engine_name = if active_engine == ASREngine::Parakeet { "Parakeet" } else { "Granite Speech" };
+        println!("[PROCESSING] Skipping final pass ({} streaming is sufficient)", engine_name);
         let transcript = session_transcript.lock().unwrap().clone();
         let final_text = if transcript.trim().is_empty() {
             String::new()
