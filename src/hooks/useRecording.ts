@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
-import type { ModelInfo, ParakeetModelInfo } from "./useModels";
+import type { ModelInfo, ParakeetModelInfo, GraniteSpeechModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
@@ -10,6 +10,7 @@ interface UseRecordingParams {
     activeEngineRef: React.RefObject<ASREngine>;
     models: ModelInfo[];
     parakeetModels: ParakeetModelInfo[];
+    graniteModels: GraniteSpeechModelInfo[];
     currentModel: string | null;
     currentParakeetModel: string | null;
     setCurrentModel: (id: string) => void;
@@ -41,6 +42,7 @@ export function useRecording({
     activeEngineRef,
     models,
     parakeetModels,
+    graniteModels,
     currentModel,
     currentParakeetModel,
     setCurrentModel,
@@ -112,6 +114,26 @@ export function useRecording({
                 }
             } catch (e) {
                 setHeaderStatus("Failed to initialize Parakeet: " + e, 5000);
+                return;
+            }
+        }
+
+        if (currentEngine === "granite_speech") {
+            if (graniteModels.length === 0) {
+                setHeaderStatus("No Granite Speech model installed! Download it from Settings.", 5000);
+                setIsSettingsOpen(true);
+                return;
+            }
+            try {
+                const gStatus = await invoke("get_granite_speech_status") as { loaded: boolean };
+                if (!gStatus.loaded) {
+                    setHeaderStatus("Loading Granite Speech...", 60_000);
+                    await invoke("init_granite_speech", {});
+                    setLoadedEngine("granite_speech");
+                    setHeaderStatus("Granite Speech loaded");
+                }
+            } catch (e) {
+                setHeaderStatus("Failed to initialize Granite Speech: " + e, 5000);
                 return;
             }
         }

@@ -44,13 +44,13 @@
   --accent-primary-dark: #c48a2f;
   --accent-glow:         rgba(224, 159, 62, 0.4);
 
-  /* 10% — Engine status colours */
-  --whisper-color: #6895d2;
-  --whisper-glow:  rgba(104, 149, 210, 0.25);
-  --parakeet-color: #3ecfa5;
-  --parakeet-glow:  rgba(62, 207, 165, 0.25);
-  --granite-color:  #a78bfa;
-  --granite-glow:   rgba(167, 139, 250, 0.25);
+  /* 10% — Engine status colours (brand-accurate) */
+  --whisper-color: #10a37f;           /* OpenAI brand teal */
+  --whisper-glow:  rgba(16, 163, 127, 0.25);
+  --parakeet-color: #76b900;          /* NVIDIA official green */
+  --parakeet-glow:  rgba(118, 185, 0, 0.25);
+  --granite-color:  #0f62fe;          /* IBM Carbon blue */
+  --granite-glow:   rgba(15, 98, 254, 0.25);
 
   /* 10% — Recording / processing indicators */
   --recording:      #dc2626;
@@ -656,7 +656,7 @@ body {
 /* ---- Engine cards (hardware modules) ---- */
 .status-bar-container {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 1.25rem;
   width: 100%;
   align-items: center;
@@ -2074,13 +2074,19 @@ body {
   white-space: nowrap;
 }
 
-.feed-badge-engine--parakeet {
-  color: var(--parakeet-color);
-  border-color: rgba(62, 207, 165, 0.4);
+.feed-badge-engine--whisper {
+  color: var(--whisper-color);
+  border-color: rgba(16, 163, 127, 0.4);
 }
 
-.feed-badge-engine--whisper {
-  color: var(--text-secondary);
+.feed-badge-engine--parakeet {
+  color: var(--parakeet-color);
+  border-color: rgba(118, 185, 0, 0.4);
+}
+
+.feed-badge-engine--granite_speech {
+  color: var(--granite-color);
+  border-color: rgba(15, 98, 254, 0.4);
 }
 
 .feed-badge-llm {
@@ -2261,12 +2267,17 @@ body {
 
 .history-badge-engine--whisper {
   color: var(--whisper-color);
-  border-color: rgba(59, 130, 246, 0.4);
+  border-color: rgba(16, 163, 127, 0.4);
 }
 
 .history-badge-engine--parakeet {
   color: var(--parakeet-color);
-  border-color: rgba(62, 207, 165, 0.4);
+  border-color: rgba(118, 185, 0, 0.4);
+}
+
+.history-badge-engine--granite_speech {
+  color: var(--granite-color);
+  border-color: rgba(15, 98, 254, 0.4);
 }
 
 .history-delete-btn {

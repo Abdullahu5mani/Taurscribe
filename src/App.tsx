@@ -349,7 +349,7 @@ function App() {
     latestLatency,
     handleStartRecording, handleStopRecording,
   } = useRecording({
-    activeEngineRef, models, parakeetModels, currentModel, currentParakeetModel,
+    activeEngineRef, models, parakeetModels, graniteModels, currentModel, currentParakeetModel,
     setCurrentModel, setLoadedEngine, enableGrammarLMRef,
     enableDenoiseRef, enableOverlayRef, muteBackgroundAudioRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
     playStart, playPaste, playError,
@@ -811,6 +811,16 @@ function App() {
     else handleStartRecording();
   };
 
+  const colorizeStatusMessage = (msg: string) => {
+    const parts = msg.split(/(Granite Speech|Whisper|Parakeet|Granite)/g);
+    return parts.map((part, i) => {
+      if (part === "Whisper") return <span key={i} style={{ color: 'var(--whisper-color)' }}>{part}</span>;
+      if (part === "Parakeet") return <span key={i} style={{ color: 'var(--parakeet-color)' }}>{part}</span>;
+      if (part === "Granite Speech" || part === "Granite") return <span key={i} style={{ color: 'var(--granite-color)' }}>{part}</span>;
+      return part;
+    });
+  };
+
   const handleSetupComplete = useCallback((openSettings: boolean) => {
     storeRef.current?.set("setup_complete", true);
     storeRef.current?.save().catch(console.error);
@@ -847,7 +857,7 @@ function App() {
                     className={`header-status-message ${headerStatusIsProcessing ? "header-status-message--processing" : ""}`}
                     key={headerStatusMessage}
                   >
-                    {headerStatusMessage}
+                    {colorizeStatusMessage(headerStatusMessage)}
                   </span>
                 ) : (
                   <div className="header-ticker header-ticker-fade-in" aria-hidden="true">
