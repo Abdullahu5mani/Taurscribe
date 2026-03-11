@@ -103,6 +103,9 @@ fn compute_mel_filterbank() -> Array2<f32> {
 fn stft_power(signal: &[f32]) -> Array2<f32> {
     let window = hann_window(WIN_LENGTH);
 
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(N_FFT);
+
     // Zero-pad by N_FFT/2 on each side (matches torchaudio center=True)
     let pad_len = N_FFT / 2;
     let mut padded = vec![0.0_f32; pad_len];
@@ -114,9 +117,6 @@ fn stft_power(signal: &[f32]) -> Array2<f32> {
     } else {
         0
     };
-
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(N_FFT);
 
     let mut powers = Array2::<f32>::zeros((n_frames, N_FREQ_BINS));
     let mut buffer = vec![Complex::new(0.0_f32, 0.0); N_FFT];
@@ -157,19 +157,9 @@ fn log_mel_spectrogram(audio: &[f32]) -> Array2<f32> {
     let powers = stft_power(audio);
     let filterbank = compute_mel_filterbank();
 
-    let n_frames = powers.nrows();
-    let mut mel_spec = Array2::<f32>::zeros((n_frames, N_MELS));
-
-    // mel_spec = powers · filterbank^T, then log10
-    for t in 0..n_frames {
-        for m in 0..N_MELS {
-            let mut sum = 0.0_f32;
-            for k in 0..N_FREQ_BINS {
-                sum += powers[[t, k]] * filterbank[[m, k]];
-            }
-            mel_spec[[t, m]] = sum.max(1e-10_f32).log10();
-        }
-    }
+    // mel_spec = powers · filterbank^T  →  shape (n_frames, N_MELS)
+    let mut mel_spec = powers.dot(&filterbank.t());
+    mel_spec.mapv_inplace(|v| v.max(1e-10_f32).log10());
 
     mel_spec
 }

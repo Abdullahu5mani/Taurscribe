@@ -128,8 +128,8 @@ export function TranscriptHistory({ refreshKey }: TranscriptHistoryProps) {
                                             {copiedId === item.id && (
                                                 <span className="history-badge history-badge-copied"><IconCheck size={11} /> Typed</span>
                                             )}
-                                            <span className={`history-badge history-badge-engine history-badge-engine--${item.engine === "parakeet" ? "parakeet" : "whisper"}`}>
-                                                {item.engine === "parakeet" ? "Parakeet" : "Whisper"}
+                                            <span className={`history-badge history-badge-engine history-badge-engine--${item.engine}`}>
+                                                {item.engine === "parakeet" ? "Parakeet" : item.engine === "granite_speech" ? "Granite" : "Whisper"}
                                             </span>
                                             {item.grammar_llm_used && (
                                                 <span className="history-badge history-badge-llm">

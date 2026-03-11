@@ -160,38 +160,66 @@ impl GraniteSpeechManager {
             if force_cpu { " [CPU-only mode]" } else { "" }
         );
 
-        // Use the smallest (q4) Granite Speech variants by default
+        // q4f16 variants: FP16 activations, faster on CUDA tensor cores (~1.5 GB)
+        // q4 variants: FP32 I/O, runs on any hardware (~1.8 GB)
+        let enc_q4f16 = model_dir.join("audio_encoder_q4f16.onnx");
+        let emb_q4f16 = model_dir.join("embed_tokens_q4f16.onnx");
+        let dec_q4f16 = model_dir.join("decoder_model_merged_q4f16.onnx");
         let encoder_path = model_dir.join("audio_encoder_q4.onnx");
         let embed_path = model_dir.join("embed_tokens_q4.onnx");
         let decoder_path = model_dir.join("decoder_model_merged_q4.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
 
-        for (name, path) in [
-            ("audio_encoder", &encoder_path),
-            ("embed_tokens", &embed_path),
-            ("decoder_model_merged", &decoder_path),
-            ("tokenizer.json", &tokenizer_path),
-        ] {
-            if !path.exists() {
-                return Err(format!("Missing required file: {} (expected at {})", name, path.display()));
-            }
+        let has_q4    = encoder_path.exists() && embed_path.exists() && decoder_path.exists();
+        let has_q4f16 = enc_q4f16.exists()    && emb_q4f16.exists()  && dec_q4f16.exists();
+        if !has_q4 && !has_q4f16 {
+            return Err(
+                "No Granite Speech model files found. Download the GPU or CPU variant from Settings > Models.".to_string()
+            );
+        }
+        if !tokenizer_path.exists() {
+            return Err(format!("Missing tokenizer.json (expected at {})", tokenizer_path.display()));
         }
 
         let (backend, encoder, embed, decoder) = if force_cpu {
-            let enc = self.create_session_cpu(&encoder_path)?;
-            let emb = self.create_session_cpu(&embed_path)?;
-            let dec = self.create_session_cpu(&decoder_path)?;
+            // Prefer q4 on CPU; fall back to q4f16 if only the GPU download is present.
+            let (ep, eb, dp) = if has_q4 { (&encoder_path, &embed_path, &decoder_path) }
+                               else       { (&enc_q4f16,   &emb_q4f16,   &dec_q4f16)   };
+            let enc = self.create_session_cpu(ep)?;
+            let emb = self.create_session_cpu(eb)?;
+            let dec = self.create_session_cpu(dp)?;
             (GpuBackend::Cpu, enc, emb, dec)
         } else {
-            match self.try_create_sessions_cuda(&encoder_path, &embed_path, &decoder_path) {
-                Ok((enc, emb, dec)) => (GpuBackend::Cuda, enc, emb, dec),
-                Err(e) => {
-                    println!("[GRANITE] CUDA failed ({}), falling back to CPU...", e);
-                    let enc = self.create_session_cpu(&encoder_path)?;
-                    let emb = self.create_session_cpu(&embed_path)?;
-                    let dec = self.create_session_cpu(&decoder_path)?;
-                    (GpuBackend::Cpu, enc, emb, dec)
+            // Prefer q4f16 on CUDA (FP16 activations, faster on tensor cores).
+            // Fall back to q4 on CUDA, then to CPU with whatever files are present.
+            let cuda_q4f16 = if has_q4f16 {
+                self.try_create_sessions_cuda(&enc_q4f16, &emb_q4f16, &dec_q4f16)
+                    .map(|r| { println!("[GRANITE] Using q4f16 on CUDA"); r })
+                    .ok()
+            } else {
+                None
+            };
+
+            if let Some((enc, emb, dec)) = cuda_q4f16 {
+                (GpuBackend::Cuda, enc, emb, dec)
+            } else if has_q4 {
+                match self.try_create_sessions_cuda(&encoder_path, &embed_path, &decoder_path) {
+                    Ok((enc, emb, dec)) => (GpuBackend::Cuda, enc, emb, dec),
+                    Err(e) => {
+                        println!("[GRANITE] CUDA failed ({}), falling back to CPU...", e);
+                        let enc = self.create_session_cpu(&encoder_path)?;
+                        let emb = self.create_session_cpu(&embed_path)?;
+                        let dec = self.create_session_cpu(&decoder_path)?;
+                        (GpuBackend::Cpu, enc, emb, dec)
+                    }
                 }
+            } else {
+                // Only q4f16 available but CUDA failed — run q4f16 on CPU
+                println!("[GRANITE] CUDA unavailable, running q4f16 on CPU");
+                let enc = self.create_session_cpu(&enc_q4f16)?;
+                let emb = self.create_session_cpu(&emb_q4f16)?;
+                let dec = self.create_session_cpu(&dec_q4f16)?;
+                (GpuBackend::Cpu, enc, emb, dec)
             }
         };
 
@@ -522,8 +550,8 @@ impl GraniteSpeechManager {
                 let key_idx = layer * 2;
                 let val_idx = layer * 2 + 1;
 
-                let key_data = kv_cache[key_idx].clone();
-                let val_data = kv_cache[val_idx].clone();
+                let key_data = std::mem::take(&mut kv_cache[key_idx]);
+                let val_data = std::mem::take(&mut kv_cache[val_idx]);
 
                 decoder_inputs.push((
                     format!("past_key_values.{}.key", layer),
