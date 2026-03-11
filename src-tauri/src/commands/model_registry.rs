@@ -328,42 +328,38 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
 
         // ── Granite Speech ─────────────────────────────────────────────────────
         "granite-speech-1b" => Some(ModelConfig {
+            // Smallest Granite Speech variant: q4 encoder/decoder/embed
             repo: "onnx-community/granite-4.0-1b-speech-ONNX",
             branch: "main",
             files: vec![
                 ModelFile {
-                    filename: "audio_encoder_fp16.onnx",
-                    remote_path: "onnx/audio_encoder_fp16.onnx",
+                    filename: "audio_encoder_q4.onnx",
+                    remote_path: "onnx/audio_encoder_q4.onnx",
                     sha1: "",
                 },
                 ModelFile {
-                    filename: "audio_encoder_fp16.onnx_data",
-                    remote_path: "onnx/audio_encoder_fp16.onnx_data",
+                    filename: "audio_encoder_q4.onnx_data",
+                    remote_path: "onnx/audio_encoder_q4.onnx_data",
                     sha1: "",
                 },
                 ModelFile {
-                    filename: "embed_tokens_fp16.onnx",
-                    remote_path: "onnx/embed_tokens_fp16.onnx",
+                    filename: "embed_tokens_q4.onnx",
+                    remote_path: "onnx/embed_tokens_q4.onnx",
                     sha1: "",
                 },
                 ModelFile {
-                    filename: "embed_tokens_fp16.onnx_data",
-                    remote_path: "onnx/embed_tokens_fp16.onnx_data",
+                    filename: "embed_tokens_q4.onnx_data",
+                    remote_path: "onnx/embed_tokens_q4.onnx_data",
                     sha1: "",
                 },
                 ModelFile {
-                    filename: "decoder_model_merged_fp16.onnx",
-                    remote_path: "onnx/decoder_model_merged_fp16.onnx",
+                    filename: "decoder_model_merged_q4.onnx",
+                    remote_path: "onnx/decoder_model_merged_q4.onnx",
                     sha1: "",
                 },
                 ModelFile {
-                    filename: "decoder_model_merged_fp16.onnx_data",
-                    remote_path: "onnx/decoder_model_merged_fp16.onnx_data",
-                    sha1: "",
-                },
-                ModelFile {
-                    filename: "decoder_model_merged_fp16.onnx_data_1",
-                    remote_path: "onnx/decoder_model_merged_fp16.onnx_data_1",
+                    filename: "decoder_model_merged_q4.onnx_data",
+                    remote_path: "onnx/decoder_model_merged_q4.onnx_data",
                     sha1: "",
                 },
                 ModelFile {

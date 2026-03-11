@@ -37,6 +37,10 @@ CODEBASE_GUIDE.md
 ARCHITECTURE.pdf
 GRANITE_SPEECH.md
 
+# Test audio fixtures (large binary, not for the repo)
+*.wav
+*.mp3
+
 # Build logs & misc artifacts
 build_log.txt
 src-tauri/build_log.txt

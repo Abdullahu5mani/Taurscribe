@@ -6,9 +6,11 @@
 // NOTE: We use ort's (shape, Vec<T>) tuple API for Value::from_array instead of
 // ndarray arrays because ort 2.0.0-rc.11 re-exports its own ndarray version
 // which is incompatible with the project's ndarray 0.15.
+//
+// KV cache is float32 throughout: the q4 ONNX models only quantize internal
+// weight matrices; the past_key_values I/O tensors remain float32.
 
-use half::f16;
-use ndarray::{Array2, Array3};
+use ndarray::{Array2, Array3, Array4};
 use ort::session::Session;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -70,20 +72,12 @@ fn make_tensor_i64(shape: Vec<usize>, data: Vec<i64>) -> Result<ort::value::DynV
         .map_err(|e| format!("Tensor creation error: {}", e))
 }
 
-fn make_tensor_f16(shape: Vec<usize>, data: Vec<f16>) -> Result<ort::value::DynValue, String> {
-    ort::value::Value::from_array((shape, data))
-        .map(|t| t.into_dyn())
-        .map_err(|e| format!("Tensor creation error: {}", e))
-}
-
 /// Create an empty (zero-length sequence) KV cache tensor: [1, num_heads, 0, head_dim].
 ///
 /// ORT's (shape, Vec<T>) raw-data API rejects zero-sized dimensions.
-/// ndarray::Array4 handles zero-length axes correctly, and since we now use
-/// ndarray 0.17 (matching ORT's dependency), the type is compatible with from_array.
-fn make_empty_kv_f16(num_heads: usize, head_dim: usize) -> Result<ort::value::DynValue, String> {
-    // zeros() requires f16: Zero; from_shape_vec with an empty Vec avoids that requirement.
-    let arr = ndarray::Array4::<f16>::from_shape_vec((1, num_heads, 0, head_dim), vec![])
+/// ndarray::Array4 handles zero-length axes correctly.
+fn make_empty_kv_f32(num_heads: usize, head_dim: usize) -> Result<ort::value::DynValue, String> {
+    let arr = Array4::<f32>::from_shape_vec((1, num_heads, 0, head_dim), vec![])
         .map_err(|e| format!("Empty KV shape error: {}", e))?;
     ort::value::Value::from_array(arr)
         .map(|t| t.into_dyn())
@@ -166,9 +160,10 @@ impl GraniteSpeechManager {
             if force_cpu { " [CPU-only mode]" } else { "" }
         );
 
-        let encoder_path = model_dir.join("audio_encoder_fp16.onnx");
-        let embed_path = model_dir.join("embed_tokens_fp16.onnx");
-        let decoder_path = model_dir.join("decoder_model_merged_fp16.onnx");
+        // Use the smallest (q4) Granite Speech variants by default
+        let encoder_path = model_dir.join("audio_encoder_q4.onnx");
+        let embed_path = model_dir.join("embed_tokens_q4.onnx");
+        let decoder_path = model_dir.join("decoder_model_merged_q4.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
 
         for (name, path) in [
@@ -347,15 +342,15 @@ impl GraniteSpeechManager {
     fn prefill(
         &mut self,
         audio_embeddings: &Array3<f32>,
-    ) -> Result<(i64, Vec<Vec<f16>>), String> {
+    ) -> Result<(i64, Vec<Vec<f32>>), String> {
         let embed_session = self.embed_session.as_mut().ok_or("Embed session not loaded")?;
         let decoder = self.decoder_session.as_mut().ok_or("Decoder not loaded")?;
         let tokenizer = self.tokenizer.as_ref().ok_or("Tokenizer not loaded")?;
 
-        // Granite 4.0 chat template format (matches tokenizer.apply_chat_template output):
-        //   <|start_of_role|>user<|end_of_role|><|audio|>{instruction}<|end_of_text|>
-        //   <|start_of_role|>assistant<|end_of_role|>
-        let prompt = "<|start_of_role|>user<|end_of_role|><|audio|>can you transcribe the speech into a written format?<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>".to_string();
+        // Chat template from tokenizer_config.json (granite-4.0-1b-speech):
+        //   {% if role == 'user' %}USER: {{ content }}\n ASSISTANT:{% endif %}
+        // The <|audio|> placeholder is placed inside the user content, before the question.
+        let prompt = "USER: <|audio|>can you transcribe the speech into a written format?\n ASSISTANT:".to_string();
         let encoding = tokenizer
             .encode(prompt, false)
             .map_err(|e| format!("Tokenize error: {}", e))?;
@@ -437,8 +432,8 @@ impl GraniteSpeechManager {
         // Empty KV cache (past_sequence_length = 0) via ndarray::Array4 — ORT's raw-data API
         // rejects zero-sized dimensions, but ndarray handles them correctly.
         for layer in 0..NUM_HIDDEN_LAYERS {
-            decoder_inputs.push((format!("past_key_values.{}.key", layer), make_empty_kv_f16(NUM_KV_HEADS, HEAD_DIM)?));
-            decoder_inputs.push((format!("past_key_values.{}.value", layer), make_empty_kv_f16(NUM_KV_HEADS, HEAD_DIM)?));
+            decoder_inputs.push((format!("past_key_values.{}.key", layer), make_empty_kv_f32(NUM_KV_HEADS, HEAD_DIM)?));
+            decoder_inputs.push((format!("past_key_values.{}.value", layer), make_empty_kv_f32(NUM_KV_HEADS, HEAD_DIM)?));
         }
 
         let decoder_outputs = decoder
@@ -456,14 +451,14 @@ impl GraniteSpeechManager {
     fn decode_loop(
         &mut self,
         first_token_id: i64,
-        initial_kv_cache: Vec<Vec<f16>>,
+        initial_kv_cache: Vec<Vec<f32>>,
     ) -> Result<Vec<i64>, String> {
         let embed_session = self.embed_session.as_mut().ok_or("Embed not loaded")?;
         let decoder = self.decoder_session.as_mut().ok_or("Decoder not loaded")?;
 
         let mut generated_tokens = vec![first_token_id];
         let mut current_token = first_token_id;
-        // KV cache stored as flat Vec<f16> per layer-kind
+        // KV cache stored as flat Vec<f32> per layer-kind
         let mut kv_cache = initial_kv_cache;
         // kv_cache_seq_len tracks how many tokens are in the KV cache
         let mut kv_cache_seq_len: usize = if !kv_cache.is_empty() {
@@ -476,6 +471,30 @@ impl GraniteSpeechManager {
             if current_token == EOS_TOKEN_ID {
                 println!("[GRANITE] EOS reached at step {}", step);
                 break;
+            }
+
+            // Repetition guard: stop if the last 6 tokens are all identical,
+            // or if a 2-token pattern repeats 4 times (e.g. "as as as as as as").
+            let n = generated_tokens.len();
+            if n >= 6 {
+                let tail = &generated_tokens[n - 6..];
+                // All-same check
+                if tail.iter().all(|&t| t == tail[0]) {
+                    println!("[GRANITE] Repetition detected (all-same) at step {}, stopping", step);
+                    generated_tokens.truncate(n - 5); // keep only the first of the run
+                    break;
+                }
+                // Alternating-pair check (a b a b a b)
+                if n >= 8 {
+                    let t = &generated_tokens[n - 8..];
+                    if t[0] == t[2] && t[2] == t[4] && t[4] == t[6]
+                        && t[1] == t[3] && t[3] == t[5] && t[5] == t[7]
+                    {
+                        println!("[GRANITE] Repetition detected (bigram loop) at step {}, stopping", step);
+                        generated_tokens.truncate(n - 6);
+                        break;
+                    }
+                }
             }
 
             // Embed the single new token
@@ -498,7 +517,7 @@ impl GraniteSpeechManager {
             let attn_len = kv_cache_seq_len + 1;
             decoder_inputs.push(("attention_mask".into(), make_tensor_i64(vec![1, attn_len], vec![1i64; attn_len])?));
 
-            // Past KV cache tensors — model expects f16
+            // Past KV cache tensors — model expects f32
             for layer in 0..NUM_HIDDEN_LAYERS {
                 let key_idx = layer * 2;
                 let val_idx = layer * 2 + 1;
@@ -508,11 +527,11 @@ impl GraniteSpeechManager {
 
                 decoder_inputs.push((
                     format!("past_key_values.{}.key", layer),
-                    make_tensor_f16(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], key_data)?,
+                    make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], key_data)?,
                 ));
                 decoder_inputs.push((
                     format!("past_key_values.{}.value", layer),
-                    make_tensor_f16(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], val_data)?,
+                    make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], val_data)?,
                 ));
             }
 
@@ -544,49 +563,61 @@ impl GraniteSpeechManager {
 // that hold &mut borrows on individual session fields.
 fn extract_decoder_outputs(
     outputs: &ort::session::SessionOutputs,
-) -> Result<(i64, Vec<Vec<f16>>), String> {
-        let logits_val = outputs
-            .get("logits")
-            .ok_or("No 'logits' output from decoder")?;
+) -> Result<(i64, Vec<Vec<f32>>), String> {
+    let logits_val = outputs
+        .get("logits")
+        .ok_or("No 'logits' output from decoder")?;
 
-        // Logits are f16 — extract and convert to f32 for argmax
-        let (logits_shape, logits_data) = logits_val
-            .try_extract_tensor::<f16>()
-            .map_err(|e| format!("Extract logits: {}", e))?;
-
+    // Try f32 logits first; fall back to f16 and upcast
+    let token_id = if let Ok((logits_shape, logits_data)) =
+        logits_val.try_extract_tensor::<f32>()
+    {
         let seq_len = logits_shape[1] as usize;
         let vocab_size = logits_shape[2] as usize;
-
-        // Argmax of the last token's logits
-        let last_logits_start = (seq_len - 1) * vocab_size;
-        let last_logits = &logits_data[last_logits_start..last_logits_start + vocab_size];
-
-        let token_id = last_logits
+        let last_start = (seq_len - 1) * vocab_size;
+        logits_data[last_start..last_start + vocab_size]
             .iter()
             .enumerate()
-            .max_by(|(_, a): &(usize, &f16), (_, b): &(usize, &f16)| {
-                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(idx, _)| idx as i64)
-            .ok_or("Empty logits")?;
+            .ok_or_else(|| "Empty logits".to_string())?
+    } else {
+        let (logits_shape, logits_data) = logits_val
+            .try_extract_tensor::<half::f16>()
+            .map_err(|e| format!("Extract logits: {}", e))?;
+        let seq_len = logits_shape[1] as usize;
+        let vocab_size = logits_shape[2] as usize;
+        let last_start = (seq_len - 1) * vocab_size;
+        logits_data[last_start..last_start + vocab_size]
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(idx, _)| idx as i64)
+            .ok_or_else(|| "Empty logits".to_string())?
+    };
 
-        // Extract KV cache — store as flat Vec<f16> (model outputs f16)
-        let mut kv_cache = Vec::new();
+    // Extract KV cache — try f32 first, fall back to f16→f32 upcast
+    let mut kv_cache: Vec<Vec<f32>> = Vec::new();
 
-        for layer in 0..NUM_HIDDEN_LAYERS {
-            for kind in &["key", "value"] {
-                let name = format!("present.{}.{}", layer, kind);
-                let kv_val = outputs
-                    .get(&name)
-                    .ok_or_else(|| format!("Missing KV output: {}", name))?;
+    for layer in 0..NUM_HIDDEN_LAYERS {
+        for kind in &["key", "value"] {
+            let name = format!("present.{}.{}", layer, kind);
+            let kv_val = outputs
+                .get(&name)
+                .ok_or_else(|| format!("Missing KV output: {}", name))?;
 
-                let (_kv_shape, kv_data) = kv_val
-                    .try_extract_tensor::<f16>()
+            let data: Vec<f32> = if let Ok((_, kv_data)) = kv_val.try_extract_tensor::<f32>() {
+                kv_data.to_vec()
+            } else {
+                let (_, kv_data) = kv_val
+                    .try_extract_tensor::<half::f16>()
                     .map_err(|e| format!("Extract KV {}: {}", name, e))?;
+                kv_data.iter().map(|x| x.to_f32()).collect()
+            };
 
-                kv_cache.push(kv_data.to_vec());
-            }
+            kv_cache.push(data);
         }
+    }
 
     Ok((token_id, kv_cache))
 }
@@ -594,6 +625,7 @@ fn extract_decoder_outputs(
 impl GraniteSpeechManager {
 
     // ─────────────────────── Resampling ──────────────────────────────────────
+
 
     fn resample(&mut self, samples: &[f32], sample_rate: u32) -> Result<Vec<f32>, String> {
         let needs_new = self
@@ -625,5 +657,155 @@ impl GraniteSpeechManager {
             .process(&vec![samples.to_vec()], None)
             .map_err(|e| e.to_string())?;
         Ok(waves[0].clone())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// End-to-end integration test using jfk.wav (bundled in the repo root).
+    ///
+    /// Requires the Granite Speech 1B model at:
+    ///   %LOCALAPPDATA%\Taurscribe\models\granite-speech-1b\
+    ///
+    /// If the model is not present the test is skipped, not failed.
+    ///
+    /// Run with:
+    ///   cargo test -p taurscribe granite_speech -- --nocapture
+    #[test]
+    fn test_transcribe_jfk() {
+        // ── 1. Locate and decode jfk.wav ──────────────────────────────────────
+        let wav_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("jfk.wav");
+
+        if !wav_path.exists() {
+            eprintln!(
+                "[TEST] SKIP — jfk.wav not found at {}.\n\
+                 Place a 16 kHz mono WAV of the JFK quote next to Cargo.toml to run this test.",
+                wav_path.display()
+            );
+            return;
+        }
+
+        let mut reader = hound::WavReader::open(&wav_path)
+            .expect("Failed to open jfk.wav");
+        let spec = reader.spec();
+
+        println!(
+            "[TEST] jfk.wav: {} Hz, {} ch, {:?}",
+            spec.sample_rate, spec.channels, spec.sample_format
+        );
+
+        let raw_samples: Vec<f32> = match spec.sample_format {
+            hound::SampleFormat::Float => reader
+                .samples::<f32>()
+                .map(|s| s.expect("WAV sample read error"))
+                .collect(),
+            hound::SampleFormat::Int => {
+                let max_val = (1i64 << (spec.bits_per_sample - 1)) as f32;
+                reader
+                    .samples::<i32>()
+                    .map(|s| s.expect("WAV sample read error") as f32 / max_val)
+                    .collect()
+            }
+        };
+
+        // Mix down to mono if stereo
+        let mono: Vec<f32> = if spec.channels == 2 {
+            raw_samples
+                .chunks_exact(2)
+                .map(|c| (c[0] + c[1]) * 0.5)
+                .collect()
+        } else {
+            raw_samples
+        };
+
+        println!(
+            "[TEST] {} mono samples ({:.2}s)",
+            mono.len(),
+            mono.len() as f32 / spec.sample_rate as f32
+        );
+
+        // ── 2. Locate model; skip gracefully if absent ─────────────────────
+        let models_dir = match crate::utils::get_models_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("[TEST] SKIP — cannot resolve models dir: {}", e);
+                return;
+            }
+        };
+
+        let model_dir = models_dir.join("granite-speech-1b");
+        if !model_dir.exists() {
+            eprintln!(
+                "[TEST] SKIP — Granite Speech model not found at {}.\n\
+                 Download it via Settings > Download Manager and re-run.",
+                model_dir.display()
+            );
+            return;
+        }
+
+        // ── 3. Initialise manager (force CPU so the test runs without a GPU) ─
+        let mut manager = GraniteSpeechManager::new();
+        manager
+            .initialize(Some(model_dir.to_str().unwrap()), true /* force_cpu */)
+            .expect("GraniteSpeechManager::initialize failed");
+
+        // ── 4. Transcribe ─────────────────────────────────────────────────────
+        let start = std::time::Instant::now();
+        let result = manager
+            .transcribe_chunk(&mono, spec.sample_rate)
+            .expect("transcribe_chunk failed");
+        println!(
+            "[TEST] Transcript ({:.0}ms): {:?}",
+            start.elapsed().as_millis(),
+            result
+        );
+
+        // ── 5. Assert full JFK quote is present (case-insensitive, punctuation optional)
+        //
+        // Expected: "And so, my fellow Americans, ask not what your country can do
+        //            for you, ask what you can do for your country."
+        //
+        // Checks that every key phrase appears in the correct left-to-right order
+        // so the test fails if any part of the quote is missing or garbled.
+        let lower = result.to_lowercase();
+
+        let phrases = [
+            "and so",
+            "my fellow",
+            "ask not",
+            "what your country can do for you",
+            "ask what you can do for your country",
+        ];
+
+        // Verify every phrase is present
+        for phrase in &phrases {
+            assert!(
+                lower.contains(phrase),
+                "Missing phrase {:?} in transcript.\nFull transcript: {:?}",
+                phrase,
+                result
+            );
+        }
+
+        // Verify the phrases appear in the correct order
+        let positions: Vec<usize> = phrases
+            .iter()
+            .map(|p| lower.find(p).unwrap())
+            .collect();
+        let in_order = positions.windows(2).all(|w| w[0] <= w[1]);
+        assert!(
+            in_order,
+            "Phrases found but out of order ({:?}).\nFull transcript: {:?}",
+            positions,
+            result
+        );
     }
 }

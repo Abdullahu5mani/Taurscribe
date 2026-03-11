@@ -1,9 +1,16 @@
 // granite_features.rs — Audio feature extraction for Granite 4.0 1B Speech ONNX
 //
-// Computes 160-dimensional log-mel spectrogram features matching the model's
-// preprocessor_config.json:
-//   sample_rate = 16000, n_fft = 512, hop_length = 160,
-//   win_length = 400, n_mels = 80, frame_stacking = 2
+// Exactly replicates GraniteSpeechFeatureExtractor from HuggingFace transformers:
+//   preprocessor_config.json: sample_rate=16000, n_fft=512, hop_length=160,
+//                              win_length=400, n_mels=80
+//
+// Pipeline (matches Python reference):
+//   1. STFT → POWER spectrogram (|X|²), not magnitude — torchaudio MelSpectrogram
+//      default is power=2.0
+//   2. Triangular HTK mel filterbank applied to power spectrogram
+//   3. Clip at 1e-10, take log BASE-10 (not natural log)
+//   4. Global normalization per utterance: max(v, v_max - 8) / 4 + 1
+//   5. Drop last frame if odd; stack adjacent pairs → 160-dim vectors
 
 use ndarray::Array2;
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -88,20 +95,20 @@ fn compute_mel_filterbank() -> Array2<f32> {
 
 // ───────────────────────── STFT ──────────────────────────────────────────────
 
-/// Compute the Short-Time Fourier Transform.
+/// Compute the Short-Time Fourier Transform power spectrogram.
 ///
-/// Returns a 2-D array of shape `(n_frames, N_FREQ_BINS)` containing the
-/// magnitude of each frequency bin per frame.
-fn stft_magnitude(signal: &[f32]) -> Array2<f32> {
+/// Returns a 2-D array of shape `(n_frames, N_FREQ_BINS)` containing |X|²
+/// (power, not magnitude) per frequency bin per frame — matching torchaudio's
+/// MelSpectrogram default of power=2.0.
+fn stft_power(signal: &[f32]) -> Array2<f32> {
     let window = hann_window(WIN_LENGTH);
 
-    // Pad signal with zeros so every sample is covered
+    // Zero-pad by N_FFT/2 on each side (matches torchaudio center=True)
     let pad_len = N_FFT / 2;
     let mut padded = vec![0.0_f32; pad_len];
     padded.extend_from_slice(signal);
     padded.resize(padded.len() + pad_len, 0.0);
 
-    // Number of frames
     let n_frames = if padded.len() >= N_FFT {
         (padded.len() - N_FFT) / HOP_LENGTH + 1
     } else {
@@ -111,23 +118,16 @@ fn stft_magnitude(signal: &[f32]) -> Array2<f32> {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(N_FFT);
 
-    let mut magnitudes = Array2::<f32>::zeros((n_frames, N_FREQ_BINS));
-
+    let mut powers = Array2::<f32>::zeros((n_frames, N_FREQ_BINS));
     let mut buffer = vec![Complex::new(0.0_f32, 0.0); N_FFT];
+    // Window is WIN_LENGTH (400) centered within the N_FFT (512) frame
+    let win_offset = (N_FFT - WIN_LENGTH) / 2; // 56
 
     for frame_idx in 0..n_frames {
         let start = frame_idx * HOP_LENGTH;
 
-        // Fill buffer: apply window to center of N_FFT frame
         for i in 0..N_FFT {
-            let sample_idx = start + i;
-            let sample = if sample_idx < padded.len() {
-                padded[sample_idx]
-            } else {
-                0.0
-            };
-            // Window is WIN_LENGTH (400), centered within N_FFT (512)
-            let win_offset = (N_FFT - WIN_LENGTH) / 2; // 56
+            let sample = padded.get(start + i).copied().unwrap_or(0.0);
             let win_val = if i >= win_offset && i < win_offset + WIN_LENGTH {
                 window[i - win_offset]
             } else {
@@ -138,34 +138,36 @@ fn stft_magnitude(signal: &[f32]) -> Array2<f32> {
 
         fft.process(&mut buffer);
 
-        // Take magnitude of first N_FREQ_BINS
+        // |X|² — power spectrogram (torchaudio default power=2.0)
         for k in 0..N_FREQ_BINS {
-            magnitudes[[frame_idx, k]] = (buffer[k].re * buffer[k].re + buffer[k].im * buffer[k].im).sqrt();
+            powers[[frame_idx, k]] = buffer[k].re * buffer[k].re + buffer[k].im * buffer[k].im;
         }
     }
 
-    magnitudes
+    powers
 }
 
 // ───────────────────────── Log-Mel Spectrogram ───────────────────────────────
 
-/// Compute log-mel spectrogram: shape `(n_frames, 80)`.
+/// Compute log10-mel spectrogram: shape `(n_frames, 80)`.
+///
+/// Applies the mel filterbank to the **power** spectrogram, then takes log10
+/// (matching torchaudio MelSpectrogram + `.clip_(min=1e-10).log10_()`).
 fn log_mel_spectrogram(audio: &[f32]) -> Array2<f32> {
-    let magnitudes = stft_magnitude(audio);
+    let powers = stft_power(audio);
     let filterbank = compute_mel_filterbank();
 
-    let n_frames = magnitudes.nrows();
+    let n_frames = powers.nrows();
     let mut mel_spec = Array2::<f32>::zeros((n_frames, N_MELS));
 
-    // mel_spec = magnitudes · filterbank^T
+    // mel_spec = powers · filterbank^T, then log10
     for t in 0..n_frames {
         for m in 0..N_MELS {
             let mut sum = 0.0_f32;
             for k in 0..N_FREQ_BINS {
-                sum += magnitudes[[t, k]] * filterbank[[m, k]];
+                sum += powers[[t, k]] * filterbank[[m, k]];
             }
-            // Clamp to avoid log(0)
-            mel_spec[[t, m]] = (sum.max(1e-10)).ln();
+            mel_spec[[t, m]] = sum.max(1e-10_f32).log10();
         }
     }
 
@@ -176,20 +178,31 @@ fn log_mel_spectrogram(audio: &[f32]) -> Array2<f32> {
 
 /// Extract Granite Speech input features from raw 16 kHz audio.
 ///
-/// 1. Computes 80-bin log-mel spectrogram
-/// 2. Stacks pairs of adjacent frames → 160-dimensional vectors
+/// Exactly matches `GraniteSpeechFeatureExtractor._extract_mel_spectrograms`:
+///   1. Power mel spectrogram (|STFT|², mel filterbank applied to power)
+///   2. log10, clipped at 1e-10
+///   3. Global normalization: max(v, v_max - 8) / 4 + 1
+///   4. Drop last frame if odd (for clean pair-stacking)
+///   5. Stack adjacent frame pairs → 160-dim vectors
 ///
 /// Returns an `Array2<f32>` of shape `(n_stacked_frames, 160)`.
 pub fn extract_features(audio: &[f32]) -> Array2<f32> {
-    let mel = log_mel_spectrogram(audio);
+    let mut mel = log_mel_spectrogram(audio);
     let n_frames = mel.nrows();
+    if n_frames == 0 {
+        return Array2::<f32>::zeros((0, N_MELS * 2));
+    }
 
-    // Stack pairs of adjacent frames: [frame_t || frame_{t+1}]
-    // If odd number of frames, the last unpaired frame is dropped.
-    let n_stacked = n_frames / 2;
+    // Global normalization: max(v, v_max − 8) / 4 + 1
+    let v_max = mel.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    mel.mapv_inplace(|v| (v.max(v_max - 8.0)) / 4.0 + 1.0);
 
+    // Drop last frame when odd (matches Python `if logmel.shape[1] % 2 == 1: logmel = logmel[:-1]`)
+    let n_even = (n_frames / 2) * 2;
+
+    // Stack adjacent pairs: [frame_2t ‖ frame_{2t+1}] → 160 dims
+    let n_stacked = n_even / 2;
     let mut features = Array2::<f32>::zeros((n_stacked, N_MELS * 2));
-
     for t in 0..n_stacked {
         let src_t = t * 2;
         for m in 0..N_MELS {
