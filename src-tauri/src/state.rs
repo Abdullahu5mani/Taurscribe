@@ -1,5 +1,6 @@
 use crate::audio::RecordingHandle;
 use crate::denoise::Denoiser;
+use crate::granite_speech::GraniteSpeechManager;
 use crate::parakeet::ParakeetManager;
 use crate::types::{ASREngine, AppState, HotkeyBinding};
 use crate::vad::VADManager;
@@ -57,10 +58,18 @@ pub struct AudioState {
     // "tray"  → hide to system tray (default)
     // "quit"  → exit the process
     pub close_behavior: Arc<Mutex<String>>,
+
+    // The Granite Speech ONNX engine (alternative to Whisper/Parakeet)
+    pub granite_speech: Arc<Mutex<GraniteSpeechManager>>,
 }
 
 impl AudioState {
-    pub fn new(whisper: WhisperManager, parakeet: ParakeetManager, vad: VADManager) -> Self {
+    pub fn new(
+        whisper: WhisperManager,
+        parakeet: ParakeetManager,
+        vad: VADManager,
+        granite_speech: GraniteSpeechManager,
+    ) -> Self {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
             whisper: Arc::new(Mutex::new(whisper)),
@@ -75,6 +84,7 @@ impl AudioState {
             selected_input_device: Arc::new(Mutex::new(None)),
             denoiser: Arc::new(Mutex::new(None)),
             close_behavior: Arc::new(Mutex::new("tray".to_string())),
+            granite_speech: Arc::new(Mutex::new(granite_speech)),
         }
     }
 }

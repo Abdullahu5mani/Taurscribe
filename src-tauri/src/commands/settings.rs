@@ -18,6 +18,11 @@ pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
             let whisper = state.whisper.lock().unwrap();
             Ok(format!("{}", whisper.get_backend()))
         }
+        ASREngine::GraniteSpeech => {
+            let gs = state.granite_speech.lock().unwrap();
+            let status = gs.get_status();
+            Ok(status.backend)
+        }
     }
 }
 
@@ -27,6 +32,7 @@ pub fn set_active_engine(state: State<AudioState>, engine: String) -> Result<Str
     let new_engine = match engine.to_lowercase().as_str() {
         "whisper" => ASREngine::Whisper,
         "parakeet" => ASREngine::Parakeet,
+        "granitespeech" | "granite_speech" | "granite-speech" => ASREngine::GraniteSpeech,
         _ => return Err(format!("Unknown engine: {}", engine)),
     };
 

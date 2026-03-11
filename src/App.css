@@ -49,6 +49,8 @@
   --whisper-glow:  rgba(104, 149, 210, 0.25);
   --parakeet-color: #3ecfa5;
   --parakeet-glow:  rgba(62, 207, 165, 0.25);
+  --granite-color:  #a78bfa;
+  --granite-glow:   rgba(167, 139, 250, 0.25);
 
   /* 10% — Recording / processing indicators */
   --recording:      #dc2626;
@@ -360,6 +362,12 @@ body {
 /* Parakeet (NVIDIA) — green */
 .ticker-parakeet {
   color: var(--parakeet-color);
+  font-weight: 600;
+}
+
+/* Granite (IBM) — violet */
+.ticker-granite {
+  color: var(--granite-color);
   font-weight: 600;
 }
 
@@ -699,6 +707,11 @@ body {
   box-shadow: 0 0 12px var(--parakeet-glow);
 }
 
+.status-card.granite.active::before {
+  background: var(--granite-color);
+  box-shadow: 0 0 12px var(--granite-glow);
+}
+
 .status-card-header {
   display: flex;
   align-items: center;
@@ -720,6 +733,10 @@ body {
 
 .status-card.parakeet .engine-badge {
   color: var(--parakeet-color);
+}
+
+.status-card.granite .engine-badge {
+  color: var(--granite-color);
 }
 
 .status-card-header-right {
@@ -2692,7 +2709,8 @@ body {
   }
 
   .status-card.whisper.active::before,
-  .status-card.parakeet.active::before {
+  .status-card.parakeet.active::before,
+  .status-card.granite.active::before {
     height: 3px;
   }
 

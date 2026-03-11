@@ -1,17 +1,20 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
-import type { ModelInfo, ParakeetModelInfo } from "./useModels";
+import type { ModelInfo, ParakeetModelInfo, GraniteSpeechModelInfo } from "./useModels";
 
-export type ASREngine = "whisper" | "parakeet";
+export type ASREngine = "whisper" | "parakeet" | "granite_speech";
 
 interface UseEngineSwitchParams {
     models: ModelInfo[];
     parakeetModels: ParakeetModelInfo[];
+    graniteModels: GraniteSpeechModelInfo[];
     currentModel: string | null;
     currentParakeetModel: string | null;
+    currentGraniteModel: string | null;
     setCurrentModel: (id: string) => void;
     setCurrentParakeetModel: (id: string) => void;
+    setCurrentGraniteModel: (id: string) => void;
     setBackendInfo: (info: string) => void;
     storeRef: React.RefObject<Store | null>;
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
@@ -26,10 +29,13 @@ interface UseEngineSwitchParams {
 export function useEngineSwitch({
     models,
     parakeetModels,
+    graniteModels,
     currentModel,
     currentParakeetModel,
+    currentGraniteModel,
     setCurrentModel,
     setCurrentParakeetModel,
+    setCurrentGraniteModel,
     setBackendInfo,
     storeRef,
     setHeaderStatus,
@@ -174,6 +180,69 @@ export function useEngineSwitch({
         }
     };
 
+    const handleSwitchToGranite = async () => {
+        if (graniteModels.length === 0) {
+            setActiveEngine("granite_speech");
+            activeEngineRef.current = "granite_speech";
+            return;
+        }
+        if (isLoading || isLoadingRef.current) {
+            console.log("[LOADING] Skipping handleSwitchToGranite — already loading");
+            return;
+        }
+
+        if (activeEngine === "granite_speech") {
+            try {
+                const gStatus = await invoke("get_granite_speech_status") as { loaded: boolean };
+                if (gStatus.loaded) return;
+            } catch {
+                // proceed with loading attempt
+            }
+        }
+
+        const targetModel = currentGraniteModel || graniteModels[0].id;
+
+        isLoadingRef.current = true;
+        setIsLoading(true);
+        setLoadedEngine(null);
+        setLoadingTargetEngine("granite_speech");
+        const msg = `Loading Granite Speech...`;
+        setLoadingMessage(msg);
+        setHeaderStatus(msg, 60_000);
+        console.log("[LOADING] Loading Granite Speech (" + targetModel + ")");
+
+        try {
+            await setTrayState("processing");
+            await invoke("init_granite_speech", { forceCpu: asrBackend === "cpu" });
+
+            setCurrentGraniteModel(targetModel);
+            setActiveEngine("granite_speech");
+            activeEngineRef.current = "granite_speech";
+            setLoadedEngine("granite_speech");
+
+            if (storeRef.current) {
+                await storeRef.current.set("granite_model", targetModel);
+                await storeRef.current.set("active_engine", "granite_speech");
+                await storeRef.current.save();
+            }
+
+            setHeaderStatus("Switched to Granite Speech");
+
+            const backend = await invoke("get_backend_info");
+            setBackendInfo(backend as string);
+        } catch (e) {
+            setHeaderStatus(`Error switching to Granite Speech: ${e}`, 5000);
+        } finally {
+            console.log("[LOADING] Set loading FALSE — handleSwitchToGranite");
+            isLoadingRef.current = false;
+            setIsLoading(false);
+            setLoadingMessage("");
+            setLoadingTargetEngine(null);
+            setTransferLineFadingOut(true);
+            await setTrayState("ready");
+        }
+    };
+
     return {
         activeEngine,
         setActiveEngine,
@@ -190,5 +259,6 @@ export function useEngineSwitch({
         handleModelChange,
         handleSwitchToWhisper,
         handleSwitchToParakeet,
+        handleSwitchToGranite,
     };
 }

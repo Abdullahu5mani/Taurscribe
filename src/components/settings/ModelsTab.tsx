@@ -78,6 +78,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete }: Mo
     const rowProps = { downloadProgress, onDownload, onDelete };
 
     const parakeetModels = models.filter(m => m.type === 'Parakeet');
+    const graniteModels = models.filter(m => m.type === 'GraniteSpeech');
     const llmModels = models.filter(m => m.type === 'LLM');
     const coremlModels = models.filter(m => m.type === 'CoreML');
 
@@ -206,6 +207,17 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete }: Mo
                 </div>
                 <div className="model-list">
                     {parakeetModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
+                </div>
+            </div>
+
+            {/* ── Granite Speech ───────────────────────────────────── */}
+            <div className="model-group">
+                <div className="model-group-header">
+                    <h3 className="settings-section-title">Granite Speech</h3>
+                    <span className="model-group-sub">by IBM · English · ONNX</span>
+                </div>
+                <div className="model-list">
+                    {graniteModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
                 </div>
             </div>
 

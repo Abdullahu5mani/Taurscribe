@@ -3,7 +3,7 @@
 export interface DownloadableModel {
     id: string;
     name: string;
-    type: 'Whisper' | 'Parakeet' | 'LLM' | 'CoreML';
+    type: 'Whisper' | 'Parakeet' | 'LLM' | 'CoreML' | 'GraniteSpeech';
     size: string;
     description: string;
     downloaded: boolean;
@@ -52,6 +52,9 @@ export const MODELS: DownloadableModel[] = [
 
     // --- Parakeet ---
     { id: 'parakeet-nemotron', name: 'Nemotron Streaming', type: 'Parakeet', size: '1.2 GB', description: 'Ultra-low latency streaming. English only.', downloaded: true },
+
+    // --- Granite Speech ---
+    { id: 'granite-speech-1b', name: 'Granite 4.0 1B Speech', type: 'GraniteSpeech', size: '~2 GB', description: 'IBM Granite 4.0 1B speech model via ONNX. English. Encoder-decoder architecture.', downloaded: false },
 
     // --- LLM ---
     { id: 'flowscribe-qwen2.5-0.5b', name: 'FlowScribe Qwen 2.5 0.5B', type: 'LLM', size: '398 MB', description: 'Fine-tuned Q4_K_M GGUF for speech-to-text grammar correction.', downloaded: false },
