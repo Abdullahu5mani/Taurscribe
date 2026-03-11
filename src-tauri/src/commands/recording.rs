@@ -417,12 +417,14 @@ fn start_recording_blocking(
                     .ok();
             } else if active_engine == ASREngine::GraniteSpeech {
                 let mut gs = granite_speech.lock().unwrap();
-                if let Ok(transcript) = gs.transcribe_chunk(&chunk, sample_rate) {
-                    if !transcript.is_empty() {
+                match gs.transcribe_chunk(&chunk, sample_rate) {
+                    Ok(transcript) if !transcript.is_empty() => {
                         let mut session = session_transcript.lock().unwrap();
                         session.push_str(&transcript);
                         println!("[TRANSCRIPT] 🪨 (Final) \"{}\"", transcript);
                     }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("[ERROR] Granite Speech error (final): {}", e),
                 }
             } else {
                 let mut p_manager = parakeet_manager.lock().unwrap();
@@ -447,12 +449,14 @@ fn start_recording_blocking(
                         .ok();
                 } else if active_engine == ASREngine::GraniteSpeech {
                     let mut gs = granite_speech.lock().unwrap();
-                    if let Ok(transcript) = gs.transcribe_chunk(&buffer, sample_rate) {
-                        if !transcript.is_empty() {
+                    match gs.transcribe_chunk(&buffer, sample_rate) {
+                        Ok(transcript) if !transcript.is_empty() => {
                             let mut session = session_transcript.lock().unwrap();
                             session.push_str(&transcript);
                             println!("[TRANSCRIPT] 🪨 (Final Partial) \"{}\"", transcript);
                         }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[ERROR] Granite Speech error (final partial): {}", e),
                     }
                 } else {
                     let mut p_manager = parakeet_manager.lock().unwrap();
