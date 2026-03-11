@@ -76,6 +76,21 @@ fn make_tensor_f16(shape: Vec<usize>, data: Vec<f16>) -> Result<ort::value::DynV
         .map_err(|e| format!("Tensor creation error: {}", e))
 }
 
+/// Create an empty (zero-length sequence) KV cache tensor: [1, num_heads, 0, head_dim].
+///
+/// ORT's (shape, Vec<T>) raw-data API rejects zero-sized dimensions.
+/// ndarray::Array4 handles zero-length axes correctly, and since we now use
+/// ndarray 0.17 (matching ORT's dependency), the type is compatible with from_array.
+fn make_empty_kv_f16(num_heads: usize, head_dim: usize) -> Result<ort::value::DynValue, String> {
+    // zeros() requires f16: Zero; from_shape_vec with an empty Vec avoids that requirement.
+    let arr = ndarray::Array4::<f16>::from_shape_vec((1, num_heads, 0, head_dim), vec![])
+        .map_err(|e| format!("Empty KV shape error: {}", e))?;
+    ort::value::Value::from_array(arr)
+        .map(|t| t.into_dyn())
+        .map_err(|e| format!("Empty KV tensor creation error: {}", e))
+}
+
+
 // ───────────────────────── Manager ────────────────────────────────────────────
 
 pub struct GraniteSpeechManager {
@@ -337,7 +352,10 @@ impl GraniteSpeechManager {
         let decoder = self.decoder_session.as_mut().ok_or("Decoder not loaded")?;
         let tokenizer = self.tokenizer.as_ref().ok_or("Tokenizer not loaded")?;
 
-        let prompt = "USER: <|audio|>\n ASSISTANT:".to_string();
+        // Granite 4.0 chat template format (matches tokenizer.apply_chat_template output):
+        //   <|start_of_role|>user<|end_of_role|><|audio|>{instruction}<|end_of_text|>
+        //   <|start_of_role|>assistant<|end_of_role|>
+        let prompt = "<|start_of_role|>user<|end_of_role|><|audio|>can you transcribe the speech into a written format?<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>".to_string();
         let encoding = tokenizer
             .encode(prompt, false)
             .map_err(|e| format!("Tokenize error: {}", e))?;
@@ -407,7 +425,7 @@ impl GraniteSpeechManager {
         let seq_len = combined_embeddings.shape()[1];
         println!("[GRANITE] Combined embeddings: 1 × {} × {}", seq_len, HIDDEN_SIZE);
 
-        // Build decoder inputs
+        // Build decoder inputs — inputs_embeds is float32; KV cache is float16
         let embeds_data: Vec<f32> = combined_embeddings.iter().cloned().collect();
         let attn_data: Vec<i64> = vec![1i64; seq_len];
 
@@ -416,11 +434,11 @@ impl GraniteSpeechManager {
         decoder_inputs.push(("inputs_embeds".into(), make_tensor_f32(vec![1, seq_len, HIDDEN_SIZE], embeds_data)?));
         decoder_inputs.push(("attention_mask".into(), make_tensor_i64(vec![1, seq_len], attn_data)?));
 
-        // Empty KV cache tensors (past_sequence_length = 0) — model expects f16
+        // Empty KV cache (past_sequence_length = 0) via ndarray::Array4 — ORT's raw-data API
+        // rejects zero-sized dimensions, but ndarray handles them correctly.
         for layer in 0..NUM_HIDDEN_LAYERS {
-            let empty: Vec<f16> = vec![];
-            decoder_inputs.push((format!("past_key_values.{}.key", layer), make_tensor_f16(vec![1, NUM_KV_HEADS, 0, HEAD_DIM], empty.clone())?));
-            decoder_inputs.push((format!("past_key_values.{}.value", layer), make_tensor_f16(vec![1, NUM_KV_HEADS, 0, HEAD_DIM], empty)?));
+            decoder_inputs.push((format!("past_key_values.{}.key", layer), make_empty_kv_f16(NUM_KV_HEADS, HEAD_DIM)?));
+            decoder_inputs.push((format!("past_key_values.{}.value", layer), make_empty_kv_f16(NUM_KV_HEADS, HEAD_DIM)?));
         }
 
         let decoder_outputs = decoder
@@ -472,7 +490,7 @@ impl GraniteSpeechManager {
                 .try_extract_tensor::<f32>()
                 .map_err(|e| format!("Extract embedding: {}", e))?;
 
-            // Build decoder inputs
+            // Build decoder inputs — inputs_embeds is float32; KV cache is float16
             let mut decoder_inputs: Vec<(String, ort::value::DynValue)> = Vec::new();
 
             decoder_inputs.push(("inputs_embeds".into(), make_tensor_f32(vec![1, 1, HIDDEN_SIZE], emb_data.to_vec())?));

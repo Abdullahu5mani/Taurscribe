@@ -54,7 +54,7 @@ llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
 llama-cpp-sys-2 = "=0.1.134"
 encoding_rs = "0.8"
 anyhow = "1.0"
-ndarray = "0.15"
+ndarray = "0.17"
 # FFT for Granite Speech mel-spectrogram computation
 rustfft = "6.2"
 # HuggingFace tokenizer for Granite Speech BPE token encoding/decoding
