@@ -66,29 +66,30 @@ const TICKER_PHRASES: { parts: { text: string; highlight?: TickerHighlight }[] }
   { parts: [{ text: "Hit " }, { text: "REC", highlight: "accent" }, { text: " · speech to text in real time" }] },
   { parts: [{ text: "No cloud", highlight: "accent" }, { text: " · no API keys · no subscriptions" }] },
   { parts: [{ text: "Switch between " }, { text: "Whisper", highlight: "whisper" }, { text: " and " }, { text: "Parakeet", highlight: "parakeet" }, { text: " anytime" }] },
+  { parts: [{ text: "IBM " }, { text: "Granite Speech", highlight: "granite" }, { text: " · 1B · ONNX · runs anywhere" }] },
   { parts: [{ text: "Ctrl+Win", highlight: "accent" }, { text: " from anywhere to record" }] },
   { parts: [{ text: "Grammar correction · optional " }, { text: "LLM", highlight: "accent" }, { text: "" }] },
   { parts: [{ text: "Offline-first", highlight: "accent" }, { text: " · your data stays yours" }] },
-  { parts: [{ text: "Pick your engine · " }, { text: "Whisper", highlight: "whisper" }, { text: " for OpenAI · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " for NVIDIA" }] },
+  { parts: [{ text: "Pick your engine · " }, { text: "Whisper", highlight: "whisper" }, { text: " · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " · " }, { text: "Granite Speech", highlight: "granite" }] },
   { parts: [{ text: "Studio-grade", highlight: "accent" }, { text: " · runs on your hardware" }] },
-  { parts: [{ text: "Real-time transcription with " }, { text: "Whisper", highlight: "whisper" }, { text: " or " }, { text: "Parakeet", highlight: "parakeet" }, { text: "" }] },
+  { parts: [{ text: "Real-time transcription with " }, { text: "Whisper", highlight: "whisper" }, { text: " or " }, { text: "Parakeet", highlight: "parakeet" }] },
   { parts: [{ text: "Your audio never leaves this device" }] },
   { parts: [{ text: "CUDA · CPU · Metal · flexible backends" }] },
   { parts: [{ text: "Download models once · use forever" }] },
   { parts: [{ text: "Built for privacy · built for speed" }] },
-  { parts: [{ text: "Two engines · " }, { text: "Whisper", highlight: "whisper" }, { text: " & " }, { text: "Parakeet", highlight: "parakeet" }, { text: " · one app" }] },
+  { parts: [{ text: "Three engines · " }, { text: "Whisper", highlight: "whisper" }, { text: " · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " · " }, { text: "Granite Speech", highlight: "granite" }] },
   { parts: [{ text: "Press REC and speak · that's it" }] },
   { parts: [{ text: "No account", highlight: "accent" }, { text: " · no sign-up · no tracking" }] },
   { parts: [{ text: "Low latency · high accuracy" }] },
   { parts: [{ text: "Use " }, { text: "Whisper", highlight: "whisper" }, { text: " for batch · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " for streaming" }] },
   { parts: [{ text: "Desktop-first · always ready" }] },
   { parts: [{ text: "Your words · your machine · your rules" }] },
-  { parts: [{ text: "Multilingual " }, { text: "Whisper", highlight: "whisper" }, { text: " · real-time " }, { text: "Parakeet", highlight: "parakeet" }, { text: "" }] },
+  { parts: [{ text: "Multilingual " }, { text: "Whisper", highlight: "whisper" }, { text: " · real-time " }, { text: "Parakeet", highlight: "parakeet" }] },
   { parts: [{ text: "Transcribe meetings · notes · ideas" }] },
   { parts: [{ text: "One click to record", highlight: "accent" }, { text: " · one click to copy" }] },
   { parts: [{ text: "GPU-accelerated when you have it" }] },
   { parts: [{ text: "Open source models · open future" }] },
-  { parts: [{ text: "From " }, { text: "Whisper", highlight: "whisper" }, { text: " to " }, { text: "Parakeet", highlight: "parakeet" }, { text: " in one tap" }] },
+  { parts: [{ text: "IBM " }, { text: "Granite Speech", highlight: "granite" }, { text: " · no GPU required" }] },
   { parts: [{ text: "Privacy by design", highlight: "accent" }, { text: " · not as an afterthought" }] },
   { parts: [{ text: "Capture every word · edit later" }] },
   { parts: [{ text: "No internet? No problem." }] },
@@ -99,14 +100,15 @@ const TICKER_PHRASES: { parts: { text: string; highlight?: TickerHighlight }[] }
   { parts: [{ text: "Built for creators · built for you" }] },
   { parts: [{ text: "Switch engines mid-workflow" }] },
   { parts: [{ text: "Grammar correction · optional" }] },
-  { parts: [{ text: "Whisper", highlight: "whisper" }, { text: " for accuracy · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " for speed" }] },
+  { parts: [{ text: "Whisper", highlight: "whisper" }, { text: " for accuracy · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " for speed · " }, { text: "Granite Speech", highlight: "granite" }, { text: " for reliability" }] },
   { parts: [{ text: "Your microphone · your transcript" }] },
   { parts: [{ text: "Download once · run anywhere" }] },
   { parts: [{ text: "No subscriptions", highlight: "accent" }, { text: " · pay with your hardware" }] },
   { parts: [{ text: "Transcription that respects you" }] },
-  { parts: [{ text: "Fast " }, { text: "Whisper", highlight: "whisper" }, { text: " · faster " }, { text: "Parakeet", highlight: "parakeet" }, { text: "" }] },
+  { parts: [{ text: "Fast " }, { text: "Whisper", highlight: "whisper" }, { text: " · faster " }, { text: "Parakeet", highlight: "parakeet" }] },
   { parts: [{ text: "Record · transcribe · copy · done" }] },
-  { parts: [{ text: "One app · two engines · zero compromise" }] },
+  { parts: [{ text: "OpenAI · NVIDIA · IBM · three giants · one app" }] },
+  { parts: [{ text: "One app · three engines · zero compromise" }] },
 ];
 
 const TONE_STYLES: { value: string; label: string; icon: React.ReactNode; accent: string; desc: string }[] = [
@@ -812,11 +814,11 @@ function App() {
   };
 
   const colorizeStatusMessage = (msg: string) => {
-    const parts = msg.split(/(Granite Speech|Whisper|Parakeet|Granite)/g);
+    const parts = msg.split(/(Granite Speech|Whisper|Parakeet|Granite|OpenAI|NVIDIA|IBM)/g);
     return parts.map((part, i) => {
-      if (part === "Whisper") return <span key={i} style={{ color: 'var(--whisper-color)' }}>{part}</span>;
-      if (part === "Parakeet") return <span key={i} style={{ color: 'var(--parakeet-color)' }}>{part}</span>;
-      if (part === "Granite Speech" || part === "Granite") return <span key={i} style={{ color: 'var(--granite-color)' }}>{part}</span>;
+      if (part === "Whisper" || part === "OpenAI") return <span key={i} style={{ color: 'var(--whisper-color)' }}>{part}</span>;
+      if (part === "Parakeet" || part === "NVIDIA") return <span key={i} style={{ color: 'var(--parakeet-color)' }}>{part}</span>;
+      if (part === "Granite Speech" || part === "Granite" || part === "IBM") return <span key={i} style={{ color: 'var(--granite-color)' }}>{part}</span>;
       return part;
     });
   };
