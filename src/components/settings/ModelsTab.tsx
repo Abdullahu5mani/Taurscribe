@@ -62,9 +62,10 @@ interface ModelsTabProps {
     downloadProgress: Record<string, DownloadProgress>;
     onDownload: (id: string, name: string) => void;
     onDelete: (id: string, name: string) => Promise<void>;
+    onCancelDownload: (id: string) => void;
 }
 
-export function ModelsTab({ models, downloadProgress, onDownload, onDelete }: ModelsTabProps) {
+export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCancelDownload }: ModelsTabProps) {
     const [activeTier, setActiveTier] = useState<WhisperTier>('Small');
     const [platform, setPlatform] = useState('');
     const [isAppleSilicon, setIsAppleSilicon] = useState(false);
@@ -75,7 +76,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete }: Mo
     }, []);
 
     const isMac = platform === 'macos';
-    const rowProps = { downloadProgress, onDownload, onDelete };
+    const rowProps = { downloadProgress, onDownload, onDelete, onCancelDownload };
 
     const parakeetModels = models.filter(m => m.type === 'Parakeet');
     const graniteModels = models.filter(m => m.type === 'GraniteSpeech');

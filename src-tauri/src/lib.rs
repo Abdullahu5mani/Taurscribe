@@ -178,6 +178,7 @@ pub fn run() {
             commands::list_transcript_history,
             commands::delete_transcript_history,
             commands::download_model,
+            commands::cancel_download,
             commands::get_download_status,
             commands::delete_model,
             commands::get_platform,

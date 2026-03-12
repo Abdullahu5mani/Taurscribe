@@ -43,6 +43,14 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
                     });
                     onModelDownloaded(payload.model_id);
                 } else if (payload.status === "error") {
+                    toast.error(`Download failed — file may be corrupted. Try again.`);
+                    setDownloadProgress((prev) => {
+                        const next = { ...prev };
+                        delete next[payload.model_id];
+                        return next;
+                    });
+                } else if (payload.status === "cancelled") {
+                    toast.info(`Download cancelled: ${payload.model_id}`);
                     setDownloadProgress((prev) => {
                         const next = { ...prev };
                         delete next[payload.model_id];
@@ -84,6 +92,14 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
         }
     };
 
+    const handleCancelDownload = async (id: string) => {
+        try {
+            await invoke("cancel_download", { modelId: id });
+        } catch (e) {
+            console.warn("cancel_download failed:", e);
+        }
+    };
+
     const handleVerify = async () => {
         // Stub: verification is now automatic on download.
     };
@@ -91,6 +107,7 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
     return {
         downloadProgress,
         handleDownload,
+        handleCancelDownload,
         handleVerify,
     };
 }

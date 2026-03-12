@@ -143,6 +143,8 @@ export function useRecording({
             await setTrayState("recording");
             setLiveTranscript("");
             setLatestLatency(null);
+            // Play start sound before muting so the app's own audio isn't silenced.
+            playStart?.();
             if (muteBackgroundAudioRef.current) {
                 await invoke("mute_system_audio").catch(e => console.warn("mute_system_audio failed:", e));
             }
@@ -169,7 +171,6 @@ export function useRecording({
                 await new Promise(r => setTimeout(r, 80));
                 emitTo("overlay", "overlay-state", { phase: "recording" }).catch(() => { });
             }
-            playStart?.();
         } catch (e) {
             const errStr = String(e);
             if (errStr.includes("Already recording")) {
@@ -276,8 +277,9 @@ export function useRecording({
                 await invoke("save_transcript_history", {
                     transcript: finalTrans,
                     engine: currentEngine,
-                    durationMs: recordingDurationMs,        // Tauri v2: snake_case → camelCase
-                    grammarLlmUsed: enableGrammarLMRef.current, // Tauri v2: snake_case → camelCase
+                    durationMs: recordingDurationMs,
+                    grammarLlmUsed: enableGrammarLMRef.current,
+                    processingTimeMs: totalMs,
                 });
                 onHistorySaved?.();
             } catch (e) {

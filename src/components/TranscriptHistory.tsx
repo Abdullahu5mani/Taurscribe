@@ -9,6 +9,7 @@ type TranscriptRecord = {
     engine: string;
     duration_ms: number | null;
     grammar_llm_used: boolean;
+    processing_time_ms: number | null;
 };
 
 interface TranscriptHistoryProps {
@@ -28,6 +29,11 @@ const formatTimestamp = (iso: string) => {
 
 const truncate = (text: string, max = 140) =>
     text.length > max ? text.slice(0, max).trimEnd() + "…" : text;
+
+const formatProcessingTime = (ms: number | null) => {
+    if (ms == null) return null;
+    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+};
 
 export function TranscriptHistory({ refreshKey }: TranscriptHistoryProps) {
     const [open, setOpen] = useState(false);
@@ -134,6 +140,11 @@ export function TranscriptHistory({ refreshKey }: TranscriptHistoryProps) {
                                             {item.grammar_llm_used && (
                                                 <span className="history-badge history-badge-llm">
                                                     LLM
+                                                </span>
+                                            )}
+                                            {formatProcessingTime(item.processing_time_ms) && (
+                                                <span className="history-badge history-badge-latency" title="AI processing time">
+                                                    ⚡ {formatProcessingTime(item.processing_time_ms)}
                                                 </span>
                                             )}
                                             <button

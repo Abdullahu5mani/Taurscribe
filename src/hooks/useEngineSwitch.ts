@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import type { ModelInfo, ParakeetModelInfo, GraniteSpeechModelInfo } from "./useModels";
+import type { DownloadProgress } from "../components/settings/types";
 
 export type ASREngine = "whisper" | "parakeet" | "granite_speech";
 
@@ -20,6 +21,7 @@ interface UseEngineSwitchParams {
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
     setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
     asrBackend: "gpu" | "cpu";
+    downloadProgressRef: React.RefObject<Record<string, DownloadProgress>>;
 }
 
 /**
@@ -41,6 +43,7 @@ export function useEngineSwitch({
     setHeaderStatus,
     setTrayState,
     asrBackend,
+    downloadProgressRef,
 }: UseEngineSwitchParams) {
     const [activeEngine, setActiveEngine] = useState<ASREngine>("whisper");
     const [loadedEngine, setLoadedEngine] = useState<ASREngine | null>(null);
@@ -118,6 +121,13 @@ export function useEngineSwitch({
     };
 
     const handleSwitchToParakeet = async () => {
+        const progress = downloadProgressRef.current ?? {};
+        const parakeetDownloading = parakeetModels.some(m => progress[m.id]) ||
+            Object.keys(progress).some(k => k.startsWith('parakeet'));
+        if (parakeetDownloading) {
+            setHeaderStatus("Parakeet is still downloading — please wait", 3000);
+            return;
+        }
         if (parakeetModels.length === 0) {
             setActiveEngine("parakeet");
             activeEngineRef.current = "parakeet";
@@ -181,6 +191,13 @@ export function useEngineSwitch({
     };
 
     const handleSwitchToGranite = async () => {
+        const progress = downloadProgressRef.current ?? {};
+        const graniteDownloading = graniteModels.some(m => progress[m.id]) ||
+            Object.keys(progress).some(k => k.startsWith('granite'));
+        if (graniteDownloading) {
+            setHeaderStatus("Granite Speech is still downloading — please wait", 3000);
+            return;
+        }
         if (graniteModels.length === 0) {
             setActiveEngine("granite_speech");
             activeEngineRef.current = "granite_speech";

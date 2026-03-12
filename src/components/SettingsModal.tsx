@@ -47,6 +47,7 @@ interface SettingsModalProps {
     downloadProgress: Record<string, DownloadProgress>;
     onDownload: (id: string, name: string) => void;
     onDelete: (id: string, name: string) => Promise<void>;
+    onCancelDownload: (id: string) => void;
     closeBehavior: 'tray' | 'quit';
     setCloseBehavior: (val: 'tray' | 'quit') => void;
 }
@@ -165,7 +166,7 @@ export function SettingsModal({
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
     dictionary, addDictEntry, updateDictEntry, removeDictEntry,
     snippets, addSnippet, updateSnippet, removeSnippet,
-    settingsModels, downloadProgress, onDownload, onDelete,
+    settingsModels, downloadProgress, onDownload, onDelete, onCancelDownload,
     closeBehavior, setCloseBehavior,
 }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<Tab>('models');
@@ -186,6 +187,7 @@ export function SettingsModal({
                         downloadProgress={downloadProgress}
                         onDownload={onDownload}
                         onDelete={onDelete}
+                        onCancelDownload={onCancelDownload}
                     />
                 );
             case 'post-processing':
