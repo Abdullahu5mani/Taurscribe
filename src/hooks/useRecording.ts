@@ -71,6 +71,7 @@ export function useRecording({
     const isRecordingRef = useRef(false);
     const recordingStartTimeRef = useRef(0);
     const hotkeySessionRef = useRef(false);
+    const overlayHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const handleStartRecording = async (fromHotkey = false) => {
         hotkeySessionRef.current = fromHotkey && enableOverlayRef.current;
@@ -151,6 +152,11 @@ export function useRecording({
             setIsRecording(true);
             isRecordingRef.current = true;
             if (fromHotkey) {
+                // Cancel any pending hide from the previous session
+                if (overlayHideTimerRef.current !== null) {
+                    clearTimeout(overlayHideTimerRef.current);
+                    overlayHideTimerRef.current = null;
+                }
                 // Show overlay reliably: retry once if needed, then emit state
                 for (let attempt = 0; attempt < 2; attempt++) {
                     try {
@@ -172,6 +178,9 @@ export function useRecording({
             }
             console.error("Start recording failed:", e);
             setHeaderStatus("Error: " + e, 5000);
+            if (muteBackgroundAudioRef.current) {
+                await invoke("unmute_system_audio").catch(() => {});
+            }
             playError?.();
             await setTrayState("ready");
             setIsRecording(false);
@@ -205,6 +214,9 @@ export function useRecording({
             const recordingDurationMs = Date.now() - recordingStartTimeRef.current;
             if (recordingDurationMs < MIN_RECORDING_MS) {
                 setHeaderStatus("Recording too short — try at least 1.5 seconds", 5000);
+                if (muteBackgroundAudioRef.current) {
+                    await invoke("unmute_system_audio").catch(() => {});
+                }
                 playError?.();
                 setLiveTranscript("");
                 setIsProcessingTranscript(false);
@@ -246,6 +258,10 @@ export function useRecording({
 
             await invoke("type_text", { text: finalTrans });
 
+            if (muteBackgroundAudioRef.current) {
+                await invoke("unmute_system_audio").catch(e => console.warn("unmute_system_audio failed:", e));
+            }
+
             // Clear the "Processing transcription..." status that was set at recording stop.
             // The spell-check / grammar branches already set their own completion messages,
             // so only clear here when neither ran (plain Whisper with no post-processing).
@@ -274,7 +290,8 @@ export function useRecording({
                 invoke("show_overlay").catch(() => { });
                 const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
                 await emitTo("overlay", "overlay-state", { phase: "done", text: preview, ms: totalMs });
-                setTimeout(() => {
+                overlayHideTimerRef.current = setTimeout(() => {
+                    overlayHideTimerRef.current = null;
                     invoke("hide_overlay").catch(() => { });
                     emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
                 }, 1500);
@@ -287,6 +304,9 @@ export function useRecording({
             const errStr = String(e);
             if (!errStr.includes("Not recording")) {
                 setHeaderStatus("Error: " + e, 5000);
+                if (muteBackgroundAudioRef.current) {
+                    await invoke("unmute_system_audio").catch(() => {});
+                }
                 playError?.();
             }
             isRecordingRef.current = false;
