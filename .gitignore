@@ -47,6 +47,10 @@ src-tauri/build_log.txt
 OLD.pdf
 update_svgs.js
 
+# Unused scaffold placeholders
+public/tauri.svg
+public/vite.svg
+
 # Mobile icons (desktop-only app)
 src-tauri/icons/android/
 src-tauri/icons/ios/
