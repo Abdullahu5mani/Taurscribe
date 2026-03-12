@@ -4,10 +4,57 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;
 
-use super::model_registry::{get_model_config, ModelFile};
+// ── Cancellation registry ─────────────────────────────────────────────────────
+
+static CANCEL_FLAGS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+
+fn cancel_flags() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    CANCEL_FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_cancel_flag(model_id: &str) -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    cancel_flags()
+        .lock()
+        .unwrap()
+        .insert(model_id.to_string(), Arc::clone(&flag));
+    flag
+}
+
+fn unregister_cancel_flag(model_id: &str) {
+    cancel_flags().lock().unwrap().remove(model_id);
+}
+
+/// Delete all files/directories belonging to a model (used on cancel or hash mismatch).
+fn delete_model_files(config: &ModelConfig, base_dir: &std::path::Path) {
+    for fs in &config.files {
+        let p = base_dir.join(fs.filename);
+        if p.is_dir() {
+            let _ = std::fs::remove_dir_all(&p);
+        } else {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+    if config.subdirectory.is_some() {
+        let _ = std::fs::remove_dir(base_dir);
+    }
+}
+
+/// Cancel an in-progress download. Deletes all partial files for that model.
+#[tauri::command]
+pub async fn cancel_download(model_id: String) -> Result<(), String> {
+    if let Some(flag) = cancel_flags().lock().unwrap().get(&model_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+use super::model_registry::{get_model_config, ModelConfig, ModelFile};
 
 // ── Verification store ────────────────────────────────────────────────────────
 
@@ -155,8 +202,19 @@ pub async fn get_download_status(
 
 #[tauri::command]
 pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, String> {
+    let cancel_flag = register_cancel_flag(&model_id);
+    let result = download_model_inner(&app, &model_id, &cancel_flag).await;
+    unregister_cancel_flag(&model_id);
+    result
+}
+
+async fn download_model_inner(
+    app: &AppHandle,
+    model_id: &str,
+    cancel_flag: &Arc<AtomicBool>,
+) -> Result<String, String> {
     let config =
-        get_model_config(&model_id).ok_or_else(|| format!("Unknown model ID: {}", model_id))?;
+        get_model_config(model_id).ok_or_else(|| format!("Unknown model ID: {}", model_id))?;
     let models_dir =
         crate::utils::get_models_dir().map_err(|e| format!("Failed to get models dir: {}", e))?;
 
@@ -230,7 +288,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                 let _ = app.emit(
                     "download-progress",
                     DownloadProgressPayload {
-                        model_id: model_id.clone(),
+                        model_id: model_id.to_string(),
                         total_bytes: total_size,
                         downloaded_bytes: downloaded,
                         status: "downloading".to_string(),
@@ -238,6 +296,25 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                         total_files: files_count as u32,
                     },
                 );
+
+                // Check for user cancellation at each progress emit.
+                if cancel_flag.load(Ordering::Relaxed) {
+                    drop(file);
+                    let _ = std::fs::remove_file(&download_path);
+                    delete_model_files(&config, &base_dir);
+                    let _ = app.emit(
+                        "download-progress",
+                        DownloadProgressPayload {
+                            model_id: model_id.to_string(),
+                            total_bytes: 0,
+                            downloaded_bytes: 0,
+                            status: "cancelled".to_string(),
+                            current_file: (i + 1) as u32,
+                            total_files: files_count as u32,
+                        },
+                    );
+                    return Err("Download cancelled by user".to_string());
+                }
             }
         }
         drop(file);
@@ -247,7 +324,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
             let _ = app.emit(
                 "download-progress",
                 DownloadProgressPayload {
-                    model_id: model_id.clone(),
+                    model_id: model_id.to_string(),
                     total_bytes: 0,
                     downloaded_bytes: 0,
                     status: "extracting".to_string(),
@@ -288,7 +365,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                 let _ = app.emit(
                     "download-progress",
                     DownloadProgressPayload {
-                        model_id: model_id.clone(),
+                        model_id: model_id.to_string(),
                         total_bytes: total_entries,
                         downloaded_bytes: (entry_idx + 1) as u64,
                         status: "extracting".to_string(),
@@ -296,6 +373,24 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                         total_files: files_count as u32,
                     },
                 );
+
+                // Check for cancellation during extraction.
+                if cancel_flag.load(Ordering::Relaxed) {
+                    let _ = std::fs::remove_file(&download_path);
+                    delete_model_files(&config, &base_dir);
+                    let _ = app.emit(
+                        "download-progress",
+                        DownloadProgressPayload {
+                            model_id: model_id.to_string(),
+                            total_bytes: 0,
+                            downloaded_bytes: 0,
+                            status: "cancelled".to_string(),
+                            current_file: (i + 1) as u32,
+                            total_files: files_count as u32,
+                        },
+                    );
+                    return Err("Download cancelled by user".to_string());
+                }
             }
 
             std::fs::remove_file(&download_path).ok();
@@ -313,7 +408,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
         let _ = app.emit(
             "download-progress",
             DownloadProgressPayload {
-                model_id: model_id.clone(),
+                model_id: model_id.to_string(),
                 total_bytes: 100,
                 downloaded_bytes: 100,
                 status: "done".to_string(),
@@ -365,7 +460,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
         let _ = app.emit(
             "download-progress",
             DownloadProgressPayload {
-                model_id: model_id.clone(),
+                model_id: model_id.to_string(),
                 total_bytes: total_verify_bytes,
                 downloaded_bytes: verified_bytes,
                 status: "verifying".to_string(),
@@ -400,7 +495,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                 let _ = app.emit(
                     "download-progress",
                     DownloadProgressPayload {
-                        model_id: model_id.clone(),
+                        model_id: model_id.to_string(),
                         total_bytes: total_verify_bytes,
                         downloaded_bytes: verified_bytes,
                         status: "verifying".to_string(),
@@ -415,7 +510,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
         let _ = app.emit(
             "download-progress",
             DownloadProgressPayload {
-                model_id: model_id.clone(),
+                model_id: model_id.to_string(),
                 total_bytes: total_verify_bytes,
                 downloaded_bytes: verified_bytes,
                 status: "verifying".to_string(),
@@ -433,18 +528,11 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
         if hash_hex != file_spec.sha1 {
             // Corrupted — delete ALL files for this model and return an error.
             eprintln!("[VERIFY] Hash mismatch! Deleting corrupted files.");
-            for fs in &config.files {
-                let _ = std::fs::remove_file(base_dir.join(fs.filename));
-            }
-            // Also clean up the subdirectory if empty.
-            if config.subdirectory.is_some() {
-                let _ = std::fs::remove_dir(&base_dir);
-            }
-
+            delete_model_files(&config, &base_dir);
             let _ = app.emit(
                 "download-progress",
                 DownloadProgressPayload {
-                    model_id: model_id.clone(),
+                    model_id: model_id.to_string(),
                     total_bytes: 0,
                     downloaded_bytes: 0,
                     status: "error".to_string(),
@@ -452,7 +540,6 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
                     total_files: files_count as u32,
                 },
             );
-
             return Err(format!(
                 "Hash mismatch for {} — file may be corrupted. Please try downloading again.",
                 file_spec.filename
@@ -468,7 +555,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
 
     let mut store = load_verified_store();
     store.insert(
-        model_id.clone(),
+        model_id.to_string(),
         VerifiedEntry {
             fingerprint: computed_fp,
             verified_at: now,
@@ -481,7 +568,7 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
     let _ = app.emit(
         "download-progress",
         DownloadProgressPayload {
-            model_id: model_id.clone(),
+            model_id: model_id.to_string(),
             total_bytes: 100,
             downloaded_bytes: 100,
             status: "done".to_string(),

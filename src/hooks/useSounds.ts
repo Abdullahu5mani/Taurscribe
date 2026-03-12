@@ -58,11 +58,17 @@ export function useSounds() {
         }).catch(() => {});
     }, []);
 
-    const play = useCallback((audio: HTMLAudioElement | null) => {
-        if (!audio || mutedRef.current) return;
+    const play = useCallback((audio: HTMLAudioElement | null): Promise<void> => {
+        if (!audio || mutedRef.current) return Promise.resolve();
         audio.currentTime = 0;
         audio.volume = volumeRef.current;
-        audio.play().catch(() => {});
+        return new Promise<void>((resolve) => {
+            let done = false;
+            const finish = () => { if (!done) { done = true; resolve(); } };
+            audio.addEventListener('ended', finish, { once: true });
+            setTimeout(finish, 2000); // Safety: never block more than 2s
+            audio.play().catch(finish);
+        });
     }, []);
 
     const playStart = useCallback(() => play(recStartAudio.current), [play]);

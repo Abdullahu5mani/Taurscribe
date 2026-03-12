@@ -21,12 +21,13 @@ fn ensure_history_db() -> Result<Connection, String> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS transcriptions (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at       TEXT NOT NULL,
-            transcript       TEXT NOT NULL,
-            engine           TEXT NOT NULL,
-            duration_ms      INTEGER,
-            grammar_llm_used INTEGER NOT NULL
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at          TEXT NOT NULL,
+            transcript          TEXT NOT NULL,
+            engine              TEXT NOT NULL,
+            duration_ms         INTEGER,
+            grammar_llm_used    INTEGER NOT NULL,
+            processing_time_ms  INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at
             ON transcriptions(created_at DESC);
@@ -36,6 +37,9 @@ fn ensure_history_db() -> Result<Connection, String> {
         eprintln!("[HISTORY] Failed to initialize history DB: {}", e);
         format!("Failed to initialize history DB: {}", e)
     })?;
+
+    // Migrate existing DBs that predate the processing_time_ms column.
+    let _ = conn.execute("ALTER TABLE transcriptions ADD COLUMN processing_time_ms INTEGER", []);
 
     Ok(conn)
 }
@@ -48,6 +52,7 @@ pub struct TranscriptRecord {
     pub engine: String,
     pub duration_ms: Option<i64>,
     pub grammar_llm_used: bool,
+    pub processing_time_ms: Option<i64>,
 }
 
 /// Save a single transcription entry to the history database.
@@ -62,9 +67,10 @@ pub async fn save_transcript_history(
     engine: String,
     duration_ms: Option<i64>,
     grammar_llm_used: bool,
+    processing_time_ms: Option<i64>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        save_transcript_history_blocking(transcript, engine, duration_ms, grammar_llm_used)
+        save_transcript_history_blocking(transcript, engine, duration_ms, grammar_llm_used, processing_time_ms)
     })
     .await
     .map_err(|e| format!("save_transcript_history task failed: {}", e))?
@@ -75,6 +81,7 @@ fn save_transcript_history_blocking(
     engine: String,
     duration_ms: Option<i64>,
     grammar_llm_used: bool,
+    processing_time_ms: Option<i64>,
 ) -> Result<(), String> {
     // Don't persist empty transcripts.
     if transcript.trim().is_empty() {
@@ -86,16 +93,17 @@ fn save_transcript_history_blocking(
     let grammar_flag: i64 = if grammar_llm_used { 1 } else { 0 };
 
     println!(
-        "[HISTORY] Saving transcript: engine={}, len={}, grammar_llm_used={}",
+        "[HISTORY] Saving transcript: engine={}, len={}, grammar_llm_used={}, processing_time_ms={:?}",
         engine,
         transcript.len(),
-        grammar_llm_used
+        grammar_llm_used,
+        processing_time_ms
     );
 
     conn.execute(
-        "INSERT INTO transcriptions (created_at, transcript, engine, duration_ms, grammar_llm_used)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![created_at, transcript, engine, duration_ms, grammar_flag],
+        "INSERT INTO transcriptions (created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![created_at, transcript, engine, duration_ms, grammar_flag, processing_time_ms],
     )
     .map_err(|e| {
         eprintln!("[HISTORY] Failed to insert history row: {}", e);
@@ -130,7 +138,7 @@ fn list_transcript_history_blocking(
 
     let mut stmt = conn
         .prepare(
-            "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used
+            "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms
              FROM transcriptions
              ORDER BY datetime(created_at) DESC
              LIMIT ?1 OFFSET ?2",
@@ -150,6 +158,7 @@ fn list_transcript_history_blocking(
                 engine: row.get(3)?,
                 duration_ms: row.get(4)?,
                 grammar_llm_used: grammar_int != 0,
+                processing_time_ms: row.get(6)?,
             })
         })
         .map_err(|e| {

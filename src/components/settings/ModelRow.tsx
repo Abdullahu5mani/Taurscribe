@@ -8,11 +8,12 @@ interface ModelRowProps {
     downloadProgress: Record<string, DownloadProgress>;
     onDownload: (id: string, name: string) => void;
     onDelete: (id: string, name: string) => Promise<void>;
+    onCancelDownload: (id: string) => void;
 }
 
 type DeletePhase = 'idle' | 'confirm' | 'deleting' | 'deleted';
 
-export function ModelRow({ model, downloadProgress, onDownload, onDelete }: ModelRowProps) {
+export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCancelDownload }: ModelRowProps) {
     const progress = downloadProgress[model.id];
     const [deletePhase, setDeletePhase] = useState<DeletePhase>('idle');
     const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -109,13 +110,32 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete }: Mode
                 ) : progress && !model.downloaded ? (
                     /* ── Download progress bar ──────────────────────────── */
                     <div style={{ width: '100%' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '4px', color: '#94a3b8' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: '#94a3b8' }}>
                             <span>
                                 {(progress.total_files || 0) > 1 ?
                                     `Downloading (${progress.current_file || 1}/${progress.total_files || 1})...` :
                                     'Downloading...'}
                             </span>
-                            <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
+                                <button
+                                    type="button"
+                                    onClick={() => onCancelDownload(model.id)}
+                                    title="Cancel download and delete partial files"
+                                    style={{
+                                        background: 'rgba(239, 68, 68, 0.15)',
+                                        color: '#f87171',
+                                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                                        borderRadius: '4px',
+                                        padding: '1px 6px',
+                                        fontSize: '0.7rem',
+                                        cursor: 'pointer',
+                                        lineHeight: '1.4',
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                            </div>
                         </div>
                         <div style={{ height: '6px', width: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
                             <div style={{

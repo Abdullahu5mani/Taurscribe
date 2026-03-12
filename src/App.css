@@ -952,6 +952,10 @@ body {
   color: var(--error);
 }
 
+.status-value.processing {
+  color: var(--processing);
+}
+
 /* ---- Model row: model tile + record button side by side ---- */
 .model-row {
   display: flex;
@@ -1921,6 +1925,12 @@ body {
 .history-badge-llm {
   color: var(--accent-primary);
   border-color: rgba(224, 159, 62, 0.8);
+}
+
+.history-badge-latency {
+  color: #a0a0b0;
+  border-color: rgba(160, 160, 176, 0.3);
+  font-variant-numeric: tabular-nums;
 }
 
 .history-snippet {

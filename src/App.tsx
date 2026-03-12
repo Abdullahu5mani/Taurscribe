@@ -268,7 +268,9 @@ function App() {
   useEffect(() => { onModelDownloadedRef.current = onModelDownloadedImpl; });
   const onModelDownloaded = useCallback((id: string) => onModelDownloadedRef.current(id), []);
 
-  const { downloadProgress, handleDownload } = useDownloads(onModelDownloaded);
+  const { downloadProgress, handleDownload, handleCancelDownload } = useDownloads(onModelDownloaded);
+  const downloadProgressRef = useRef(downloadProgress);
+  useEffect(() => { downloadProgressRef.current = downloadProgress; });
 
   // On Apple Silicon, automatically download the matching CoreML encoder alongside any Whisper model.
   const WHISPER_TO_COREML: Record<string, string> = {
@@ -337,6 +339,7 @@ function App() {
     currentModel, currentParakeetModel, currentGraniteModel,
     setCurrentModel, setCurrentParakeetModel, setCurrentGraniteModel,
     setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
+    downloadProgressRef,
   });
 
   const { volume, muted, setVolume, setMuted, playStart, playPaste, playError } = useSounds();
@@ -610,10 +613,8 @@ function App() {
   const refreshModelsRef = useRef(refreshModels);
   useEffect(() => { refreshModelsRef.current = refreshModels; });
 
-  // Keep a ref to the latest downloadProgress so the FS watcher callback can
-  // skip models that currently have an active download, delete, or verify.
-  const downloadProgressRef = useRef(downloadProgress);
-  useEffect(() => { downloadProgressRef.current = downloadProgress; });
+  // downloadProgressRef is defined near the top of the component (after useDownloads)
+  // so it's available to both useEngineSwitch and the FS watcher callback below.
 
   useEffect(() => {
     let active = true;
@@ -1045,8 +1046,8 @@ function App() {
               </div>
               <div className="status-item">
                 <span className="status-label">Model</span>
-                <span className={`status-value ${parakeetModels.length === 0 ? "error" : ""}`}>
-                  {parakeetModels.length === 0 ? "Download required" : (parakeetModels.find(m => m.id === currentParakeetModel) ?? parakeetModels[0]).display_name.split(' - ')[0].replace(/\s*\(.*?\)/g, '').trim()}
+                <span className={`status-value ${parakeetModels.length === 0 && !Object.keys(downloadProgress).some(k => k.startsWith('parakeet')) ? "error" : Object.keys(downloadProgress).some(k => k.startsWith('parakeet')) ? "processing" : ""}`}>
+                  {Object.keys(downloadProgress).some(k => k.startsWith('parakeet')) ? "Downloading…" : parakeetModels.length === 0 ? "Download required" : (parakeetModels.find(m => m.id === currentParakeetModel) ?? parakeetModels[0]).display_name.split(' - ')[0].replace(/\s*\(.*?\)/g, '').trim()}
                 </span>
               </div>
             </div>
@@ -1079,8 +1080,8 @@ function App() {
               </div>
               <div className="status-item">
                 <span className="status-label">Model</span>
-                <span className={`status-value ${graniteModels.length === 0 ? "error" : ""}`}>
-                  {graniteModels.length === 0 ? "Download required" : (graniteModels.find(m => m.id === currentGraniteModel) ?? graniteModels[0]).display_name}
+                <span className={`status-value ${graniteModels.length === 0 && !Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "error" : Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "processing" : ""}`}>
+                  {Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "Downloading…" : graniteModels.length === 0 ? "Download required" : (graniteModels.find(m => m.id === currentGraniteModel) ?? graniteModels[0]).display_name}
                 </span>
               </div>
             </div>
@@ -1349,6 +1350,7 @@ function App() {
             downloadProgress={downloadProgress}
             onDownload={handleDownloadWithCoreml}
             onDelete={handleDeleteModel}
+            onCancelDownload={handleCancelDownload}
             closeBehavior={closeBehavior}
             setCloseBehavior={setCloseBehavior}
           />
