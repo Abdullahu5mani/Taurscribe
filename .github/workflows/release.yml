@@ -62,7 +62,7 @@ jobs:
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
-          sudo apt-get -y install cuda-toolkit-12-6
+          sudo env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install cuda-toolkit-12-6
           echo "CUDA_PATH=/usr/local/cuda-12.6" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
           echo "PATH=/usr/local/cuda-12.6/bin:$PATH" >> $GITHUB_ENV
@@ -96,7 +96,7 @@ jobs:
         if: contains(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \

@@ -92,7 +92,7 @@ jobs:
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
           # Install the toolkit (compiler, libraries, etc.)
-          sudo apt-get -y install cuda-toolkit-12-6
+          sudo env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install cuda-toolkit-12-6
           # Set Environment variables so build scripts can find CUDA
           echo "CUDA_PATH=/usr/local/cuda-12.6" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
@@ -145,7 +145,7 @@ jobs:
         if: contains(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
