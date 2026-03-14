@@ -111,7 +111,7 @@ export function DictionaryTab({
                                     className="dict-delete"
                                     onClick={() => removeDictEntry(entry.id)}
                                     title="Remove entry"
-                                    aria-label="Remove"
+                                    aria-label={`Remove ${entry.soundsLike} → ${entry.correct}`}
                                 >
                                     <IconTrash size={14} />
                                 </button>

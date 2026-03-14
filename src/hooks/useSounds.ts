@@ -10,6 +10,7 @@ export function useSounds() {
 
     const volumeRef = useRef(0.7);
     const mutedRef = useRef(false);
+    const storeRef = useRef<Store | null>(null);
 
     const recStartAudio = useRef<HTMLAudioElement | null>(null);
     const pasteAudio = useRef<HTMLAudioElement | null>(null);
@@ -22,9 +23,10 @@ export function useSounds() {
         errorAudio.current = new Audio(errorUrl);
     }, []);
 
-    // Load persisted settings
+    // Load persisted settings and cache Store instance
     useEffect(() => {
         Store.load('settings.json').then(store => {
+            storeRef.current = store;
             store.get<number>('sound_volume').then(v => {
                 if (v != null) {
                     volumeRef.current = v;
@@ -43,19 +45,19 @@ export function useSounds() {
     const setVolume = useCallback((v: number) => {
         volumeRef.current = v;
         setVolumeState(v);
-        Store.load('settings.json').then(store => {
-            store.set('sound_volume', v);
-            store.save();
-        }).catch(() => {});
+        if (storeRef.current) {
+            storeRef.current.set('sound_volume', v);
+            storeRef.current.save();
+        }
     }, []);
 
     const setMuted = useCallback((m: boolean) => {
         mutedRef.current = m;
         setMutedState(m);
-        Store.load('settings.json').then(store => {
-            store.set('sound_muted', m);
-            store.save();
-        }).catch(() => {});
+        if (storeRef.current) {
+            storeRef.current.set('sound_muted', m);
+            storeRef.current.save();
+        }
     }, []);
 
     const play = useCallback((audio: HTMLAudioElement | null): Promise<void> => {

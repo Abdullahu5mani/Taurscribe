@@ -99,7 +99,7 @@ export function SnippetsTab({
                                         className="dict-delete"
                                         onClick={() => removeSnippet(snippet.id)}
                                         title="Remove snippet"
-                                        aria-label="Remove"
+                                        aria-label={`Remove snippet: ${snippet.trigger}`}
                                     >
                                         <IconTrash size={14} />
                                     </button>

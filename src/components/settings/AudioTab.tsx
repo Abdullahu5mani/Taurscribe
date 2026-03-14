@@ -13,6 +13,7 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
     const [devices, setDevices] = useState<string[]>([]);
     const [selected, setSelected] = useState<string>('');   // '' = system default
     const [saved, setSaved] = useState(false);
+    const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
 
     // Load device list and saved preference on mount
@@ -42,6 +43,7 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
     const handleChange = async (value: string) => {
         setSelected(value);
         setSaved(false);
+        setError(null);
         try {
             await invoke('set_input_device', { name: value || null });
             const store = await Store.load('settings.json');
@@ -55,6 +57,8 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
             setTimeout(() => setSaved(false), 2000);
         } catch (e) {
             console.error('Failed to set input device:', e);
+            setError('Failed to set device. Try again or restart the app.');
+            setTimeout(() => setError(null), 5000);
         }
     };
 
@@ -67,6 +71,7 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
                 <div className="setting-card-header">
                     <span className="setting-card-label-plain">Input Device</span>
                     {saved && <span className="saved-confirm">Saved ✓</span>}
+                    {error && <span role="alert" className="setting-card-error">{error}</span>}
                 </div>
                 <p className="setting-card-desc">
                     Choose which microphone Taurscribe records from. Takes effect on the next recording.
@@ -100,7 +105,7 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
             <div className="setting-card">
                 <div className="setting-card-header">
                     <div className="setting-card-label">
-                        <span className="status-dot" style={{ background: enableDenoise ? '#3ecfa5' : '#4b4b55' }} />
+                        <span className="status-dot" style={{ background: enableDenoise ? 'var(--success)' : 'var(--text-muted)' }} />
                         <span>RNNoise</span>
                         <span className="setting-card-meta">CPU · real-time · no GPU needed</span>
                     </div>
@@ -126,8 +131,8 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
                     <span className="about-row-value">48 kHz · 480-sample frames</span>
                 </div>
                 <div className="about-row" style={{ marginTop: '16px' }}>
-                    <span className="about-row-label" style={{ color: '#4b4b55' }}>High Quality (DeepFilterNet3)</span>
-                    <span className="about-row-value" style={{ color: '#4b4b55' }}>Coming in a future update</span>
+                    <span className="about-row-label" style={{ color: 'var(--text-muted)' }}>High Quality (DeepFilterNet3)</span>
+                    <span className="about-row-value" style={{ color: 'var(--text-muted)' }}>Coming in a future update</span>
                 </div>
             </div>
 
@@ -137,7 +142,7 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
             <div className="setting-card">
                 <div className="setting-card-header">
                     <div className="setting-card-label">
-                        <span className="status-dot" style={{ background: muteBackgroundAudio ? '#3ecfa5' : '#4b4b55' }} />
+                        <span className="status-dot" style={{ background: muteBackgroundAudio ? 'var(--success)' : 'var(--text-muted)' }} />
                         <span>Mute During Recording</span>
                     </div>
                     <label className="switch">
@@ -172,8 +177,8 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
                     <span className="about-row-value">1500 ms</span>
                 </div>
                 <div className="about-row" style={{ marginTop: '16px' }}>
-                    <span className="about-row-label" style={{ color: '#4b4b55' }}>Threshold control</span>
-                    <span className="about-row-value" style={{ color: '#4b4b55' }}>Coming in a future update</span>
+                    <span className="about-row-label" style={{ color: 'var(--text-muted)' }}>Threshold control</span>
+                    <span className="about-row-value" style={{ color: 'var(--text-muted)' }}>Coming in a future update</span>
                 </div>
             </div>
         </div>

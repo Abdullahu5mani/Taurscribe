@@ -17,6 +17,7 @@ export interface DownloadProgress {
     status: string;
     current_file?: number;
     total_files?: number;
+    error?: string;
 }
 
 export const MODELS: DownloadableModel[] = [

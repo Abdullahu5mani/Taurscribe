@@ -228,7 +228,7 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
             <div className="setting-card">
                 <div className="setting-card-header">
                     <div className="setting-card-label">
-                        <span className="status-dot" style={{ background: enableOverlay ? '#3ecfa5' : '#4b4b55' }} />
+                        <span className="status-dot" style={{ background: enableOverlay ? 'var(--success)' : 'var(--text-muted)' }} />
                         <span>Recording Overlay</span>
                     </div>
                     <label className="switch">

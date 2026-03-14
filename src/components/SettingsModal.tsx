@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { IconX } from './Icons';
 import './SettingsModal.css';
 import { GeneralTab } from './settings/GeneralTab';
@@ -170,11 +170,58 @@ export function SettingsModal({
     closeBehavior, setCloseBehavior,
 }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<Tab>('models');
+    const modalRef = useRef<HTMLDivElement>(null);
+    const previousFocusRef = useRef<HTMLElement | null>(null);
 
     // Jump to the requested tab each time the modal is opened
     useEffect(() => {
         if (isOpen) setActiveTab(initialTab ?? 'models');
     }, [isOpen, initialTab]);
+
+    // ── Focus trap + Escape handler ──────────────────────────────
+    const handleKeyDown = useCallback((e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+            e.stopPropagation();
+            onClose();
+            return;
+        }
+        if (e.key !== 'Tab' || !modalRef.current) return;
+
+        const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+        }
+    }, [onClose]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        // Save current focus so we can restore it on close
+        previousFocusRef.current = document.activeElement as HTMLElement;
+
+        // Move focus into the modal
+        requestAnimationFrame(() => {
+            modalRef.current?.querySelector<HTMLElement>('button, [tabindex]')?.focus();
+        });
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+            // Restore focus when modal closes
+            previousFocusRef.current?.focus();
+        };
+    }, [isOpen, handleKeyDown]);
 
     const renderContent = () => {
         switch (activeTab) {
@@ -238,25 +285,33 @@ export function SettingsModal({
             aria-hidden={!isOpen}
         >
             {isOpen && (
-                <div className="settings-modal" onClick={e => e.stopPropagation()}>
+                <div
+                    className="settings-modal"
+                    ref={modalRef}
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="settings-modal-title"
+                    onClick={e => e.stopPropagation()}
+                >
                     <div className="settings-header">
-                        <h2>Settings</h2>
-                        <button className="close-btn" onClick={onClose}><IconX size={14} /></button>
+                        <h2 id="settings-modal-title">Settings</h2>
+                        <button className="close-btn" onClick={onClose} aria-label="Close settings"><IconX size={14} /></button>
                     </div>
 
                     <div className="settings-body">
-                        <div className="settings-sidebar">
+                        <nav className="settings-sidebar" aria-label="Settings sections">
                             {TABS.map(tab => (
-                                <div
+                                <button
                                     key={tab.id}
                                     className={`settings-nav-item ${activeTab === tab.id ? 'active' : ''}`}
                                     onClick={() => setActiveTab(tab.id)}
+                                    aria-current={activeTab === tab.id ? 'page' : undefined}
                                 >
                                     {tab.icon}
                                     {tab.label}
-                                </div>
+                                </button>
                             ))}
-                        </div>
+                        </nav>
 
                         <div className="settings-content">
                             {renderContent()}
