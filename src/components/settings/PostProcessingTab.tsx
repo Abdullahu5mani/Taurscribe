@@ -21,10 +21,10 @@ const STYLES = [
 ];
 
 function statusColor(status: string, enabled: boolean): string {
-    if (!enabled) return '#4b4b55';
-    if (status === 'Loaded') return '#3ecfa5';
-    if (status === 'Loading...') return '#e09f3e';
-    return '#ef4444';
+    if (!enabled) return 'var(--text-muted)';
+    if (status === 'Loaded') return 'var(--success)';
+    if (status === 'Loading...') return 'var(--accent-primary)';
+    return 'var(--error)';
 }
 
 export function PostProcessingTab({
@@ -70,7 +70,7 @@ export function PostProcessingTab({
                 </p>
 
                 {llmNotDownloaded && (
-                    <p className="setting-card-desc" style={{ color: '#ef4444', marginTop: '8px' }}>
+                    <p className="setting-card-desc" style={{ color: 'var(--error)', marginTop: '8px' }}>
                         Model not downloaded. Download FlowScribe Qwen from the <strong>Models</strong> tab.
                     </p>
                 )}
@@ -87,7 +87,7 @@ export function PostProcessingTab({
                         <span className="setting-row-label">
                             Backend
                             {llmBackendLocked && (
-                                <span style={{ display: 'block', fontSize: '0.72rem', color: '#4b4b55', marginTop: '2px' }}>
+                                <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                                     disable LLM to change
                                 </span>
                             )}

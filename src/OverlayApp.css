@@ -1,12 +1,7 @@
-:root {
-  --font-xs: 0.85rem;
-  --font-sm: 1rem;
-}
-
 html, body, #root {
   margin: 0;
   padding: 0;
-  background: #09090b;
+  background: transparent;
   overflow: hidden;
   width: 100%;
   height: 100%;
@@ -14,12 +9,19 @@ html, body, #root {
 
 /* ── Square container ─────────────────────────────────────────────────────── */
 .overlay-box {
+  --font-xs: 0.85rem;
+  --font-sm: 1rem;
   position: fixed;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #09090b;
+  background: var(--bg-card, rgba(255, 255, 255, 0.03));
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 8px 32px rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 16px;
   overflow: hidden;
   animation: fadeIn 0.2s ease-out both;
 }
@@ -52,7 +54,7 @@ html, body, #root {
   font-family: 'Zodiak', serif;
   font-size: var(--font-xs);
   font-weight: 500;
-  color: #dc2626;
+  color: var(--recording, #dc2626);
   letter-spacing: 0.02em;
   opacity: 0.85;
 }
@@ -61,8 +63,8 @@ html, body, #root {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #dc2626;
-  box-shadow: 0 0 6px #dc2626;
+  background: var(--recording, #dc2626);
+  box-shadow: 0 0 6px var(--recording, #dc2626);
   animation: dotBreathe 1.2s ease-in-out infinite alternate;
   flex-shrink: 0;
 }
@@ -88,7 +90,7 @@ html, body, #root {
 .waveform-bar {
   width: 2px;
   border-radius: 2px;
-  background: linear-gradient(to top, #dc2626, #e09f3e);
+  background: linear-gradient(to top, var(--recording, #dc2626), var(--accent-primary, #2563eb));
   transition: height 0.12s ease-out;
   min-height: 3px;
 }
@@ -130,7 +132,7 @@ html, body, #root {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #eab308;
+  background: var(--processing, #eab308);
   animation: dotJump 1s ease-in-out infinite;
 }
 
@@ -142,14 +144,14 @@ html, body, #root {
   30%           { transform: translateY(-10px); opacity: 1; }
 }
 
-.anim-dots--amber .dot { background: #e09f3e; }
+.anim-dots--amber .dot { background: var(--accent-primary, #2563eb); }
 
 .overlay-box--transcribing {
   box-shadow: inset 0 0 20px rgba(234, 179, 8, 0.1);
 }
 
 .overlay-box--correcting {
-  box-shadow: inset 0 0 20px rgba(224, 159, 62, 0.1);
+  box-shadow: inset 0 0 20px rgba(var(--accent-primary-rgb), 0.1);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
@@ -169,7 +171,7 @@ html, body, #root {
   font-family: 'Zodiak', serif;
   font-size: var(--font-xs);
   font-weight: 500;
-  color: #3ecfa5;
+  color: var(--success, #3ecfa5);
   letter-spacing: 0.04em;
   opacity: 0;
   animation: tooShortLabelFade 0.25s ease-out 0.35s forwards;
@@ -183,7 +185,7 @@ html, body, #root {
 
 .check-circle {
   fill: none;
-  stroke: #3ecfa5;
+  stroke: var(--success, #3ecfa5);
   stroke-width: 2;
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
@@ -192,7 +194,7 @@ html, body, #root {
 
 .check-mark {
   fill: none;
-  stroke: #3ecfa5;
+  stroke: var(--success, #3ecfa5);
   stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -228,7 +230,7 @@ html, body, #root {
   font-size: var(--font-sm);
   font-weight: 600;
   letter-spacing: 0.08em;
-  color: #dc2626;
+  color: var(--recording, #dc2626);
   text-transform: uppercase;
   opacity: 0;
   animation: tooShortLabelFade 0.2s ease-out 0.55s forwards;
@@ -261,4 +263,28 @@ html, body, #root {
 .overlay-box--too_short {
   box-shadow: inset 0 0 0 1.5px rgba(220, 38, 38, 0.35),
               0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+/* ── Reduced motion ───────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .overlay-box,
+  .waveform-dot,
+  .dot,
+  .check-circle,
+  .check-mark,
+  .too-short-label,
+  .done-latency,
+  .x-circle,
+  .x-line-1,
+  .x-line-2 {
+    animation: none !important;
+    opacity: 1 !important;
+  }
+  .check-circle,
+  .check-mark,
+  .x-circle,
+  .x-line-1,
+  .x-line-2 {
+    stroke-dashoffset: 0 !important;
+  }
 }

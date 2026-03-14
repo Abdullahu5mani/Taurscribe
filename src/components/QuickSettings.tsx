@@ -174,11 +174,13 @@ export function QuickSettings({
                             type="button"
                             className={`qs-backend-btn${llmBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
                             onClick={() => setLlmBackend("gpu")}
+                            title="Run grammar LLM on GPU (Fast, requires VRAM)"
                         ><IconBolt size={12} style={{ color: '#facc15' }} /> GPU</button>
                         <button
                             type="button"
                             className={`qs-backend-btn${llmBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
                             onClick={() => setLlmBackend("cpu")}
+                            title="Run grammar LLM on CPU (Universal, slower)"
                         ><IconCpu size={12} /> CPU</button>
                     </div>
                   </>

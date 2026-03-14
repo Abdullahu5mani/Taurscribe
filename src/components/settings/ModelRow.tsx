@@ -16,6 +16,7 @@ type DeletePhase = 'idle' | 'confirm' | 'deleting' | 'deleted';
 export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCancelDownload }: ModelRowProps) {
     const progress = downloadProgress[model.id];
     const [deletePhase, setDeletePhase] = useState<DeletePhase>('idle');
+    const [deleteError, setDeleteError] = useState<string | null>(null);
     const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Auto-cancel the confirm prompt after 4s of inactivity
@@ -37,13 +38,15 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
     const handleConfirmDelete = async () => {
         if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
         setDeletePhase('deleting');
+        setDeleteError(null);
         try {
             await onDelete(model.id, model.name);
             setDeletePhase('deleted');
-            // Show "Deleted ✓" for 1.5s before resetting
             setTimeout(() => setDeletePhase('idle'), 1500);
-        } catch {
+        } catch (err) {
             setDeletePhase('idle');
+            setDeleteError(err instanceof Error ? err.message : 'Delete failed');
+            setTimeout(() => setDeleteError(null), 5000);
         }
     };
 
@@ -67,9 +70,14 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                     }}>{model.type}</span>
                     <span>{model.size}</span>
                 </div>
-                <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: '#94a3b8' }}>
+                <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
                     {model.description}
                 </p>
+                {deleteError && (
+                    <p role="alert" style={{ margin: '6px 0 0 0', fontSize: '0.78rem', color: 'var(--error-light, #f87171)' }}>
+                        {deleteError}
+                    </p>
+                )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px', minWidth: '180px', flexShrink: 0, marginLeft: '16px' }}>
                 {progress?.status === 'verifying' ? (
@@ -110,31 +118,35 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                 ) : progress && !model.downloaded ? (
                     /* ── Download progress bar ──────────────────────────── */
                     <div style={{ width: '100%' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: '#94a3b8' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: 'var(--text-secondary)' }}>
                             <span>
-                                {(progress.total_files || 0) > 1 ?
+                                {progress.status === 'starting' ? 'Starting download...' :
+                                    progress.status === 'finalizing' ? 'Finalizing...' :
+                                (progress.total_files || 0) > 1 ?
                                     `Downloading (${progress.current_file || 1}/${progress.total_files || 1})...` :
                                     'Downloading...'}
                             </span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
-                                <button
-                                    type="button"
-                                    onClick={() => onCancelDownload(model.id)}
-                                    title="Cancel download and delete partial files"
-                                    style={{
-                                        background: 'rgba(239, 68, 68, 0.15)',
-                                        color: '#f87171',
-                                        border: '1px solid rgba(239, 68, 68, 0.3)',
-                                        borderRadius: '4px',
-                                        padding: '1px 6px',
-                                        fontSize: '0.7rem',
-                                        cursor: 'pointer',
-                                        lineHeight: '1.4',
-                                    }}
-                                >
-                                    Cancel
-                                </button>
+                                {progress.status !== 'finalizing' && (
+                                    <button
+                                        type="button"
+                                        onClick={() => onCancelDownload(model.id)}
+                                        title="Cancel download and delete partial files"
+                                        style={{
+                                            background: 'rgba(239, 68, 68, 0.15)',
+                                            color: 'var(--error-light, #f87171)',
+                                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                                            borderRadius: '4px',
+                                            padding: '1px 6px',
+                                            fontSize: '0.7rem',
+                                            cursor: 'pointer',
+                                            lineHeight: '1.4',
+                                        }}
+                                    >
+                                        Cancel
+                                    </button>
+                                )}
                             </div>
                         </div>
                         <div style={{ height: '6px', width: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
@@ -153,7 +165,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                         const pct = delProgress && delProgress.total > 0 ? Math.round((delProgress.bytes / delProgress.total) * 100) : 0;
                         return (
                             <div style={{ width: '100%' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: '#f87171' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: 'var(--error-light, #f87171)' }}>
                                     <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                                         <span className="verify-pulse"><IconTrash size={14} /></span>
                                         Deleting{delProgress && (delProgress.total_files || 0) > 1 ? ` (${delProgress.current_file || 1}/${delProgress.total_files})` : ''}...
@@ -179,20 +191,28 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                 ) : (
                     <div style={{ display: 'flex', gap: '8px' }}>
                         {progress?.status === 'error' ? (
-                            <button
-                                className="download-btn"
-                                onClick={() => onDownload(model.id, model.name)}
-                                style={{
-                                    background: 'rgba(239, 68, 68, 0.15)',
-                                    color: '#f87171',
-                                    border: '1px solid rgba(239, 68, 68, 0.4)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '6px'
-                                }}
-                            >
-                                <IconRetry size={14} /> Retry Download
-                            </button>
+                            <>
+                                <button
+                                    className="download-btn"
+                                    onClick={() => onDownload(model.id, model.name)}
+                                    style={{
+                                        background: 'rgba(239, 68, 68, 0.15)',
+                                        color: 'var(--error-light, #f87171)',
+                                        border: '1px solid rgba(239, 68, 68, 0.4)',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px'
+                                    }}
+                                >
+                                    <IconRetry size={14} /> Retry
+                                </button>
+                                {progress.error && (
+                                    <span role="alert" style={{ fontSize: '0.72rem', color: 'var(--error-light, #f87171)', maxWidth: '160px' }}>
+                                        {progress.error}
+                                    </span>
+                                )}
+                            </>
+
                         ) : model.downloaded ? (
                             deletePhase === 'confirm' ? (
                                 /* ── Confirm / Cancel inline prompt ─────────── */
@@ -217,9 +237,10 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                         className="delete-btn"
                                         onClick={handleDeleteClick}
                                         title="Delete Model"
+                                        aria-label={`Delete ${model.name}`}
                                         style={{
                                             background: 'rgba(239, 68, 68, 0.1)',
-                                            color: '#ef4444',
+                                            color: 'var(--error, #ef4444)',
                                             border: '1px solid rgba(239, 68, 68, 0.2)',
                                             padding: '8px 12px',
                                             borderRadius: '6px',

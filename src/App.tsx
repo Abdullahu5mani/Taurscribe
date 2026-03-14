@@ -116,7 +116,7 @@ const TONE_STYLES: { value: string; label: string; icon: React.ReactNode; accent
   { value: 'Verbatim', label: 'Verbatim', icon: <IconFileText size={18} />, accent: '#94a3b8', desc: 'Minimal changes. Keeps your original speech intact with filler words preserved.' },
   { value: 'Enthusiastic', label: 'Enthusiastic', icon: <IconSparkle size={18} />, accent: '#f472b6', desc: 'Energetic and expressive. Perfect for pitches, presentations, and vlogs.' },
   { value: 'Software_Dev', label: 'Software Dev', icon: <IconCode size={18} />, accent: '#3ecfa5', desc: 'Technical language with proper code terms, casing, and dev conventions.' },
-  { value: 'Professional', label: 'Professional', icon: <IconTie size={18} />, accent: '#e09f3e', desc: 'Formal and polished. Ideal for reports, documentation, and client work.' },
+  { value: 'Professional', label: 'Professional', icon: <IconTie size={18} />, accent: '#2563eb', desc: 'Formal and polished. Ideal for reports, documentation, and client work.' },
 ];
 
 const setTrayState = async (newState: "ready" | "recording" | "processing") => {
@@ -160,6 +160,25 @@ function App() {
   }, []);
 
   const [randomLogo, setRandomLogo] = useState(pickRandomLogo);
+  const [isLogoShuttering, setIsLogoShuttering] = useState(false);
+
+  const [isBooting, setIsBooting] = useState(true);
+
+  useEffect(() => {
+    // Initial boot sequence delay
+    const timer = setTimeout(() => setIsBooting(false), 600);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleLogoClick = useCallback(() => {
+    if (isLogoShuttering) return;
+    setIsLogoShuttering(true);
+    // Sharp mechanical shutter timing: 150ms to close, swap, 150ms to open
+    setTimeout(() => {
+      setRandomLogo(pickRandomLogo());
+      setTimeout(() => setIsLogoShuttering(false), 150);
+    }, 150);
+  }, [isLogoShuttering, pickRandomLogo]);
 
   // Re-randomize the logo animation when the window is restored from the tray
   useEffect(() => {
@@ -361,6 +380,33 @@ function App() {
     dictionaryRef, snippetsRef,
     onHistorySaved: () => setHistoryRefreshKey(k => k + 1),
   });
+
+  // Track the engine that was loaded before a switch began (for power-routing-out visual)
+  const prevLoadedEngineRef = useRef<string | null>(null);
+  useEffect(() => {
+    // When loading starts, snapshot the engine that was loaded just before
+    if (loadingTargetEngine && loadedEngine === null) {
+      // prevLoadedEngineRef already holds the previous value from the last render
+    }
+    // When loading ends, clear the prev
+    if (!loadingTargetEngine) {
+      prevLoadedEngineRef.current = null;
+    }
+  }, [loadingTargetEngine, loadedEngine]);
+  // Keep prev updated whenever loadedEngine changes (and we're not mid-switch)
+  useEffect(() => {
+    if (loadedEngine && !loadingTargetEngine) {
+      prevLoadedEngineRef.current = loadedEngine;
+    }
+  }, [loadedEngine, loadingTargetEngine]);
+
+  // Helper to compute power-routing classes for engine cards
+  const engineCardRouting = (engine: string) => {
+    if (!loadingTargetEngine) return "";
+    if (engine === loadingTargetEngine) return " power-routing-in";
+    if (engine === prevLoadedEngineRef.current) return " power-routing-out";
+    return "";
+  };
 
   // --- Transfer line fade ---
   const transferLineFadeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -636,7 +682,7 @@ function App() {
             // (download, verify, delete) — the FS watcher sees partial
             // files on disk and would prematurely report them as downloaded.
             const op = activeOps[m.id];
-            if (op && ['starting', 'downloading', 'verifying', 'deleting'].includes(op.status)) {
+            if (op && ['starting', 'downloading', 'extracting', 'verifying', 'finalizing', 'deleting'].includes(op.status)) {
               return m;
             }
             const s = statuses.find(x => x.id === m.id);
@@ -833,7 +879,7 @@ function App() {
 
   if (showSetupWizard === null) {
     return (
-      <div className="app-loading" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#0f172a", color: "#94a3b8" }}>
+      <div className="app-loading" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-primary, #09090b)", color: "var(--text-secondary, #9494a0)" }}>
         Loading…
       </div>
     );
@@ -846,13 +892,22 @@ function App() {
   return (
     <>
       <TitleBar />
-      <div className="app-body">
+      <div className={`app-body ${isRecording ? "app-body--recording" : ""} theme-${activeEngine}`}>
         <main className="container">
           <div>
             <div className="app-header">
               <div className="app-title-container">
-                <img key={randomLogo} src={`/logos/${randomLogo}`} alt="" className="app-title-logo" />
-                <h1 className="app-title">TAURSCRIBE</h1>
+                <img
+                  key={randomLogo}
+                  src={`/logos/${randomLogo}`}
+                  alt=""
+                  className={`app-title-logo ${isLogoShuttering ? "app-title-logo--shutter" : ""}`}
+                  onClick={handleLogoClick}
+                  title="Cycle Logo"
+                />
+                <h1 className={`app-title ${isBooting ? "app-title--boot" : ""}`}>
+                  TAURSCRIBE
+                </h1>
               </div>
               <div className="header-status">
                 {headerStatusMessage !== null ? (
@@ -978,14 +1033,19 @@ function App() {
           </div>
 
           <div className="status-bar-container">
-            {(isLoading || transferLineFadingOut) && (
+            {(isLoading || transferLineFadingOut || isProcessingTranscript || isCorrecting) && (
               <div
-                className={`status-bar-transfer-line ${transferLineFadingOut ? "status-bar-transfer-line--fade-out" : ""}`}
+                className={`status-bar-transfer-line ${
+                  transferLineFadingOut ? "status-bar-transfer-line--fade-out" : ""
+                } ${
+                  isProcessingTranscript || isCorrecting ? "status-bar-transfer-line--active" : ""
+                }`}
                 aria-hidden="true"
               />
             )}
+
             <div
-              className={`status-card whisper ${activeEngine === "whisper" ? "active" : ""}`}
+              className={`status-card whisper ${activeEngine === "whisper" ? "active" : ""}${engineCardRouting("whisper")}`}
               onClick={handleSwitchToWhisper}
               style={isLoading ? { pointerEvents: 'none' } : {}}
               role="button"
@@ -1019,7 +1079,7 @@ function App() {
             </div>
 
             <div
-              className={`status-card parakeet ${activeEngine === "parakeet" ? "active" : ""}`}
+              className={`status-card parakeet ${activeEngine === "parakeet" ? "active" : ""}${engineCardRouting("parakeet")}`}
               onClick={handleSwitchToParakeet}
               style={isLoading ? { pointerEvents: 'none' } : {}}
               role="button"
@@ -1053,7 +1113,7 @@ function App() {
             </div>
 
             <div
-              className={`status-card granite ${activeEngine === "granite_speech" ? "active" : ""}`}
+              className={`status-card granite ${activeEngine === "granite_speech" ? "active" : ""}${engineCardRouting("granite_speech")}`}
               onClick={handleSwitchToGranite}
               style={isLoading ? { pointerEvents: 'none' } : {}}
               role="button"
@@ -1179,7 +1239,7 @@ function App() {
                     {/* macOS fix: Hide the GPU/CPU backend badge on macOS since
                         there is no GPU/CPU choice — Metal is used automatically. */}
                     {llmStatus === 'Loaded' && !isMac && (
-                      <span className={`llm-backend-badge llm-backend-badge--${llmBackend}`}>
+                      <span className={`llm-backend-badge llm-backend-badge--${llmBackend}`} title={llmBackend === 'gpu' ? 'Currently using GPU acceleration' : 'Currently using CPU (slower)'}>
                         {llmBackend === 'gpu' ? <><IconBolt size={10} style={{ color: '#facc15' }} /> GPU</> : <><IconCpu size={10} /> CPU</>}
                       </span>
                     )}

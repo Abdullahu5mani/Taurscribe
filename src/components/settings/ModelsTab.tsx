@@ -194,7 +194,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                         <h3 className="settings-section-title">CoreML Encoders</h3>
                         <span className="model-group-badge">Apple Silicon</span>
                     </div>
-                    <p className="model-group-desc" style={{ color: '#4b4b55' }}>
+                    <p className="model-group-desc" style={{ color: 'var(--text-muted)' }}>
                         Download a {activeTier} Whisper model above first — the matching CoreML encoder will appear here.
                     </p>
                 </div>

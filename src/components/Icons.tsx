@@ -268,18 +268,24 @@ export function InfoTooltip({ text, size = 12 }: { text: string; size?: number }
     const [pos, setPos] = useState({ top: 0, left: 0 });
     const ref = useRef<HTMLSpanElement>(null);
 
-    const TOOLTIP_HEIGHT = 80; // generous estimate for flip calculation
+    const TOOLTIP_WIDTH = 200;
+    const TOOLTIP_HEIGHT = 60; // Approximate height for wrapping text
+
     const show = () => {
         if (ref.current) {
             const r = ref.current.getBoundingClientRect();
+            
+            // Calculate top: flip above if not enough space below
             const spaceBelow = window.innerHeight - r.bottom;
-            const top = spaceBelow < TOOLTIP_HEIGHT + 12
-                ? r.top - TOOLTIP_HEIGHT - 6   // flip above
-                : r.bottom + 6;
-            setPos({
-                top,
-                left: Math.max(8, Math.min(r.right - 220, window.innerWidth - 228)),
-            });
+            const top = spaceBelow < TOOLTIP_HEIGHT + 20
+                ? r.top - TOOLTIP_HEIGHT - 10 
+                : r.bottom + 8;
+
+            // Calculate left: center on anchor but stay within window bounds
+            let left = r.left + (r.width / 2) - (TOOLTIP_WIDTH / 2);
+            left = Math.max(12, Math.min(left, window.innerWidth - TOOLTIP_WIDTH - 12));
+
+            setPos({ top, left });
         }
         setVisible(true);
     };

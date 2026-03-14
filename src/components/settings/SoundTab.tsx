@@ -47,7 +47,7 @@ export function SoundTab({ soundVolume, soundMuted, setSoundVolume, setSoundMute
                 </p>
 
                 <div className="volume-row" style={{ opacity: soundMuted ? 0.35 : 1, transition: 'opacity 0.2s' }}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#6b6b76', flexShrink: 0 }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
                         <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
                     </svg>
                     <input
@@ -60,7 +60,7 @@ export function SoundTab({ soundVolume, soundMuted, setSoundVolume, setSoundMute
                         onChange={e => setSoundVolume(Number(e.target.value))}
                         className="volume-slider"
                     />
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#6b6b76', flexShrink: 0 }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
                         <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
                         <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
                         <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Store } from "@tauri-apps/plugin-store";
 import { IconCheck, IconCopy } from "./Icons";
 
 type TranscriptRecord = {
@@ -18,6 +19,38 @@ interface TranscriptFeedProps {
     isCorrecting: boolean;
     latestLatency: number | null;
 }
+
+/** Animated odometer that counts from 0 to `target` over `duration` ms. */
+function LatencyOdometer({ target, duration = 400 }: { target: number; duration?: number }) {
+    const [display, setDisplay] = useState(0);
+    const rafRef = useRef<number | null>(null);
+
+    useEffect(() => {
+        const start = performance.now();
+        const tick = (now: number) => {
+            const elapsed = now - start;
+            const progress = Math.min(elapsed / duration, 1);
+            // ease-out quad
+            const eased = 1 - (1 - progress) * (1 - progress);
+            setDisplay(Math.round(eased * target));
+            if (progress < 1) {
+                rafRef.current = requestAnimationFrame(tick);
+            }
+        };
+        rafRef.current = requestAnimationFrame(tick);
+        return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    }, [target, duration]);
+
+    return <>{display} ms</>;
+}
+
+const MILESTONE_COUNTS = [1, 100, 500, 1000];
+const MILESTONE_LABELS: Record<number, string> = {
+    1: "First capture!",
+    100: "100 captures!",
+    500: "500 captures!",
+    1000: "1,000 captures!",
+};
 
 /** Show HH:MM:SS for today, or "Mon 12, 5:42 PM" otherwise. */
 const formatTimestamp = (iso: string) => {
@@ -44,9 +77,12 @@ export function TranscriptFeed({
     const [items, setItems] = useState<TranscriptRecord[]>([]);
     const [animatingId, setAnimatingId] = useState<number | null>(null);
     const [copiedId, setCopiedId] = useState<number | null>(null);
+    const [milestoneMsg, setMilestoneMsg] = useState<string | null>(null);
     const prevTopIdRef = useRef<number | null>(null);
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const animTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const milestoneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const milestoneCheckedRef = useRef<Set<number>>(new Set());
 
     const loadHistory = useCallback(async () => {
         try {
@@ -55,7 +91,8 @@ export function TranscriptFeed({
                 offset: 0,
             });
             // Detect a newly added top item and trigger its enter animation.
-            if (rows.length > 0 && rows[0].id !== prevTopIdRef.current) {
+            const isNewItem = rows.length > 0 && rows[0].id !== prevTopIdRef.current;
+            if (isNewItem) {
                 const newId = rows[0].id;
                 if (animTimerRef.current) clearTimeout(animTimerRef.current);
                 setAnimatingId(newId);
@@ -66,8 +103,48 @@ export function TranscriptFeed({
                 prevTopIdRef.current = newId;
             }
             setItems(rows);
+
+            // Milestone detection: check total count against known thresholds
+            if (isNewItem) {
+                checkMilestone();
+            }
         } catch (e) {
             console.error("[TranscriptFeed] Failed to load history:", e);
+        }
+    }, []);
+
+    const checkMilestone = useCallback(async () => {
+        try {
+            const store = await Store.load("settings.json");
+            const totalCount = await store.get<number>("transcript_count") ?? 0;
+            const newCount = totalCount + 1;
+            await store.set("transcript_count", newCount);
+            await store.save();
+
+            if (MILESTONE_COUNTS.includes(newCount) && !milestoneCheckedRef.current.has(newCount)) {
+                milestoneCheckedRef.current.add(newCount);
+                const label = MILESTONE_LABELS[newCount];
+                setMilestoneMsg(label);
+
+                // Fire confetti — dynamically imported to keep it out of the main bundle
+                import("canvas-confetti").then(mod => {
+                    mod.default({
+                        particleCount: newCount === 1 ? 40 : 80,
+                        spread: newCount === 1 ? 50 : 70,
+                        origin: { y: 0.7 },
+                        colors: ['#2563eb', '#1d4ed8', '#fef08a', '#ededef', '#3ecfa5'],
+                        disableForReducedMotion: true,
+                    });
+                }).catch(() => {});
+
+                if (milestoneTimerRef.current) clearTimeout(milestoneTimerRef.current);
+                milestoneTimerRef.current = setTimeout(() => {
+                    setMilestoneMsg(null);
+                    milestoneTimerRef.current = null;
+                }, 3500);
+            }
+        } catch {
+            // non-critical
         }
     }, []);
 
@@ -105,6 +182,12 @@ export function TranscriptFeed({
 
     return (
         <div className="transcript-feed">
+            {milestoneMsg && (
+                <div className="feed-milestone" key={milestoneMsg}>
+                    <span className="feed-milestone-label">{milestoneMsg}</span>
+                </div>
+            )}
+
             {showLive && (
                 <div className={`feed-live-row ${liveClass}`}>
                     <span className="feed-live-dot" />
@@ -128,12 +211,14 @@ export function TranscriptFeed({
                         key={item.id}
                         className={`feed-item-wrapper${isNew ? " feed-item-wrapper--entering" : ""}`}
                     >
-                        <div className={`feed-item${isLatest ? " feed-item--latest" : ""}${isNew ? " feed-item--fading-in" : ""}`}>
+                        <div className={`feed-item${isLatest ? " feed-item--latest" : ""}${isNew ? " feed-item--entering feed-item--fading-in" : ""}`}>
                             <div className="feed-item-header">
                                 <span className="feed-timestamp">{formatTimestamp(item.created_at)}</span>
                                 <div className="feed-badges">
                                     {isLatest && latestLatency !== null && (
-                                        <span className="latency-badge">{latestLatency} ms</span>
+                                        <span className="latency-badge">
+                                            {isNew ? <LatencyOdometer target={latestLatency} /> : <>{latestLatency} ms</>}
+                                        </span>
                                     )}
                                     <span className={`feed-badge feed-badge-engine--${item.engine}`}>
                                         {item.engine === "parakeet" ? "Parakeet" : item.engine === "granite_speech" ? "Granite" : "Whisper"}

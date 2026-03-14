@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
@@ -15,6 +15,15 @@ interface DownloadProgressPayload {
 
 export function useDownloads(onModelDownloaded: (id: string) => void) {
     const [downloadProgress, setDownloadProgress] = useState<Record<string, DownloadProgress>>({});
+    const activeDownloadsRef = useRef<Set<string>>(new Set());
+
+    const clearProgress = (modelId: string) => {
+        setDownloadProgress((prev) => {
+            const next = { ...prev };
+            delete next[modelId];
+            return next;
+        });
+    };
 
     useEffect(() => {
         let unlisten: (() => void) | undefined;
@@ -35,34 +44,46 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
                 }));
 
                 if (payload.status === "done") {
-                    toast.success(`Downloaded: ${payload.model_id}`);
-                    setDownloadProgress((prev) => {
-                        const next = { ...prev };
-                        delete next[payload.model_id];
-                        return next;
-                    });
-                    onModelDownloaded(payload.model_id);
+                    setDownloadProgress((prev) => ({
+                        ...prev,
+                        [payload.model_id]: {
+                            bytes: payload.downloaded_bytes,
+                            total: payload.total_bytes,
+                            status: "finalizing",
+                            current_file: payload.current_file,
+                            total_files: payload.total_files,
+                        },
+                    }));
+                    Promise.resolve(onModelDownloaded(payload.model_id))
+                        .catch((err) => {
+                            console.warn("onModelDownloaded failed:", err);
+                        })
+                        .finally(() => {
+                            activeDownloadsRef.current.delete(payload.model_id);
+                            clearProgress(payload.model_id);
+                            toast.success(`Downloaded: ${payload.model_id}`);
+                        });
                 } else if (payload.status === "error") {
+                    activeDownloadsRef.current.delete(payload.model_id);
+                    setDownloadProgress((prev) => ({
+                        ...prev,
+                        [payload.model_id]: {
+                            bytes: payload.downloaded_bytes,
+                            total: payload.total_bytes,
+                            status: "error",
+                            current_file: payload.current_file,
+                            total_files: payload.total_files,
+                            error: "Download failed — file may be corrupted. Try again.",
+                        },
+                    }));
                     toast.error(`Download failed — file may be corrupted. Try again.`);
-                    setDownloadProgress((prev) => {
-                        const next = { ...prev };
-                        delete next[payload.model_id];
-                        return next;
-                    });
                 } else if (payload.status === "cancelled") {
+                    activeDownloadsRef.current.delete(payload.model_id);
                     toast.info(`Download cancelled: ${payload.model_id}`);
-                    setDownloadProgress((prev) => {
-                        const next = { ...prev };
-                        delete next[payload.model_id];
-                        return next;
-                    });
+                    clearProgress(payload.model_id);
                 } else if (payload.status === "delete-done") {
                     // Clean up progress entry after deletion completes — no callback needed.
-                    setDownloadProgress((prev) => {
-                        const next = { ...prev };
-                        delete next[payload.model_id];
-                        return next;
-                    });
+                    clearProgress(payload.model_id);
                 }
             });
         };
@@ -75,6 +96,11 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
     }, [onModelDownloaded]);
 
     const handleDownload = async (id: string, name: string) => {
+        const current = downloadProgress[id];
+        if (activeDownloadsRef.current.has(id) || (current && current.status !== "error")) {
+            return;
+        }
+        activeDownloadsRef.current.add(id);
         toast.info(`Starting download: ${name}`);
         setDownloadProgress((prev) => ({
             ...prev,
@@ -83,12 +109,17 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
         try {
             await invoke("download_model", { modelId: id });
         } catch (e) {
+            activeDownloadsRef.current.delete(id);
+            const message = `${e ?? "Unknown error"}`;
             toast.error(`Download failed: ${e}`);
-            setDownloadProgress((prev) => {
-                const n = { ...prev };
-                delete n[id];
-                return n;
-            });
+            setDownloadProgress((prev) => ({
+                ...prev,
+                [id]: {
+                    ...(prev[id] ?? { bytes: 0, total: 100 }),
+                    status: "error",
+                    error: message,
+                },
+            }));
         }
     };
 
