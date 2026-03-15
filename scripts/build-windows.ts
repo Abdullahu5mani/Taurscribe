@@ -39,10 +39,11 @@ const args = process.argv.slice(2);
 const targetIdx = args.indexOf("--target");
 const targetTriple = targetIdx !== -1 && args[targetIdx + 1] ? args[targetIdx + 1] : null;
 
-// Determine release directory based on whether --target was specified
+// Determine release directory based on --target and CARGO_TARGET_DIR
+const targetDir = process.env.CARGO_TARGET_DIR || join(srcTauri, "target");
 const releaseDir = targetTriple
-  ? join(srcTauri, "target", targetTriple, "release")
-  : join(srcTauri, "target", "release");
+  ? join(targetDir, targetTriple, "release")
+  : join(targetDir, "release");
 
 const windowsConfPath = join(srcTauri, "tauri.windows.conf.json");
 

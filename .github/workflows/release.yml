@@ -290,7 +290,7 @@ jobs:
           WHISPER_NO_AVX2: "0"
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
-          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
+          CMAKE_CUDA_ARCHITECTURES: "75;86;89"
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
@@ -299,6 +299,10 @@ jobs:
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          # Match Bundle step env vars so cargo doesn't see a changed environment and recompile
+          CI: "true"
+          NO_STRIP: "true"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
 
       - name: Build frontend
         run: bun run build
@@ -350,7 +354,7 @@ jobs:
         run: |
           if [ "${{ matrix.os_name }}" = "Windows" ]; then
             # Use build-windows.ts which handles DLL bundling
-            bun scripts/build-windows.ts --bundles nsis
+            bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
             bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm
           else
@@ -376,7 +380,7 @@ jobs:
           WHISPER_NO_AVX2: "0"
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
-          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
+          CMAKE_CUDA_ARCHITECTURES: "75;86;89"
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
