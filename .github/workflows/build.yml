@@ -412,8 +412,9 @@ jobs:
 
           # Force CUDA architectures:
           # In CI (headless), cmake cannot auto-detect the GPU architecture.
-          # We specify a list of common supported architectures (Pascal, Volta, Turing, Ampere).
-          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
+          # Only target desktop-relevant GPUs to keep CUDA compile times reasonable:
+          # 75 = Turing (RTX 2000), 86 = Ampere (RTX 3000), 89 = Ada (RTX 4000)
+          CMAKE_CUDA_ARCHITECTURES: "75;86;89"
 
           # macOS: Set minimum deployment target for ONNX Runtime/CoreML support.
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
@@ -429,6 +430,10 @@ jobs:
           # and add a -L flag via RUSTFLAGS so rustc's linker invocation finds libvulkan.so.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          # Match Bundle step env vars so cargo doesn't see a changed environment and recompile
+          CI: "true"
+          NO_STRIP: "true"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
 
       # Build frontend
       - name: Build frontend
@@ -465,7 +470,7 @@ jobs:
         run: |
           if [ "${{ matrix.os_name }}" = "Windows" ]; then
             # Use build-windows.ts which handles DLL bundling
-            bun scripts/build-windows.ts --bundles nsis
+            bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
             bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm
           else
@@ -505,8 +510,9 @@ jobs:
           
           # Force CUDA architectures:
           # In CI (headless), cmake cannot auto-detect the GPU architecture.
-          # We specify a list of common supported architectures (Pascal, Volta, Turing, Ampere).
-          CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
+          # Only target desktop-relevant GPUs to keep CUDA compile times reasonable:
+          # 75 = Turing (RTX 2000), 86 = Ampere (RTX 3000), 89 = Ada (RTX 4000)
+          CMAKE_CUDA_ARCHITECTURES: "75;86;89"
           
           # macOS: Set minimum deployment target for ONNX Runtime/CoreML support.
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
