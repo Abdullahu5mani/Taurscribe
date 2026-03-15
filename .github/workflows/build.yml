@@ -391,33 +391,34 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
-          # Serial CMake builds on Windows and Linux to avoid whisper-rs-sys vs llama-cpp-sys-2
-          # ggml.c race condition (LNK1181 on Windows, duplicate symbol errors on Linux).
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{ (contains(matrix.platform, 'windows') || contains(matrix.platform, 'ubuntu')) && '1' || '4' }}
+          # Serial CMake builds on Windows to avoid whisper-rs-sys vs llama-cpp-sys-2
+          # ggml.c race condition (LNK1181). Linux/macOS use parallel builds — cargo
+          # isolates each -sys crate into its own OUT_DIR so they don't collide.
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
-          
+
           # CCACHE_DISABLE=1 is set globally; keep GGML_CCACHE=OFF everywhere to stay consistent.
           GGML_CCACHE: "OFF"
-          
+
           # Windows: use Ninja (simpler, avoids MSBuild/ExternalProject path issues). macOS/Linux: Unix Makefiles.
           CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
           CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && '' || '' }}
-          
+
           # Enable AVX/AVX2 for Whisper/ggml (faster on modern CPUs and typical CI runners).
           WHISPER_NO_AVX: "0"
           WHISPER_NO_AVX2: "0"
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
-          
+
           # Force CUDA architectures:
           # In CI (headless), cmake cannot auto-detect the GPU architecture.
           # We specify a list of common supported architectures (Pascal, Volta, Turing, Ampere).
           CMAKE_CUDA_ARCHITECTURES: "61;70;75;80;86"
-          
+
           # macOS: Set minimum deployment target for ONNX Runtime/CoreML support.
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
-          
+
           # Pass environment variables set in previous steps to the build process
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
@@ -485,9 +486,8 @@ jobs:
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
-          # Serial CMake builds on Windows and Linux to avoid whisper-rs-sys vs llama-cpp-sys-2
-          # ggml.c race condition.
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{ (contains(matrix.platform, 'windows') || contains(matrix.platform, 'ubuntu')) && '1' || '4' }}
+          # Serial CMake builds on Windows only (LNK1181 race). Linux uses parallel builds.
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
           # CCACHE_DISABLE=1 is set globally; keep GGML_CCACHE=OFF everywhere to stay consistent.
