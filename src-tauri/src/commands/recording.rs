@@ -600,20 +600,30 @@ fn start_recording_blocking(
 /// macOS:         AXUIElement (kAXSelectedTextAttribute) — inserts at cursor, no clipboard touch
 ///                → fallback: clipboard + Cmd+V
 /// Windows/Linux: clipboard save → set text → Ctrl+V → restore clipboard
+/// Returns Err with a short error code on failure so the frontend can show
+/// a "couldn't paste" indicator without silently dropping the transcript.
 #[tauri::command]
-pub fn type_text(text: String) {
+pub async fn type_text(text: String) -> Result<(), String> {
     if text.trim().is_empty() || text.trim() == "[silence]" {
-        return;
+        return Ok(());
     }
     let text_to_type = text.trim().to_string();
-    std::thread::spawn(move || {
-        insert_text(&text_to_type);
-    });
+    tauri::async_runtime::spawn_blocking(move || insert_text(&text_to_type))
+        .await
+        .map_err(|e| format!("thread_panic:{e:?}"))??
 }
 
-fn insert_text(text: &str) {
+fn insert_text(text: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        // Bail early if the OS has locked keyboard injection (e.g. a password
+        // field has focus). CGEventPost silently does nothing while this lock
+        // is held — detecting it lets us surface a real error to the user.
+        if is_secure_input_active() {
+            eprintln!("[INSERT] Secure input is active — aborting keyboard injection");
+            return Err("secure_input".to_string());
+        }
+
         // macOS fix: After the hotkey is released, the OS needs a moment to
         // settle focus back to the target app's text field. Without this
         // delay, AXFocusedUIElement often returns null or a stale element.
@@ -624,7 +634,7 @@ fn insert_text(text: &str) {
         for attempt in 0..3 {
             if ax_insert(text) {
                 println!("[INSERT] AXUIElement succeeded (attempt {})", attempt + 1);
-                return;
+                return Ok(());
             }
             if attempt < 2 {
                 std::thread::sleep(std::time::Duration::from_millis(80));
@@ -632,19 +642,27 @@ fn insert_text(text: &str) {
         }
         eprintln!("[INSERT] AXUIElement failed after 3 attempts, falling back to clipboard+Cmd+V");
     }
-    clipboard_paste(text);
+    clipboard_paste(text)
 }
 
 /// Clipboard + simulated paste keystroke (Cmd+V on macOS, Ctrl+V elsewhere).
 /// Saves and restores the previous clipboard content.
-fn clipboard_paste(text: &str) {
+fn clipboard_paste(text: &str) -> Result<(), String> {
     use arboard::Clipboard;
+
+    // Windows: classic cmd.exe console windows use a different paste path
+    // (right-click context menu or Win+V). They do not process Ctrl+V from
+    // synthetic SendInput events, so detect them before touching the clipboard.
+    #[cfg(target_os = "windows")]
+    if let Some(reason) = get_foreground_window_issue() {
+        return Err(reason);
+    }
 
     let mut clipboard = match Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[INSERT] Clipboard init failed: {}", e);
-            return;
+            return Err(format!("clipboard_init:{e}"));
         }
     };
 
@@ -652,11 +670,13 @@ fn clipboard_paste(text: &str) {
 
     if let Err(e) = clipboard.set_text(text) {
         eprintln!("[INSERT] Failed to set clipboard: {}", e);
-        return;
+        return Err(format!("clipboard_set:{e}"));
     }
 
-    // arboard's set_text is synchronous; a short yield lets the OS finalise the write
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    // Give the pasteboard server (pbs) time to propagate the write to other
+    // processes. 10 ms was too tight for heavy apps (Word, Excel, Outlook)
+    // that validate the pasteboard change count before reading on Cmd+V.
+    std::thread::sleep(std::time::Duration::from_millis(50));
 
     #[cfg(target_os = "macos")]
     {
@@ -676,19 +696,27 @@ fn clipboard_paste(text: &str) {
             Ok(e) => e,
             Err(e) => {
                 eprintln!("[INSERT] Enigo init failed: {:?}", e);
-                return;
+                return Err(format!("enigo_init:{e:?}"));
             }
         };
+        // Small gap between modifier down and V so the target app's message
+        // pump sees them as distinct WM_KEYDOWN events. Zero-gap synthetic
+        // sequences can be coalesced or dropped by apps like Word/LibreOffice.
         let _ = enigo.key(Key::Control, Direction::Press);
+        std::thread::sleep(std::time::Duration::from_millis(20));
         let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+        std::thread::sleep(std::time::Duration::from_millis(20));
         let _ = enigo.key(Key::Control, Direction::Release);
     }
 
-    // Wait for the target app to read the clipboard before we restore it
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    // Wait for the target app to finish reading the clipboard before restoring.
+    // 150 ms was too short for heavy apps (Word, LibreOffice) that process
+    // paste asynchronously through their own undo/format pipeline.
+    std::thread::sleep(std::time::Duration::from_millis(300));
     if let Some(prev) = previous {
         let _ = clipboard.set_text(prev);
     }
+    Ok(())
 }
 
 /// macOS fix: Simulate Cmd+V using CGEvent instead of enigo.
@@ -717,8 +745,13 @@ fn simulate_cmd_v_cgevent() {
     ) {
         key_down.set_flags(CGEventFlags::CGEventFlagCommand);
         key_up.set_flags(CGEventFlags::CGEventFlagCommand);
-        key_down.post(core_graphics::event::CGEventTapLocation::HID);
-        key_up.post(core_graphics::event::CGEventTapLocation::HID);
+        // AnnotatedSession delivers the event after the window server has
+        // assigned it a target process and annotated it with process/window
+        // info. This is the level at which Carbon HIToolbox (used by Word,
+        // Excel, Outlook) intercepts keyboard shortcuts — posting at HID
+        // bypasses that layer and those apps silently ignore the event.
+        key_down.post(core_graphics::event::CGEventTapLocation::AnnotatedSession);
+        key_up.post(core_graphics::event::CGEventTapLocation::AnnotatedSession);
     } else {
         eprintln!("[INSERT] Failed to create CGEvent for Cmd+V");
     }
@@ -771,6 +804,101 @@ fn ax_insert(text: &str) -> bool {
         CFRelease(focused);
 
         err == kAXErrorSuccess
+    }
+}
+
+/// macOS: Returns true when any process has activated Secure Input — an IOKit
+/// flag set when a password field (or Terminal "Secure Keyboard Entry") has
+/// focus. While active, CGEventPost keyboard injection is silently blocked
+/// system-wide by the OS kernel; there is no way to paste into any app.
+/// We check before attempting so we can return a real error code rather than
+/// silently succeeding with no text inserted.
+#[cfg(target_os = "macos")]
+fn is_secure_input_active() -> bool {
+    use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
+    use core_foundation::string::CFString;
+    use std::ffi::{c_void, CStr};
+
+    type IOService = u32;
+
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOServiceMatching(name: *const std::ffi::c_char) -> *mut c_void;
+        // IOServiceGetMatchingService takes ownership of (and releases) `matching`.
+        fn IOServiceGetMatchingService(masterPort: u32, matching: *mut c_void) -> IOService;
+        fn IORegistryEntryCreateCFProperty(
+            entry: IOService,
+            key: CFTypeRef,
+            allocator: *const c_void,
+            options: u32,
+        ) -> CFTypeRef;
+        fn IOObjectRelease(object: IOService) -> i32;
+    }
+
+    extern "C" {
+        fn CFGetTypeID(cf: CFTypeRef) -> usize;
+        fn CFBooleanGetTypeID() -> usize;
+        fn CFBooleanGetValue(boolean: CFTypeRef) -> bool;
+    }
+
+    unsafe {
+        let matching = IOServiceMatching(
+            CStr::from_bytes_with_nul_unchecked(b"IOHIDSystem\0").as_ptr(),
+        );
+        if matching.is_null() {
+            return false;
+        }
+        // kIOMasterPortDefault = 0; matching ref is consumed by this call.
+        let service = IOServiceGetMatchingService(0, matching);
+        if service == 0 {
+            return false;
+        }
+        let key = CFString::new("HIDSecureEventInputIsActive");
+        let prop =
+            IORegistryEntryCreateCFProperty(service, key.as_CFTypeRef(), std::ptr::null(), 0);
+        IOObjectRelease(service);
+        if prop.is_null() {
+            return false;
+        }
+        let result = CFGetTypeID(prop) == CFBooleanGetTypeID() && CFBooleanGetValue(prop);
+        CFRelease(prop);
+        result
+    }
+}
+
+/// Windows: checks the foreground window's class name before attempting paste.
+/// Classic cmd.exe uses "ConsoleWindowClass" and does not process Ctrl+V from
+/// synthetic SendInput — it expects right-click → Paste or Win+V. Windows
+/// Terminal ("CASCADIA_HOSTING_WINDOW_CLASS") does handle Ctrl+V correctly.
+#[cfg(target_os = "windows")]
+fn get_foreground_window_issue() -> Option<String> {
+    unsafe {
+        extern "system" {
+            fn GetForegroundWindow() -> *mut std::ffi::c_void;
+            fn GetClassNameW(
+                hWnd: *mut std::ffi::c_void,
+                lpClassName: *mut u16,
+                nMaxCount: i32,
+            ) -> i32;
+        }
+
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return None;
+        }
+
+        let mut class_buf = [0u16; 256];
+        let len = GetClassNameW(hwnd, class_buf.as_mut_ptr(), 256);
+        if len <= 0 {
+            return None;
+        }
+
+        let class_name = String::from_utf16_lossy(&class_buf[..len as usize]);
+        if class_name == "ConsoleWindowClass" {
+            return Some("console".to_string());
+        }
+
+        None
     }
 }
 

@@ -265,6 +265,32 @@ html, body, #root {
               0 8px 32px rgba(0, 0, 0, 0.45);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/*  PASTE FAILED – same X animation as too_short, smaller label text          */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+.anim-paste-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.paste-failed-label {
+  font-family: 'Zodiak', serif;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--recording, #dc2626);
+  text-transform: uppercase;
+  opacity: 0;
+  animation: tooShortLabelFade 0.2s ease-out 0.55s forwards;
+}
+
+.overlay-box--paste_failed {
+  box-shadow: inset 0 0 0 1.5px rgba(220, 38, 38, 0.35),
+              0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
 /* ── Reduced motion ───────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .overlay-box,
@@ -273,6 +299,7 @@ html, body, #root {
   .check-circle,
   .check-mark,
   .too-short-label,
+  .paste-failed-label,
   .done-latency,
   .x-circle,
   .x-line-1,
