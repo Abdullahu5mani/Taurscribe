@@ -16,6 +16,7 @@ interface DownloadProgressPayload {
 export function useDownloads(onModelDownloaded: (id: string) => void) {
     const [downloadProgress, setDownloadProgress] = useState<Record<string, DownloadProgress>>({});
     const activeDownloadsRef = useRef<Set<string>>(new Set());
+    const cancelledRef = useRef<Set<string>>(new Set());
 
     const clearProgress = (modelId: string) => {
         setDownloadProgress((prev) => {
@@ -79,6 +80,7 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
                     toast.error(`Download failed — file may be corrupted. Try again.`);
                 } else if (payload.status === "cancelled") {
                     activeDownloadsRef.current.delete(payload.model_id);
+                    cancelledRef.current.add(payload.model_id);
                     toast.info(`Download cancelled: ${payload.model_id}`);
                     clearProgress(payload.model_id);
                 } else if (payload.status === "delete-done") {
@@ -110,6 +112,12 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
             await invoke("download_model", { modelId: id });
         } catch (e) {
             activeDownloadsRef.current.delete(id);
+            // If a cancellation was requested, the "cancelled" event already
+            // cleaned up the progress state — don't overwrite it with an error.
+            if (cancelledRef.current.has(id)) {
+                cancelledRef.current.delete(id);
+                return;
+            }
             const message = `${e ?? "Unknown error"}`;
             toast.error(`Download failed: ${e}`);
             setDownloadProgress((prev) => ({
