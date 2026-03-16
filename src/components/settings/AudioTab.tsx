@@ -84,6 +84,12 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
                         className="select-input select-input--full"
                         value={selected}
                         onChange={e => handleChange(e.target.value)}
+                        onFocus={() => {
+                            invoke<string[]>('list_input_devices').then(setDevices).catch(() => {});
+                        }}
+                        onMouseEnter={() => {
+                            invoke<string[]>('list_input_devices').then(setDevices).catch(() => {});
+                        }}
                     >
                         <option value="">System Default</option>
                         {devices.map(name => (
