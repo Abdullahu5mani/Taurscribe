@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import "./OverlayApp.css";
 
-type Phase = "recording" | "transcribing" | "correcting" | "done" | "too_short";
+type Phase = "recording" | "transcribing" | "correcting" | "done" | "too_short" | "paste_failed";
 interface Payload { phase: Phase | "hidden"; text?: string; ms?: number; }
 
 const BAR_COUNT = 17;
@@ -144,6 +144,22 @@ export function OverlayApp() {
                             strokeDasharray="20" strokeDashoffset="20" />
                     </svg>
                     <span className="too-short-label">Too short</span>
+                </div>
+            )}
+            {phase === "paste_failed" && (
+                <div className="anim-paste-failed">
+                    <svg viewBox="0 0 40 40" width="36" height="36">
+                        <circle className="x-circle" cx="20" cy="20" r="16"
+                            fill="none" stroke="#dc2626" strokeWidth="2.5"
+                            strokeDasharray="100" strokeDashoffset="100" />
+                        <line className="x-line-1" x1="13" y1="13" x2="27" y2="27"
+                            stroke="#dc2626" strokeWidth="2.5" strokeLinecap="round"
+                            strokeDasharray="20" strokeDashoffset="20" />
+                        <line className="x-line-2" x1="27" y1="13" x2="13" y2="27"
+                            stroke="#dc2626" strokeWidth="2.5" strokeLinecap="round"
+                            strokeDasharray="20" strokeDashoffset="20" />
+                    </svg>
+                    <span className="paste-failed-label">Couldn't paste</span>
                 </div>
             )}
         </div>

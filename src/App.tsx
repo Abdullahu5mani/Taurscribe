@@ -1047,7 +1047,11 @@ function App() {
                       type="button"
                       className="mic-banner-action"
                       onClick={async () => {
-                        const status = await invoke<string>('request_microphone_permission');
+                        await invoke<string>('request_microphone_permission');
+                        // Re-check with a fresh AVFoundation status query — the
+                        // request call triggers the dialog but its return value
+                        // can race with the OS updating the authorization status.
+                        const status = await invoke<string>('check_microphone_permission');
                         setMicPermission(status as 'granted' | 'denied' | 'undetermined');
                       }}
                     >

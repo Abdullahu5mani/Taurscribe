@@ -257,22 +257,23 @@ export function useRecording({
             setLatestLatency(totalMs);
             setLiveTranscript(finalTrans);
 
-            await invoke("type_text", { text: finalTrans });
+            // Capture paste result without blocking history/unmute — a failed
+            // paste means the transcript is still shown in the UI, just not
+            // inserted into the target app.
+            let pasteError: string | null = null;
+            try {
+                await invoke("type_text", { text: finalTrans });
+            } catch (e) {
+                pasteError = String(e);
+                console.warn("[INSERT] type_text failed:", pasteError);
+            }
 
             if (muteBackgroundAudioRef.current) {
                 await invoke("unmute_system_audio").catch(e => console.warn("unmute_system_audio failed:", e));
             }
 
-            // Clear the "Processing transcription..." status that was set at recording stop.
-            // The spell-check / grammar branches already set their own completion messages,
-            // so only clear here when neither ran (plain Whisper with no post-processing).
-            if (!enableGrammarLMRef.current) {
-                setHeaderStatus("Done!", 900);
-            }
-
-            // Persist a lightweight history entry for this transcription.
-            // We record which engine was used, how long the recording was,
-            // and whether the grammar LLM was enabled for this run.
+            // Persist a lightweight history entry regardless of paste outcome —
+            // the transcript was generated successfully and is visible in the UI.
             try {
                 await invoke("save_transcript_history", {
                     transcript: finalTrans,
@@ -286,17 +287,43 @@ export function useRecording({
                 console.warn("Failed to save transcript history:", e);
             }
 
-            playPaste?.();
-
-            if (isOverlay) {
-                invoke("show_overlay").catch(() => { });
-                const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
-                await emitTo("overlay", "overlay-state", { phase: "done", text: preview, ms: totalMs });
-                overlayHideTimerRef.current = setTimeout(() => {
-                    overlayHideTimerRef.current = null;
-                    invoke("hide_overlay").catch(() => { });
-                    emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
-                }, 1500);
+            if (pasteError) {
+                let headerMsg: string;
+                if (pasteError.includes("secure_input")) {
+                    headerMsg = "Couldn't paste — a password field has locked keyboard input";
+                } else if (pasteError.includes("console")) {
+                    headerMsg = "Couldn't paste — right-click → Paste in console windows";
+                } else {
+                    headerMsg = "Couldn't paste — transcript is shown above";
+                }
+                setHeaderStatus(headerMsg, 5000);
+                playError?.();
+                if (isOverlay) {
+                    invoke("show_overlay").catch(() => { });
+                    await emitTo("overlay", "overlay-state", { phase: "paste_failed" }).catch(() => { });
+                    overlayHideTimerRef.current = setTimeout(() => {
+                        overlayHideTimerRef.current = null;
+                        invoke("hide_overlay").catch(() => { });
+                        emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+                    }, 2000);
+                }
+            } else {
+                // Clear the "Processing transcription..." status only when no
+                // grammar LM ran (the grammar branch already set its own message).
+                if (!enableGrammarLMRef.current) {
+                    setHeaderStatus("Done!", 900);
+                }
+                playPaste?.();
+                if (isOverlay) {
+                    invoke("show_overlay").catch(() => { });
+                    const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
+                    await emitTo("overlay", "overlay-state", { phase: "done", text: preview, ms: totalMs });
+                    overlayHideTimerRef.current = setTimeout(() => {
+                        overlayHideTimerRef.current = null;
+                        invoke("hide_overlay").catch(() => { });
+                        emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+                    }, 1500);
+                }
             }
 
             setIsProcessingTranscript(false);
