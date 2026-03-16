@@ -88,21 +88,44 @@ fn start_recording_blocking(
     // 1. Setup Microphone
     let host = cpal::default_host();
     let preferred = selected_input_device_arc.lock().unwrap().clone();
-    let device = if let Some(ref name) = preferred {
-        host.input_devices()
-            .map_err(|e| e.to_string())?
-            .find(|d| d.name().ok().as_deref() == Some(name))
-            .ok_or_else(|| format!("Input device '{}' not found", name))?
-    } else {
-        host.default_input_device()
-            .ok_or("No input device found. Check that a microphone is connected.")?
-    };
-    println!(
-        "[INFO] Using input device: {}",
-        device.name().unwrap_or_default()
-    );
+    
+    let mut device_opt = None;
+    let mut fallback_triggered = false;
+    
+    if let Some(ref name) = preferred {
+        device_opt = host.input_devices()
+            .ok()
+            .and_then(|mut iter| iter.find(|d| d.name().ok().as_deref() == Some(name.as_str())));
+            
+        if device_opt.is_none() {
+            println!("[WARNING] Preferred input device '{}' not found, falling back to default", name);
+            fallback_triggered = true;
+        }
+    }
+    
+    if device_opt.is_none() {
+        device_opt = host.default_input_device();
+    }
+    
+    let device = device_opt.ok_or("No input device found. Check that a microphone is connected.")?;
+    let device_name = device.name().unwrap_or_else(|_| "Unknown Device".to_string());
+    
+    println!("[INFO] Using input device: {}", device_name);
+    
+    if fallback_triggered {
+        let _ = app_handle.emit("audio-fallback", device_name);
+    }
+
     let config: cpal::StreamConfig = device
         .default_input_config()
+        .or_else(|e| {
+            println!("[WARNING] default_input_config failed: {}, falling back to iterating supported configs", e);
+            device.supported_input_configs()
+                .map_err(|_err| cpal::DefaultStreamConfigError::DeviceNotAvailable)?
+                .find(|c| c.sample_format() == cpal::SampleFormat::F32 || c.sample_format() == cpal::SampleFormat::I16)
+                .map(|c| c.with_max_sample_rate())
+                .ok_or(cpal::DefaultStreamConfigError::StreamTypeNotSupported)
+        })
         .map_err(|e| {
             // macOS: permission denial often surfaces as a vague
             // CoreAudio error during config or stream creation.
@@ -497,7 +520,7 @@ fn start_recording_blocking(
         }
     });
 
-    // 10. Start the Microphone Stream
+    let app_for_error = app_handle.clone();
     let stream = device
         .build_input_stream(
             &config,
@@ -536,7 +559,8 @@ fn start_recording_blocking(
                 whisper_tx_clone.send(transcriber_data).ok();
             },
             move |err| {
-                eprintln!("Audio input error: {}", err);
+                eprintln!("[ERROR] Audio input stream error: {}", err);
+                let _ = app_for_error.emit("audio-disconnected", err.to_string());
             },
             None,
         )

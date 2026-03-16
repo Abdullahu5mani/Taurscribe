@@ -263,6 +263,9 @@ function App() {
     refreshModels,
   } = useModels(setHeaderStatus);
 
+  const setHeaderStatusRef = useRef(setHeaderStatus);
+  useEffect(() => { setHeaderStatusRef.current = setHeaderStatus; }, [setHeaderStatus]);
+
   const onModelDownloadedImpl = async (id: string) => {
     // Refresh the main-menu model lists immediately AND query verified status
     // in parallel so the Whisper/Parakeet cards update without delay.
@@ -728,6 +731,8 @@ function App() {
     let unlistenStop: (() => void) | undefined;
     let unlistenChunk: (() => void) | undefined;
     let unlistenAccessibility: (() => void) | undefined;
+    let unlistenAudioFallback: (() => void) | undefined;
+    let unlistenAudioDisconnect: (() => void) | undefined;
     const setup = async () => {
       const unsub1 = await listen("hotkey-start-recording", async () => {
         const now = Date.now();
@@ -781,13 +786,30 @@ function App() {
         setAccessibilityMissing(true);
       });
 
+      const unsub5 = await listen("audio-fallback", (event) => {
+        const deviceName = event.payload as string;
+        setHeaderStatusRef.current(`Mic lost, using fallback: ${deviceName}`, 6000);
+      });
+
+      const unsub6 = await listen("audio-disconnected", (_event) => {
+        setHeaderStatusRef.current("Microphone disconnected! Recording stopped.", 6000);
+        if (isRecordingRef.current && !stopInProgressRef.current) {
+          stopInProgressRef.current = true;
+          handleStopRecordingRef.current().finally(() => {
+            stopInProgressRef.current = false;
+          });
+        }
+      });
+
       if (active) {
         unlistenStart = unsub1;
         unlistenStop = unsub2;
         unlistenChunk = unsub3;
         unlistenAccessibility = unsub4;
+        unlistenAudioFallback = unsub5;
+        unlistenAudioDisconnect = unsub6;
       } else {
-        unsub1(); unsub2(); unsub3(); unsub4();
+        unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6();
       }
     };
 
@@ -798,6 +820,8 @@ function App() {
       if (unlistenStop) unlistenStop();
       if (unlistenChunk) unlistenChunk();
       if (unlistenAccessibility) unlistenAccessibility();
+      if (unlistenAudioFallback) unlistenAudioFallback();
+      if (unlistenAudioDisconnect) unlistenAudioDisconnect();
     };
   }, []);
 
@@ -975,6 +999,12 @@ function App() {
                 className="mic-selector-dropdown"
                 value={activeMic ?? ''}
                 onChange={(e) => handleMicChange(e.target.value)}
+                onFocus={() => {
+                  invoke<string[]>('list_input_devices').then(setInputDevices).catch(() => {});
+                }}
+                onMouseEnter={() => {
+                  invoke<string[]>('list_input_devices').then(setInputDevices).catch(() => {});
+                }}
               >
                 <option value="">System Default</option>
                 {inputDevices.map((d) => (

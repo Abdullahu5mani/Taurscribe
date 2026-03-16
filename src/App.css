@@ -1009,17 +1009,12 @@ body {
 }
 
 /* High-Speed Data Packet Stream */
-@keyframes data-stream {
+@keyframes data-stream-slide {
   0% {
     background-position: 200% 0;
-    opacity: 0.4;
-  }
-  50% {
-    opacity: 1;
   }
   100% {
     background-position: -200% 0;
-    opacity: 0.4;
   }
 }
 
@@ -1028,26 +1023,39 @@ body {
   left: 0;
   right: 0;
   bottom: -6px;
-  height: 1px; /* Thinner, more professional */
+  height: 2px; /* Slightly thicker to support the glow */
   background: var(--border-color);
-  border-radius: 0;
+  border-radius: 2px;
   opacity: 0.6;
   transition: opacity 0.4s ease-out;
 }
 
 .status-bar-transfer-line--active {
-  background: repeating-linear-gradient(
-    90deg,
-    transparent,
-    transparent 10px,
-    var(--accent-primary) 10px,
-    var(--accent-primary) 14px,
-    transparent 14px
-  );
-  background-size: 40px 100%;
-  animation: data-stream 0.8s linear infinite !important;
   opacity: 1;
-  filter: drop-shadow(0 0 2px var(--accent-glow));
+  background: var(--border-color); /* Base track */
+}
+
+.status-bar-transfer-line--active::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 35%,
+    rgba(var(--accent-primary-rgb), 0.6) 45%,
+    var(--accent-primary) 50%,
+    rgba(var(--accent-primary-rgb), 0.6) 55%,
+    transparent 65%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: data-stream-slide 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite !important;
+  border-radius: 2px;
+  filter: drop-shadow(0 0 4px rgba(var(--accent-primary-rgb), 0.8)) drop-shadow(0 0 8px var(--accent-glow));
 }
 
 .status-bar-transfer-line--fade-out {
