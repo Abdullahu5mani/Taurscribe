@@ -1,3 +1,4 @@
+mod file_transcription;
 mod history;
 mod llm;
 mod misc;
@@ -7,6 +8,7 @@ mod recording;
 mod settings;
 mod granite_speech;
 
+pub use file_transcription::*;
 pub use history::*;
 pub use llm::*;
 pub use misc::*;

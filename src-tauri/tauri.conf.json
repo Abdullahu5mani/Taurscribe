@@ -15,8 +15,8 @@
       {
         "label": "main",
         "title": "Taurscribe",
-        "width": 901,
-        "height": 850,
+        "width": 780,
+        "height": 730,
         "minWidth": 400,
         "minHeight": 200,
         "decorations": false,
