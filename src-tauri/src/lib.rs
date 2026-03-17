@@ -202,7 +202,8 @@ pub fn run() {
             commands::set_close_behavior,
             commands::init_granite_speech,
             commands::get_granite_speech_status,
-            commands::list_granite_models
+            commands::list_granite_models,
+            commands::transcribe_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

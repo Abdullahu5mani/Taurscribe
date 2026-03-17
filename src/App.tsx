@@ -14,6 +14,7 @@ import { useRecording } from "./hooks/useRecording";
 import { useSounds } from "./hooks/useSounds";
 import { usePersonalization } from "./hooks/usePersonalization";
 import { TranscriptFeed } from "./components/TranscriptFeed";
+import { FileTranscriptionPanel } from "./components/FileTranscriptionPanel";
 import { QuickSettings } from "./components/QuickSettings";
 import { useDownloads } from "./hooks/useDownloads";
 import { MODELS } from "./components/settings/types";
@@ -198,6 +199,8 @@ function App() {
   const [showSetupWizard, setShowSetupWizard] = useState<boolean | null>(null);
   /** Incremented after each successful save_transcript_history; tells TranscriptFeed to reload. */
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  /** Whether the output area is in file-transcription mode vs mic-recording mode */
+  const [fileMode, setFileMode] = useState(false);
 
   // macOS fix: Detect the runtime platform so we can hide/adjust UI elements
   // that don't apply on macOS (e.g. GPU/CPU toggle, VRAM display).
@@ -1344,8 +1347,29 @@ function App() {
             </div>
           )}
 
+          {/* Mic / File mode toggle */}
+          <div className="mode-toggle">
+            <button
+              type="button"
+              className={`mode-toggle-btn${!fileMode ? " mode-toggle-btn--active" : ""}`}
+              onClick={() => setFileMode(false)}
+            >
+              <IconMic size={13} /> Microphone
+            </button>
+            <button
+              type="button"
+              className={`mode-toggle-btn${fileMode ? " mode-toggle-btn--active" : ""}`}
+              onClick={() => setFileMode(true)}
+            >
+              <IconFileText size={13} /> File
+            </button>
+          </div>
+
           <div className="output-area output-area--feed">
-            {activeEngineHasNoModel ? (
+            <div style={fileMode ? undefined : { display: 'none' }}>
+              <FileTranscriptionPanel />
+            </div>
+            {!fileMode && (activeEngineHasNoModel ? (
               <div className="empty-state">
                 <div className="empty-state-icon" aria-hidden="true">
                   {noAnyAsrModel ? <IconDownload size={32} /> : activeEngine === "whisper" ? <IconMic size={32} /> : <IconBolt size={32} style={{ color: '#facc15' }} />}
@@ -1402,7 +1426,7 @@ function App() {
                 isCorrecting={isCorrecting}
                 latestLatency={latestLatency}
               />
-            )}
+            ))}
           </div>
 
           <SettingsModal

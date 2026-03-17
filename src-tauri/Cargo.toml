@@ -67,6 +67,9 @@ nnnoiseless = "0.5"
 # File system watcher - Detect model changes
 notify = "6.1"
 
+# Audio file decoding for drag-and-drop file transcription (pure Rust, no binary deps)
+symphonia = { version = "0.5", features = ["mp3", "aac", "flac", "ogg", "wav", "isomp4"] }
+
 # --- Platform-Specific AI Backends ---
 
 
