@@ -558,9 +558,14 @@ impl WhisperManager {
             .create_state()
             .map_err(|e| format!("Failed to create state: {:?}", e))?;
 
-        // Use offline parameters (same as transcribe_file)
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        // Post-recording final pass: use all available cores (no audio capture to compete with).
+        // Beam search matches Python whisper's default (beam_size=5) — used here because
+        // file transcription and the post-recording final pass have no latency constraint,
+        // so we can trade speed for accuracy. Live chunk transcription stays greedy.
+        let mut params = FullParams::new(SamplingStrategy::BeamSearch {
+            beam_size: 5,
+            patience: -1.0, // -1.0 = use whisper.cpp default (1.0)
+        });
+        // Use all available cores — no audio capture thread to compete with.
         let n_threads = std::thread::available_parallelism()
             .map(|n| n.get().min(12) as i32)
             .unwrap_or(8);

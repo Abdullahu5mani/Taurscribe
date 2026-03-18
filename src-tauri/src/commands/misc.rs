@@ -8,6 +8,8 @@ use tauri::Manager;
 #[tauri::command]
 pub fn show_main_window(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        // macOS: appear on all Spaces so the window can be focused from any Space.
+        let _ = window.set_visible_on_all_workspaces(true);
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -30,6 +32,9 @@ pub fn show_overlay(app: tauri::AppHandle) {
         }
         let _ = overlay.set_always_on_top(true);
         let _ = overlay.set_ignore_cursor_events(true);
+        // macOS: allow the overlay to appear on all Spaces, including full-screen app Spaces
+        // (sets NSWindowCollectionBehaviorCanJoinAllSpaces). No-op on Windows/Linux.
+        let _ = overlay.set_visible_on_all_workspaces(true);
         let _ = overlay.show();
     }
 }
