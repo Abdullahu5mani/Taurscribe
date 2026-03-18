@@ -5,6 +5,9 @@ import { getVersion } from '@tauri-apps/api/app';
 export function AboutTab() {
     const [platform, setPlatform] = useState('');
     const [version, setVersion] = useState('');
+    const [confirmReset, setConfirmReset] = useState(false);
+    const [resetting, setResetting] = useState(false);
+    const [resetError, setResetError] = useState('');
 
     useEffect(() => {
         invoke<string>('get_platform').then(setPlatform).catch(() => setPlatform('unknown'));
@@ -20,12 +23,29 @@ export function AboutTab() {
 
     const storagePaths: { label: string; path: string; platform?: string }[] = [
         { label: 'Models & recordings', path: '%LOCALAPPDATA%\\Taurscribe\\', platform: 'windows' },
-        { label: 'Models & recordings', path: '~/Library/Application Support/taurscribe/', platform: 'macos' },
-        { label: 'Settings', path: '%APPDATA%\\taurscribe\\settings.json', platform: 'windows' },
-        { label: 'Settings', path: '~/Library/Application Support/taurscribe/settings.json', platform: 'macos' },
+        { label: 'Models & recordings', path: '~/Library/Application Support/Taurscribe/', platform: 'macos' },
+        { label: 'Settings', path: '%LOCALAPPDATA%\\Taurscribe\\settings.json', platform: 'windows' },
+        { label: 'Settings', path: '~/Library/Application Support/Taurscribe/settings.json', platform: 'macos' },
     ];
 
     const relevantPaths = storagePaths.filter(p => !p.platform || p.platform === platform);
+
+    const handleFactoryReset = async () => {
+        if (resetting) return;
+        if (!confirmReset) {
+            setConfirmReset(true);
+            setResetError('');
+            return;
+        }
+        try {
+            setResetting(true);
+            setResetError('');
+            await invoke('factory_reset_app_data');
+        } catch (err) {
+            setResetting(false);
+            setResetError(String(err));
+        }
+    };
 
     return (
         <div className="about-tab">
@@ -74,6 +94,44 @@ export function AboutTab() {
                     <span className="about-row-label">Grammar LLM</span>
                     <span className="about-row-value">FlowScribe Qwen 2.5 0.5B via llama-cpp-2</span>
                 </div>
+            </div>
+
+            <div className="setting-card" style={{ marginTop: '12px' }}>
+                <h4 className="setting-card-label-plain">Factory Reset</h4>
+                <p className="setting-card-desc">
+                    Deletes all local app data and restarts Taurscribe as a brand-new install.
+                    This removes downloaded models, settings, transcript history, and temp files.
+                </p>
+                <div className="about-reset-actions">
+                    <button
+                        className={`ghost-btn ghost-btn--danger ${resetting ? 'ghost-btn--disabled' : ''}`}
+                        onClick={handleFactoryReset}
+                        disabled={resetting}
+                    >
+                        {resetting ? 'Resetting…' : confirmReset ? 'Confirm Factory Reset' : 'Factory Reset'}
+                    </button>
+                    {confirmReset && !resetting && (
+                        <button
+                            className="ghost-btn"
+                            onClick={() => {
+                                setConfirmReset(false);
+                                setResetError('');
+                            }}
+                        >
+                            Cancel
+                        </button>
+                    )}
+                </div>
+                {confirmReset && !resetting && (
+                    <p className="setting-card-error" style={{ marginTop: '10px' }}>
+                        This action is permanent.
+                    </p>
+                )}
+                {resetError && (
+                    <p className="setting-card-error" style={{ marginTop: '10px' }}>
+                        Reset failed: {resetError}
+                    </p>
+                )}
             </div>
         </div>
     );

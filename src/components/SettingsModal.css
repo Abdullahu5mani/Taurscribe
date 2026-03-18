@@ -1234,6 +1234,13 @@
   text-align: right;
 }
 
+.about-reset-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 /* ── Dictionary tab ───────────────────────────────────────────────── */
 
 .dict-tab,

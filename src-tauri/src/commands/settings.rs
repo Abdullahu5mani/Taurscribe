@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use tauri::{AppHandle, State};
 use crate::state::AudioState;
 use crate::tray;
@@ -53,11 +54,26 @@ pub fn get_hotkey(state: State<AudioState>) -> HotkeyBinding {
     state.hotkey_config.lock().unwrap().clone()
 }
 
-/// Update the hotkey binding — takes effect immediately (no restart needed)
+/// Update the hotkey binding — takes effect immediately (no restart needed).
+/// Rejects bindings that don't have exactly 2 keys.
 #[tauri::command]
 pub fn set_hotkey(state: State<AudioState>, binding: HotkeyBinding) -> Result<(), String> {
+    if binding.keys.len() != 2 {
+        return Err(format!(
+            "Hotkey must be exactly 2 keys, got {}",
+            binding.keys.len()
+        ));
+    }
     *state.hotkey_config.lock().unwrap() = binding;
     Ok(())
+}
+
+/// Suppress or unsuppress the global hotkey listener.
+/// Called by the frontend when the Settings modal opens (suppress) and closes (unsuppress)
+/// so accidental key combos don't trigger recording while the user is rebinding.
+#[tauri::command]
+pub fn set_hotkey_suppressed(state: State<AudioState>, suppressed: bool) {
+    state.hotkey_suppressed.store(suppressed, Ordering::SeqCst);
 }
 
 /// Return the currently preferred input device name (None = system default).

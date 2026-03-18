@@ -111,7 +111,7 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
 
     const saveBinding = async () => {
         const keys = pendingRef.current;
-        if (!keys.length) return;
+        if (keys.length !== 2) return;
         const binding: HotkeyBinding = { keys, mode: pendingMode };
         try {
             await invoke('set_hotkey', { binding });
@@ -195,7 +195,7 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
                 {recording && (
                     <div className="hotkey-capture">
                         <p className="hotkey-capture-hint">
-                            Hold up to <strong>2 keys</strong> (modifier or F-key), then click Save.
+                            Press exactly <strong>2 keys</strong> (modifier or F-key), then click Save.
                         </p>
                         <div className="hotkey-capture-zone">
                             {captureChips.length > 0
@@ -207,9 +207,9 @@ export function HotkeyTab({ enableOverlay, setEnableOverlay }: HotkeyTabProps) {
                         </div>
                         <div className="hotkey-capture-actions">
                             <button
-                                className={`ghost-btn ghost-btn--confirm ${!pendingKeys.length ? 'ghost-btn--disabled' : ''}`}
+                                className={`ghost-btn ghost-btn--confirm ${pendingKeys.length !== 2 ? 'ghost-btn--disabled' : ''}`}
                                 onClick={saveBinding}
-                                disabled={!pendingKeys.length}
+                                disabled={pendingKeys.length !== 2}
                             >
                                 Save
                             </button>
