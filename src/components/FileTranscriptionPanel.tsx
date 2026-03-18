@@ -20,7 +20,15 @@ interface ProgressPayload {
     error?: string;
 }
 
-export function FileTranscriptionPanel() {
+interface FileTranscriptionPanelProps {
+    activeEngine: string;
+}
+
+export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelProps) {
+    const isParakeet = activeEngine === "parakeet";
+    const isParakeetRef = useRef(isParakeet);
+    useEffect(() => { isParakeetRef.current = isParakeet; }, [isParakeet]);
+
     const [files, setFiles] = useState<FileItem[]>([]);
     const [isDragOver, setIsDragOver] = useState(false);
     const processingRef = useRef(false);
@@ -31,6 +39,7 @@ export function FileTranscriptionPanel() {
     const getExt = (name: string) => name.split(".").pop()?.toLowerCase() ?? "";
 
     const addPaths = useCallback((paths: string[]) => {
+        if (isParakeetRef.current) return;
         const audio = paths.filter(p => AUDIO_EXTS.includes(getExt(p)));
         if (audio.length === 0) return;
         setFiles(prev => {
@@ -166,12 +175,24 @@ export function FileTranscriptionPanel() {
         <div className="file-panel">
             {/* Drop zone */}
             <div
-                className={`file-drop-zone${isDragOver ? " file-drop-zone--active" : ""}${isEmpty ? " file-drop-zone--empty" : " file-drop-zone--compact"}`}
-                onDragOver={onDragOver}
-                onDragLeave={onDragLeave}
-                onDrop={onDrop}
+                className={`file-drop-zone${!isParakeet && isDragOver ? " file-drop-zone--active" : ""}${isEmpty ? " file-drop-zone--empty" : " file-drop-zone--compact"}${isParakeet ? " file-drop-zone--disabled" : ""}`}
+                onDragOver={isParakeet ? undefined : onDragOver}
+                onDragLeave={isParakeet ? undefined : onDragLeave}
+                onDrop={isParakeet ? undefined : onDrop}
             >
-                {isEmpty ? (
+                {isParakeet ? (
+                    <>
+                        <div className="file-drop-icon" aria-hidden="true" style={{ opacity: 0.3 }}>
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="17 8 12 3 7 8" />
+                                <line x1="12" y1="3" x2="12" y2="15" />
+                            </svg>
+                        </div>
+                        <p className="file-drop-title" style={{ opacity: 0.35 }}>File transcription unavailable</p>
+                        <p className="file-drop-hint">Parakeet is a streaming engine · switch to Whisper or Granite for file transcription</p>
+                    </>
+                ) : isEmpty ? (
                     <>
                         <div className="file-drop-icon" aria-hidden="true">
                             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

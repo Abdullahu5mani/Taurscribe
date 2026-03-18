@@ -571,7 +571,6 @@ impl WhisperManager {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        params.set_max_len(1);
         params.set_token_timestamps(false);
 
         // Inject active-app context as initial prompt so Whisper favours

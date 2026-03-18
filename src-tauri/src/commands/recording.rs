@@ -610,7 +610,7 @@ pub async fn type_text(text: String) -> Result<(), String> {
     let text_to_type = text.trim().to_string();
     tauri::async_runtime::spawn_blocking(move || insert_text(&text_to_type))
         .await
-        .map_err(|e| format!("thread_panic:{e:?}"))??
+        .map_err(|e| format!("thread_panic:{e:?}"))?
 }
 
 fn insert_text(text: &str) -> Result<(), String> {

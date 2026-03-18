@@ -167,6 +167,18 @@ impl VADManager {
         audio: &[f32],
         padding_ms: usize,
     ) -> Result<Vec<(f32, f32)>, String> {
+        self.get_speech_timestamps_with_threshold(audio, padding_ms, self.threshold)
+    }
+
+    /// Variant of `get_speech_timestamps` that allows overriding the internal
+    /// probability threshold for a single pass. Used by file transcription to
+    /// run with a more permissive threshold without affecting live VAD.
+    pub fn get_speech_timestamps_with_threshold(
+        &mut self,
+        audio: &[f32],
+        padding_ms: usize,
+        threshold: f32,
+    ) -> Result<Vec<(f32, f32)>, String> {
         const SAMPLE_RATE: f32 = 16000.0;
         const MIN_SPEECH_FRAMES: usize = 2; // ~64 ms minimum to count as real speech
 
@@ -183,7 +195,7 @@ impl VADManager {
 
         for (i, chunk) in audio.chunks(CHUNK_SIZE).enumerate() {
             let prob = self.is_speech(chunk).unwrap_or(0.0);
-            let is_speech = prob > self.threshold;
+            let is_speech = prob > threshold;
 
             match (is_speech, speech_start) {
                 (true, None) => {

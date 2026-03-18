@@ -3218,6 +3218,13 @@ body {
   opacity: 1;
 }
 
+.file-drop-zone--disabled {
+  cursor: not-allowed;
+  border-color: var(--border-subtle, rgba(255,255,255,0.06));
+  background: transparent;
+  pointer-events: none;
+}
+
 .file-drop-title {
   font-size: 0.95rem;
   font-weight: 500;
