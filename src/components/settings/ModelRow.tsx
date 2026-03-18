@@ -191,7 +191,21 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                 ) : (
                     <div style={{ display: 'flex', gap: '8px' }}>
                         {progress?.status === 'error' ? (
-                            <>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', width: '100%' }}>
+                                {progress.error && (
+                                    <span role="alert" style={{
+                                        fontSize: '0.72rem',
+                                        color: 'var(--error-light, #f87171)',
+                                        textAlign: 'right',
+                                        lineHeight: '1.35',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '5px',
+                                    }}>
+                                        <IconWarning size={13} />
+                                        {progress.error}
+                                    </span>
+                                )}
                                 <button
                                     className="download-btn"
                                     onClick={() => onDownload(model.id, model.name)}
@@ -206,12 +220,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                 >
                                     <IconRetry size={14} /> Retry
                                 </button>
-                                {progress.error && (
-                                    <span role="alert" style={{ fontSize: '0.72rem', color: 'var(--error-light, #f87171)', maxWidth: '160px' }}>
-                                        {progress.error}
-                                    </span>
-                                )}
-                            </>
+                            </div>
 
                         ) : model.downloaded ? (
                             deletePhase === 'confirm' ? (

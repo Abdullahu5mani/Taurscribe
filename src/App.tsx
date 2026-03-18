@@ -1367,7 +1367,7 @@ function App() {
 
           <div className="output-area output-area--feed">
             <div style={fileMode ? undefined : { display: 'none' }}>
-              <FileTranscriptionPanel />
+              <FileTranscriptionPanel activeEngine={activeEngine} />
             </div>
             {!fileMode && (activeEngineHasNoModel ? (
               <div className="empty-state">

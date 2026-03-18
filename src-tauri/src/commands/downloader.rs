@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
@@ -261,12 +262,42 @@ async fn download_model_inner(
             url
         );
 
-        let client = Client::new();
-        let res = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to connect: {}", e))?;
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .read_timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+        let emit_error = |app: &AppHandle, model_id: &str, i: usize, files_count: usize, msg: &str| {
+            let _ = app.emit(
+                "download-progress",
+                DownloadProgressPayload {
+                    model_id: model_id.to_string(),
+                    total_bytes: 0,
+                    downloaded_bytes: 0,
+                    status: "error".to_string(),
+                    current_file: (i + 1) as u32,
+                    total_files: files_count as u32,
+                },
+            );
+            msg.to_string()
+        };
+
+        let res = client.get(&url).send().await.map_err(|e| {
+            let reason = if e.is_connect() || e.is_timeout() {
+                "No internet connection — check your network and try again."
+            } else {
+                "Failed to connect to download server."
+            };
+            emit_error(app, model_id, i, files_count, reason)
+        })?;
+
+        if !res.status().is_success() {
+            return Err(emit_error(
+                app, model_id, i, files_count,
+                &format!("Download server returned HTTP {}", res.status()),
+            ));
+        }
 
         let total_size = res.content_length().unwrap_or(0);
         let mut file =
@@ -278,7 +309,22 @@ async fn download_model_inner(
         let emit_threshold = 1024 * 1024; // 1 MB
 
         while let Some(item) = stream.next().await {
-            let chunk = item.map_err(|e| format!("Error while downloading chunk: {}", e))?;
+            let chunk = match item {
+                Ok(c) => c,
+                Err(e) => {
+                    drop(file);
+                    let _ = std::fs::remove_file(&download_path);
+                    delete_model_files(&config, &base_dir);
+                    let reason = if e.is_timeout() {
+                        "Connection lost — no data received for 30 seconds. Check your internet and try again."
+                    } else if e.is_connect() || e.to_string().contains("reset") || e.to_string().contains("connection") {
+                        "Connection lost during download. Check your internet and try again."
+                    } else {
+                        "Download interrupted — a network error occurred."
+                    };
+                    return Err(emit_error(app, model_id, i, files_count, reason));
+                }
+            };
             file.write_all(&chunk)
                 .map_err(|e| format!("Error writing to file: {}", e))?;
             downloaded += chunk.len() as u64;
