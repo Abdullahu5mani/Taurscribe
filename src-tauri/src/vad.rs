@@ -179,6 +179,24 @@ impl VADManager {
         padding_ms: usize,
         threshold: f32,
     ) -> Result<Vec<(f32, f32)>, String> {
+        self.get_speech_timestamps_hysteresis(audio, padding_ms, threshold, threshold)
+    }
+
+    /// Hysteresis-based segment finder — the canonical way to use Silero VAD.
+    ///
+    /// A segment STARTS when `prob > onset` and ENDS when `prob < offset` persists
+    /// for longer than `padding_ms`.  Using a higher onset than offset prevents
+    /// background noise (which sits between offset and onset) from either
+    /// starting spurious segments or keeping real segments open indefinitely.
+    ///
+    /// Recommended values for file transcription: onset=0.40, offset=0.15.
+    pub fn get_speech_timestamps_hysteresis(
+        &mut self,
+        audio: &[f32],
+        padding_ms: usize,
+        onset: f32,
+        offset: f32,
+    ) -> Result<Vec<(f32, f32)>, String> {
         const SAMPLE_RATE: f32 = 16000.0;
         const MIN_SPEECH_FRAMES: usize = 2; // ~64 ms minimum to count as real speech
 
@@ -191,39 +209,43 @@ impl VADManager {
         let mut segments = Vec::new();
         let mut speech_start: Option<usize> = None;
         let mut consecutive_speech = 0usize;
-        let mut silence_frames = 0usize;
+        let mut below_offset_frames = 0usize;
 
         for (i, chunk) in audio.chunks(CHUNK_SIZE).enumerate() {
             let prob = self.is_speech(chunk).unwrap_or(0.0);
-            let is_speech = prob > threshold;
 
-            match (is_speech, speech_start) {
-                (true, None) => {
-                    speech_start = Some(i);
-                    consecutive_speech = 1;
-                    silence_frames = 0;
-                }
-                (true, Some(_)) => {
-                    consecutive_speech += 1;
-                    silence_frames = 0;
-                }
-                (false, Some(_)) => {
-                    silence_frames += 1;
-                    if silence_frames > padding_frames {
-                        if consecutive_speech >= MIN_SPEECH_FRAMES {
-                            let start_idx = speech_start.unwrap().saturating_sub(padding_frames);
-                            let end_idx = i;
-                            segments.push((
-                                (start_idx * CHUNK_SIZE) as f32 / SAMPLE_RATE,
-                                (end_idx * CHUNK_SIZE) as f32 / SAMPLE_RATE,
-                            ));
-                        }
-                        speech_start = None;
-                        consecutive_speech = 0;
-                        silence_frames = 0;
+            match speech_start {
+                None => {
+                    // Not in a speech segment: wait for onset threshold
+                    if prob > onset {
+                        speech_start = Some(i);
+                        consecutive_speech = 1;
+                        below_offset_frames = 0;
                     }
                 }
-                (false, None) => {}
+                Some(_) => {
+                    // Inside a speech segment: end when prob stays below offset long enough
+                    if prob >= offset {
+                        consecutive_speech += 1;
+                        below_offset_frames = 0;
+                    } else {
+                        below_offset_frames += 1;
+                        if below_offset_frames > padding_frames {
+                            if consecutive_speech >= MIN_SPEECH_FRAMES {
+                                let start_idx =
+                                    speech_start.unwrap().saturating_sub(padding_frames);
+                                let end_idx = i;
+                                segments.push((
+                                    (start_idx * CHUNK_SIZE) as f32 / SAMPLE_RATE,
+                                    (end_idx * CHUNK_SIZE) as f32 / SAMPLE_RATE,
+                                ));
+                            }
+                            speech_start = None;
+                            consecutive_speech = 0;
+                            below_offset_frames = 0;
+                        }
+                    }
+                }
             }
         }
 
@@ -251,8 +273,10 @@ impl VADManager {
         }
 
         println!(
-            "[VAD] Found {} speech segment(s)",
-            merged.len()
+            "[VAD] Found {} speech segment(s) (onset={}, offset={})",
+            merged.len(),
+            onset,
+            offset
         );
         for (i, (s, e)) in merged.iter().enumerate() {
             println!("  Segment {}: {:.2}s – {:.2}s", i + 1, s, e);

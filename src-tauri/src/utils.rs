@@ -17,9 +17,12 @@ pub fn normalize_audio(samples: &mut [f32]) {
     }
 }
 
-/// Simple Post-Processing to clean up raw ASR artifacts
+/// Post-process raw ASR output: fix punctuation artifacts and remove Whisper hallucinations.
 pub fn clean_transcript(text: &str) -> String {
     let mut cleaned = text.trim().to_string();
+
+    // Remove Whisper hallucination repetitions before anything else
+    cleaned = remove_repetitions(&cleaned);
 
     // Fix floating punctuation
     cleaned = cleaned.replace(" ,", ",");
@@ -47,6 +50,66 @@ pub fn clean_transcript(text: &str) -> String {
     }
 
     cleaned
+}
+
+/// Collapse consecutive repeated tokens and sentences — Whisper's hallucination signature
+/// when it encounters silence, footsteps, static, or other ambient noise.
+///
+/// Two passes:
+///   Pass 1 — token-level: "[ [ [ [" -> "["  |  "(footsteps) (footsteps) ..." -> "(footsteps)"
+///   Pass 2 — sentence-level: "Okay. Okay. Okay." -> "Okay."
+///
+/// A run of 3+ identical tokens is collapsed to 1. Consecutive duplicate sentences
+/// (any length) are collapsed to 1.
+fn remove_repetitions(text: &str) -> String {
+    // ── Pass 1: token-level ──────────────────────────────────────────────────
+    let parts: Vec<&str> = text.split(' ').collect();
+    let mut t_out: Vec<&str> = Vec::with_capacity(parts.len());
+    let mut i = 0;
+    while i < parts.len() {
+        let tok = parts[i];
+        let mut j = i + 1;
+        while j < parts.len() && parts[j].eq_ignore_ascii_case(tok) {
+            j += 1;
+        }
+        let run = j - i;
+        // Runs of 3+ identical tokens -> keep 1; shorter runs kept as-is
+        let keep = if run >= 3 { 1 } else { run };
+        t_out.extend_from_slice(&parts[i..i + keep]);
+        i = j;
+    }
+    let phase1 = t_out.join(" ");
+
+    // ── Pass 2: sentence-level ───────────────────────────────────────────────
+    // Split on ". " / "? " / "! " boundaries (sentence-ending punct followed by space).
+    // Each sentence string retains its trailing punctuation.
+    let mut sentences: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut chars = phase1.chars().peekable();
+    while let Some(c) = chars.next() {
+        buf.push(c);
+        if matches!(c, '.' | '?' | '!') && chars.peek() == Some(&' ') {
+            chars.next(); // consume the space
+            sentences.push(buf.trim().to_string());
+            buf.clear();
+        }
+    }
+    if !buf.trim().is_empty() {
+        sentences.push(buf.trim().to_string());
+    }
+
+    // Deduplicate consecutive identical sentences (case-insensitive)
+    let mut deduped: Vec<String> = Vec::new();
+    let mut prev_key = String::new();
+    for sent in sentences {
+        let key = sent.to_lowercase();
+        if key != prev_key {
+            deduped.push(sent);
+            prev_key = key;
+        }
+    }
+
+    deduped.join(" ")
 }
 
 /// Helper: Find or create the directory to save recordings
