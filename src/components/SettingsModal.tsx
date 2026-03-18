@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { IconX } from './Icons';
 import './SettingsModal.css';
 import { GeneralTab } from './settings/GeneralTab';
@@ -207,6 +208,8 @@ export function SettingsModal({
     useEffect(() => {
         if (!isOpen) return;
 
+        invoke('set_hotkey_suppressed', { suppressed: true }).catch(console.error);
+
         // Save current focus so we can restore it on close
         previousFocusRef.current = document.activeElement as HTMLElement;
 
@@ -218,6 +221,7 @@ export function SettingsModal({
         document.addEventListener('keydown', handleKeyDown);
         return () => {
             document.removeEventListener('keydown', handleKeyDown);
+            invoke('set_hotkey_suppressed', { suppressed: false }).catch(console.error);
             // Restore focus when modal closes
             previousFocusRef.current?.focus();
         };

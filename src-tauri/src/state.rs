@@ -5,7 +5,10 @@ use crate::parakeet::ParakeetManager;
 use crate::types::{ASREngine, AppState, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::AtomicBool,
+    Arc, Mutex,
+};
 
 /// The Global "Brain" of the application.
 /// This struct holds all the data that needs to live as long as the app runs.
@@ -61,6 +64,11 @@ pub struct AudioState {
 
     // The Granite Speech ONNX engine (alternative to Whisper/Parakeet)
     pub granite_speech: Arc<Mutex<GraniteSpeechManager>>,
+
+    // When true the global hotkey listener ignores all key events.
+    // Used to prevent accidental recording while the user is re-binding
+    // the hotkey inside the Settings modal.
+    pub hotkey_suppressed: Arc<AtomicBool>,
 }
 
 impl AudioState {
@@ -85,6 +93,7 @@ impl AudioState {
             denoiser: Arc::new(Mutex::new(None)),
             close_behavior: Arc::new(Mutex::new("tray".to_string())),
             granite_speech: Arc::new(Mutex::new(granite_speech)),
+            hotkey_suppressed: Arc::new(AtomicBool::new(false)),
         }
     }
 }

@@ -5,6 +5,8 @@ use std::sync::{
     Arc, Mutex,
 };
 
+const MAX_HOTKEY_KEYS: usize = 2;
+
 /// Map an rdev Key to a stable string code matching browser KeyboardEvent.code names.
 fn key_to_code(key: &Key) -> Option<&'static str> {
     match key {
@@ -40,6 +42,7 @@ fn key_to_code(key: &Key) -> Option<&'static str> {
 pub fn start_hotkey_listener(
     app_handle: tauri::AppHandle,
     hotkey_config: Arc<Mutex<HotkeyBinding>>,
+    hotkey_suppressed: Arc<AtomicBool>,
 ) {
     use tauri::Emitter;
 
@@ -51,7 +54,9 @@ pub fn start_hotkey_listener(
     // telling the user to grant permission in System Settings.
     #[cfg(target_os = "macos")]
     {
-        let trusted = macos_accessibility_trusted(true);
+        // Silent check — do NOT prompt every launch. The Setup Wizard and About tab
+        // already provide a way to open System Settings when needed.
+        let trusted = macos_accessibility_trusted(false);
         if !trusted {
             eprintln!("[WARN] Accessibility permission NOT granted — hotkey listener will not receive key events.");
             eprintln!("[WARN] Grant Taurscribe access in System Settings → Privacy & Security → Input Monitoring (and Accessibility).");
@@ -72,8 +77,18 @@ pub fn start_hotkey_listener(
     let app_c = app_handle.clone();
     let config_c = hotkey_config.clone();
 
+    let suppressed_c = hotkey_suppressed.clone();
+
     let callback = move |event: Event| {
+        if suppressed_c.load(Ordering::SeqCst) {
+            return;
+        }
+
         let config = config_c.lock().unwrap().clone();
+
+        if config.keys.len() != MAX_HOTKEY_KEYS {
+            return;
+        }
 
         match event.event_type {
             EventType::KeyPress(key) => {

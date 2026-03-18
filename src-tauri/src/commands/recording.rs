@@ -624,13 +624,16 @@ fn insert_text(text: &str) -> Result<(), String> {
             return Err("secure_input".to_string());
         }
 
+        if should_prefer_clipboard_paste() {
+            println!("[INSERT] Browser/web app detected — using clipboard+Cmd+V directly");
+            return clipboard_paste(text);
+        }
+
         // macOS fix: After the hotkey is released, the OS needs a moment to
         // settle focus back to the target app's text field. Without this
         // delay, AXFocusedUIElement often returns null or a stale element.
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        // macOS fix: Retry AXUIElement insertion up to 3 times — focus can
-        // take a variable amount of time to settle after hotkey release.
         for attempt in 0..3 {
             if ax_insert(text) {
                 println!("[INSERT] AXUIElement succeeded (attempt {})", attempt + 1);
@@ -643,6 +646,70 @@ fn insert_text(text: &str) -> Result<(), String> {
         eprintln!("[INSERT] AXUIElement failed after 3 attempts, falling back to clipboard+Cmd+V");
     }
     clipboard_paste(text)
+}
+
+/// Returns true when the frontmost application is a web browser or Electron app
+/// whose web content fields don't expose AXSelectedText. In these apps,
+/// ax_insert() always fails, wasting ~260ms on retries before falling back
+/// to clipboard paste anyway. Skip straight to Cmd+V for speed and reliability.
+#[cfg(target_os = "macos")]
+fn should_prefer_clipboard_paste() -> bool {
+    use std::ffi::{c_void, CStr};
+
+    type MsgSendFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
+
+    extern "C" {
+        fn objc_getClass(name: *const std::ffi::c_char) -> *mut c_void;
+        fn sel_registerName(name: *const std::ffi::c_char) -> *mut c_void;
+    }
+
+    // Obtain objc_msgSend via dlsym to avoid clashing extern declarations
+    // with the different signature in misc.rs.
+    unsafe {
+        let msg_send: MsgSendFn = {
+            extern "C" { fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void; }
+            const RTLD_DEFAULT: *mut c_void = std::ptr::null_mut::<c_void>().wrapping_sub(2);
+            let sym = dlsym(RTLD_DEFAULT, CStr::from_bytes_with_nul_unchecked(b"objc_msgSend\0").as_ptr());
+            if sym.is_null() { return false; }
+            std::mem::transmute(sym)
+        };
+
+        let ws_cls = objc_getClass(CStr::from_bytes_with_nul_unchecked(b"NSWorkspace\0").as_ptr());
+        if ws_cls.is_null() { return false; }
+        let shared_sel = sel_registerName(CStr::from_bytes_with_nul_unchecked(b"sharedWorkspace\0").as_ptr());
+        let ws = msg_send(ws_cls, shared_sel);
+        if ws.is_null() { return false; }
+
+        let front_sel = sel_registerName(CStr::from_bytes_with_nul_unchecked(b"frontmostApplication\0").as_ptr());
+        let app = msg_send(ws, front_sel);
+        if app.is_null() { return false; }
+
+        let bundle_sel = sel_registerName(CStr::from_bytes_with_nul_unchecked(b"bundleIdentifier\0").as_ptr());
+        let bundle_id = msg_send(app, bundle_sel);
+        if bundle_id.is_null() { return false; }
+
+        let utf8_sel = sel_registerName(CStr::from_bytes_with_nul_unchecked(b"UTF8String\0").as_ptr());
+        let cstr_ptr = msg_send(bundle_id, utf8_sel) as *const std::ffi::c_char;
+        if cstr_ptr.is_null() { return false; }
+
+        let bid = CStr::from_ptr(cstr_ptr).to_string_lossy();
+        let bid_lower = bid.to_lowercase();
+        println!("[INSERT] Frontmost app bundle ID: {}", bid);
+
+        const BROWSER_BUNDLES: &[&str] = &[
+            "com.google.chrome",
+            "org.mozilla.firefox",
+            "com.apple.safari",
+            "company.thebrowser.browser",   // Arc
+            "com.brave.browser",
+            "com.operasoftware.opera",
+            "com.vivaldi.vivaldi",
+            "com.microsoft.edgemac",
+            "org.chromium.chromium",
+        ];
+
+        BROWSER_BUNDLES.iter().any(|b| bid_lower.starts_with(b))
+    }
 }
 
 /// Clipboard + simulated paste keystroke (Cmd+V on macOS, Ctrl+V elsewhere).

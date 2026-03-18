@@ -1,5 +1,7 @@
 use cpal::traits::{DeviceTrait, HostTrait};
+use dirs::data_local_dir;
 use serde::Serialize;
+use std::fs;
 use sysinfo::System;
 use tauri::Manager;
 
@@ -471,6 +473,38 @@ pub fn open_accessibility_settings() {
 /// that requires a restart (e.g. Accessibility on macOS) to take effect.
 #[tauri::command]
 pub fn relaunch_app(app: tauri::AppHandle) {
+    app.restart();
+}
+
+/// Deletes all persisted app data (models, settings, history, temp) and relaunches.
+/// This is a full "factory reset".
+#[tauri::command]
+pub async fn factory_reset_app_data(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_data = data_local_dir()
+            .ok_or_else(|| "Could not find app data directory".to_string())?;
+
+        // On some platforms (and with different components) we may end up with either
+        // "Taurscribe" or "taurscribe" as the app data folder. Wipe both variants so
+        // settings.json, models, history, and temp are all removed.
+        for name in ["Taurscribe", "taurscribe"] {
+            let base = app_data.join(name);
+            if base.exists() {
+                fs::remove_dir_all(&base).map_err(|e| {
+                    format!(
+                        "Failed to remove app data directory at {}: {}",
+                        base.display(),
+                        e
+                    )
+                })?;
+            }
+        }
+
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("factory_reset_app_data task failed: {}", e))??;
+
     app.restart();
 }
 

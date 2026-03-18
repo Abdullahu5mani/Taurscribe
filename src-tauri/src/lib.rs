@@ -113,9 +113,10 @@ pub fn run() {
             // Start Hotkey Listener in Background Thread
             // Clone the hotkey_config Arc so the listener reacts to config changes immediately.
             let hotkey_config = app.state::<AudioState>().hotkey_config.clone();
+            let hotkey_suppressed = app.state::<AudioState>().hotkey_suppressed.clone();
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
-                hotkeys::start_hotkey_listener(app_handle, hotkey_config);
+                hotkeys::start_hotkey_listener(app_handle, hotkey_config, hotkey_suppressed);
             });
 
             println!("[INFO] Global hotkey listener started (configurable hotkey)");
@@ -185,6 +186,7 @@ pub fn run() {
             commands::is_apple_silicon,
             commands::get_hotkey,
             commands::set_hotkey,
+            commands::set_hotkey_suppressed,
             commands::list_input_devices,
             commands::get_input_device,
             commands::get_active_input_device,
@@ -198,6 +200,7 @@ pub fn run() {
             commands::check_accessibility_permission,
             commands::open_accessibility_settings,
             commands::relaunch_app,
+            commands::factory_reset_app_data,
             commands::get_close_behavior,
             commands::set_close_behavior,
             commands::init_granite_speech,
@@ -205,6 +208,32 @@ pub fn run() {
             commands::list_granite_models,
             commands::transcribe_file
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Explicitly drop ggml/Metal resources BEFORE exit() runs C++ static
+                // destructors. Without this, ggml_metal_device's unique_ptr destructor
+                // races with a background dispatch queue that may still be initializing
+                // Metal resource sets, causing ggml_abort → SIGABRT on quit.
+                println!("[EXIT] App exiting — cleaning up AI engine resources...");
+                if let Some(state) = app_handle.try_state::<AudioState>() {
+                    if let Ok(mut whisper) = state.whisper.lock() {
+                        whisper.unload();
+                    }
+                    if let Ok(mut parakeet) = state.parakeet.lock() {
+                        parakeet.unload();
+                    }
+                    if let Ok(mut granite) = state.granite_speech.lock() {
+                        granite.unload();
+                    }
+                    if let Ok(mut llm) = state.llm.lock() {
+                        *llm = None;
+                    }
+                }
+                // Safety unmute in case the app exits mid-recording
+                let _ = system_audio::force_unmute();
+                println!("[EXIT] Cleanup complete");
+            }
+        });
 }
