@@ -16,11 +16,16 @@ interface DownloadProgressPayload {
 const STALL_CHECK_INTERVAL_MS = 5_000;
 const STALL_THRESHOLD_MS = 35_000;
 
-export function useDownloads(onModelDownloaded: (id: string) => void) {
+export function useDownloads(
+    onModelDownloaded: (id: string) => void,
+    onDownloadFailed?: (id: string) => void | Promise<void>,
+) {
     const [downloadProgress, setDownloadProgress] = useState<Record<string, DownloadProgress>>({});
     const activeDownloadsRef = useRef<Set<string>>(new Set());
     const cancelledRef = useRef<Set<string>>(new Set());
     const lastActivityRef = useRef<Record<string, { bytes: number; time: number }>>({});
+    const onDownloadFailedRef = useRef(onDownloadFailed);
+    onDownloadFailedRef.current = onDownloadFailed;
 
     const clearProgress = useCallback((modelId: string) => {
         setDownloadProgress((prev) => {
@@ -34,16 +39,12 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
     const markError = useCallback((modelId: string, message: string) => {
         activeDownloadsRef.current.delete(modelId);
         delete lastActivityRef.current[modelId];
-        setDownloadProgress((prev) => ({
-            ...prev,
-            [modelId]: {
-                ...(prev[modelId] ?? { bytes: 0, total: 100 }),
-                status: "error",
-                error: message,
-            },
-        }));
         toast.error(message);
-    }, []);
+        void Promise.resolve(onDownloadFailedRef.current?.(modelId)).catch((err) => {
+            console.warn("onDownloadFailed failed:", err);
+        });
+        clearProgress(modelId);
+    }, [clearProgress]);
 
     // Stall detector: fires every STALL_CHECK_INTERVAL_MS, checks each active
     // download for progress. If bytes haven't advanced in STALL_THRESHOLD_MS,
@@ -57,7 +58,7 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
                 if (now - activity.time > STALL_THRESHOLD_MS) {
                     console.warn(`[STALL] No progress for ${modelId} in ${STALL_THRESHOLD_MS}ms — cancelling`);
                     invoke("cancel_download", { modelId }).catch(() => {});
-                    markError(modelId, "Connection lost — download stalled. Check your internet and try again.");
+                    markError(modelId, "Download failed — connection stalled. Check your internet and try again.");
                 }
             }
         }, STALL_CHECK_INTERVAL_MS);
@@ -138,8 +139,7 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
     }, [onModelDownloaded, clearProgress, markError]);
 
     const handleDownload = async (id: string, name: string) => {
-        const current = downloadProgress[id];
-        if (activeDownloadsRef.current.has(id) || (current && current.status !== "error")) {
+        if (activeDownloadsRef.current.has(id)) {
             return;
         }
         activeDownloadsRef.current.add(id);
@@ -163,14 +163,10 @@ export function useDownloads(onModelDownloaded: (id: string) => void) {
                 ? raw
                 : `Download failed — ${raw}`;
             toast.error(message);
-            setDownloadProgress((prev) => ({
-                ...prev,
-                [id]: {
-                    ...(prev[id] ?? { bytes: 0, total: 100 }),
-                    status: "error",
-                    error: message,
-                },
-            }));
+            void Promise.resolve(onDownloadFailedRef.current?.(id)).catch((err) => {
+                console.warn("onDownloadFailed failed:", err);
+            });
+            clearProgress(id);
         }
     };
 

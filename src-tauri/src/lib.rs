@@ -7,6 +7,7 @@ mod granite_features;
 mod granite_speech;
 mod hotkeys;
 mod llm;
+mod overlay;
 mod parakeet;
 mod parakeet_loaders;
 mod state;
@@ -107,6 +108,9 @@ pub fn run() {
                 println!("[INFO] Safety unmute on startup completed");
             }
 
+            // Initialise the native overlay (macOS: creates NSPanel; others: no-op)
+            overlay::init(app.handle());
+
             // Setup System Tray
             tray::setup_tray(app)?;
 
@@ -193,6 +197,7 @@ pub fn run() {
             commands::set_input_device,
             commands::show_overlay,
             commands::hide_overlay,
+            commands::set_overlay_state,
             commands::mute_system_audio,
             commands::unmute_system_audio,
             commands::check_microphone_permission,
@@ -206,7 +211,8 @@ pub fn run() {
             commands::init_granite_speech,
             commands::get_granite_speech_status,
             commands::list_granite_models,
-            commands::transcribe_file
+            commands::transcribe_file,
+            commands::cancel_file_transcription
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

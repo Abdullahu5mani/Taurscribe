@@ -293,7 +293,31 @@ function App() {
   useEffect(() => { onModelDownloadedRef.current = onModelDownloadedImpl; });
   const onModelDownloaded = useCallback((id: string) => onModelDownloadedRef.current(id), []);
 
-  const { downloadProgress, handleDownload, handleCancelDownload } = useDownloads(onModelDownloaded);
+  const onDownloadFailedImpl = async (id: string) => {
+    const [statuses] = await Promise.all([
+      invoke<any[]>("get_download_status", { modelIds: [id] }).catch(() => null),
+      refreshModels(false),
+    ]);
+    if (statuses) {
+      const s = statuses.find((x: any) => x.id === id);
+      setSettingsModels((prev) =>
+        prev.map((m) =>
+          m.id === id
+            ? { ...m, downloaded: s?.downloaded ?? false, verified: s?.verified ?? false }
+            : m,
+        ),
+      );
+    } else {
+      setSettingsModels((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, downloaded: false, verified: false } : m)),
+      );
+    }
+  };
+  const onDownloadFailedRef = useRef(onDownloadFailedImpl);
+  useEffect(() => { onDownloadFailedRef.current = onDownloadFailedImpl; });
+  const onDownloadFailed = useCallback((id: string) => onDownloadFailedRef.current(id), []);
+
+  const { downloadProgress, handleDownload, handleCancelDownload } = useDownloads(onModelDownloaded, onDownloadFailed);
   const downloadProgressRef = useRef(downloadProgress);
   useEffect(() => { downloadProgressRef.current = downloadProgress; });
 

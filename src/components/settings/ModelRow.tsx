@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import type { DownloadableModel } from "./types";
 import type { DownloadProgress } from "./types";
-import { IconShieldCheck, IconTrash, IconCheck, IconRetry, IconWarning, IconDownload } from "../Icons";
+import { IconShieldCheck, IconTrash, IconCheck, IconWarning, IconDownload } from "../Icons";
 
 interface ModelRowProps {
     model: DownloadableModel;
@@ -190,39 +190,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                     </div>
                 ) : (
                     <div style={{ display: 'flex', gap: '8px' }}>
-                        {progress?.status === 'error' ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px', width: '100%' }}>
-                                {progress.error && (
-                                    <span role="alert" style={{
-                                        fontSize: '0.72rem',
-                                        color: 'var(--error-light, #f87171)',
-                                        textAlign: 'right',
-                                        lineHeight: '1.35',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '5px',
-                                    }}>
-                                        <IconWarning size={13} />
-                                        {progress.error}
-                                    </span>
-                                )}
-                                <button
-                                    className="download-btn"
-                                    onClick={() => onDownload(model.id, model.name)}
-                                    style={{
-                                        background: 'rgba(239, 68, 68, 0.15)',
-                                        color: 'var(--error-light, #f87171)',
-                                        border: '1px solid rgba(239, 68, 68, 0.4)',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '6px'
-                                    }}
-                                >
-                                    <IconRetry size={14} /> Retry
-                                </button>
-                            </div>
-
-                        ) : model.downloaded ? (
+                        {model.downloaded ? (
                             deletePhase === 'confirm' ? (
                                 /* ── Confirm / Cancel inline prompt ─────────── */
                                 <div className="delete-confirm-row">
