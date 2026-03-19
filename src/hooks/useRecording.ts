@@ -1,6 +1,5 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emitTo } from "@tauri-apps/api/event";
 import type { ModelInfo, ParakeetModelInfo, GraniteSpeechModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
@@ -169,7 +168,7 @@ export function useRecording({
                     }
                 }
                 await new Promise(r => setTimeout(r, 80));
-                emitTo("overlay", "overlay-state", { phase: "recording" }).catch(() => { });
+                invoke("set_overlay_state", { phase: "recording" }).catch(() => { });
             }
         } catch (e) {
             const errStr = String(e);
@@ -200,7 +199,7 @@ export function useRecording({
         setIsProcessingTranscript(true);
         if (isOverlay) {
             invoke("show_overlay").catch(() => { }); // Re-show in case it was hidden
-            emitTo("overlay", "overlay-state", { phase: "transcribing" }).catch(() => { });
+            invoke("set_overlay_state", { phase: "transcribing" }).catch(() => { });
         }
 
         try {
@@ -224,10 +223,10 @@ export function useRecording({
                 await setTrayState("ready");
                 if (isOverlay) {
                     invoke("show_overlay").catch(() => { });
-                    await emitTo("overlay", "overlay-state", { phase: "too_short" }).catch(() => { });
+                    await invoke("set_overlay_state", { phase: "too_short" }).catch(() => { });
                     await new Promise(resolve => setTimeout(resolve, 1000));
                     invoke("hide_overlay").catch(() => { });
-                    emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+                    invoke("set_overlay_state", { phase: "hidden" }).catch(() => { });
                 }
                 return;
             }
@@ -236,7 +235,7 @@ export function useRecording({
             if (enableGrammarLMRef.current) {
                 if (isOverlay) {
                     invoke("show_overlay").catch(() => { });
-                    emitTo("overlay", "overlay-state", { phase: "correcting" }).catch(() => { });
+                    invoke("set_overlay_state", { phase: "correcting" }).catch(() => { });
                 }
                 setHeaderStatus("Correcting grammar...", 60_000, true);
                 try {
@@ -300,11 +299,11 @@ export function useRecording({
                 playError?.();
                 if (isOverlay) {
                     invoke("show_overlay").catch(() => { });
-                    await emitTo("overlay", "overlay-state", { phase: "paste_failed" }).catch(() => { });
+                    await invoke("set_overlay_state", { phase: "paste_failed" }).catch(() => { });
                     overlayHideTimerRef.current = setTimeout(() => {
                         overlayHideTimerRef.current = null;
                         invoke("hide_overlay").catch(() => { });
-                        emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+                        invoke("set_overlay_state", { phase: "hidden" }).catch(() => { });
                     }, 2000);
                 }
             } else {
@@ -317,11 +316,11 @@ export function useRecording({
                 if (isOverlay) {
                     invoke("show_overlay").catch(() => { });
                     const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
-                    await emitTo("overlay", "overlay-state", { phase: "done", text: preview, ms: totalMs });
+                    await invoke("set_overlay_state", { phase: "done", text: preview, ms: totalMs }).catch(() => { });
                     overlayHideTimerRef.current = setTimeout(() => {
                         overlayHideTimerRef.current = null;
                         invoke("hide_overlay").catch(() => { });
-                        emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+                        invoke("set_overlay_state", { phase: "hidden" }).catch(() => { });
                     }, 1500);
                 }
             }
@@ -344,7 +343,7 @@ export function useRecording({
             await setTrayState("ready");
             if (isOverlay) {
                 invoke("hide_overlay").catch(() => { });
-                emitTo("overlay", "overlay-state", { phase: "hidden" }).catch(() => { });
+                invoke("set_overlay_state", { phase: "hidden" }).catch(() => { });
             }
         } finally {
             if (muteBackgroundAudioRef.current) {

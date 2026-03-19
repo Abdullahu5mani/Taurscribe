@@ -2,15 +2,48 @@ use crate::state::AudioState;
 use crate::types::ASREngine;
 use crate::utils::{clean_transcript, normalize_audio};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FileTranscriptionProgress {
     pub path: String,
     pub percent: u8,
-    pub status: String, // "decoding" | "transcribing" | "done" | "error"
+    pub status: String, // "decoding" | "transcribing" | "done" | "error" | "cancelled"
     pub error: Option<String>,
+}
+
+// ── Cancellation (same pattern as model downloads) ───────────────────────────
+
+static FILE_TRANSCRIBE_CANCEL: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
+    OnceLock::new();
+
+fn cancel_flags() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    FILE_TRANSCRIBE_CANCEL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_cancel_flag(path: &str) -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    cancel_flags()
+        .lock()
+        .unwrap()
+        .insert(path.to_string(), Arc::clone(&flag));
+    flag
+}
+
+fn unregister_cancel_flag(path: &str) {
+    cancel_flags().lock().unwrap().remove(path);
+}
+
+/// Cancel in-progress file transcription for the given file path.
+#[tauri::command]
+pub async fn cancel_file_transcription(path: String) -> Result<(), String> {
+    if let Some(flag) = cancel_flags().lock().unwrap().get(&path) {
+        flag.store(true, Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 /// Transcribe an audio file using the currently active ASR engine.
@@ -23,17 +56,33 @@ pub async fn transcribe_file(
     state: State<'_, AudioState>,
     path: String,
 ) -> Result<String, String> {
+    let cancel = register_cancel_flag(&path);
     let whisper = state.whisper.clone();
     let parakeet = state.parakeet.clone();
     let granite = state.granite_speech.clone();
     let vad = state.vad.clone();
     let active_engine = state.active_engine.lock().unwrap().clone();
+    let path_for_task = path.clone();
 
-    tauri::async_runtime::spawn_blocking(move || {
-        transcribe_file_blocking(&app, &path, active_engine, whisper, parakeet, granite, vad)
+    let join_result = tauri::async_runtime::spawn_blocking(move || {
+        transcribe_file_blocking(
+            &app,
+            &path_for_task,
+            active_engine,
+            whisper,
+            parakeet,
+            granite,
+            vad,
+            cancel,
+        )
     })
-    .await
-    .map_err(|e| format!("transcribe_file task failed: {}", e))?
+    .await;
+
+    unregister_cancel_flag(&path);
+
+    join_result
+        .map_err(|e| format!("transcribe_file task failed: {}", e))
+        .and_then(|r| r)
 }
 
 fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: Option<String>) {
@@ -48,6 +97,25 @@ fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: 
     );
 }
 
+fn ensure_not_cancelled(
+    app: &AppHandle,
+    path: &str,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        emit_progress(
+            app,
+            path,
+            0,
+            "cancelled",
+            Some("Cancelled by user".to_string()),
+        );
+        Err("Transcription cancelled".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 fn transcribe_file_blocking(
     app: &AppHandle,
     path: &str,
@@ -56,6 +124,7 @@ fn transcribe_file_blocking(
     parakeet: Arc<Mutex<crate::parakeet::ParakeetManager>>,
     granite: Arc<Mutex<crate::granite_speech::GraniteSpeechManager>>,
     vad: Arc<Mutex<crate::vad::VADManager>>,
+    cancel: Arc<AtomicBool>,
 ) -> Result<String, String> {
     // Validate extension
     let ext = std::path::Path::new(path)
@@ -71,10 +140,14 @@ fn transcribe_file_blocking(
         ));
     }
 
+    ensure_not_cancelled(app, path, &cancel)?;
+
     emit_progress(app, path, 5, "decoding", None);
 
     // Decode audio file to raw f32 samples
     let (raw_samples, sample_rate, channels) = decode_audio(path)?;
+
+    ensure_not_cancelled(app, path, &cancel)?;
 
     emit_progress(app, path, 20, "decoding", None);
 
@@ -94,13 +167,27 @@ fn transcribe_file_blocking(
         mono = resample_to_16k(mono, sample_rate)?;
     }
 
+    ensure_not_cancelled(app, path, &cancel)?;
+
     emit_progress(app, path, 30, "transcribing", None);
 
     // ── VAD: strip silence, assemble one clean speech buffer ─────────────────
     // Run VAD on a normalised probe copy so speech detection isn't biased by
     // overall recording level, then slice the *original* mono samples for the
     // actual transcription (normalization happens after assembly).
-    let speech_audio = assemble_speech_audio(&mono, &vad);
+    let speech_audio = assemble_speech_audio(&mono, &vad, Some(&cancel)).map_err(|e| {
+        if e == "Transcription cancelled" {
+            emit_progress(
+                app,
+                path,
+                0,
+                "cancelled",
+                Some("Cancelled by user".to_string()),
+            );
+        }
+        e
+    })?;
+
     println!(
         "[FILE_TRANSCRIBE] Assembled {:.1}s of speech from {:.1}s of audio ({} silence removed)",
         speech_audio.len() as f32 / 16000.0,
@@ -115,15 +202,31 @@ fn transcribe_file_blocking(
     emit_progress(app, path, 50, "transcribing", None);
 
     let text = match active_engine {
-        // Whisper: single shot over the full VAD-filtered buffer - no manual chunking.
-        // Whisper is designed for long-form audio and handles its own internal segmentation.
+        // Whisper: chunked so the user can cancel between segments (long files).
         ASREngine::Whisper => {
-            let mut audio = speech_audio;
-            normalize_audio(&mut audio);
-            let mut w = whisper
-                .lock()
-                .map_err(|_| "Whisper lock poisoned".to_string())?;
-            w.transcribe_audio_data(&audio, None)?
+            const WHISPER_CHUNK_SAMPLES: usize = 16000 * 180; // 3 minutes
+            let total_w = (speech_audio.len() + WHISPER_CHUNK_SAMPLES - 1).max(1)
+                / WHISPER_CHUNK_SAMPLES;
+            let mut parts: Vec<String> = Vec::new();
+
+            for (i, raw_chunk) in speech_audio.chunks(WHISPER_CHUNK_SAMPLES).enumerate() {
+                ensure_not_cancelled(app, path, &cancel)?;
+
+                let percent = 50 + ((i as f32 / total_w as f32) * 45.0) as u8;
+                emit_progress(app, path, percent, "transcribing", None);
+
+                let mut chunk = raw_chunk.to_vec();
+                normalize_audio(&mut chunk);
+                let mut w = whisper
+                    .lock()
+                    .map_err(|_| "Whisper lock poisoned".to_string())?;
+                let t = w.transcribe_audio_data(&chunk, None)?;
+                if !t.trim().is_empty() {
+                    parts.push(t.trim().to_string());
+                }
+            }
+
+            parts.join(" ")
         }
 
         // Parakeet and Granite are streaming/chunk-based engines - feed in windows.
@@ -133,6 +236,8 @@ fn transcribe_file_blocking(
             let mut parts: Vec<String> = Vec::new();
 
             for (i, raw_chunk) in speech_audio.chunks(CHUNK_SAMPLES).enumerate() {
+                ensure_not_cancelled(app, path, &cancel)?;
+
                 let percent = 50 + ((i as f32 / total_chunks as f32) * 45.0) as u8;
                 emit_progress(app, path, percent, "transcribing", None);
 
@@ -314,12 +419,19 @@ fn resample_to_16k(samples: Vec<f32>, from_rate: u32) -> Result<Vec<f32>, String
 fn assemble_speech_audio(
     mono: &[f32],
     vad: &Arc<Mutex<crate::vad::VADManager>>,
-) -> Vec<f32> {
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<Vec<f32>, String> {
     const SAMPLE_RATE: f32 = 16000.0;
     // Hysteresis thresholds: onset is high enough to ignore background noise,
     // offset is low enough that real speech trailing off doesn't cut the segment.
     const VAD_ONSET: f32 = 0.40;
     const VAD_OFFSET: f32 = 0.15;
+
+    if let Some(c) = cancel {
+        if c.load(Ordering::Relaxed) {
+            return Err("Transcription cancelled".to_string());
+        }
+    }
 
     // Normalised probe - Silero works best on audio at a consistent level.
     let mut probe = mono.to_vec();
@@ -364,7 +476,7 @@ fn assemble_speech_audio(
                 }
             }
             if !assembled.is_empty() {
-                return assembled;
+                return Ok(assembled);
             }
         } else {
             println!(
@@ -408,6 +520,13 @@ fn assemble_speech_audio(
     let mut silence_run = 0usize;
 
     for (i, &rms) in frames.iter().enumerate() {
+        if i % 2048 == 0 {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    return Err("Transcription cancelled".to_string());
+                }
+            }
+        }
         if rms >= energy_threshold {
             if seg_start.is_none() {
                 seg_start = Some(i);
@@ -429,7 +548,7 @@ fn assemble_speech_audio(
 
     if segments.is_empty() {
         println!("[FILE_TRANSCRIBE] Energy fallback found no active regions - using full audio");
-        return mono.to_vec();
+        return Ok(mono.to_vec());
     }
 
     println!(
@@ -439,6 +558,13 @@ fn assemble_speech_audio(
 
     let mut assembled = Vec::new();
     for (i, (fs, fe)) in segments.iter().enumerate() {
+        if i % 32 == 0 {
+            if let Some(c) = cancel {
+                if c.load(Ordering::Relaxed) {
+                    return Err("Transcription cancelled".to_string());
+                }
+            }
+        }
         // Add PAD_FRAMES of context around each segment
         let sample_start = fs.saturating_sub(PAD_FRAMES) * ENERGY_FRAME_SAMPLES;
         let sample_end = ((fe + PAD_FRAMES) * ENERGY_FRAME_SAMPLES).min(mono.len());
@@ -453,8 +579,8 @@ fn assemble_speech_audio(
 
     if assembled.is_empty() {
         println!("[FILE_TRANSCRIBE] Assembled buffer empty after energy fallback - using full audio");
-        return mono.to_vec();
+        return Ok(mono.to_vec());
     }
 
-    assembled
+    Ok(assembled)
 }

@@ -19,62 +19,28 @@ pub fn show_main_window(app: tauri::AppHandle) {
 
 #[tauri::command]
 pub fn show_overlay(app: tauri::AppHandle) {
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        let monitor = cursor_monitor(&app)
-            .or_else(|| overlay.primary_monitor().ok().flatten());
-
-        if let Some(monitor) = monitor {
-            let monitor_size = monitor.size();
-            let monitor_pos  = monitor.position();
-            let overlay_size = overlay.outer_size().unwrap_or(tauri::PhysicalSize::new(80, 80));
-            let x = monitor_pos.x + ((monitor_size.width as i32 - overlay_size.width as i32) / 2);
-            let bottom_margin = (120.0 * monitor.scale_factor()) as i32;
-            let y = monitor_pos.y + monitor_size.height as i32 - overlay_size.height as i32 - bottom_margin;
-            let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
-        }
-        let _ = overlay.set_always_on_top(true);
-        let _ = overlay.set_ignore_cursor_events(true);
-        // macOS: allow the overlay to appear on all Spaces, including full-screen app Spaces
-        // (sets NSWindowCollectionBehaviorCanJoinAllSpaces). No-op on Windows/Linux.
-        let _ = overlay.set_visible_on_all_workspaces(true);
-        let _ = overlay.show();
-    }
-}
-
-/// Returns the monitor the mouse cursor is currently on.
-/// Uses GetCursorPos (Win32 FFI) on Windows; returns None on other platforms.
-fn cursor_monitor(app: &tauri::AppHandle) -> Option<tauri::Monitor> {
-    let (cx, cy) = cursor_pos()?;
-    app.available_monitors().ok()?.into_iter().find(|m| {
-        let pos  = m.position();
-        let size = m.size();
-        cx >= pos.x
-            && cx < pos.x + size.width as i32
-            && cy >= pos.y
-            && cy < pos.y + size.height as i32
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn cursor_pos() -> Option<(i32, i32)> {
-    #[repr(C)]
-    struct POINT { x: i32, y: i32 }
-    extern "system" { fn GetCursorPos(lp: *mut POINT) -> i32; }
-    let mut pt = POINT { x: 0, y: 0 };
-    if unsafe { GetCursorPos(&mut pt) } != 0 { Some((pt.x, pt.y)) } else { None }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn cursor_pos() -> Option<(i32, i32)> {
-    None
+    crate::overlay::show(&app);
 }
 
 #[tauri::command]
 pub fn hide_overlay(app: tauri::AppHandle) {
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        let _ = overlay.set_ignore_cursor_events(false);
-        let _ = overlay.hide();
-    }
+    crate::overlay::hide(&app);
+}
+
+/// Updates the overlay phase from the frontend.
+/// macOS  → updates native NSPanel + egui context directly.
+/// Win/Linux → emits "overlay-state" to the WebView overlay window.
+#[tauri::command]
+pub fn set_overlay_state(
+    app: tauri::AppHandle,
+    phase: String,
+    text: Option<String>,
+    ms: Option<u64>,
+) {
+    crate::overlay::set_state(
+        &app,
+        crate::overlay::OverlayStatePayload { phase, text, ms },
+    );
 }
 
 /// Returns the names of all available audio input devices on this machine.

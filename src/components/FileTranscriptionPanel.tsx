@@ -7,7 +7,7 @@ interface FileItem {
     id: string;
     path: string;
     name: string;
-    status: "queued" | "processing" | "done" | "error";
+    status: "queued" | "processing" | "done" | "error" | "cancelled";
     progress: number;
     transcript: string;
     error?: string;
@@ -82,11 +82,23 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
         listen<ProgressPayload>("file-transcription-progress", event => {
             const { path, percent, status, error } = event.payload;
             setFiles(prev =>
-                prev.map(f =>
-                    f.path === path
-                        ? { ...f, progress: percent, status: status === "done" ? "done" : status === "error" ? "error" : "processing", error }
-                        : f
-                )
+                prev.map(f => {
+                    if (f.path !== path) return f;
+                    if (status === "cancelled") {
+                        return { ...f, progress: 0, status: "cancelled", error: error ?? "Cancelled" };
+                    }
+                    return {
+                        ...f,
+                        progress: percent,
+                        status:
+                            status === "done"
+                                ? "done"
+                                : status === "error"
+                                  ? "error"
+                                  : "processing",
+                        error,
+                    };
+                })
             );
         }).then(fn => { unlisten = fn; });
         return () => { unlisten?.(); };
@@ -118,10 +130,20 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
                 )
             );
         } catch (e) {
+            const msg = `${e ?? ""}`;
+            const cancelled =
+                msg.includes("Transcription cancelled") ||
+                msg.includes("cancelled") ||
+                msg.includes("Cancelled");
             setFiles(prev =>
                 prev.map(f =>
                     f.id === queued.id
-                        ? { ...f, status: "error", progress: 0, error: `${e}` }
+                        ? {
+                              ...f,
+                              status: cancelled ? "cancelled" : "error",
+                              progress: 0,
+                              error: cancelled ? "Cancelled" : msg,
+                          }
                         : f
                 )
             );
@@ -151,6 +173,10 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
 
     const copyText = (text: string) => {
         navigator.clipboard.writeText(text).catch(() => {});
+    };
+
+    const cancelTranscription = (filePath: string) => {
+        invoke("cancel_file_transcription", { path: filePath }).catch(() => {});
     };
 
     // HTML5 drag events (visual feedback for webview drags)
@@ -246,6 +272,15 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
                                             Retry
                                         </button>
                                     )}
+                                    {item.status === "cancelled" && (
+                                        <button
+                                            className="file-card-btn file-card-btn--secondary"
+                                            onClick={() => retranscribe(item)}
+                                            title="Transcribe again"
+                                        >
+                                            Retry
+                                        </button>
+                                    )}
                                     {item.status !== "processing" && (
                                         <button
                                             className="file-card-btn file-card-btn--remove"
@@ -264,7 +299,17 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
                                 <div className="file-card-progress-wrap">
                                     <div className="file-card-progress-label">
                                         <span>{item.progress < 25 ? "Decoding…" : "Transcribing…"}</span>
-                                        <span>{item.progress}%</span>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                            <span>{item.progress}%</span>
+                                            <button
+                                                type="button"
+                                                className="file-card-btn file-card-btn--error"
+                                                onClick={() => cancelTranscription(item.path)}
+                                                title="Stop transcription"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
                                     </div>
                                     <div className="file-card-progress-bar">
                                         <div
@@ -276,7 +321,7 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
                             )}
 
                             {/* Error */}
-                            {item.status === "error" && item.error && (
+                            {(item.status === "error" || item.status === "cancelled") && item.error && (
                                 <p className="file-card-error" role="alert">{item.error}</p>
                             )}
 

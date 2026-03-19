@@ -213,7 +213,7 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - [ ] Export Options (`.txt`, `.srt`, `.md`)
 - [x] Audio Waveform Visualizer
  - [x] Extended Keyboard Shortcuts
-- [ ] File / Audio Import (Drag-and-drop `.wav`, `.mp3`, `.m4a`)
+- [ ] Proper file transcription for drag-and-drop files with models like Granite and Whisper
  - [x] Smart Punctuation & Formatting
 - [ ] Auto-Update Mechanism (Tauri updater plugin)
 - [ ] VAD Sensitivity Controller (Adjustable threshold slider + Auto-calibration mode like Discord's automatic voice detection)

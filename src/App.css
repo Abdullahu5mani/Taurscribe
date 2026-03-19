@@ -767,6 +767,10 @@ body {
     opacity: 0.5;
     filter: brightness(0.7);
   }
+  55% {
+    opacity: 1;
+    filter: brightness(1.3); /* brief bloom before settling — "powered up" */
+  }
   100% {
     opacity: 1;
     filter: brightness(1);
@@ -1324,6 +1328,17 @@ body {
   pointer-events: none;
 }
 
+/* Activation flare — fires once when recording starts, then fades out */
+.record-btn.recording::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(220, 38, 38, 0.75);
+  animation: ringFlare 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: none;
+}
+
 /* Processing (yellow when transcribing or correcting) */
 .record-btn.processing {
   color: var(--processing);
@@ -1390,6 +1405,12 @@ body {
     opacity: 1;
     transform: scale(1.05);
   }
+}
+
+/* One-shot ring that expands outward and fades when recording activates */
+@keyframes ringFlare {
+  0%   { opacity: 0.85; transform: scale(1); }
+  100% { opacity: 0;    transform: scale(1.75); }
 }
 
 /* ---- Loading overlay: full-window backdrop + centered card ---- */
@@ -2850,6 +2871,12 @@ body {
 .qs-toggle-track--on .qs-toggle-thumb {
   transform: translateX(14px);
   background: var(--accent-primary);
+  animation: thumbClick 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes thumbClick {
+  0%   { transform: translateX(14px) scale(0.75); }
+  100% { transform: translateX(14px) scale(1); }
 }
 
 /* ── Style pills ── */
@@ -3206,8 +3233,14 @@ body {
 
 .file-drop-zone--active {
   border-color: var(--accent-primary);
-  background: rgba(var(--accent-primary-rgb, 6, 182, 212), 0.06);
   color: var(--accent-primary);
+  animation: dropZoneBreath 1.5s ease-in-out infinite;
+}
+
+/* Breathing glow — communicates "ready to receive" */
+@keyframes dropZoneBreath {
+  0%, 100% { background: rgba(var(--accent-primary-rgb), 0.04); box-shadow: none; }
+  50%       { background: rgba(var(--accent-primary-rgb), 0.10); box-shadow: inset 0 0 16px rgba(var(--accent-primary-rgb), 0.08); }
 }
 
 .file-drop-icon {
@@ -3265,6 +3298,10 @@ body {
 
 .file-card--error {
   border-color: rgba(239, 68, 68, 0.25);
+}
+
+.file-card--cancelled {
+  border-color: rgba(245, 158, 11, 0.3);
 }
 
 .file-card-header {

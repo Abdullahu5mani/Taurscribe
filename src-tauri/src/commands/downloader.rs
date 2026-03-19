@@ -123,6 +123,32 @@ pub struct DownloadProgressPayload {
     pub total_files: u32,
 }
 
+/// Delete partial model files and emit `error` to the download manager UI.
+fn emit_download_error_and_cleanup(
+    app: &AppHandle,
+    model_id: &str,
+    config: &ModelConfig,
+    base_dir: &std::path::Path,
+    current_file: u32,
+    files_count: u32,
+    message: &str,
+) -> String {
+    delete_model_files(config, base_dir);
+    let _ = app.emit(
+        "download-progress",
+        DownloadProgressPayload {
+            model_id: model_id.to_string(),
+            total_bytes: 0,
+            downloaded_bytes: 0,
+            status: "error".to_string(),
+            current_file,
+            total_files: files_count,
+        },
+    );
+    eprintln!("[DOWNLOAD] {}", message);
+    message.to_string()
+}
+
 #[derive(Serialize)]
 pub struct ModelStatus {
     pub id: String,
@@ -269,18 +295,15 @@ async fn download_model_inner(
             .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
         let emit_error = |app: &AppHandle, model_id: &str, i: usize, files_count: usize, msg: &str| {
-            let _ = app.emit(
-                "download-progress",
-                DownloadProgressPayload {
-                    model_id: model_id.to_string(),
-                    total_bytes: 0,
-                    downloaded_bytes: 0,
-                    status: "error".to_string(),
-                    current_file: (i + 1) as u32,
-                    total_files: files_count as u32,
-                },
-            );
-            msg.to_string()
+            emit_download_error_and_cleanup(
+                app,
+                model_id,
+                &config,
+                &base_dir,
+                (i + 1) as u32,
+                files_count as u32,
+                msg,
+            )
         };
 
         let res = client.get(&url).send().await.map_err(|e| {
@@ -314,7 +337,6 @@ async fn download_model_inner(
                 Err(e) => {
                     drop(file);
                     let _ = std::fs::remove_file(&download_path);
-                    delete_model_files(&config, &base_dir);
                     let reason = if e.is_timeout() {
                         "Connection lost — no data received for 30 seconds. Check your internet and try again."
                     } else if e.is_connect() || e.to_string().contains("reset") || e.to_string().contains("connection") {
@@ -325,8 +347,17 @@ async fn download_model_inner(
                     return Err(emit_error(app, model_id, i, files_count, reason));
                 }
             };
-            file.write_all(&chunk)
-                .map_err(|e| format!("Error writing to file: {}", e))?;
+            if let Err(e) = file.write_all(&chunk) {
+                drop(file);
+                let _ = std::fs::remove_file(&download_path);
+                return Err(emit_error(
+                    app,
+                    model_id,
+                    i,
+                    files_count,
+                    &format!("Download failed — could not write file ({})", e),
+                ));
+            }
             downloaded += chunk.len() as u64;
 
             if downloaded - last_emit > emit_threshold || downloaded == total_size {
@@ -380,32 +411,42 @@ async fn download_model_inner(
             );
 
             println!("[DOWNLOAD] Extracting zip: {:?}", download_path);
+
+            let zip_fail = |detail: String| -> String {
+                let _ = std::fs::remove_file(&download_path);
+                emit_error(app, model_id, i, files_count, &detail)
+            };
+
             let zip_file = File::open(&download_path)
-                .map_err(|e| format!("Failed to open zip for extraction: {}", e))?;
+                .map_err(|e| zip_fail(format!("Failed to open zip for extraction: {}", e)))?;
             let mut archive = ZipArchive::new(zip_file)
-                .map_err(|e| format!("Failed to read zip archive: {}", e))?;
+                .map_err(|e| zip_fail(format!("Failed to read zip archive: {}", e)))?;
             let total_entries = archive.len() as u64;
 
             for entry_idx in 0..archive.len() {
                 let mut entry = archive
                     .by_index(entry_idx)
-                    .map_err(|e| format!("Failed to read zip entry: {}", e))?;
+                    .map_err(|e| zip_fail(format!("Failed to read zip entry: {}", e)))?;
                 let outpath = match entry.enclosed_name() {
                     Some(path) => base_dir.join(path),
                     None => continue,
                 };
                 if entry.is_dir() {
-                    std::fs::create_dir_all(&outpath)
-                        .map_err(|e| format!("Failed to create dir during extraction: {}", e))?;
+                    std::fs::create_dir_all(&outpath).map_err(|e| {
+                        zip_fail(format!("Failed to create dir during extraction: {}", e))
+                    })?;
                 } else {
                     if let Some(parent) = outpath.parent() {
-                        std::fs::create_dir_all(parent)
-                            .map_err(|e| format!("Failed to create parent dir: {}", e))?;
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            zip_fail(format!("Failed to create parent dir: {}", e))
+                        })?;
                     }
-                    let mut out_file = File::create(&outpath)
-                        .map_err(|e| format!("Failed to create extracted file: {}", e))?;
-                    std::io::copy(&mut entry, &mut out_file)
-                        .map_err(|e| format!("Failed to write extracted file: {}", e))?;
+                    let mut out_file = File::create(&outpath).map_err(|e| {
+                        zip_fail(format!("Failed to create extracted file: {}", e))
+                    })?;
+                    std::io::copy(&mut entry, &mut out_file).map_err(|e| {
+                        zip_fail(format!("Failed to write extracted file: {}", e))
+                    })?;
                 }
                 // Progress: bytes = entries done, total = total entries
                 let _ = app.emit(
@@ -522,14 +563,34 @@ async fn download_model_inner(
             continue;
         }
 
-        let mut file = File::open(&file_path).map_err(|e| e.to_string())?;
+        let mut file = File::open(&file_path).map_err(|e| {
+            emit_download_error_and_cleanup(
+                app,
+                model_id,
+                &config,
+                &base_dir,
+                (i + 1) as u32,
+                files_count as u32,
+                &format!("Download failed — could not read file for verification ({})", e),
+            )
+        })?;
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         let mut buffer = [0u8; 65536]; // 64 KiB chunks for speed
         let mut last_emit: u64 = verified_bytes;
 
         loop {
-            let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            let count = file.read(&mut buffer).map_err(|e| {
+                emit_download_error_and_cleanup(
+                    app,
+                    model_id,
+                    &config,
+                    &base_dir,
+                    (i + 1) as u32,
+                    files_count as u32,
+                    &format!("Download failed — verification read error ({})", e),
+                )
+            })?;
             if count == 0 {
                 break;
             }
@@ -572,23 +633,19 @@ async fn download_model_inner(
         );
 
         if hash_hex != file_spec.sha1 {
-            // Corrupted — delete ALL files for this model and return an error.
             eprintln!("[VERIFY] Hash mismatch! Deleting corrupted files.");
-            delete_model_files(&config, &base_dir);
-            let _ = app.emit(
-                "download-progress",
-                DownloadProgressPayload {
-                    model_id: model_id.to_string(),
-                    total_bytes: 0,
-                    downloaded_bytes: 0,
-                    status: "error".to_string(),
-                    current_file: (i + 1) as u32,
-                    total_files: files_count as u32,
-                },
-            );
-            return Err(format!(
-                "Hash mismatch for {} — file may be corrupted. Please try downloading again.",
+            let msg = format!(
+                "Download failed — file may be corrupted ({}). Try again.",
                 file_spec.filename
+            );
+            return Err(emit_download_error_and_cleanup(
+                app,
+                model_id,
+                &config,
+                &base_dir,
+                (i + 1) as u32,
+                files_count as u32,
+                &msg,
             ));
         }
 
