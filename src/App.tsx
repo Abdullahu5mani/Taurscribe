@@ -19,6 +19,7 @@ import { QuickSettings } from "./components/QuickSettings";
 import { useDownloads } from "./hooks/useDownloads";
 import { MODELS } from "./components/settings/types";
 import type { DownloadableModel } from "./components/settings/types";
+import type { OnboardingUseCase } from "./modelRecommendations";
 import "./components/TitleBar.css";
 import "./App.css";
 import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, InfoTooltip } from "./components/Icons";
@@ -218,6 +219,8 @@ function App() {
   const [inputDevices, setInputDevices] = useState<string[]>([]);
   // Close-button behavior: 'tray' = hide to tray (default), 'quit' = exit process
   const [closeBehavior, setCloseBehavior] = useState<'tray' | 'quit'>('tray');
+  // Overlay HUD style: 'full' = interactive card with controls, 'minimal' = compact status pill
+  const [overlayStyle, setOverlayStyle] = useState<'minimal' | 'full'>('full');
   const [isAppleSilicon, setIsAppleSilicon] = useState(false);
   useEffect(() => {
     invoke<string>('get_platform').then(setPlatform).catch(() => {});
@@ -399,9 +402,9 @@ function App() {
   } = usePersonalization();
 
   const {
-    isRecording, isRecordingRef, isProcessingTranscript, isCorrecting,
+    isRecording, isRecordingRef, isPaused, isProcessingTranscript, isCorrecting,
     latestLatency,
-    handleStartRecording, handleStopRecording,
+    handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk,
   } = useRecording({
     activeEngineRef, models, parakeetModels, graniteModels, currentModel, currentParakeetModel,
     setCurrentModel, setLoadedEngine, enableGrammarLMRef,
@@ -593,6 +596,12 @@ function App() {
             invoke("set_close_behavior", { behavior: savedCloseBehavior }).catch(() => { });
           }
 
+          // Restore overlay style preference.
+          const savedOverlayStyle = await loadedStore.get<'minimal' | 'full'>("overlay_style");
+          if (savedOverlayStyle && !cancelled) {
+            setOverlayStyle(savedOverlayStyle);
+          }
+
           savedEngine = (await loadedStore.get<"whisper" | "parakeet" | "granite_speech">("active_engine")) || null;
           if (savedEngine) {
             setActiveEngine(savedEngine);
@@ -739,10 +748,18 @@ function App() {
 
   // --- Hotkey listeners ---
   const handleStartRecordingRef = useRef(handleStartRecording);
+  const handlePauseRecordingRef = useRef(handlePauseRecording);
+  const handleResumeRecordingRef = useRef(handleResumeRecording);
   const handleStopRecordingRef = useRef(handleStopRecording);
+  const handleCancelRecordingRef = useRef(handleCancelRecording);
+  const handleTranscriptionChunkRef = useRef(handleTranscriptionChunk);
   useEffect(() => {
     handleStartRecordingRef.current = handleStartRecording;
+    handlePauseRecordingRef.current = handlePauseRecording;
+    handleResumeRecordingRef.current = handleResumeRecording;
     handleStopRecordingRef.current = handleStopRecording;
+    handleCancelRecordingRef.current = handleCancelRecording;
+    handleTranscriptionChunkRef.current = handleTranscriptionChunk;
   });
 
   const startingRecordingRef = useRef(false);
@@ -760,6 +777,7 @@ function App() {
     let unlistenAccessibility: (() => void) | undefined;
     let unlistenAudioFallback: (() => void) | undefined;
     let unlistenAudioDisconnect: (() => void) | undefined;
+    let unlistenOverlayAction: (() => void) | undefined;
     const setup = async () => {
       const unsub1 = await listen("hotkey-start-recording", async () => {
         const now = Date.now();
@@ -802,8 +820,8 @@ function App() {
         }
       });
 
-      const unsub3 = await listen("transcription-chunk", () => {
-        // Live chunks not displayed; only final transcript shown
+      const unsub3 = await listen<{ text: string }>("transcription-chunk", (event) => {
+        handleTranscriptionChunkRef.current(event.payload.text);
       });
 
       // macOS fix: Listen for accessibility-missing event from the Rust backend.
@@ -828,6 +846,27 @@ function App() {
         }
       });
 
+      const unsub7 = await listen<string>("overlay-action", async (event) => {
+        const action = String(event.payload);
+        if (action === "pause") {
+          await handlePauseRecordingRef.current();
+          return;
+        }
+        if (action === "resume") {
+          await handleResumeRecordingRef.current();
+          return;
+        }
+        if (action === "cancel") {
+          if (stopInProgressRef.current) return;
+          stopInProgressRef.current = true;
+          try {
+            await handleCancelRecordingRef.current();
+          } finally {
+            stopInProgressRef.current = false;
+          }
+        }
+      });
+
       if (active) {
         unlistenStart = unsub1;
         unlistenStop = unsub2;
@@ -835,8 +874,9 @@ function App() {
         unlistenAccessibility = unsub4;
         unlistenAudioFallback = unsub5;
         unlistenAudioDisconnect = unsub6;
+        unlistenOverlayAction = unsub7;
       } else {
-        unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6();
+        unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7();
       }
     };
 
@@ -849,6 +889,7 @@ function App() {
       if (unlistenAccessibility) unlistenAccessibility();
       if (unlistenAudioFallback) unlistenAudioFallback();
       if (unlistenAudioDisconnect) unlistenAudioDisconnect();
+      if (unlistenOverlayAction) unlistenOverlayAction();
     };
   }, []);
 
@@ -921,11 +962,15 @@ function App() {
     });
   };
 
-  const handleSetupComplete = useCallback((openSettings: boolean) => {
+  const handleSetupComplete = useCallback(({ openSettings, useCase }: { openSettings: boolean; useCase: OnboardingUseCase }) => {
     storeRef.current?.set("setup_complete", true);
+    storeRef.current?.set("onboarding_use_case", useCase);
     storeRef.current?.save().catch(console.error);
     setShowSetupWizard(false);
-    if (openSettings) setIsSettingsOpen(true);
+    if (openSettings) {
+      setSettingsInitialTab("models");
+      setIsSettingsOpen(true);
+    }
   }, []);
 
   if (showSetupWizard === null) {
@@ -1446,6 +1491,7 @@ function App() {
               <TranscriptFeed
                 refreshKey={historyRefreshKey}
                 isRecording={isRecording}
+                isPaused={isPaused}
                 isProcessingTranscript={isProcessingTranscript}
                 isCorrecting={isCorrecting}
                 latestLatency={latestLatency}
@@ -1495,6 +1541,8 @@ function App() {
             onCancelDownload={handleCancelDownload}
             closeBehavior={closeBehavior}
             setCloseBehavior={setCloseBehavior}
+            overlayStyle={overlayStyle}
+            setOverlayStyle={setOverlayStyle}
           />
         </main>
 

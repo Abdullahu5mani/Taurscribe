@@ -31,6 +31,10 @@ use whisper::WhisperManager;
 /// This is where the app starts!
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(e) = commands::perform_pending_factory_reset_on_startup() {
+        eprintln!("[RESET] Failed to complete pending factory reset: {}", e);
+    }
+
     // 1. Initialize Whisper AI
     println!("[INFO] Initializing Whisper transcription engine...");
     let whisper = WhisperManager::new();
@@ -199,6 +203,7 @@ pub fn run() {
             commands::show_overlay,
             commands::hide_overlay,
             commands::set_overlay_state,
+            commands::request_overlay_action,
             commands::mute_system_audio,
             commands::unmute_system_audio,
             commands::check_microphone_permission,
@@ -212,6 +217,9 @@ pub fn run() {
             commands::init_granite_speech,
             commands::get_granite_speech_status,
             commands::list_granite_models,
+            commands::pause_recording,
+            commands::resume_recording,
+            commands::cancel_recording,
             commands::transcribe_file,
             commands::cancel_file_transcription
         ])

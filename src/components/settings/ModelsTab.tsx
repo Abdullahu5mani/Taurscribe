@@ -1,7 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { Store } from '@tauri-apps/plugin-store';
 import type { DownloadableModel, DownloadProgress } from './types';
 import { ModelRow } from './ModelRow';
+import {
+    computeModelRecommendation,
+    getWhisperTierFromModelId,
+    type OnboardingUseCase,
+    type SystemInfo,
+} from '../../modelRecommendations';
 
 type WhisperTier = 'Tiny' | 'Base' | 'Small' | 'Medium' | 'Large';
 
@@ -69,19 +76,65 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const [activeTier, setActiveTier] = useState<WhisperTier>('Small');
     const [platform, setPlatform] = useState('');
     const [isAppleSilicon, setIsAppleSilicon] = useState(false);
+    const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
+    const [useCase, setUseCase] = useState<OnboardingUseCase>('quick_notes');
+    const hydratedTierRef = useRef(false);
 
     useEffect(() => {
         invoke<string>('get_platform').then(setPlatform).catch(() => { });
         invoke<boolean>('is_apple_silicon').then(setIsAppleSilicon).catch(() => { });
+        invoke<SystemInfo>('get_system_info').then(setSysInfo).catch(() => { });
+        Store.load('settings.json')
+            .then((store) => store.get<OnboardingUseCase>('onboarding_use_case'))
+            .then((savedUseCase) => {
+                if (savedUseCase) {
+                    setUseCase(savedUseCase);
+                }
+            })
+            .catch(() => { });
     }, []);
 
     const isMac = platform === 'macos';
     const rowProps = { downloadProgress, onDownload, onDelete, onCancelDownload };
+    const recommendation = useMemo(
+        () => computeModelRecommendation({ sysInfo, isAppleSilicon, useCase }),
+        [sysInfo, isAppleSilicon, useCase],
+    );
 
     const parakeetModels = models.filter(m => m.type === 'Parakeet');
     const graniteModels = models.filter(m => m.type === 'GraniteSpeech');
     const llmModels = models.filter(m => m.type === 'LLM');
     const coremlModels = models.filter(m => m.type === 'CoreML');
+
+    useEffect(() => {
+        if (hydratedTierRef.current) return;
+        const preferredTier =
+            recommendation.whisperTier ??
+            getWhisperTierFromModelId(recommendation.primaryModelId) ??
+            getWhisperTierFromModelId(recommendation.backupModelId);
+        if (preferredTier) {
+            setActiveTier(preferredTier);
+            hydratedTierRef.current = true;
+        }
+    }, [recommendation]);
+
+    const recommendationBadge = (modelId: string) => {
+        if (modelId === recommendation.primaryModelId) return 'Primary';
+        if (modelId === recommendation.backupModelId) return 'Backup';
+        return null;
+    };
+
+    const recommendedModels = Array.from(
+        new Map(
+            [recommendation.primaryModelId, recommendation.backupModelId]
+                .filter((id): id is string => Boolean(id))
+                .map((id) => {
+                    const model = models.find((entry) => entry.id === id);
+                    return model ? [id, model] : null;
+                })
+                .filter((entry): entry is [string, DownloadableModel] => entry !== null),
+        ).values(),
+    );
 
     const tierModels = (() => {
         const list = TIER_MODEL_IDS[activeTier]
@@ -127,6 +180,34 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
 
     return (
         <div className="models-tab">
+            {recommendedModels.length > 0 && (
+                <div className="model-group model-group--recommended">
+                    <div className="model-group-header">
+                        <h3 className="settings-section-title">Recommended For You</h3>
+                        <span className="model-group-badge">{recommendation.useCaseLabel}</span>
+                    </div>
+                    <p className="model-group-desc model-group-desc--highlight">
+                        {recommendation.summary}
+                    </p>
+                    <p className="model-group-desc">
+                        {recommendation.hardwareLine}
+                    </p>
+                    <div className="model-list">
+                        {recommendedModels.map((model) => {
+                            const badge = recommendationBadge(model.id);
+                            return (
+                                <div
+                                    key={model.id}
+                                    className={`model-item-wrapper model-item-wrapper--rec${badge === 'Backup' ? ' model-item-wrapper--rec-secondary' : ''}`}
+                                >
+                                    {badge && <span className={`badge-rec${badge === 'Backup' ? ' badge-rec--secondary' : ''}`}>{badge}</span>}
+                                    <ModelRow model={model} {...rowProps} />
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
 
             {/* ── Whisper ──────────────────────────────────────────── */}
             <div className="model-group">
@@ -159,8 +240,15 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
 
                 <div className="model-list">
                     {tierModels.map(m => (
-                        <div key={m.id} className={`model-item-wrapper ${m.id === recommendedId ? 'model-item-wrapper--rec' : ''}`}>
-                            {m.id === recommendedId && <span className="badge-rec">Recommended</span>}
+                        <div
+                            key={m.id}
+                            className={`model-item-wrapper ${m.id === recommendedId || recommendationBadge(m.id) ? 'model-item-wrapper--rec' : ''}${recommendationBadge(m.id) === 'Backup' ? ' model-item-wrapper--rec-secondary' : ''}`}
+                        >
+                            {(recommendationBadge(m.id) || (m.id === recommendedId ? 'Recommended' : null)) && (
+                                <span className={`badge-rec${recommendationBadge(m.id) === 'Backup' ? ' badge-rec--secondary' : ''}`}>
+                                    {recommendationBadge(m.id) || 'Recommended'}
+                                </span>
+                            )}
                             <ModelRow model={m} {...rowProps} />
                         </div>
                     ))}
@@ -207,7 +295,15 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     <span className="model-group-sub">by NVIDIA Nemotron · English only</span>
                 </div>
                 <div className="model-list">
-                    {parakeetModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
+                    {parakeetModels.map(m => (
+                        <div
+                            key={m.id}
+                            className={`model-item-wrapper ${recommendationBadge(m.id) ? 'model-item-wrapper--rec' : ''}`}
+                        >
+                            {recommendationBadge(m.id) && <span className="badge-rec">{recommendationBadge(m.id)}</span>}
+                            <ModelRow model={m} {...rowProps} />
+                        </div>
+                    ))}
                 </div>
             </div>
 
@@ -218,7 +314,15 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     <span className="model-group-sub">by IBM · English · ONNX</span>
                 </div>
                 <div className="model-list">
-                    {graniteModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
+                    {graniteModels.map(m => (
+                        <div
+                            key={m.id}
+                            className={`model-item-wrapper ${recommendationBadge(m.id) ? 'model-item-wrapper--rec' : ''}`}
+                        >
+                            {recommendationBadge(m.id) && <span className="badge-rec">{recommendationBadge(m.id)}</span>}
+                            <ModelRow model={m} {...rowProps} />
+                        </div>
+                    ))}
                 </div>
             </div>
 

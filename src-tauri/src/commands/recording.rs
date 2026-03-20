@@ -47,6 +47,7 @@ pub async fn start_recording(
     let session_transcript_arc = state.session_transcript.clone();
     let denoiser_state_arc = state.denoiser.clone();
     let granite_speech_arc = state.granite_speech.clone();
+    let recording_paused_arc = state.recording_paused.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
         start_recording_blocking(
@@ -62,6 +63,7 @@ pub async fn start_recording(
             session_transcript_arc,
             denoiser_state_arc,
             granite_speech_arc,
+            recording_paused_arc,
         )
     })
     .await
@@ -83,8 +85,11 @@ fn start_recording_blocking(
     session_transcript_arc: Arc<std::sync::Mutex<String>>,
     denoiser_state_arc: Arc<std::sync::Mutex<Option<Denoiser>>>,
     granite_speech_arc: Arc<std::sync::Mutex<crate::granite_speech::GraniteSpeechManager>>,
+    recording_paused_arc: Arc<AtomicBool>,
 ) -> Result<String, String> {
     let denoise_enabled = denoise.unwrap_or(false);
+    recording_paused_arc.store(false, Ordering::Relaxed);
+
     // 1. Setup Microphone
     let host = cpal::default_host();
     let preferred = selected_input_device_arc.lock().unwrap().clone();
@@ -596,6 +601,98 @@ fn start_recording_blocking(
     Ok(format!("Recording started: {}", path.display()))
 }
 
+fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) {
+    use cpal::traits::StreamTrait;
+
+    let RecordingHandle {
+        stream,
+        file_tx,
+        whisper_tx,
+        writer_thread,
+        transcriber_thread,
+        level_stop,
+        level_thread,
+        ..
+    } = recording;
+
+    if tail_capture_ms > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(tail_capture_ms));
+    }
+
+    let _ = stream.0.pause();
+    drop(stream);
+    drop(file_tx);
+    drop(whisper_tx);
+
+    level_stop.store(true, Ordering::Relaxed);
+    if let Err(e) = level_thread.join() {
+        eprintln!("[ERROR] Level thread panicked: {:?}", e);
+    }
+
+    println!("[INFO] Waiting for worker threads to finish...");
+    if let Err(e) = writer_thread.join() {
+        eprintln!("[ERROR] Writer thread panicked: {:?}", e);
+    }
+    if let Err(e) = transcriber_thread.join() {
+        eprintln!("[ERROR] Transcriber thread panicked: {:?}", e);
+    }
+    println!("[INFO] Worker threads finished.");
+}
+
+#[tauri::command]
+pub fn pause_recording(state: State<'_, AudioState>) -> Result<String, String> {
+    let guard = state.recording_handle.lock().unwrap();
+    let handle = guard.as_ref().ok_or_else(|| "Not recording".to_string())?;
+
+    handle
+        .stream
+        .0
+        .pause()
+        .map_err(|e| format!("Failed to pause recording: {}", e))?;
+    state.recording_paused.store(true, Ordering::Relaxed);
+    Ok("Recording paused".to_string())
+}
+
+#[tauri::command]
+pub fn resume_recording(state: State<'_, AudioState>) -> Result<String, String> {
+    let guard = state.recording_handle.lock().unwrap();
+    let handle = guard.as_ref().ok_or_else(|| "Not recording".to_string())?;
+
+    handle
+        .stream
+        .0
+        .play()
+        .map_err(|e| format!("Failed to resume recording: {}", e))?;
+    state.recording_paused.store(false, Ordering::Relaxed);
+    Ok("Recording resumed".to_string())
+}
+
+#[tauri::command]
+pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<(), String> {
+    *state.denoiser.lock().unwrap() = None;
+    state.recording_paused.store(false, Ordering::Relaxed);
+
+    let recording = state
+        .recording_handle
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or_else(|| "Not recording".to_string())?;
+    let last_recording_path = state.last_recording_path.lock().unwrap().clone();
+    let session_transcript = state.session_transcript.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        teardown_recording(recording, 0);
+        session_transcript.lock().unwrap().clear();
+        if let Some(path) = last_recording_path {
+            let _ = std::fs::remove_file(path);
+        }
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("cancel_recording task failed: {}", e))?
+}
+
 /// COMMAND: Insert text into the focused application.
 /// macOS:         AXUIElement (kAXSelectedTextAttribute) — inserts at cursor, no clipboard touch
 ///                → fallback: clipboard + Cmd+V
@@ -981,38 +1078,9 @@ fn stop_recording_blocking(
     whisper_arc: Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
     vad_arc: Arc<std::sync::Mutex<crate::vad::VADManager>>,
 ) -> Result<String, String> {
-    use cpal::traits::StreamTrait;
-
-    // Tail capture: keep mic open briefly to capture the last syllable
-    // (e.g. "LLM design?" — "design?" often gets cut when releasing the hotkey)
-    std::thread::sleep(std::time::Duration::from_millis(220));
-
-    // macOS fix: Explicitly pause the audio unit before dropping the stream.
-    // On macOS, CoreAudio may keep the render callback alive after
-    // Stream::drop() if called from a non-main thread. pause() calls
-    // AudioOutputUnitStop() synchronously, ensuring the callback stops
-    // before the stream is dropped and preventing use-after-free.
-    let _ = recording.stream.0.pause();
-    drop(recording.stream);
-    drop(recording.file_tx);
-    drop(recording.whisper_tx);
-
-    // Signal the audio-level emitter thread to exit and join it.
-    recording.level_stop.store(true, Ordering::Relaxed);
-    if let Err(e) = recording.level_thread.join() {
-        eprintln!("[ERROR] Level thread panicked: {:?}", e);
-    }
-
-    // Join the threads to ensure they finish processing before we proceed.
-    // This is CRITICAL for Parakeet which relies on the transcript built by the thread.
-    println!("[INFO] Waiting for worker threads to finish...");
-    if let Err(e) = recording.writer_thread.join() {
-        eprintln!("[ERROR] Writer thread panicked: {:?}", e);
-    }
-    if let Err(e) = recording.transcriber_thread.join() {
-        eprintln!("[ERROR] Transcriber thread panicked: {:?}", e);
-    }
-    println!("[INFO] Worker threads finished.");
+    // Tail capture: keep the mic open briefly to catch the last syllable
+    // before shutting the stream down and running the final pass.
+    teardown_recording(recording, 220);
 
     if active_engine == ASREngine::Parakeet || active_engine == ASREngine::GraniteSpeech {
         let engine_name = if active_engine == ASREngine::Parakeet { "Parakeet" } else { "Granite Speech" };
@@ -1108,6 +1176,7 @@ fn stop_recording_blocking(
 pub async fn stop_recording(state: State<'_, AudioState>) -> Result<String, String> {
     // --- Quick state access (non-blocking, just mutex snapshots) ---
     *state.denoiser.lock().unwrap() = None;
+    state.recording_paused.store(false, Ordering::Relaxed);
 
     let recording = state.recording_handle.lock().unwrap().take()
         .ok_or_else(|| "Not recording".to_string())?;

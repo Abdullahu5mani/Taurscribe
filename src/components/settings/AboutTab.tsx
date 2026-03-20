@@ -24,8 +24,10 @@ export function AboutTab() {
     const storagePaths: { label: string; path: string; platform?: string }[] = [
         { label: 'Models & recordings', path: '%LOCALAPPDATA%\\Taurscribe\\', platform: 'windows' },
         { label: 'Models & recordings', path: '~/Library/Application Support/Taurscribe/', platform: 'macos' },
+        { label: 'Models & recordings', path: '~/.local/share/Taurscribe/', platform: 'linux' },
         { label: 'Settings', path: '%LOCALAPPDATA%\\Taurscribe\\settings.json', platform: 'windows' },
         { label: 'Settings', path: '~/Library/Application Support/Taurscribe/settings.json', platform: 'macos' },
+        { label: 'Settings', path: '~/.local/share/Taurscribe/settings.json', platform: 'linux' },
     ];
 
     const relevantPaths = storagePaths.filter(p => !p.platform || p.platform === platform);
@@ -99,7 +101,7 @@ export function AboutTab() {
             <div className="setting-card" style={{ marginTop: '12px' }}>
                 <h4 className="setting-card-label-plain">Factory Reset</h4>
                 <p className="setting-card-desc">
-                    Deletes all local app data and restarts Taurscribe as a brand-new install.
+                    Deletes all local app data and restarts Taurscribe into the setup wizard as a brand-new install.
                     This removes downloaded models, settings, transcript history, and temp files.
                 </p>
                 <div className="about-reset-actions">

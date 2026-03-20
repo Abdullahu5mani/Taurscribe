@@ -51,6 +51,8 @@ interface SettingsModalProps {
     onCancelDownload: (id: string) => void;
     closeBehavior: 'tray' | 'quit';
     setCloseBehavior: (val: 'tray' | 'quit') => void;
+    overlayStyle: 'minimal' | 'full';
+    setOverlayStyle: (val: 'minimal' | 'full') => void;
 }
 
 type Tab = 'general' | 'models' | 'post-processing' | 'audio' | 'hotkey' | 'sound' | 'dictionary' | 'snippets' | 'about';
@@ -169,6 +171,7 @@ export function SettingsModal({
     snippets, addSnippet, updateSnippet, removeSnippet,
     settingsModels, downloadProgress, onDownload, onDelete, onCancelDownload,
     closeBehavior, setCloseBehavior,
+    overlayStyle, setOverlayStyle,
 }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<Tab>('models');
     const modalRef = useRef<HTMLDivElement>(null);
@@ -230,7 +233,7 @@ export function SettingsModal({
     const renderContent = () => {
         switch (activeTab) {
             case 'general':
-                return <GeneralTab closeBehavior={closeBehavior} setCloseBehavior={setCloseBehavior} />;
+                return <GeneralTab closeBehavior={closeBehavior} setCloseBehavior={setCloseBehavior} overlayStyle={overlayStyle} setOverlayStyle={setOverlayStyle} />;
             case 'models':
                 return (
                     <ModelsTab

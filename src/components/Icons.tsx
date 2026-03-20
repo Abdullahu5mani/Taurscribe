@@ -35,6 +35,19 @@ export const IconStop = ({ size = 16, ...props }: IconProps) => (
     </svg>
 );
 
+export const IconPause = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} {...props}>
+        <rect x="7" y="5" width="4" height="14" rx="1.5" fill="currentColor" />
+        <rect x="13" y="5" width="4" height="14" rx="1.5" fill="currentColor" />
+    </svg>
+);
+
+export const IconPlay = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} {...props}>
+        <polygon points="8 6 19 12 8 18 8 6" fill="currentColor" />
+    </svg>
+);
+
 export const IconProcessing = ({ size = 16, ...props }: IconProps) => (
     <svg {...defaultProps(size)} {...props}>
         <circle cx="6" cy="12" r="2.5" fill="currentColor" />
