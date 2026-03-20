@@ -65,3 +65,6 @@ src-tauri/linux-libs/*.so.*
 
 # Agents folder
 .agents/
+
+# Local scratch / temp
+CODEBASE_GUIDE.pdf

@@ -1,9 +1,12 @@
+use crate::state::AudioState;
+use crate::types::{ASREngine, AppState, HotkeyBinding};
 use cpal::traits::{DeviceTrait, HostTrait};
 use dirs::data_local_dir;
 use serde::Serialize;
 use std::fs;
+use std::path::Path;
 use sysinfo::System;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Shows the main window. Called by the frontend once it has finished its own
 /// initialization so the user never sees a loading state when the window opens.
@@ -36,11 +39,31 @@ pub fn set_overlay_state(
     phase: String,
     text: Option<String>,
     ms: Option<u64>,
+    engine: Option<String>,
 ) {
     crate::overlay::set_state(
         &app,
-        crate::overlay::OverlayStatePayload { phase, text, ms },
+        crate::overlay::OverlayStatePayload {
+            phase,
+            text,
+            ms,
+            engine,
+        },
     );
+}
+
+/// Forwards an action from the overlay HUD back to the main application UI.
+#[tauri::command]
+pub fn request_overlay_action(app: tauri::AppHandle, action: String) -> Result<(), String> {
+    match action.as_str() {
+        "pause" | "resume" | "cancel" => {
+            app.emit("overlay-action", action.clone())
+                .map_err(|e| format!("Failed to emit overlay action: {}", e))?;
+            crate::overlay::restore_focus(&app);
+            Ok(())
+        }
+        _ => Err(format!("Unknown overlay action: {}", action)),
+    }
 }
 
 /// Returns the names of all available audio input devices on this machine.
@@ -442,34 +465,138 @@ pub fn relaunch_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+fn factory_reset_marker_path() -> Result<std::path::PathBuf, String> {
+    let app_data = data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
+    Ok(app_data.join("taurscribe-factory-reset-pending"))
+}
+
+fn remove_path_with_retries(path: &Path) -> Result<(), String> {
+    const MAX_ATTEMPTS: u32 = 5;
+
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let is_dir = path.is_dir();
+    let kind = if is_dir { "directory" } else { "file" };
+    let mut last_error = None;
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        let result = if is_dir {
+            fs::remove_dir_all(path)
+        } else {
+            fs::remove_file(path)
+        };
+
+        match result {
+            Ok(()) => return Ok(()),
+            Err(_) if !path.exists() => return Ok(()),
+            Err(err) => {
+                last_error = Some(err);
+                if attempt < MAX_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(150 * attempt as u64));
+                }
+            }
+        }
+    }
+
+    let message = last_error
+        .map(|err| err.to_string())
+        .unwrap_or_else(|| "unknown error".to_string());
+    Err(format!(
+        "Failed to remove {kind} at {}: {}",
+        path.display(),
+        message
+    ))
+}
+
+fn clear_app_data_root(base: &Path) -> Result<(), String> {
+    if !base.exists() {
+        return Ok(());
+    }
+
+    remove_path_with_retries(base)
+}
+
+pub fn perform_pending_factory_reset_on_startup() -> Result<(), String> {
+    let marker_path = factory_reset_marker_path()?;
+    if !marker_path.exists() {
+        return Ok(());
+    }
+
+    let app_data = data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
+    println!("[RESET] Pending factory reset detected. Clearing app data before startup...");
+
+    for name in ["Taurscribe", "taurscribe"] {
+        clear_app_data_root(&app_data.join(name))?;
+    }
+
+    remove_path_with_retries(&marker_path)?;
+    println!("[RESET] Factory reset completed successfully.");
+    Ok(())
+}
+
 /// Deletes all persisted app data (models, settings, history, temp) and relaunches.
 /// This is a full "factory reset".
 #[tauri::command]
-pub async fn factory_reset_app_data(app: tauri::AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let app_data = data_local_dir()
-            .ok_or_else(|| "Could not find app data directory".to_string())?;
+pub async fn factory_reset_app_data(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AudioState>,
+) -> Result<(), String> {
+    if state.recording_handle.lock().unwrap().is_some() {
+        return Err("Stop the current recording before running a factory reset.".to_string());
+    }
 
-        // On some platforms (and with different components) we may end up with either
-        // "Taurscribe" or "taurscribe" as the app data folder. Wipe both variants so
-        // settings.json, models, history, and temp are all removed.
-        for name in ["Taurscribe", "taurscribe"] {
-            let base = app_data.join(name);
-            if base.exists() {
-                fs::remove_dir_all(&base).map_err(|e| {
-                    format!(
-                        "Failed to remove app data directory at {}: {}",
-                        base.display(),
-                        e
-                    )
-                })?;
-            }
-        }
+    if let Ok(mut whisper) = state.whisper.lock() {
+        whisper.unload();
+    }
+    if let Ok(mut parakeet) = state.parakeet.lock() {
+        parakeet.unload();
+    }
+    if let Ok(mut granite) = state.granite_speech.lock() {
+        granite.unload();
+    }
+    if let Ok(mut llm) = state.llm.lock() {
+        *llm = None;
+    }
+    if let Ok(mut denoiser) = state.denoiser.lock() {
+        *denoiser = None;
+    }
+    if let Ok(mut transcript) = state.session_transcript.lock() {
+        transcript.clear();
+    }
+    if let Ok(mut last_recording_path) = state.last_recording_path.lock() {
+        *last_recording_path = None;
+    }
+    if let Ok(mut app_state) = state.current_app_state.lock() {
+        *app_state = AppState::Ready;
+    }
+    if let Ok(mut active_engine) = state.active_engine.lock() {
+        *active_engine = ASREngine::Whisper;
+    }
+    if let Ok(mut selected_input_device) = state.selected_input_device.lock() {
+        *selected_input_device = None;
+    }
+    if let Ok(mut hotkey_config) = state.hotkey_config.lock() {
+        *hotkey_config = HotkeyBinding::default();
+    }
+    if let Ok(mut close_behavior) = state.close_behavior.lock() {
+        *close_behavior = "tray".to_string();
+    }
+    state
+        .hotkey_suppressed
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    state
+        .recording_paused
+        .store(false, std::sync::atomic::Ordering::Relaxed);
 
-        Ok::<(), String>(())
-    })
-    .await
-    .map_err(|e| format!("factory_reset_app_data task failed: {}", e))??;
+    let _ = crate::system_audio::force_unmute();
+    let _ = crate::tray::update_tray_icon(&app, AppState::Ready);
+    crate::overlay::hide(&app);
+
+    let marker_path = factory_reset_marker_path()?;
+    fs::write(&marker_path, b"pending")
+        .map_err(|e| format!("Failed to create factory reset marker at {}: {}", marker_path.display(), e))?;
 
     app.restart();
 }

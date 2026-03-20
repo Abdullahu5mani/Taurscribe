@@ -1,20 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar } from './TitleBar';
+import {
+  ONBOARDING_USE_CASES,
+  computeModelRecommendation,
+  getEngineLabel,
+  type OnboardingUseCase,
+  type SystemInfo,
+} from '../modelRecommendations';
 import './SetupWizard.css';
 
-interface SystemInfo {
-  cpu_name: string;
-  cpu_cores: number;
-  ram_total_gb: number;
-  gpu_name: string;
-  cuda_available: boolean;
-  vram_gb: number | null;
-  backend_hint: string;
-}
-
 interface Props {
-  onComplete: (openSettings: boolean) => void;
+  onComplete: (result: { openSettings: boolean; useCase: OnboardingUseCase }) => void;
 }
 
 // Step entry tracks which step and which direction it entered from
@@ -29,9 +26,12 @@ const STEPS = 6;
 export function SetupWizard({ onComplete }: Props) {
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
   const [platform, setPlatform] = useState<string>('');
+  const [isAppleSilicon, setIsAppleSilicon] = useState(false);
+  const [useCase, setUseCase] = useState<OnboardingUseCase>('quick_notes');
   const [current, setCurrent] = useState<StepEntry>({ idx: 0, enterDir: 'right', key: 0 });
   const [exiting, setExiting] = useState<{ idx: number; exitDir: 'left' | 'right'; key: number } | null>(null);
   const transitioning = useRef(false);
+  const recommendation = computeModelRecommendation({ sysInfo, isAppleSilicon, useCase });
 
   useEffect(() => {
     invoke<SystemInfo>('get_system_info')
@@ -46,6 +46,7 @@ export function SetupWizard({ onComplete }: Props) {
         backend_hint: 'CPU',
       }));
     invoke<string>('get_platform').then(setPlatform).catch(() => {});
+    invoke<boolean>('is_apple_silicon').then(setIsAppleSilicon).catch(() => {});
   }, []);
 
   const goTo = useCallback((target: number) => {
@@ -69,15 +70,25 @@ export function SetupWizard({ onComplete }: Props) {
     switch (idx) {
       case 0: return <StepWelcome onNext={next} />;
       case 1: return <StepHardware sysInfo={sysInfo} platform={platform} onNext={next} onBack={back} />;
-      case 2: return <StepEngines onNext={next} onBack={back} platform={platform} />;
+      case 2: return (
+        <StepEngines
+          sysInfo={sysInfo}
+          platform={platform}
+          isAppleSilicon={isAppleSilicon}
+          useCase={useCase}
+          onUseCaseChange={setUseCase}
+          onNext={next}
+          onBack={back}
+        />
+      );
       case 3: return <StepHotkey onNext={next} onBack={back} platform={platform} />;
       case 4: 
         // Skip permissions step on non-macOS platforms
         if (platform !== 'macos') {
-          return <StepReady onComplete={onComplete} />;
+          return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} />;
         }
         return <StepPermissions onNext={next} onBack={back} platform={platform} />;
-      case 5: return <StepReady onComplete={onComplete} />;
+      case 5: return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} />;
       default: return null;
     }
   };
@@ -131,7 +142,7 @@ function StepWelcome({ onNext }: { onNext: () => void }) {
         </li>
         <li className="welcome-feature">
           <span className="welcome-feature-dot" />
-          GPU-accelerated transcription with Whisper & Parakeet
+          Three local engines: Whisper, Parakeet, and Granite Speech
         </li>
         <li className="welcome-feature">
           <span className="welcome-feature-dot" />
@@ -245,50 +256,104 @@ function StepHardware({
 // ─────────────────────────────────────────────────────────────────
 // STEP 2 — ENGINES
 // ─────────────────────────────────────────────────────────────────
-function StepEngines({ onNext, onBack, platform }: { onNext: () => void; onBack: () => void; platform: string }) {
+function StepEngines({
+  sysInfo,
+  platform,
+  isAppleSilicon,
+  useCase,
+  onUseCaseChange,
+  onNext,
+  onBack,
+}: {
+  sysInfo: SystemInfo | null;
+  platform: string;
+  isAppleSilicon: boolean;
+  useCase: OnboardingUseCase;
+  onUseCaseChange: (value: OnboardingUseCase) => void;
+  onNext: () => void;
+  onBack: () => void;
+}) {
+  const recommendation = computeModelRecommendation({ sysInfo, isAppleSilicon, useCase });
+
   return (
     <>
       <p className="setup-eyebrow">Step 3 of 6</p>
-      <h2 className="setup-heading">Two Engines</h2>
-      <p className="setup-sub">Both are included. Download models for either in Settings.</p>
+      <h2 className="setup-heading">Recommended Setup</h2>
+      <p className="setup-sub">Pick what you do most often and Taurscribe will steer you toward the best starting model for this machine.</p>
 
-      <div className="engines-grid">
-        <div className="engine-card">
-          <div>
-            <div className="engine-card-name">Whisper</div>
-            <div className="engine-card-source">by OpenAI</div>
-          </div>
-          <ul className="engine-card-traits">
-            <li className="engine-card-trait">Highest accuracy</li>
-            <li className="engine-card-trait">Multilingual</li>
-            <li className="engine-card-trait">Any GPU or CPU</li>
-            <li className="engine-card-trait">Buffered (6s chunks)</li>
-          </ul>
-        </div>
-
-        <div className="engine-card">
-          <div>
-            <div className="engine-card-name">Parakeet</div>
-            <div className="engine-card-source">by NVIDIA Nemotron</div>
-          </div>
-          <ul className="engine-card-traits">
-            <li className="engine-card-trait">Real-time streaming</li>
-            <li className="engine-card-trait">Under 500ms latency</li>
-            <li className="engine-card-trait">English only</li>
-          </ul>
-        </div>
+      <div className="setup-use-cases">
+        {ONBOARDING_USE_CASES.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            className={`setup-use-case${useCase === option.id ? ' setup-use-case--active' : ''}`}
+            onClick={() => onUseCaseChange(option.id)}
+          >
+            <span className="setup-use-case-kicker">{option.audience}</span>
+            <span className="setup-use-case-title">{option.label}</span>
+            <span className="setup-use-case-copy">{option.description}</span>
+          </button>
+        ))}
       </div>
 
-      <p className="engines-note">Switch between engines anytime in the main UI.</p>
+      <div className="setup-recommendation-stack">
+        <div className="setup-recommendation-card setup-recommendation-card--primary">
+          <div className="setup-recommendation-topline">
+            <span className="setup-recommendation-badge">Primary</span>
+            <span className={`setup-recommendation-engine setup-recommendation-engine--${recommendation.primaryEngine}`}>
+              {recommendation.primaryEngineLabel}
+            </span>
+          </div>
+          <div className="setup-recommendation-model">{recommendation.primaryLabel}</div>
+          <p className="setup-recommendation-summary">{recommendation.summary}</p>
+          <ul className="setup-recommendation-list">
+            {recommendation.primaryReasoning.map((reason) => (
+              <li key={reason} className="setup-recommendation-item">{reason}</li>
+            ))}
+          </ul>
+        </div>
+
+        {recommendation.backupModelId && recommendation.backupLabel && recommendation.backupEngine && recommendation.backupEngineLabel && (
+          <div className="setup-recommendation-card">
+            <div className="setup-recommendation-topline">
+              <span className="setup-recommendation-badge setup-recommendation-badge--secondary">Backup</span>
+              <span className={`setup-recommendation-engine setup-recommendation-engine--${recommendation.backupEngine}`}>
+                {recommendation.backupEngineLabel}
+              </span>
+            </div>
+            <div className="setup-recommendation-model">{recommendation.backupLabel}</div>
+            <p className="setup-recommendation-summary">
+              Keep this nearby if you want a smaller download, a safer fallback, or a second engine to compare against.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <p className="engines-note">{recommendation.hardwareLine}</p>
 
       {platform === 'macos' && (
         <div className="engines-coreml-note">
           <span className="engines-coreml-badge">CoreML</span>
-          Apple Silicon · CoreML encoder libraries are available for Whisper — download them
-          in Settings → Downloads to offload the encoder to the Neural Engine for faster,
-          lower-power transcription on M-series Macs.
+          {isAppleSilicon
+            ? 'Apple Silicon detected. When you download a Whisper model, Taurscribe can pair it with a CoreML encoder for lower-power transcription.'
+            : 'On Apple Silicon, Whisper can pair with CoreML encoder downloads for faster, lower-power transcription.'}
         </div>
       )}
+
+      <div className="setup-engine-legend">
+        <div className="setup-engine-legend-item">
+          <strong>{getEngineLabel('whisper')}</strong>
+          <span>Highest overall accuracy and the safest multilingual choice.</span>
+        </div>
+        <div className="setup-engine-legend-item">
+          <strong>{getEngineLabel('parakeet')}</strong>
+          <span>Best when you want live English text with the lowest latency.</span>
+        </div>
+        <div className="setup-engine-legend-item">
+          <strong>{getEngineLabel('granite_speech')}</strong>
+          <span>Reliable extra option when you want another local English engine on deck.</span>
+        </div>
+      </div>
 
       <div className="setup-nav setup-nav--spread">
         <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
@@ -485,9 +550,18 @@ function StepPermissions({
 // ─────────────────────────────────────────────────────────────────
 function StepReady({
   onComplete,
+  platform,
+  recommendation,
+  useCase,
 }: {
-  onComplete: (openSettings: boolean) => void;
+  onComplete: (result: { openSettings: boolean; useCase: OnboardingUseCase }) => void;
+  platform: string;
+  recommendation: ReturnType<typeof computeModelRecommendation>;
+  useCase: OnboardingUseCase;
 }) {
+  const isMac = platform === 'macos';
+  const comboLabel = isMac ? 'Ctrl + Option' : 'Ctrl + Win';
+
   return (
     <>
       <p className="setup-eyebrow">All done</p>
@@ -496,8 +570,9 @@ function StepReady({
       <ul className="ready-checks">
         {[
           'Hardware detected and configured',
-          'AI engines ready to load',
-          'Global hotkey active: Ctrl + Win',
+          `Starting profile tuned for ${recommendation.useCaseLabel.toLowerCase()}`,
+          `Recommended engine: ${recommendation.primaryEngineLabel}`,
+          `Global hotkey active: ${comboLabel}`,
           'Pastes directly into any app',
         ].map((text, i) => (
           <li className="ready-check" key={i}>
@@ -512,20 +587,20 @@ function StepReady({
       </ul>
 
       <p className="ready-cta-note">
-        Download a <strong>Whisper</strong> or <strong>Parakeet</strong> model<br />
-        in Settings → Downloads to start transcribing.
+        Start with <strong>{recommendation.primaryLabel}</strong>
+        {recommendation.backupLabel ? <> and keep <strong>{recommendation.backupLabel}</strong> as your fallback.</> : <> in Settings → Models.</>}
       </p>
 
       <div className="setup-nav--ready">
         <button
           className="setup-btn setup-btn--primary setup-btn--full"
-          onClick={() => onComplete(true)}
+          onClick={() => onComplete({ openSettings: true, useCase })}
         >
-          Open Settings & Download a Model
+          Open Models & Download Recommended
         </button>
         <button
           className="setup-btn setup-btn--settings setup-btn--full"
-          onClick={() => onComplete(false)}
+          onClick={() => onComplete({ openSettings: false, useCase })}
         >
           Launch App
         </button>

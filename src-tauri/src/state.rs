@@ -69,6 +69,9 @@ pub struct AudioState {
     // Used to prevent accidental recording while the user is re-binding
     // the hotkey inside the Settings modal.
     pub hotkey_suppressed: Arc<AtomicBool>,
+
+    // Tracks whether the current recording stream is temporarily paused.
+    pub recording_paused: Arc<AtomicBool>,
 }
 
 impl AudioState {
@@ -94,6 +97,7 @@ impl AudioState {
             close_behavior: Arc::new(Mutex::new("tray".to_string())),
             granite_speech: Arc::new(Mutex::new(granite_speech)),
             hotkey_suppressed: Arc::new(AtomicBool::new(false)),
+            recording_paused: Arc::new(AtomicBool::new(false)),
         }
     }
 }

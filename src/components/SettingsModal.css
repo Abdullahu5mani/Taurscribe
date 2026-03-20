@@ -752,6 +752,19 @@
   line-height: 1.5;
 }
 
+.model-group--recommended {
+  padding: 18px 18px 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.18);
+  background:
+    radial-gradient(circle at top left, rgba(var(--accent-primary-rgb), 0.08), transparent 45%),
+    rgba(255, 255, 255, 0.02);
+}
+
+.model-group-desc--highlight {
+  color: var(--text-primary);
+}
+
 /* CoreML inline header (inside the Whisper group, above .bin rows) */
 .coreml-inline-header {
   display: flex;
@@ -835,6 +848,10 @@
   padding-top: 22px;
 }
 
+.model-item-wrapper--rec-secondary {
+  border-color: rgba(255,255,255,0.12);
+}
+
 .model-item-wrapper--rec .model-item {
   border: none;
   border-radius: 0 0 12px 12px;
@@ -855,6 +872,11 @@
   color: var(--bg-primary);
   border-radius: 4px;
   padding: 2px 8px;
+}
+
+.badge-rec--secondary {
+  background: rgba(255,255,255,0.82);
+  color: var(--bg-primary);
 }
 
 /* ── Post-Processing tab ───────────────────────────────────────────── */

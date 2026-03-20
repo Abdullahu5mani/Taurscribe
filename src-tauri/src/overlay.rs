@@ -15,6 +15,7 @@ pub struct OverlayStatePayload {
     pub phase: String,
     pub text: Option<String>,
     pub ms: Option<u64>,
+    pub engine: Option<String>,
 }
 
 // ── Public API (platform-dispatched) ─────────────────────────────────────────
@@ -54,15 +55,35 @@ pub fn set_state(app: &AppHandle, payload: OverlayStatePayload) {
     webview::set_state(app, payload);
 }
 
+/// Restores focus to the app that was active when the overlay opened.
+pub fn restore_focus(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app;
+    #[cfg(not(target_os = "macos"))]
+    webview::restore_focus(app);
+}
+
 // ── WebView implementation (Windows / Linux) ──────────────────────────────────
 
 #[cfg(not(target_os = "macos"))]
 mod webview {
     use super::OverlayStatePayload;
+    use std::sync::{Mutex, OnceLock};
     use tauri::{AppHandle, Emitter, Manager};
+
+    #[cfg(target_os = "windows")]
+    static LAST_FOREGROUND_HWND: OnceLock<Mutex<usize>> = OnceLock::new();
+
+    #[cfg(target_os = "windows")]
+    fn last_foreground_hwnd() -> &'static Mutex<usize> {
+        LAST_FOREGROUND_HWND.get_or_init(|| Mutex::new(0))
+    }
 
     pub fn show(app: &AppHandle) {
         if let Some(overlay) = app.get_webview_window("overlay") {
+            #[cfg(target_os = "windows")]
+            remember_foreground_window();
+
             let monitor = active_monitor(app)
                 .or_else(|| overlay.primary_monitor().ok().flatten());
 
@@ -80,14 +101,13 @@ mod webview {
                 let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
             }
             let _ = overlay.set_always_on_top(true);
-            let _ = overlay.set_ignore_cursor_events(true);
+            let _ = overlay.set_ignore_cursor_events(false);
             let _ = overlay.show();
         }
     }
 
     pub fn hide(app: &AppHandle) {
         if let Some(overlay) = app.get_webview_window("overlay") {
-            let _ = overlay.set_ignore_cursor_events(false);
             let _ = overlay.hide();
         }
     }
@@ -96,6 +116,11 @@ mod webview {
         if let Some(overlay) = app.get_webview_window("overlay") {
             let _ = overlay.emit("overlay-state", payload);
         }
+    }
+
+    pub fn restore_focus(_app: &AppHandle) {
+        #[cfg(target_os = "windows")]
+        restore_foreground_window();
     }
 
     /// Returns the monitor containing the foreground window (the app the user
@@ -178,6 +203,45 @@ mod webview {
     pub fn active_monitor(_app: &AppHandle) -> Option<tauri::Monitor> {
         None
     }
+
+    #[cfg(target_os = "windows")]
+    fn remember_foreground_window() {
+        use std::ffi::c_void;
+
+        extern "system" {
+            fn GetForegroundWindow() -> *mut c_void;
+        }
+
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.is_null() {
+            return;
+        }
+
+        if let Ok(mut slot) = last_foreground_hwnd().lock() {
+            *slot = hwnd as usize;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn restore_foreground_window() {
+        use std::ffi::c_void;
+
+        extern "system" {
+            fn IsWindow(hwnd: *mut c_void) -> i32;
+            fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
+        }
+
+        let hwnd = match last_foreground_hwnd().lock() {
+            Ok(slot) if *slot != 0 => *slot as *mut c_void,
+            _ => return,
+        };
+
+        unsafe {
+            if IsWindow(hwnd) != 0 {
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
+    }
 }
 
 // ── macOS native implementation ───────────────────────────────────────────────
@@ -213,6 +277,7 @@ mod mac {
     struct PhaseState {
         phase: String,
         done_ms: Option<u64>,
+        engine: Option<String>,
     }
 
     fn phase_state() -> Arc<Mutex<PhaseState>> {
@@ -241,6 +306,7 @@ mod mac {
             let mut st = arc.lock().unwrap();
             st.phase = payload.phase.clone();
             st.done_ms = payload.ms;
+            st.engine = payload.engine.clone();
         }
         let _ = app.run_on_main_thread(refresh_text);
     }
@@ -412,7 +478,7 @@ mod mac {
         }
 
         let st = phase_state().lock().unwrap().clone();
-        let text = phase_to_label(&st.phase, st.done_ms);
+        let text = phase_to_label(&st.phase, st.done_ms, st.engine.as_deref());
 
         // Empty string → nothing to show, leave the previous label visible
         // until hide() is called.
@@ -428,16 +494,24 @@ mod mac {
     }
 
     /// Convert a phase name + optional latency into the label shown in the pill.
-    fn phase_to_label(phase: &str, done_ms: Option<u64>) -> String {
+    fn phase_to_label(phase: &str, done_ms: Option<u64>, engine: Option<&str>) -> String {
+        let engine_label = match engine.unwrap_or_default() {
+            "whisper" => "Whisper",
+            "parakeet" => "Parakeet",
+            "granite_speech" => "Granite",
+            _ => "Taurscribe",
+        };
         match phase {
-            "recording" => "● Recording".to_string(),
-            "transcribing" => "·  ·  ·   Transcribing".to_string(),
-            "correcting" => "·  ·  ·   Correcting".to_string(),
+            "recording" => format!("●  {} recording", engine_label),
+            "paused" => format!("⏸  {} paused", engine_label),
+            "transcribing" => format!("·  ·  ·   {} transcribing", engine_label),
+            "correcting" => format!("·  ·  ·   {} correcting", engine_label),
             "done" => match done_ms {
-                Some(ms) if ms >= 1000 => format!("✓  Done  ({:.1}s)", ms as f64 / 1000.0),
-                Some(ms) => format!("✓  Done  ({}ms)", ms),
-                None => "✓  Done".to_string(),
+                Some(ms) if ms >= 1000 => format!("✓  {} done  ({:.1}s)", engine_label, ms as f64 / 1000.0),
+                Some(ms) => format!("✓  {} done  ({}ms)", engine_label, ms),
+                None => format!("✓  {} done", engine_label),
             },
+            "cancelled" => "✕  Recording discarded".to_string(),
             "too_short" => "⚠  Too short".to_string(),
             "paste_failed" => "⚠  Couldn't paste".to_string(),
             _ => String::new(),

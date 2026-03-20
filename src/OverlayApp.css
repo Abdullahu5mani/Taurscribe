@@ -1,368 +1,339 @@
 html, body, #root {
   margin: 0;
   padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
   background: transparent;
-  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.overlay-shell {
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
-}
-
-/* ── Square container ─────────────────────────────────────────────────────── */
-.overlay-box {
-  --font-xs: 0.85rem;
-  --font-sm: 1rem;
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-card, rgba(255, 255, 255, 0.03));
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 8px 32px rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
-  border-radius: 16px;
-  overflow: hidden;
-  animation: fadeIn 0.2s ease-out both;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/*  RECORDING – live waveform bars + glowing dot                              */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-.waveform-container {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  height: 100%;
+  gap: 14px;
+  padding: 16px 16px 14px;
+  color: #f4efe3;
+  background:
+    radial-gradient(circle at top left, rgba(224, 159, 62, 0.14), transparent 42%),
+    linear-gradient(180deg, rgba(17, 15, 12, 0.96) 0%, rgba(10, 9, 8, 0.96) 100%);
+  border: 1px solid rgba(224, 159, 62, 0.16);
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 18px 44px rgba(0, 0, 0, 0.42);
+  animation: overlayFadeIn 0.18s ease-out both;
 }
 
-.waveform-header {
+@keyframes overlayFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.overlay-topline,
+.overlay-bottom {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.waveform-timer {
-  font-family: 'Zodiak', serif;
-  font-size: var(--font-xs);
-  font-weight: 500;
-  color: var(--recording, #dc2626);
-  letter-spacing: 0.02em;
-  opacity: 0.85;
+.overlay-phase-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
-.waveform-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--recording, #dc2626);
-  box-shadow: 0 0 6px var(--recording, #dc2626);
-  /* dotIgnite fires once on recording start, then dotBreathe takes over */
-  animation: dotIgnite 0.35s ease-out both, dotBreathe 1.2s ease-in-out 0.35s infinite alternate;
+.overlay-phase-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
   flex-shrink: 0;
 }
 
-/* Brief "ignition" flash — dot flares bright before settling into breathe */
-@keyframes dotIgnite {
-  0%   { transform: scale(1.9); box-shadow: 0 0 18px rgba(220, 38, 38, 1), 0 0 36px rgba(220, 38, 38, 0.5); }
-  100% { transform: scale(1);   box-shadow: 0 0 6px rgba(220, 38, 38, 0.6); }
+.overlay-phase-dot--recording {
+  background: #f05a44;
+  box-shadow: 0 0 12px rgba(240, 90, 68, 0.65);
 }
 
-@keyframes dotBreathe {
-  from {
-    box-shadow: 0 0 4px rgba(220, 38, 38, 0.6), 0 0 8px rgba(220, 38, 38, 0.2);
-    transform: scale(0.85);
-  }
-  to {
-    box-shadow: 0 0 8px rgba(220, 38, 38, 0.9), 0 0 16px rgba(220, 38, 38, 0.4);
-    transform: scale(1.15);
-  }
+.overlay-phase-dot--paused {
+  background: #f2b84b;
+  box-shadow: 0 0 12px rgba(242, 184, 75, 0.45);
 }
 
-.waveform-bars {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 44px;
+.overlay-phase-dot--transcribing,
+.overlay-phase-dot--correcting {
+  background: #f2b84b;
 }
 
-.waveform-bar {
-  width: 2px;
-  border-radius: 2px;
-  background: linear-gradient(to top, var(--recording, #dc2626), var(--accent-primary, #e09f3e));
-  transition: height 0.12s ease-out;
-  min-height: 3px;
+.overlay-phase-dot--done {
+  background: #3ecfa5;
+  box-shadow: 0 0 12px rgba(62, 207, 165, 0.42);
 }
 
-@keyframes coreBreathe {
-  from {
-    transform: translate(-50%, -50%) scale(0.85);
-    box-shadow: 0 0 8px rgba(220, 38, 38, 0.5), 0 0 16px rgba(220, 38, 38, 0.2);
-  }
-  to {
-    transform: translate(-50%, -50%) scale(1.15);
-    box-shadow: 0 0 16px rgba(220, 38, 38, 0.8), 0 0 32px rgba(220, 38, 38, 0.4);
-  }
+.overlay-phase-dot--too_short,
+.overlay-phase-dot--paste_failed,
+.overlay-phase-dot--cancelled {
+  background: #d8614f;
 }
 
-/* Border glow for recording */
-.overlay-box--recording {
-  animation: fadeIn 0.2s ease-out both, borderFlashRed 0.4s ease-out both, borderGlowRed 2s ease-in-out 0.4s infinite;
-}
-
-/* One-shot border burst when recording begins, then settles into slow pulse */
-@keyframes borderFlashRed {
-  0%   { box-shadow: inset 0 0 40px rgba(220, 38, 38, 0.45); }
-  100% { box-shadow: inset 0 0 15px rgba(220, 38, 38, 0.10); }
-}
-
-@keyframes borderGlowRed {
-  0%, 100% { box-shadow: inset 0 0 15px rgba(220, 38, 38, 0.1); }
-  50%      { box-shadow: inset 0 0 25px rgba(220, 38, 38, 0.25); }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/*  TRANSCRIBING / CORRECTING – jumping dots                                  */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/* Content pop-in — spring scale when a new phase content appears */
-.waveform-container,
-.anim-dots,
-.anim-done {
-  animation: contentPop 0.24s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
-
-.anim-too-short,
-.anim-paste-failed {
-  animation: contentPop 0.24s cubic-bezier(0.34, 1.56, 0.64, 1) both,
-             xShake 0.38s ease-out 0.68s both;
-}
-
-@keyframes contentPop {
-  from { transform: scale(0.82); opacity: 0; }
-  to   { transform: scale(1);    opacity: 1; }
-}
-
-/* Brief shake after error X draws — empathetic feedback */
-@keyframes xShake {
-  0%, 100% { transform: translateX(0); }
-  20%      { transform: translateX(-4px); }
-  45%      { transform: translateX(4px); }
-  65%      { transform: translateX(-2px); }
-  82%      { transform: translateX(2px); }
-}
-
-.anim-dots {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  height: 100%;
-}
-
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--processing, #eab308);
-  animation: dotJump 1s ease-in-out infinite;
-}
-
-.dot-2 { animation-delay: 0.15s; }
-.dot-3 { animation-delay: 0.3s; }
-
-@keyframes dotJump {
-  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-  30%           { transform: translateY(-10px); opacity: 1; }
-}
-
-.anim-dots--amber .dot { background: var(--accent-primary, #e09f3e); }
-
-.overlay-box--transcribing {
-  box-shadow: inset 0 0 20px rgba(234, 179, 8, 0.1);
-}
-
-.overlay-box--correcting {
-  box-shadow: inset 0 0 20px rgba(var(--accent-primary-rgb), 0.1);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/*  DONE – animated checkmark                                                 */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-.anim-done {
+.overlay-phase-copy {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  width: 100%;
-  height: 100%;
+  min-width: 0;
 }
 
-.done-latency {
+.overlay-engine {
+  font-family: 'Martian Mono', monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(244, 239, 227, 0.7);
+}
+
+.overlay-status {
   font-family: 'Zodiak', serif;
-  font-size: var(--font-xs);
-  font-weight: 500;
-  color: var(--success, #3ecfa5);
+  font-size: 0.95rem;
+  color: #f8f2e8;
+}
+
+.overlay-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.overlay-time {
+  font-family: 'Martian Mono', monospace;
+  font-size: 0.76rem;
   letter-spacing: 0.04em;
-  opacity: 0;
-  animation: tooShortLabelFade 0.25s ease-out 0.35s forwards;
+  color: rgba(244, 239, 227, 0.7);
+  padding: 6px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.check-svg {
-  width: 36px;
-  height: 36px;
+.overlay-transcript {
+  flex: 1;
+  min-height: 56px;
+  padding: 12px 13px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(248, 242, 232, 0.9);
+  font-size: 0.87rem;
+  line-height: 1.45;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.overlay-waveform {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 30px;
+  flex: 1;
+  min-width: 0;
+}
+
+.overlay-waveform--paused {
+  opacity: 0.45;
+}
+
+.overlay-waveform-bar {
+  width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #f6bd68 0%, #f05a44 100%);
+  transition: height 0.12s ease-out, opacity 0.18s ease-out;
+}
+
+.overlay-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
 }
 
-.check-circle {
-  fill: none;
-  stroke: var(--success, #3ecfa5);
-  stroke-width: 2;
-  stroke-dasharray: 100;
-  stroke-dashoffset: 100;
-  animation: drawCircle 0.4s ease-out 0.1s forwards;
-}
-
-.check-mark {
-  fill: none;
-  stroke: var(--success, #3ecfa5);
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 30;
-  stroke-dashoffset: 30;
-  animation: drawCheck 0.3s ease-out 0.45s forwards;
-}
-
-@keyframes drawCircle {
-  to { stroke-dashoffset: 0; }
-}
-
-@keyframes drawCheck {
-  to { stroke-dashoffset: 0; }
-}
-
-.overlay-box--done {
-  animation: fadeIn 0.2s ease-out both, doneGlow 0.65s ease-out 0.45s both;
-}
-
-/* Green glow burst after the checkmark finishes drawing */
-@keyframes doneGlow {
-  0%   { box-shadow: inset 0 0 0px  rgba(62, 207, 165, 0); }
-  35%  { box-shadow: inset 0 0 48px rgba(62, 207, 165, 0.30); }
-  100% { box-shadow: inset 0 0 20px rgba(62, 207, 165, 0.15); }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/*  TOO SHORT – X circle draw + label                                         */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-.anim-too-short {
-  display: flex;
-  flex-direction: column;
+.overlay-action {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-}
-
-.too-short-label {
-  font-family: 'Zodiak', serif;
-  font-size: var(--font-sm);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--recording, #dc2626);
-  text-transform: uppercase;
-  opacity: 0;
-  animation: tooShortLabelFade 0.2s ease-out 0.55s forwards;
-}
-
-.x-circle {
-  animation: drawXCircle 0.35s ease-out 0.05s forwards;
-}
-
-.x-line-1 {
-  animation: drawXLine 0.18s ease-out 0.35s forwards;
-}
-
-.x-line-2 {
-  animation: drawXLine 0.18s ease-out 0.48s forwards;
-}
-
-@keyframes drawXCircle {
-  to { stroke-dashoffset: 0; }
-}
-
-@keyframes drawXLine {
-  to { stroke-dashoffset: 0; }
-}
-
-@keyframes tooShortLabelFade {
-  to { opacity: 1; }
-}
-
-.overlay-box--too_short {
-  box-shadow: inset 0 0 0 1.5px rgba(220, 38, 38, 0.35),
-              0 8px 32px rgba(0, 0, 0, 0.45);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/*  PASTE FAILED – same X animation as too_short, smaller label text          */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-.anim-paste-failed {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-}
-
-.paste-failed-label {
-  font-family: 'Zodiak', serif;
+  gap: 7px;
+  padding: 8px 12px;
+  border-radius: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: #f4efe3;
+  font-family: 'Martian Mono', monospace;
   font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  color: var(--recording, #dc2626);
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  opacity: 0;
-  animation: tooShortLabelFade 0.2s ease-out 0.55s forwards;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
 }
 
-.overlay-box--paste_failed {
-  box-shadow: inset 0 0 0 1.5px rgba(220, 38, 38, 0.35),
-              0 8px 32px rgba(0, 0, 0, 0.45);
+.overlay-action:hover:not(:disabled) {
+  transform: translateY(-1px);
 }
 
-/* ── Reduced motion ───────────────────────────────────────────────── */
+.overlay-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.overlay-action--primary {
+  border-color: rgba(224, 159, 62, 0.26);
+  background: rgba(224, 159, 62, 0.11);
+}
+
+.overlay-action--primary:hover:not(:disabled) {
+  background: rgba(224, 159, 62, 0.18);
+}
+
+.overlay-action--danger {
+  border-color: rgba(216, 97, 79, 0.24);
+  background: rgba(216, 97, 79, 0.1);
+}
+
+.overlay-action--danger:hover:not(:disabled) {
+  background: rgba(216, 97, 79, 0.16);
+}
+
+.overlay-shell--recording {
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 90, 68, 0.14),
+    0 18px 44px rgba(0, 0, 0, 0.42);
+}
+
+.overlay-shell--paused {
+  box-shadow:
+    inset 0 0 0 1px rgba(242, 184, 75, 0.14),
+    0 18px 44px rgba(0, 0, 0, 0.42);
+}
+
+.overlay-shell--done {
+  box-shadow:
+    inset 0 0 0 1px rgba(62, 207, 165, 0.16),
+    0 18px 44px rgba(0, 0, 0, 0.42);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .overlay-box,
-  .waveform-dot,
-  .waveform-container,
-  .dot,
-  .anim-dots,
-  .anim-done,
-  .anim-too-short,
-  .anim-paste-failed,
-  .check-circle,
-  .check-mark,
-  .too-short-label,
-  .paste-failed-label,
-  .done-latency,
-  .x-circle,
-  .x-line-1,
-  .x-line-2 {
+  .overlay-shell,
+  .overlay-action,
+  .overlay-waveform-bar {
     animation: none !important;
-    opacity: 1 !important;
+    transition: none !important;
   }
-  .check-circle,
-  .check-mark,
-  .x-circle,
-  .x-line-1,
-  .x-line-2 {
-    stroke-dashoffset: 0 !important;
+}
+
+/* ── Minimal pill ─────────────────────────────────────────────────────────── */
+.overlay-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px 7px 10px;
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgba(22, 19, 14, 0.97) 0%, rgba(12, 10, 8, 0.97) 100%);
+  border: 1px solid rgba(224, 159, 62, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 24px rgba(0, 0, 0, 0.45);
+  font-family: 'Martian Mono', monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: rgba(244, 239, 227, 0.88);
+  white-space: nowrap;
+  animation: overlayFadeIn 0.18s ease-out both;
+  /* Position the pill at the top-right of the transparent overlay window */
+  position: fixed;
+  top: 12px;
+  right: 12px;
+}
+
+.overlay-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.overlay-pill-dot--recording {
+  background: #f05a44;
+  box-shadow: 0 0 8px rgba(240, 90, 68, 0.7);
+  animation: pillDotBreathe 1.4s ease-in-out infinite alternate;
+}
+
+.overlay-pill-dot--paused {
+  background: #f2b84b;
+  box-shadow: 0 0 8px rgba(242, 184, 75, 0.5);
+}
+
+.overlay-pill-dot--transcribing,
+.overlay-pill-dot--correcting {
+  background: #f2b84b;
+  animation: pillDotBreathe 0.9s ease-in-out infinite alternate;
+}
+
+.overlay-pill-dot--done {
+  background: #3ecfa5;
+  box-shadow: 0 0 8px rgba(62, 207, 165, 0.5);
+}
+
+.overlay-pill-dot--too_short,
+.overlay-pill-dot--paste_failed,
+.overlay-pill-dot--cancelled {
+  background: #d8614f;
+}
+
+@keyframes pillDotBreathe {
+  from { opacity: 0.55; transform: scale(0.88); }
+  to   { opacity: 1;    transform: scale(1.1); }
+}
+
+.overlay-pill-engine {
+  color: rgba(244, 239, 227, 0.5);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.overlay-pill-sep {
+  color: rgba(244, 239, 227, 0.25);
+}
+
+.overlay-pill-status {
+  color: rgba(244, 239, 227, 0.9);
+}
+
+.overlay-pill-time {
+  color: rgba(244, 239, 227, 0.45);
+  font-size: 0.66rem;
+  margin-left: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-pill,
+  .overlay-pill-dot--recording,
+  .overlay-pill-dot--transcribing,
+  .overlay-pill-dot--correcting {
+    animation: none !important;
   }
 }

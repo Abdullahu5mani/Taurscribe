@@ -15,6 +15,7 @@ type TranscriptRecord = {
 interface TranscriptFeedProps {
     refreshKey: number;
     isRecording: boolean;
+    isPaused: boolean;
     isProcessingTranscript: boolean;
     isCorrecting: boolean;
     latestLatency: number | null;
@@ -70,6 +71,7 @@ const formatTimestamp = (iso: string) => {
 export function TranscriptFeed({
     refreshKey,
     isRecording,
+    isPaused,
     isProcessingTranscript,
     isCorrecting,
     latestLatency,
@@ -177,8 +179,8 @@ export function TranscriptFeed({
 
     /* ── Live status row ── */
     const showLive = isRecording || isProcessingTranscript;
-    const liveLabel = isRecording ? "Listening" : isCorrecting ? "Correcting" : "Processing";
-    const liveClass = isRecording ? "feed-live-row--recording" : "feed-live-row--processing";
+    const liveLabel = isRecording ? (isPaused ? "Paused" : "Listening") : isCorrecting ? "Correcting" : "Processing";
+    const liveClass = isRecording && !isPaused ? "feed-live-row--recording" : "feed-live-row--processing";
 
     return (
         <div className="transcript-feed">
