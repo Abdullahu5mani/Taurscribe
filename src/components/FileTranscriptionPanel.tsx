@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open } from "@tauri-apps/plugin-dialog";
 
 interface FileItem {
     id: string;
@@ -179,6 +180,17 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
         invoke("cancel_file_transcription", { path: filePath }).catch(() => {});
     };
 
+    const handleBrowse = async () => {
+        const selected = await open({
+            multiple: true,
+            filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "mp4", "mov"] }],
+        });
+        if (selected) {
+            const paths = Array.isArray(selected) ? selected : [selected];
+            addPaths(paths);
+        }
+    };
+
     // HTML5 drag events (visual feedback for webview drags)
     const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); };
     const onDragLeave = () => setIsDragOver(false);
@@ -229,6 +241,7 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
                         </div>
                         <p className="file-drop-title">Drop audio files here</p>
                         <p className="file-drop-hint">WAV · MP3 · M4A · FLAC · OGG</p>
+                        <button className="file-browse-btn" onClick={handleBrowse}>Browse files</button>
                     </>
                 ) : (
                     <p className="file-drop-hint file-drop-hint--inline">
