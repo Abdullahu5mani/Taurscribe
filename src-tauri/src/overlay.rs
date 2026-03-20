@@ -189,13 +189,15 @@ mod mac {
     use std::sync::{Arc, Mutex, OnceLock};
     use tauri::AppHandle;
 
-    // kCGScreenSaverWindowLevel = 2000 — above all windows including fullscreen Spaces
-    const SCREENSAVER_LEVEL: i64 = 2000;
+    // NSStatusWindowLevel (25) is high enough to float above normal windows.
+    // Combined with FullScreenAuxiliary it also appears on fullscreen Spaces.
+    const STATUS_WINDOW_LEVEL: i64 = 25;
 
     // NSWindowCollectionBehavior raw flag values
-    const CAN_JOIN_ALL_SPACES: u64 = 1 << 0; // NSWindowCollectionBehaviorCanJoinAllSpaces
-    const STATIONARY: u64 = 1 << 4; // NSWindowCollectionBehaviorStationary
-    const IGNORES_CYCLE: u64 = 1 << 6; // NSWindowCollectionBehaviorIgnoresCycle
+    const CAN_JOIN_ALL_SPACES: u64 = 1 << 0;   // NSWindowCollectionBehaviorCanJoinAllSpaces
+    const STATIONARY: u64 = 1 << 4;             // NSWindowCollectionBehaviorStationary
+    const IGNORES_CYCLE: u64 = 1 << 6;          // NSWindowCollectionBehaviorIgnoresCycle
+    const FULL_SCREEN_AUXILIARY: u64 = 1 << 8;  // NSWindowCollectionBehaviorFullScreenAuxiliary
 
     // NSFontWeight: medium ≈ 0.23
     const FONT_WEIGHT_MEDIUM: f64 = 0.23;
@@ -206,11 +208,6 @@ mod mac {
 
     // Shared phase state (written from any thread, read on main thread for rendering).
     static PHASE_STATE: OnceLock<Arc<Mutex<PhaseState>>> = OnceLock::new();
-
-    /// egui Context — kept alive for the app lifetime.
-    /// Used here for UI state management; a full wgpu/Metal renderer can be
-    /// wired to it later without changing the public API.
-    static EGUI_CTX: OnceLock<egui::Context> = OnceLock::new();
 
     #[derive(Clone, Default)]
     struct PhaseState {
@@ -224,16 +221,9 @@ mod mac {
             .clone()
     }
 
-    fn egui_ctx() -> &'static egui::Context {
-        EGUI_CTX.get_or_init(egui::Context::default)
-    }
-
     // ── Public entry points ───────────────────────────────────────────────────
 
     pub fn init(app: &AppHandle) {
-        // Initialise egui context (no-op if already done)
-        let _ = egui_ctx();
-        // Schedule panel creation on the main thread
         let _ = app.run_on_main_thread(create_panel);
     }
 
@@ -246,20 +236,12 @@ mod mac {
     }
 
     pub fn set_state(app: &AppHandle, payload: OverlayStatePayload) {
-        // Update shared state from whichever thread this is called on
         {
-            let mut st = phase_state().lock().unwrap();
+            let arc = phase_state();
+            let mut st = arc.lock().unwrap();
             st.phase = payload.phase.clone();
             st.done_ms = payload.ms;
         }
-
-        // Use the egui context to record the state change (headless pass —
-        // no pixels are produced yet, but the Context tracks dirty state so a
-        // full wgpu renderer can call begin_frame/end_frame in a render loop).
-        let ctx = egui_ctx();
-        ctx.request_repaint();
-
-        // Dispatch the NSTextField update to the main thread
         let _ = app.run_on_main_thread(refresh_text);
     }
 
@@ -281,32 +263,41 @@ mod mac {
                 return;
             }
 
-            // 1. Borderless NSPanel (NSPanel = floating, non-activating by default)
+            // 1. Borderless, non-activating NSPanel — won't steal focus from
+            //    whatever fullscreen app the user is in.
             let panel: Retained<NSPanel> = NSPanel::initWithContentRect_styleMask_backing_defer(
                 mtm.alloc(),
                 NSRect::new(
                     NSPoint::new(-2000.0, -2000.0), // off-screen until show()
                     NSSize::new(340.0, 64.0),
                 ),
-                NSWindowStyleMask::Borderless,
-                NSBackingStoreType::NSBackingStoreBuffered,
+                NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+                NSBackingStoreType::Buffered,
                 false,
             );
 
-            // 2. Window level + collection behavior — this is what makes it
-            //    appear above full-screen app Spaces.
-            let level = SCREENSAVER_LEVEL;
+            // 2. NSPanel-specific: float above all windows, never become key,
+            //    and critically — do NOT hide when the app deactivates (which
+            //    happens whenever a fullscreen app is in the foreground).
+            panel.setFloatingPanel(true);
+            panel.setBecomesKeyOnlyIfNeeded(true);
+            panel.setHidesOnDeactivate(false);
+
+            // 3. Window level + collection behavior.
+            //    FullScreenAuxiliary is the flag that lets the panel appear on
+            //    fullscreen Spaces (native macOS fullscreen, not exclusive-mode games).
+            let level = STATUS_WINDOW_LEVEL;
             let _: () = msg_send![&panel, setLevel: level];
-            let behavior: u64 = CAN_JOIN_ALL_SPACES | STATIONARY | IGNORES_CYCLE;
+            let behavior: u64 = CAN_JOIN_ALL_SPACES | STATIONARY | IGNORES_CYCLE | FULL_SCREEN_AUXILIARY;
             let _: () = msg_send![&panel, setCollectionBehavior: behavior];
 
-            // 3. Transparent, click-through, no shadow
+            // 4. Transparent, click-through, no shadow
             panel.setOpaque(false);
             panel.setBackgroundColor(Some(&NSColor::clearColor()));
             panel.setIgnoresMouseEvents(true);
             panel.setHasShadow(false);
 
-            // 4. Rounded pill background on the content view's backing layer
+            // 5. Rounded pill background on the content view's backing layer
             if let Some(view) = panel.contentView() {
                 view.setWantsLayer(true);
                 if let Some(layer) = view.layer() {
@@ -321,7 +312,7 @@ mod mac {
                 }
             }
 
-            // 5. NSTextField for the phase label
+            // 6. NSTextField for the phase label
             let tf: Retained<NSTextField> = NSTextField::initWithFrame(
                 mtm.alloc(),
                 NSRect::new(NSPoint::new(0.0, 18.0), NSSize::new(340.0, 28.0)),
@@ -335,7 +326,7 @@ mod mac {
             // Monospaced system font, medium weight, 14pt
             let font: *mut AnyObject = msg_send![
                 NSFont::class(),
-                monospacedSystemFontOfSize: 14.0_f64
+                monospacedSystemFontOfSize: 14.0_f64,
                 weight: FONT_WEIGHT_MEDIUM
             ];
             let _: () = msg_send![&tf, setFont: font];
@@ -346,7 +337,7 @@ mod mac {
                 view.addSubview(&tf);
             }
 
-            // 6. Leak both into ObjC ownership (they live for the process lifetime)
+            // 7. Leak both into ObjC ownership (they live for the process lifetime)
             let panel_ptr = Retained::as_ptr(&panel) as usize;
             let tf_ptr = Retained::as_ptr(&tf) as usize;
             std::mem::forget(panel);
@@ -359,7 +350,7 @@ mod mac {
 
     fn show_panel() {
         use objc2::runtime::AnyObject;
-        use objc2::{msg_send, ClassType};
+        use objc2::msg_send;
         use objc2_app_kit::NSScreen;
         use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 
@@ -386,7 +377,7 @@ mod mac {
             let y = screen_frame.origin.y + 80.0; // 80pt above the Dock area
 
             let new_frame = NSRect::new(NSPoint::new(x, y), NSSize::new(w, h));
-            let _: () = msg_send![panel, setFrame: new_frame display: false];
+            let _: () = msg_send![panel, setFrame: new_frame, display: false];
             let _: () = msg_send![panel, orderFrontRegardless];
 
             refresh_text();
