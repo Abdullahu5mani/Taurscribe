@@ -121,7 +121,13 @@ impl VADManager {
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("Silero output extract error: {}", e))?;
         let (_, out_data) = out_tensor;
-        let prob = out_data.first().copied().unwrap_or(0.0);
+        let prob = match out_data.first().copied() {
+            Some(p) => p,
+            None => {
+                eprintln!("[VAD] Silero output tensor was empty — returning 0.0 for this frame");
+                0.0
+            }
+        };
 
         // Update LSTM state from hn / cn
         if let Ok(hn) = outputs["hn"].try_extract_tensor::<f32>() {
@@ -189,7 +195,8 @@ impl VADManager {
     /// background noise (which sits between offset and onset) from either
     /// starting spurious segments or keeping real segments open indefinitely.
     ///
-    /// Recommended values for file transcription: onset=0.40, offset=0.15.
+    /// File transcription tuning lives in `commands/file_transcription.rs`
+    /// (`assemble_speech_audio`: onset/offset/hangover for speech-in / speech-out).
     pub fn get_speech_timestamps_hysteresis(
         &mut self,
         audio: &[f32],
@@ -210,9 +217,13 @@ impl VADManager {
         let mut speech_start: Option<usize> = None;
         let mut consecutive_speech = 0usize;
         let mut below_offset_frames = 0usize;
+        let mut max_prob: f32 = 0.0;
+        let mut frame_count: usize = 0;
 
         for (i, chunk) in audio.chunks(CHUNK_SIZE).enumerate() {
             let prob = self.is_speech(chunk).unwrap_or(0.0);
+            max_prob = max_prob.max(prob);
+            frame_count += 1;
 
             match speech_start {
                 None => {
@@ -273,10 +284,12 @@ impl VADManager {
         }
 
         println!(
-            "[VAD] Found {} speech segment(s) (onset={}, offset={})",
+            "[VAD] Found {} speech segment(s) (onset={}, offset={}, max_prob={:.3}, frames={})",
             merged.len(),
             onset,
-            offset
+            offset,
+            max_prob,
+            frame_count,
         );
         for (i, (s, e)) in merged.iter().enumerate() {
             println!("  Segment {}: {:.2}s – {:.2}s", i + 1, s, e);

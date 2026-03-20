@@ -171,10 +171,10 @@ fn transcribe_file_blocking(
 
     emit_progress(app, path, 30, "transcribing", None);
 
-    // ── VAD: strip silence, assemble one clean speech buffer ─────────────────
-    // Run VAD on a normalised probe copy so speech detection isn't biased by
-    // overall recording level, then slice the *original* mono samples for the
-    // actual transcription (normalization happens after assembly).
+    // ── VAD: only feed speech to Whisper / Granite (file drop) ────────────────
+    // Silero + hysteresis detect where human speech starts/stops; silent regions
+    // are never passed to the ASR — only concatenated speech segments from the
+    // original mono buffer. No "send whole file" fallback.
     let speech_audio = assemble_speech_audio(&mono, &vad, Some(&cancel)).map_err(|e| {
         if e == "Transcription cancelled" {
             emit_progress(
@@ -188,8 +188,17 @@ fn transcribe_file_blocking(
         e
     })?;
 
+    if speech_audio.is_empty() {
+        println!(
+            "[FILE_TRANSCRIBE] No speech detected after VAD — skipping ASR ({}s audio)",
+            mono.len() as f32 / 16000.0
+        );
+        emit_progress(app, path, 100, "done", None);
+        return Ok(String::new());
+    }
+
     println!(
-        "[FILE_TRANSCRIBE] Assembled {:.1}s of speech from {:.1}s of audio ({} silence removed)",
+        "[FILE_TRANSCRIBE] Assembled {:.1}s of speech from {:.1}s of audio ({} silence dropped)",
         speech_audio.len() as f32 / 16000.0,
         mono.len() as f32 / 16000.0,
         if mono.len() > speech_audio.len() {
@@ -408,24 +417,33 @@ fn resample_to_16k(samples: Vec<f32>, from_rate: u32) -> Result<Vec<f32>, String
 }
 
 /// Run VAD on the full audio, collect speech-only segments, and concatenate
-/// them into a single contiguous buffer ready for transcription.
+/// them into a single buffer for the ASR. **Silent sections are omitted** — they
+/// are never passed to Whisper/Granite.
 ///
 /// Steps:
-/// 1. Normalise a probe copy for reliable VAD detection.
-/// 2. Run Silero with hysteresis thresholds (onset=0.40, offset=0.15) to locate speech.
-/// 3. If Silero cuts less than 10% of the audio (i.e. was ineffective against background
-///    noise), fall back to energy-based segmentation with 50ms frames.
-/// 4. Concatenate only speech regions from the *original* (un-normalised) mono.
+/// 1. Normalise a probe copy for reliable VAD (level-independent detection).
+/// 2. Silero hysteresis: segment **starts** when speech prob rises above `ONSET`,
+///    **ends** when prob stays below `OFFSET` for `PADDING_MS` (speech boundaries).
+/// 3. If Silero is too permissive (coverage >90%), fall back to energy segmentation.
+/// 4. Energy fallback: same rule — only active frames become segments; **never**
+///    return the full file when no speech is found (empty vec instead).
+/// 5. Slices come from the *original* mono (not the probe).
 fn assemble_speech_audio(
     mono: &[f32],
     vad: &Arc<Mutex<crate::vad::VADManager>>,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<Vec<f32>, String> {
     const SAMPLE_RATE: f32 = 16000.0;
-    // Hysteresis thresholds: onset is high enough to ignore background noise,
-    // offset is low enough that real speech trailing off doesn't cut the segment.
-    const VAD_ONSET: f32 = 0.40;
-    const VAD_OFFSET: f32 = 0.15;
+    /// How long prob must stay below `offset` before closing a segment (ms).
+    const VAD_HANGOVER_MS: usize = 300;
+    /// Multi-pass Silero: a single strict onset (e.g. 0.42) often yields **0 segments**
+    /// on real files because speech probability sits in ~0.25–0.40. We try progressively
+    /// more permissive (onset, offset) pairs before energy fallback.
+    const SILERO_PASSES: &[(f32, f32)] = &[
+        (0.35, 0.15),
+        (0.28, 0.12),
+        (0.22, 0.10),
+    ];
 
     if let Some(c) = cancel {
         if c.load(Ordering::Relaxed) {
@@ -433,85 +451,131 @@ fn assemble_speech_audio(
         }
     }
 
-    // Normalised probe - Silero works best on audio at a consistent level.
-    let mut probe = mono.to_vec();
-    normalize_audio(&mut probe);
+    // Feed raw (un-normalized) audio to Silero VAD.
+    // normalize_audio() boosts the entire file including silent sections, which raises
+    // the noise floor and makes silence look like speech to Silero. Silero is a neural
+    // network trained on real speech at natural levels — it does not need normalization.
 
-    let timestamps = match vad.lock() {
-        Ok(mut v) => v
-            .get_speech_timestamps_hysteresis(&probe, 300, VAD_ONSET, VAD_OFFSET)
-            .unwrap_or_default(),
+    let mut timestamps: Vec<(f32, f32)> = Vec::new();
+    match vad.lock() {
+        Ok(mut v) => {
+            for (pi, &(onset, offset)) in SILERO_PASSES.iter().enumerate() {
+                let ts = v
+                    .get_speech_timestamps_hysteresis(mono, VAD_HANGOVER_MS, onset, offset)
+                    .unwrap_or_default();
+                if ts.is_empty() {
+                    println!(
+                        "[FILE_TRANSCRIBE] Silero pass {} (onset={:.2}, offset={:.2}): 0 segments",
+                        pi + 1,
+                        onset,
+                        offset
+                    );
+                    continue;
+                }
+
+                let silero_samples: usize = ts.iter().map(|(s, e)| {
+                    let start = (*s * SAMPLE_RATE) as usize;
+                    let end = (*e * SAMPLE_RATE) as usize;
+                    end.saturating_sub(start)
+                }).sum();
+
+                let coverage = silero_samples as f32 / mono.len().max(1) as f32;
+                if coverage <= 0.90 {
+                    println!(
+                        "[FILE_TRANSCRIBE] Silero VAD (pass {} onset={:.2} offset={:.2}): {} segment(s), {:.1}s speech / {:.1}s total ({:.0}% coverage)",
+                        pi + 1,
+                        onset,
+                        offset,
+                        ts.len(),
+                        silero_samples as f32 / SAMPLE_RATE,
+                        mono.len() as f32 / SAMPLE_RATE,
+                        coverage * 100.0
+                    );
+                    timestamps = ts;
+                    break;
+                }
+
+                println!(
+                    "[FILE_TRANSCRIBE] Silero pass {} coverage {:.0}% (too uniform) — trying next pass / energy",
+                    pi + 1,
+                    coverage * 100.0
+                );
+            }
+        }
         Err(_) => {
             println!("[FILE_TRANSCRIBE] VAD lock error - falling back to energy-based segmentation");
-            Vec::new()
         }
-    };
+    }
 
-    // Assemble from Silero segments if it found something AND actually cut a meaningful
-    // chunk. If Silero segments cover >90% of the audio it means the thresholds weren't
-    // selective enough (e.g. constant background noise kept it active), so we fall through
-    // to the energy-based approach which uses a relative per-file threshold.
+    // Assemble from Silero — we only store `timestamps` when coverage ≤ 90%.
     if !timestamps.is_empty() {
-        let silero_samples: usize = timestamps.iter().map(|(s, e)| {
-            let start = (*s * SAMPLE_RATE) as usize;
-            let end = (*e * SAMPLE_RATE) as usize;
-            end.saturating_sub(start)
-        }).sum();
-
-        let coverage = silero_samples as f32 / mono.len() as f32;
-        if coverage <= 0.90 {
-            println!(
-                "[FILE_TRANSCRIBE] Silero VAD: {} segment(s), {:.1}s speech from {:.1}s total ({:.0}% coverage)",
-                timestamps.len(),
-                silero_samples as f32 / SAMPLE_RATE,
-                mono.len() as f32 / SAMPLE_RATE,
-                coverage * 100.0
-            );
-            let mut assembled: Vec<f32> = Vec::new();
-            for (start_sec, end_sec) in &timestamps {
-                let start = ((*start_sec * SAMPLE_RATE) as usize).min(mono.len());
-                let end = ((*end_sec * SAMPLE_RATE) as usize).min(mono.len());
-                if end > start {
-                    assembled.extend_from_slice(&mono[start..end]);
-                }
+        let mut assembled: Vec<f32> = Vec::new();
+        for (start_sec, end_sec) in &timestamps {
+            let start = ((*start_sec * SAMPLE_RATE) as usize).min(mono.len());
+            let end = ((*end_sec * SAMPLE_RATE) as usize).min(mono.len());
+            if end > start {
+                assembled.extend_from_slice(&mono[start..end]);
             }
-            if !assembled.is_empty() {
-                return Ok(assembled);
-            }
-        } else {
-            println!(
-                "[FILE_TRANSCRIBE] Silero VAD coverage {:.0}% - likely background noise; switching to energy segmentation",
-                coverage * 100.0
-            );
+        }
+        if !assembled.is_empty() {
+            return Ok(assembled);
         }
     } else {
-        println!("[FILE_TRANSCRIBE] Silero VAD found no segments - running energy-based segmentation");
+        println!("[FILE_TRANSCRIBE] Silero had no acceptable split — energy-based segmentation");
     }
 
     // ── Energy-based segmentation fallback ───────────────────────────────────
-    // Use 50ms frames (800 samples at 16kHz) for fine-grained detection.
-    // Threshold is relative: 8% of the file's mean RMS, so it adapts to the
-    // overall recording level instead of using a hard absolute value.
+    // Per-frame RMS vs **noise floor** (low percentiles), not global mean RMS.
+    // Long files with loud speech + long quiet stretches used to set mean RMS high while
+    // silence frames still sat above (mean*8%) — one giant "speech" segment. Using p10–p20
+    // of frame energies estimates room noise; speech must clear that by a margin.
     const ENERGY_FRAME_SAMPLES: usize = 800; // 50ms at 16kHz
-    // Minimum consecutive silent frames before we close a segment (~300ms)
-    const MIN_SILENCE_FRAMES: usize = 6;
+    // ~800 ms of consecutive silence before closing a segment (16 × 50ms).
+    // Increased from 8 to 16: natural inter-sentence pauses can be 500–700ms and should
+    // NOT split a sentence into two segments.
+    const MIN_SILENCE_FRAMES: usize = 16;
     // Pre/post padding kept around each active segment (2 frames = 100ms)
     const PAD_FRAMES: usize = 2;
-
-    let mean_sq = mono.iter().map(|&x| x * x).sum::<f32>() / mono.len() as f32;
-    let mean_rms = mean_sq.sqrt();
-    // 8% of mean RMS; clamped between a floor (very quiet files) and a ceiling (loud noisy ones)
-    let energy_threshold = (mean_rms * 0.08).max(0.0008).min(0.04);
-
-    println!(
-        "[FILE_TRANSCRIBE] Energy fallback: mean_rms={:.5}, threshold={:.5}",
-        mean_rms, energy_threshold
-    );
 
     let frames: Vec<f32> = mono
         .chunks(ENERGY_FRAME_SAMPLES)
         .map(|f| (f.iter().map(|&x| x * x).sum::<f32>() / f.len() as f32).sqrt())
         .collect();
+
+    if frames.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut sorted = frames.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+    let p10 = sorted[(n * 10 / 100).min(n.saturating_sub(1))];
+    let p25 = sorted[(n * 25 / 100).min(n.saturating_sub(1))];
+    let p50 = sorted[(n * 50 / 100).min(n.saturating_sub(1))];
+    let p75 = sorted[(n * 75 / 100).min(n.saturating_sub(1))];
+
+    // Noise floor ≈ quietest 10–25% of frames (room tone / true silence).
+    // Threshold must sit clearly above the noise floor but below speech.
+    // Old formula (p50 * 0.18) produced ~8% of mean RMS — far too low, nearly every
+    // frame was "speech". New formula aims for ~50-60% of median to properly split
+    // silence (below p50) from speech (above p50).
+    let noise_floor = p10.max(p25 * 0.85);
+    let energy_threshold = (noise_floor * 20.0) // Well above room noise
+        .max(p50 * 0.55)   // ~55% of median: silence sits below, speech above
+        .max(p25 * 2.0)    // At least 2× the 25th-percentile frame energy
+        .max(0.005_f32)    // Absolute floor (was 0.0014, far too low for normalized audio)
+        .min(0.08_f32);
+
+    println!(
+        "[FILE_TRANSCRIBE] Energy fallback: frames={}, p10={:.5} p25={:.5} p50={:.5} p75={:.5} noise_floor={:.5} threshold={:.5}",
+        frames.len(),
+        p10,
+        p25,
+        p50,
+        p75,
+        noise_floor,
+        energy_threshold
+    );
 
     // Mark each frame active/silent, then group into segments with hysteresis:
     // open on first active frame, close after MIN_SILENCE_FRAMES consecutive silent frames.
@@ -547,8 +611,10 @@ fn assemble_speech_audio(
     }
 
     if segments.is_empty() {
-        println!("[FILE_TRANSCRIBE] Energy fallback found no active regions - using full audio");
-        return Ok(mono.to_vec());
+        println!(
+            "[FILE_TRANSCRIBE] Energy fallback found no active speech — not sending silence to ASR"
+        );
+        return Ok(Vec::new());
     }
 
     println!(
@@ -557,6 +623,8 @@ fn assemble_speech_audio(
     );
 
     let mut assembled = Vec::new();
+    let nseg = segments.len();
+    const LOG_EACH: usize = 8;
     for (i, (fs, fe)) in segments.iter().enumerate() {
         if i % 32 == 0 {
             if let Some(c) = cancel {
@@ -568,18 +636,25 @@ fn assemble_speech_audio(
         // Add PAD_FRAMES of context around each segment
         let sample_start = fs.saturating_sub(PAD_FRAMES) * ENERGY_FRAME_SAMPLES;
         let sample_end = ((fe + PAD_FRAMES) * ENERGY_FRAME_SAMPLES).min(mono.len());
-        println!(
-            "  Energy segment {}: {:.2}s - {:.2}s",
-            i + 1,
-            sample_start as f32 / SAMPLE_RATE,
-            sample_end as f32 / SAMPLE_RATE
-        );
+        let log_line = nseg <= LOG_EACH
+            || i < LOG_EACH / 2
+            || i >= nseg.saturating_sub(LOG_EACH / 2);
+        if log_line {
+            println!(
+                "  Energy segment {}: {:.2}s - {:.2}s",
+                i + 1,
+                sample_start as f32 / SAMPLE_RATE,
+                sample_end as f32 / SAMPLE_RATE
+            );
+        } else if i == LOG_EACH / 2 {
+            println!("  Energy segment ... ({} segments omitted) ...", nseg.saturating_sub(LOG_EACH));
+        }
         assembled.extend_from_slice(&mono[sample_start..sample_end]);
     }
 
     if assembled.is_empty() {
-        println!("[FILE_TRANSCRIBE] Assembled buffer empty after energy fallback - using full audio");
-        return Ok(mono.to_vec());
+        println!("[FILE_TRANSCRIBE] Assembled buffer empty after energy fallback");
+        return Ok(Vec::new());
     }
 
     Ok(assembled)
