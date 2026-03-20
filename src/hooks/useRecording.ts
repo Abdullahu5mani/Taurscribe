@@ -73,7 +73,7 @@ export function useRecording({
     const overlayHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const handleStartRecording = async (fromHotkey = false) => {
-        hotkeySessionRef.current = fromHotkey && enableOverlayRef.current;
+        hotkeySessionRef.current = fromHotkey; // tracks hotkey session independent of overlay toggle
         const currentEngine = activeEngineRef.current;
 
         if (currentEngine === "whisper") {
@@ -158,17 +158,19 @@ export function useRecording({
                     clearTimeout(overlayHideTimerRef.current);
                     overlayHideTimerRef.current = null;
                 }
-                // Show overlay reliably: retry once if needed, then emit state
-                for (let attempt = 0; attempt < 2; attempt++) {
-                    try {
-                        await invoke("show_overlay");
-                        break;
-                    } catch {
-                        if (attempt === 1) console.warn("show_overlay failed after retry");
+                if (enableOverlayRef.current) {
+                    // Show overlay reliably: retry once if needed, then emit state
+                    for (let attempt = 0; attempt < 2; attempt++) {
+                        try {
+                            await invoke("show_overlay");
+                            break;
+                        } catch {
+                            if (attempt === 1) console.warn("show_overlay failed after retry");
+                        }
                     }
+                    await new Promise(r => setTimeout(r, 80));
+                    invoke("set_overlay_state", { phase: "recording" }).catch(() => { });
                 }
-                await new Promise(r => setTimeout(r, 80));
-                invoke("set_overlay_state", { phase: "recording" }).catch(() => { });
             }
         } catch (e) {
             const errStr = String(e);
@@ -192,12 +194,13 @@ export function useRecording({
     const handleStopRecording = async () => {
         const currentEngine = activeEngineRef.current;
         const processingStartMs = Date.now();
-        const isOverlay = hotkeySessionRef.current;
+        const isOverlay = hotkeySessionRef.current;              // true for any hotkey session
+        const showOverlay = isOverlay && enableOverlayRef.current; // true only when overlay is enabled
         console.log("[STOP] handleStopRecording called. GrammarLM:", enableGrammarLMRef.current);
         setIsRecording(false);
         isRecordingRef.current = false;
         setIsProcessingTranscript(true);
-        if (isOverlay) {
+        if (showOverlay) {
             invoke("show_overlay").catch(() => { }); // Re-show in case it was hidden
             invoke("set_overlay_state", { phase: "transcribing" }).catch(() => { });
         }
@@ -221,10 +224,12 @@ export function useRecording({
                 setLiveTranscript("");
                 setIsProcessingTranscript(false);
                 await setTrayState("ready");
-                if (isOverlay) {
+                if (showOverlay) {
                     invoke("show_overlay").catch(() => { });
                     await invoke("set_overlay_state", { phase: "too_short" }).catch(() => { });
                     await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                if (isOverlay) {
                     invoke("hide_overlay").catch(() => { });
                     invoke("set_overlay_state", { phase: "hidden" }).catch(() => { });
                 }
@@ -233,7 +238,7 @@ export function useRecording({
 
 
             if (enableGrammarLMRef.current) {
-                if (isOverlay) {
+                if (showOverlay) {
                     invoke("show_overlay").catch(() => { });
                     invoke("set_overlay_state", { phase: "correcting" }).catch(() => { });
                 }
@@ -297,9 +302,11 @@ export function useRecording({
                 }
                 setHeaderStatus(headerMsg, 5000);
                 playError?.();
-                if (isOverlay) {
+                if (showOverlay) {
                     invoke("show_overlay").catch(() => { });
                     await invoke("set_overlay_state", { phase: "paste_failed" }).catch(() => { });
+                }
+                if (isOverlay) {
                     overlayHideTimerRef.current = setTimeout(() => {
                         overlayHideTimerRef.current = null;
                         invoke("hide_overlay").catch(() => { });
@@ -313,10 +320,12 @@ export function useRecording({
                     setHeaderStatus("Done!", 900);
                 }
                 playPaste?.();
-                if (isOverlay) {
+                if (showOverlay) {
                     invoke("show_overlay").catch(() => { });
                     const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
                     await invoke("set_overlay_state", { phase: "done", text: preview, ms: totalMs }).catch(() => { });
+                }
+                if (isOverlay) {
                     overlayHideTimerRef.current = setTimeout(() => {
                         overlayHideTimerRef.current = null;
                         invoke("hide_overlay").catch(() => { });

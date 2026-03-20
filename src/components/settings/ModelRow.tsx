@@ -55,70 +55,53 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
         setDeletePhase('idle');
     };
 
+    const tagClass = model.type === 'LLM' ? 'model-tag--llm'
+        : model.type === 'Parakeet' ? 'model-tag--parakeet'
+        : 'model-tag--default';
+
     return (
         <div className="model-item">
             <div className="model-info">
                 <h3>{model.name}</h3>
                 <div className="model-meta">
-                    <span className="model-tag" style={{
-                        background: model.type === 'LLM' ? 'rgba(236, 72, 153, 0.15)' :
-                            model.type === 'Parakeet' ? 'rgba(16, 185, 129, 0.15)' :
-                                'rgba(148, 163, 184, 0.1)',
-                        color: model.type === 'LLM' ? '#f472b6' :
-                            model.type === 'Parakeet' ? '#34d399' :
-                                'inherit'
-                    }}>{model.type}</span>
+                    <span className={`model-tag ${tagClass}`}>{model.type}</span>
                     <span>{model.size}</span>
                 </div>
-                <p style={{ margin: '8px 0 0 0', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-                    {model.description}
-                </p>
+                <p className="model-desc">{model.description}</p>
                 {deleteError && (
-                    <p role="alert" style={{ margin: '6px 0 0 0', fontSize: '0.78rem', color: 'var(--error-light, #f87171)' }}>
-                        {deleteError}
-                    </p>
+                    <p role="alert" className="model-delete-error">{deleteError}</p>
                 )}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px', minWidth: '180px', flexShrink: 0, marginLeft: '16px' }}>
+            <div className="model-row-actions">
                 {progress?.status === 'verifying' ? (
                     /* ── Verification in-progress — real progress bar ──── */
-                    <div style={{ width: '100%' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: '#06b6d4' }}>
+                    <div className="model-progress-area">
+                        <div className="model-progress-header model-progress-header--verify">
                             <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                                 <span className="verify-pulse"><IconShieldCheck size={14} /></span>
                                 Verifying{(progress.total_files || 0) > 1 ? ` (${progress.current_file || 1}/${progress.total_files})` : ''}...
                             </span>
                             <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
                         </div>
-                        <div style={{ height: '6px', width: '100%', background: 'rgba(6, 182, 212, 0.12)', borderRadius: '3px', overflow: 'hidden' }}>
-                            <div style={{
-                                height: '100%',
-                                width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%`,
-                                background: '#06b6d4',
-                                transition: 'width 0.15s ease-out'
-                            }} />
+                        <div className="progress-track progress-track--verify">
+                            <div className="progress-fill progress-fill--verify" style={{ width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%` }} />
                         </div>
                     </div>
                 ) : progress?.status === 'extracting' ? (
                     /* ── Extraction in-progress — purple bar ─────────── */
-                    <div style={{ width: '100%' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: '#a855f7' }}>
+                    <div className="model-progress-area">
+                        <div className="model-progress-header model-progress-header--extract">
                             <span>Extracting...</span>
                             <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
                         </div>
-                        <div style={{ height: '6px', width: '100%', background: 'rgba(168, 85, 247, 0.12)', borderRadius: '3px', overflow: 'hidden' }}>
-                            <div style={{
-                                height: '100%',
-                                width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%`,
-                                background: 'linear-gradient(90deg, #a855f7, #c084fc)',
-                                transition: 'width 0.1s ease-out',
-                            }} />
+                        <div className="progress-track progress-track--extract">
+                            <div className="progress-fill progress-fill--extract" style={{ width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%` }} />
                         </div>
                     </div>
                 ) : progress && !model.downloaded ? (
                     /* ── Download progress bar ──────────────────────────── */
-                    <div style={{ width: '100%' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: 'var(--text-secondary)' }}>
+                    <div className="model-progress-area">
+                        <div className="model-progress-header model-progress-header--download">
                             <span>
                                 {progress.status === 'starting' ? 'Starting download...' :
                                     progress.status === 'finalizing' ? 'Finalizing...' :
@@ -131,31 +114,17 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                 {progress.status !== 'finalizing' && (
                                     <button
                                         type="button"
+                                        className="model-cancel-btn"
                                         onClick={() => onCancelDownload(model.id)}
                                         title="Cancel download and delete partial files"
-                                        style={{
-                                            background: 'rgba(239, 68, 68, 0.15)',
-                                            color: 'var(--error-light, #f87171)',
-                                            border: '1px solid rgba(239, 68, 68, 0.3)',
-                                            borderRadius: '4px',
-                                            padding: '1px 6px',
-                                            fontSize: '0.7rem',
-                                            cursor: 'pointer',
-                                            lineHeight: '1.4',
-                                        }}
                                     >
                                         Cancel
                                     </button>
                                 )}
                             </div>
                         </div>
-                        <div style={{ height: '6px', width: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
-                            <div style={{
-                                height: '100%',
-                                width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%`,
-                                background: '#06b6d4',
-                                transition: 'width 0.2s'
-                            }} />
+                        <div className="progress-track progress-track--download">
+                            <div className="progress-fill progress-fill--download" style={{ width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%` }} />
                         </div>
                     </div>
                 ) : deletePhase === 'deleting' ? (
@@ -164,21 +133,16 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                         const delProgress = progress?.status === 'deleting' ? progress : null;
                         const pct = delProgress && delProgress.total > 0 ? Math.round((delProgress.bytes / delProgress.total) * 100) : 0;
                         return (
-                            <div style={{ width: '100%' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', marginBottom: '4px', color: 'var(--error-light, #f87171)' }}>
+                            <div className="model-progress-area">
+                                <div className="model-progress-header model-progress-header--delete">
                                     <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                                         <span className="verify-pulse"><IconTrash size={14} /></span>
                                         Deleting{delProgress && (delProgress.total_files || 0) > 1 ? ` (${delProgress.current_file || 1}/${delProgress.total_files})` : ''}...
                                     </span>
                                     <span>{pct}%</span>
                                 </div>
-                                <div style={{ height: '6px', width: '100%', background: 'rgba(239, 68, 68, 0.12)', borderRadius: '3px', overflow: 'hidden' }}>
-                                    <div style={{
-                                        height: '100%',
-                                        width: `${pct}%`,
-                                        background: '#ef4444',
-                                        transition: 'width 0.15s ease-out'
-                                    }} />
+                                <div className="progress-track progress-track--delete">
+                                    <div className="progress-fill progress-fill--delete" style={{ width: `${pct}%` }} />
                                 </div>
                             </div>
                         );
@@ -189,7 +153,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                         <IconCheck size={14} /> Deleted
                     </div>
                 ) : (
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div className="model-buttons-row">
                         {model.downloaded ? (
                             deletePhase === 'confirm' ? (
                                 /* ── Confirm / Cancel inline prompt ─────────── */
@@ -211,29 +175,18 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                             ) : (
                                 <>
                                     <button
-                                        className="delete-btn"
+                                        className="model-delete-icon-btn"
                                         onClick={handleDeleteClick}
                                         title="Delete Model"
                                         aria-label={`Delete ${model.name}`}
-                                        style={{
-                                            background: 'rgba(239, 68, 68, 0.1)',
-                                            color: 'var(--error, #ef4444)',
-                                            border: '1px solid rgba(239, 68, 68, 0.2)',
-                                            padding: '8px 12px',
-                                            borderRadius: '6px',
-                                            cursor: 'pointer',
-                                            fontSize: '1rem',
-                                            transition: 'all 0.2s',
-                                        }}
                                     >
                                         <IconTrash size={16} />
                                     </button>
 
                                     <button
-                                        className="download-btn downloaded"
+                                        className={`download-btn downloaded${!model.verified ? ' download-btn--unverified' : ''}`}
                                         disabled
                                         title={model.verified ? "Verified Integrity" : "Unverified"}
-                                        style={!model.verified ? { background: '#eab308', color: '#000', borderColor: '#ca8a04' } : {}}
                                     >
                                         {model.verified ? (
                                             <><IconShieldCheck size={14} /> Verified</>

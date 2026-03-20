@@ -128,17 +128,17 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
                     Removes background noise from the audio before it reaches the transcription engine.
                     The saved WAV file always keeps the original unprocessed audio.
                 </p>
-                <div className="about-row">
-                    <span className="about-row-label">Method</span>
-                    <span className="about-row-value">RNNoise (recurrent neural network)</span>
+                <div className="info-row">
+                    <span className="info-row-label">Method</span>
+                    <span className="info-row-value">RNNoise (recurrent neural network)</span>
                 </div>
-                <div className="about-row">
-                    <span className="about-row-label">Operates at</span>
-                    <span className="about-row-value">48 kHz · 480-sample frames</span>
+                <div className="info-row">
+                    <span className="info-row-label">Operates at</span>
+                    <span className="info-row-value">48 kHz · 480-sample frames</span>
                 </div>
-                <div className="about-row" style={{ marginTop: '16px' }}>
-                    <span className="about-row-label" style={{ color: 'var(--text-muted)' }}>High Quality (DeepFilterNet3)</span>
-                    <span className="about-row-value" style={{ color: 'var(--text-muted)' }}>Coming in a future update</span>
+                <div className="info-row info-row--muted" style={{ marginTop: '16px' }}>
+                    <span className="info-row-label">High Quality (DeepFilterNet3)</span>
+                    <span className="info-row-value">Coming in a future update</span>
                 </div>
             </div>
 
@@ -174,17 +174,17 @@ export function AudioTab({ enableDenoise, setEnableDenoise, muteBackgroundAudio,
                     VAD filters silence before sending audio to the transcription engine,
                     reducing hallucinations and improving accuracy.
                 </p>
-                <div className="about-row">
-                    <span className="about-row-label">Method</span>
-                    <span className="about-row-value">Energy-based (RMS threshold)</span>
+                <div className="info-row">
+                    <span className="info-row-label">Method</span>
+                    <span className="info-row-value">Energy-based (RMS threshold)</span>
                 </div>
-                <div className="about-row">
-                    <span className="about-row-label">Min recording</span>
-                    <span className="about-row-value">1500 ms</span>
+                <div className="info-row">
+                    <span className="info-row-label">Min recording</span>
+                    <span className="info-row-value">1500 ms</span>
                 </div>
-                <div className="about-row" style={{ marginTop: '16px' }}>
-                    <span className="about-row-label" style={{ color: 'var(--text-muted)' }}>Threshold control</span>
-                    <span className="about-row-value" style={{ color: 'var(--text-muted)' }}>Coming in a future update</span>
+                <div className="info-row info-row--muted" style={{ marginTop: '16px' }}>
+                    <span className="info-row-label">Threshold control</span>
+                    <span className="info-row-value">Coming in a future update</span>
                 </div>
             </div>
         </div>

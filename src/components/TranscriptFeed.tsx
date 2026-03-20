@@ -132,7 +132,7 @@ export function TranscriptFeed({
                         particleCount: newCount === 1 ? 40 : 80,
                         spread: newCount === 1 ? 50 : 70,
                         origin: { y: 0.7 },
-                        colors: ['#2563eb', '#1d4ed8', '#fef08a', '#ededef', '#3ecfa5'],
+                        colors: ['#e09f3e', '#c8882a', '#fef08a', '#ededef', '#3ecfa5'],
                         disableForReducedMotion: true,
                     });
                 }).catch(() => {});

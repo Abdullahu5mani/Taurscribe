@@ -1,5 +1,27 @@
 /* Taurscribe — Dark Studio Hardware Theme */
 
+/* ── Typed custom properties ── allows CSS transitions on color variables ─── */
+@property --accent-primary {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #e09f3e;
+}
+@property --accent-glow {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(224, 159, 62, 0.35);
+}
+@property --tile-accent {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #e09f3e;
+}
+@property --tile-accent-glow {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: rgba(224, 159, 62, 0.35);
+}
+
 @font-face {
   font-family: 'Zodiak';
   src: url('./assets/fonts/Zodiak-Light.woff2') format('woff2');
@@ -34,22 +56,22 @@
    * ========================================================================= */
 
   /* 60% — Background surfaces (Warm Neutral Tint) */
-  --bg-primary:   #050505;
-  --bg-secondary: rgba(255, 255, 255, 0.02);
+  --bg-primary:   #09090b;
+  --bg-secondary: rgba(255, 255, 255, 0.025);
   --bg-tertiary:  rgba(255, 255, 255, 0.04);
   --bg-card:      rgba(255, 255, 255, 0.03);
 
   /* 10% — Accent (use sparingly: CTAs, active indicators, focus rings) */
-  --accent-primary:      #2563eb;
-  --accent-primary-rgb:  37, 99, 235;
-  --accent-primary-dark: #1d4ed8;
-  --accent-glow:         rgba(var(--accent-primary-rgb), 0.4);
+  --accent-primary:      #e09f3e;
+  --accent-primary-rgb:  224, 159, 62;
+  --accent-primary-dark: #c8882a;
+  --accent-glow:         rgba(224, 159, 62, 0.35);
 
   /* 10% — Engine status colours (brand-accurate) */
-  --whisper-color: #10a37f;           /* OpenAI brand teal */
-  --whisper-glow:  rgba(16, 163, 127, 0.25);
-  --parakeet-color: #76b900;          /* NVIDIA official green */
-  --parakeet-glow:  rgba(118, 185, 0, 0.25);
+  --whisper-color: #6895d2;           /* OpenAI blue-steel */
+  --whisper-glow:  rgba(104, 149, 210, 0.25);
+  --parakeet-color: #3ecfa5;          /* NVIDIA teal */
+  --parakeet-glow:  rgba(62, 207, 165, 0.25);
   --granite-color:  #0f62fe;          /* IBM Carbon blue */
   --granite-glow:   rgba(15, 98, 254, 0.25);
 
@@ -60,16 +82,16 @@
   --processing-glow: rgba(234, 179, 8, 0.4);
 
   /* 30% — Text (Warm Tinted) */
-  --text-primary:   rgba(255, 255, 255, 0.95);
-  --text-secondary: rgba(255, 255, 255, 0.6);
-  --text-muted:     rgba(255, 255, 255, 0.4);
+  --text-primary:   #ededef;
+  --text-secondary: rgba(237, 237, 239, 0.6);
+  --text-muted:     rgba(237, 237, 239, 0.38);
 
   /* 10% — Functional status */
   --success:       #3ecfa5;
   --success-light: #6ee7b7;
   --error:         #dc2626;
   --error-light:   #f87171;
-  --warning:       #2563eb;
+  --warning:       #eab308;
 
   /* Secondary accent (CoreML / special badges) */
   --accent-secondary: #a855f7;
@@ -77,6 +99,17 @@
   /* 30% — Borders (Warm Tinted) */
   --border-color: rgba(255, 255, 255, 0.08);
   --border-hover: rgba(255, 255, 255, 0.15);
+
+  /* Missing utility tokens — referenced throughout UI */
+  --tile-accent:      var(--accent-primary);
+  --tile-accent-glow: var(--accent-glow);
+  --ease-pop:         cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-elastic:     cubic-bezier(0.33, 1, 0.68, 1);
+  --ease-smooth:      cubic-bezier(0.25, 1, 0.5, 1);
+  --recording-rgb:    220, 38, 38;
+  --processing-rgb:   234, 179, 8;
+  --bg-tooltip:       oklch(15% 0.01 255 / 0.98);
+  --space-1-5:        0.75rem;
 
   /* Focus ring — offset double-ring: dark inner gap + amber outer */
   --focus-ring: 0 0 0 2px var(--bg-primary), 0 0 0 4px var(--accent-primary);
@@ -120,7 +153,7 @@
   /* Fluid type: scales linearly 9px (at ~514px viewport) → 16px (at 914px).
    * All rem-based values (fonts, spacing, layout) scale proportionally.
    * 9px minimum keeps content readable at the 280px minimum window width. */
-  font-size: clamp(9px, 1.752vw, 12px);
+  font-size: clamp(9px, 1.752vw, 13px);
   /* WCAG SC 1.4.12: line-height ≥ 1.5 × font-size for body text */
   line-height: 1.5;
   font-weight: 400;
@@ -134,22 +167,28 @@
 
 /* Dynamic Engine Themes */
 .theme-whisper {
-  --accent-primary: #10a37f;
-  --accent-primary-rgb: 16, 163, 127;
-  --accent-primary-dark: #0d8a6a;
-  --accent-glow: rgba(16, 163, 127, 0.4);
+  --accent-primary: #6895d2;
+  --accent-primary-rgb: 104, 149, 210;
+  --accent-primary-dark: #5a82be;
+  --accent-glow: rgba(104, 149, 210, 0.35);
+  --tile-accent: #6895d2;
+  --tile-accent-glow: rgba(104, 149, 210, 0.35);
 }
 .theme-parakeet {
-  --accent-primary: #10b981;
-  --accent-primary-rgb: 16, 185, 129;
-  --accent-primary-dark: #059669;
-  --accent-glow: rgba(16, 185, 129, 0.4);
+  --accent-primary: #3ecfa5;
+  --accent-primary-rgb: 62, 207, 165;
+  --accent-primary-dark: #32b892;
+  --accent-glow: rgba(62, 207, 165, 0.35);
+  --tile-accent: #3ecfa5;
+  --tile-accent-glow: rgba(62, 207, 165, 0.35);
 }
 .theme-granite_speech {
   --accent-primary: #0f62fe;
   --accent-primary-rgb: 15, 98, 254;
   --accent-primary-dark: #0043ce;
   --accent-glow: rgba(15, 98, 254, 0.4);
+  --tile-accent: #0f62fe;
+  --tile-accent-glow: rgba(15, 98, 254, 0.35);
 }
 
 * {
@@ -219,13 +258,18 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  background: radial-gradient(circle at 50% -20%, var(--accent-glow, rgba(255,255,255,0.05)), #050505 60%);
-  background-color: #050505;
+  background: radial-gradient(circle at 50% -20%, var(--accent-glow, rgba(255,255,255,0.05)), var(--bg-primary) 60%);
+  background-color: var(--bg-primary);
+  transition:
+    --accent-primary 0.5s cubic-bezier(0.25, 1, 0.5, 1),
+    --accent-glow    0.5s cubic-bezier(0.25, 1, 0.5, 1),
+    --tile-accent    0.5s cubic-bezier(0.25, 1, 0.5, 1),
+    --tile-accent-glow 0.5s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .container {
-  /* 52rem ≈ 832px at 16px root — wide enough for 5-tile grid and side-by-side cards */
-  max-width: 52rem;
+  /* fluid max-width: fills available space up to ~1560px at 13px root */
+  max-width: 120rem;
   width: 100%;
   margin: 0 auto;
   /* rem-based so it scales with root font-size (fluid) */
@@ -236,8 +280,9 @@ body {
   gap: 1rem;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
-  transition: max-width 0.35s ease, gap 0.35s ease, padding 0.35s ease;
+  overflow-y: auto;
+  overflow-x: hidden;
+  transition: gap 0.35s ease, padding 0.35s ease;
 }
 
 /* ---- Toasts: compact, fits between title and settings icon ---- */
@@ -329,9 +374,9 @@ body {
   100% { opacity: 1; }
 }
 
-/* Gold glow for transcription complete */
+/* Amber glow for transcription complete */
 .header-status-message--success {
-  color: #2563eb;
+  color: var(--accent-primary);
   font-weight: 600;
   text-shadow:
     0 0 8px rgba(var(--accent-primary-rgb), 0.9),
@@ -460,9 +505,9 @@ body {
   height: 5rem;
   user-select: none;
   filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
-  margin-top: -8px;
   cursor: pointer;
   transition: transform 0.1s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.1s ease;
+  margin-top: 1rem;
 }
 
 .app-title-logo:hover {
@@ -635,20 +680,20 @@ body {
   border-radius: 8px;
   background: rgba(234, 179, 8, 0.08);
   border: 1px solid rgba(234, 179, 8, 0.25);
-  color: #eab308;
+  color: var(--processing);
   font-size: var(--font-sm);
   line-height: 1.4;
 }
 
 .accessibility-banner strong {
-  color: #facc15;
+  color: var(--processing);
 }
 
 .accessibility-banner-dismiss {
   margin-left: auto;
   background: none;
   border: none;
-  color: #eab308;
+  color: var(--processing);
   cursor: pointer;
   font-size: var(--font-sm);
   padding: 4px;
@@ -722,7 +767,7 @@ body {
 .status-bar-container {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1.25rem;
   width: 100%;
   align-items: center;
@@ -779,12 +824,12 @@ body {
 
 .status-card.whisper.active {
   box-shadow: 0 0 20px var(--whisper-glow);
-  border-color: rgba(16, 163, 127, 0.5);
+  border-color: rgba(104, 149, 210, 0.5);
 }
 
 .status-card.parakeet.active {
   box-shadow: 0 0 20px var(--parakeet-glow);
-  border-color: rgba(118, 185, 0, 0.5);
+  border-color: rgba(62, 207, 165, 0.5);
 }
 
 .status-card.granite.active {
@@ -1289,7 +1334,7 @@ body {
   color: var(--accent-primary);
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.1), 0 8px 32px rgba(0,0,0,0.5),
-    0 0 20px rgba(var(--accent-primary-rgb), 0.15);
+    0 0 20px color-mix(in srgb, var(--accent-primary) 15%, transparent);
 }
 
 .record-btn.idle::before {
@@ -1297,7 +1342,7 @@ body {
   position: absolute;
   inset: -6px;
   border-radius: 50%;
-  border: 2px solid rgba(var(--accent-primary-rgb), 0.25);
+  border: 2px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
   animation: ringBreath 2.5s ease-in-out infinite;
   pointer-events: none;
 }
@@ -1913,7 +1958,7 @@ body {
 /* ---- Tone style tiles (FlowScribe) ---- */
 .tone-tiles {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
   transition: opacity 0.3s ease, gap 0.35s ease;
 }
@@ -1962,24 +2007,6 @@ body {
   50% { opacity: 1; }
 }
 
-/* Tone Tile Power LED - Fix visibility */
-.tone-tile-stripe::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  right: 10px;
-  width: 3px;
-  height: 2px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 1px;
-  transition: all 0.3s ease;
-  z-index: 2;
-}
-
-.tone-tile--active .tone-tile-stripe::before {
-  background: #fff;
-  box-shadow: 0 0 8px #fff, 0 0 14px var(--tile-accent-glow);
-}
 
 
 
@@ -2021,7 +2048,7 @@ body {
 
 .tone-tile-label {
   font-family: 'Inter', sans-serif;
-  font-size: 0.6rem;
+  font-size: var(--font-sm);
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -2350,12 +2377,12 @@ body {
 
 .feed-badge-engine--whisper {
   color: var(--whisper-color);
-  border-color: rgba(16, 163, 127, 0.4);
+  border-color: rgba(104, 149, 210, 0.4);
 }
 
 .feed-badge-engine--parakeet {
   color: var(--parakeet-color);
-  border-color: rgba(118, 185, 0, 0.4);
+  border-color: rgba(62, 207, 165, 0.4);
 }
 
 .feed-badge-engine--granite_speech {
@@ -2569,12 +2596,12 @@ body {
 
 .history-badge-engine--whisper {
   color: var(--whisper-color);
-  border-color: rgba(16, 163, 127, 0.4);
+  border-color: rgba(104, 149, 210, 0.4);
 }
 
 .history-badge-engine--parakeet {
   color: var(--parakeet-color);
-  border-color: rgba(118, 185, 0, 0.4);
+  border-color: rgba(62, 207, 165, 0.4);
 }
 
 .history-badge-engine--granite_speech {
@@ -2655,46 +2682,32 @@ body {
     animation: none;
     transition: none;
   }
+
+  /* Additional loops covered by Phase 10 */
+  .feed-live-dot,
+  .led-dot.loaded,
+  .feed-item-wrapper--entering,
+  .feed-item--entering,
+  .feed-item--fading-in,
+  .feed-milestone,
+  .app-body--recording::before,
+  .header-status-message--processing {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 /* ---- Responsive ---- */
 
-/* ── Intermediate: 2-column cards + 3-column tones ── */
-@media (max-width: 860px) {
-  .status-bar-container {
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-  }
-
-  .tone-tiles {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
 /* ── Narrow window ── */
 @media (max-width: 640px) {
   .container {
-    padding: 24px 16px;
+    padding: 1.5rem 1rem;
   }
 
   .app-title {
     font-size: var(--font-md);
     letter-spacing: 0.15em;
-  }
-
-  .status-bar-container {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
-  .tone-tiles {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .record-btn {
-    width: 76px;
-    height: 76px;
-    font-size: var(--font-xs);
   }
 }
 
@@ -3035,10 +3048,9 @@ body {
    WIDE-SCREEN ENHANCEMENTS — fullscreen / maximised window
    ============================================================ */
 
-/* ── 1100px+: expand container, enhance cards ── */
+/* ── 1100px+: enhance cards ── */
 @media (min-width: 1100px) {
   .container {
-    max-width: 1060px;
     gap: 2rem;
   }
 
@@ -3110,10 +3122,9 @@ body {
   }
 }
 
-/* ── 1400px+: even wider, premium layout ── */
+/* ── 1400px+: premium layout ── */
 @media (min-width: 1400px) {
   .container {
-    max-width: 1200px;
     gap: 2.25rem;
     padding-left: 2rem;
     padding-right: 2rem;
