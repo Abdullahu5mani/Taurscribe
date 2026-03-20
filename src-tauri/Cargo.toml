@@ -116,10 +116,6 @@ accessibility-sys = "0.1"
 core-foundation = "0.9"
 # CGEvent-based key simulation (thread-safe, unlike enigo's TSM calls)
 core-graphics = "0.23"
-# egui: immediate-mode GUI for the native overlay window (no WebView)
-# eframe pulls in egui + egui-winit + egui-wgpu (Metal backend on macOS)
-# NOTE: must be driven from the main thread — use app_handle.run_on_main_thread()
-eframe = { version = "0.31", default-features = false, features = ["wgpu"] }
 # objc2: safe Rust bindings to Objective-C + AppKit for NSWindow level/behavior
 # Required to pierce fullscreen spaces (kCGScreenSaverWindowLevel + canJoinAllSpaces)
 objc2 = "0.6"
