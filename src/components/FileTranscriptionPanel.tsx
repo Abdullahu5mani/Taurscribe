@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
+import { formatModelDisplay } from "../utils/modelDisplay";
 
 interface FileItem {
     id: string;
@@ -162,17 +163,13 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
                 )
             );
             // Persist to history
-            const modelId =
-                activeEngine === "whisper" ? (currentModel ?? null) :
-                activeEngine === "parakeet" ? (currentParakeetModel ?? null) :
-                activeEngine === "granite_speech" ? (currentGraniteModel ?? null) : null;
             invoke("save_transcript_history", {
                 transcript: result.transcript,
                 engine: activeEngine,
                 durationMs: result.audio_duration_ms,
                 grammarLlmUsed: false,
                 processingTimeMs: result.processing_time_ms,
-                modelId,
+                modelId: activeModelId,
                 audioSource: queued.name,
             }).catch(() => {});
         } catch (e) {
@@ -202,6 +199,14 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
         }
     }, []);
 
+    const cancelAll = () => {
+        const processing = files.find(f => f.status === "processing");
+        if (processing) cancelTranscription(processing.path);
+        setFiles(prev => prev.filter(f =>
+            f.status === "done" || f.status === "error" || f.status === "cancelled"
+        ));
+    };
+
     const retranscribe = async (item: FileItem) => {
         setFiles(prev =>
             prev.map(f =>
@@ -222,6 +227,19 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
         const m = Math.floor(s / 60);
         const rem = s % 60;
         return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+    };
+
+    const activeModelId =
+        activeEngine === "whisper" ? (currentModel ?? null) :
+        activeEngine === "parakeet" ? (currentParakeetModel ?? null) :
+        activeEngine === "granite_speech" ? (currentGraniteModel ?? null) : null;
+
+    const engineLabel = () => {
+        const base = activeEngine === "parakeet" ? "Parakeet"
+            : activeEngine === "granite_speech" ? "Granite"
+            : "Whisper";
+        const variant = formatModelDisplay(activeModelId);
+        return variant ? `${base} · ${variant}` : base;
     };
 
     const formatRealtime = (audioDurationMs: number, processingTimeMs: number) => {
@@ -327,7 +345,7 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
                             </svg>
                         </div>
                         <p className="file-drop-title">Drop audio files here</p>
-                        <p className="file-drop-hint">WAV · MP3 · M4A · FLAC · OGG</p>
+                        <p className="file-drop-hint">Drop one or more files · WAV, MP3, M4A, FLAC, OGG</p>
                         <button className="file-browse-btn" onClick={handleBrowse}>Browse files</button>
                     </>
                 ) : (
@@ -343,6 +361,23 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
             {/* File queue */}
             {files.length > 0 && (
                 <div className="file-queue">
+                    {files.length > 1 && (() => {
+                        const queuedCount = files.filter(f => f.status === "queued").length;
+                        const doneCount = files.filter(f => f.status === "done").length;
+                        const hasActive = files.some(f => f.status === "processing" || f.status === "queued");
+                        return (
+                            <div className="file-queue-header">
+                                <span className="file-queue-summary">
+                                    {files.length} files · {doneCount} done · {queuedCount} queued
+                                </span>
+                                {hasActive && (
+                                    <button type="button" className="file-queue-cancel-all" onClick={cancelAll}>
+                                        Cancel all
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    })()}
                     {files.map(item => (
                         <div key={item.id} className={`file-card file-card--${item.status}`}>
                             <div className="file-card-header">
@@ -360,9 +395,9 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
                                             <button
                                                 className="file-card-btn file-card-btn--secondary"
                                                 onClick={() => retranscribe(item)}
-                                                title="Re-transcribe with current engine"
+                                                title={`Re-transcribe with ${engineLabel()} (switch engine first to use a different model)`}
                                             >
-                                                Re-run
+                                                Re-run · {engineLabel()}
                                             </button>
                                         </>
                                     )}
@@ -370,28 +405,28 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
                                         <button
                                             className="file-card-btn file-card-btn--error"
                                             onClick={() => retranscribe(item)}
-                                            title="Retry"
+                                            title={`Retry with ${engineLabel()}`}
                                         >
-                                            Retry
+                                            Retry · {engineLabel()}
                                         </button>
                                     )}
                                     {item.status === "cancelled" && (
                                         <button
                                             className="file-card-btn file-card-btn--secondary"
                                             onClick={() => retranscribe(item)}
-                                            title="Transcribe again"
+                                            title={`Transcribe with ${engineLabel()}`}
                                         >
-                                            Retry
+                                            Run · {engineLabel()}
                                         </button>
                                     )}
                                     {item.status !== "processing" && (
                                         <button
-                                            className="file-card-btn file-card-btn--remove"
+                                            className={`file-card-btn file-card-btn--remove${item.status === "queued" ? " file-card-btn--remove-queued" : ""}`}
                                             onClick={() => removeFile(item.id)}
-                                            title="Remove"
+                                            title={item.status === "queued" ? "Remove from queue" : "Remove"}
                                             aria-label={`Remove ${item.name}`}
                                         >
-                                            ✕
+                                            {item.status === "queued" ? "Remove" : "✕"}
                                         </button>
                                     )}
                                 </div>
@@ -441,8 +476,8 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
                                             {formatRealtime(item.audioDurationMs, item.processingTimeMs)} speed
                                         </span>
                                     )}
-                                    <span className="file-meta-badge file-meta-badge--engine">
-                                        {activeEngine === "parakeet" ? "Parakeet" : activeEngine === "granite_speech" ? "Granite" : "Whisper"}
+                                    <span className="file-meta-badge file-meta-badge--engine" title={activeModelId ?? undefined}>
+                                        {engineLabel()}
                                     </span>
                                     {item.transcript && (
                                         <button
