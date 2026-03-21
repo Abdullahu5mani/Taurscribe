@@ -3387,6 +3387,47 @@ body {
   gap: 10px;
 }
 
+.file-queue-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 2px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  margin-bottom: 2px;
+}
+
+.file-queue-summary {
+  font-family: 'Martian Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.file-queue-cancel-all {
+  font-family: 'Martian Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 999px;
+  padding: 2px 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.file-queue-cancel-all:hover {
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.file-card-btn--remove-queued {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.3);
+  padding: 3px 8px;
+  font-size: 0.7rem;
+}
+
 /* File card */
 .file-card {
   background: var(--bg-tertiary);

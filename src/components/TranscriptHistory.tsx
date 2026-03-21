@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconCheck } from "./Icons";
+import { formatModelDisplay } from "../utils/modelDisplay";
 
 type TranscriptRecord = {
     id: number;
@@ -47,11 +48,7 @@ const formatAudioDuration = (ms: number | null) => {
     return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
 };
 
-const shortModelId = (id: string | null) => {
-    if (!id) return null;
-    // Strip common prefix patterns, keep the variant portion
-    return id.replace(/^whisper-/, '').replace(/^parakeet-/, '').replace(/^granite-speech-/, 'granite-');
-};
+const shortModelId = formatModelDisplay;
 
 export function TranscriptHistory({ refreshKey }: TranscriptHistoryProps) {
     const [open, setOpen] = useState(false);
