@@ -84,7 +84,7 @@
   /* 30% — Text (Warm Tinted) */
   --text-primary:   #ededef;
   --text-secondary: rgba(237, 237, 239, 0.6);
-  --text-muted:     rgba(237, 237, 239, 0.38);
+  --text-muted:     rgba(237, 237, 239, 0.48); /* H3 fix: raised from 0.38 → 0.48 (~4.5:1 on #09090b) */
 
   /* 10% — Functional status */
   --success:       #3ecfa5;
@@ -149,7 +149,8 @@
   --titlebar-mac: 2.375rem;  /* 38px at 16px */
   --titlebar-win: 2rem;      /* 32px at 16px */
 
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  /* M8 fix: Space Grotesk is the design-system UI sans; Inter/system-ui as fallback */
+  font-family: 'Space Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   /* Fluid type: scales linearly 9px (at ~514px viewport) → 16px (at 914px).
    * All rem-based values (fonts, spacing, layout) scale proportionally.
    * 9px minimum keeps content readable at the 280px minimum window width. */
@@ -223,8 +224,8 @@
   background: transparent;
 }
 
-/* Firefox */
-* {
+/* Firefox — scoped to :root so it doesn't override every element (L2 fix) */
+:root {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
 }
@@ -238,7 +239,7 @@ body {
   -webkit-user-select: none;
   min-width: 280px;
   background: var(--bg-primary);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  font-family: 'Space Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -365,12 +366,14 @@ body {
     0 0 8px rgba(254, 240, 138, 0.9),
     0 0 16px rgba(254, 240, 138, 0.5),
     0 0 24px rgba(254, 240, 138, 0.3);
-  animation: hardware-flicker 0.15s infinite;
+  animation: hardware-flicker 0.4s ease-in-out infinite;
 }
 
+/* C1 fix: raised period from 0.15s to 0.4s → 2.5 Hz, safely below the
+ * WCAG 2.3.1 three-flashes-per-second seizure threshold. */
 @keyframes hardware-flicker {
-  0% { opacity: 1; }
-  50% { opacity: 0.92; }
+  0%   { opacity: 1; }
+  50%  { opacity: 0.88; }
   100% { opacity: 1; }
 }
 
@@ -500,6 +503,22 @@ body {
   gap: 16px;
 }
 
+/* H1 fix: invisible button wrapper for the logo — strips all button chrome
+ * while keeping keyboard accessibility and focus management. */
+.logo-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 50%;
+  display: inline-flex;
+}
+
+.logo-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .app-title-logo {
   width: 5rem;
   height: 5rem;
@@ -510,11 +529,11 @@ body {
   margin-top: 1rem;
 }
 
-.app-title-logo:hover {
+.logo-btn:hover .app-title-logo {
   transform: scale(1.05);
 }
 
-.app-title-logo:active {
+.logo-btn:active .app-title-logo {
   transform: scale(0.95);
 }
 
@@ -525,7 +544,7 @@ body {
 
 .app-title {
   margin: 0;
-  font-family: 'Inter', sans-serif;
+  font-family: 'Zodiak', serif; /* M8 fix: was 'Inter'; Zodiak is the loaded display font */
   font-size: var(--font-xl);
   font-weight: 700;
   letter-spacing: 0.25em;
@@ -545,7 +564,11 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
   opacity: 1;
-  transition: all 0.25s cubic-bezier(0.25, 1, 0.5, 1), opacity 1.2s cubic-bezier(0.25, 1, 0.5, 1);
+  /* M2 fix: was transition: all — enumerate specific properties */
+  transition: border-color 0.25s cubic-bezier(0.25, 1, 0.5, 1),
+              color 0.25s cubic-bezier(0.25, 1, 0.5, 1),
+              background 0.25s cubic-bezier(0.25, 1, 0.5, 1),
+              opacity 1.2s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .settings-btn svg {
@@ -603,7 +626,7 @@ body {
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s;
 }
 
 .backend-toggle-inline-btn:first-child {
@@ -639,8 +662,8 @@ body {
   font-size: var(--font-xs);
   font-weight: 500;
   letter-spacing: 0.03em;
-  color: var(--text-secondary);
-  background: transparent;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 4px 8px;
@@ -707,7 +730,8 @@ body {
 }
 
 /* macOS fix: Microphone permission banner — blue-tinted to distinguish
-   from the yellow accessibility banner. */
+   from the yellow accessibility banner.
+   M7 fix: replaced hardcoded blues (#60a5fa, #93bbfd) with --whisper-color token. */
 .mic-banner {
   display: flex;
   align-items: center;
@@ -715,21 +739,21 @@ body {
   padding: 8px 12px;
   margin-top: 8px;
   border-radius: 8px;
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.25);
-  color: #60a5fa;
+  background: rgba(104, 149, 210, 0.08);
+  border: 1px solid rgba(104, 149, 210, 0.25);
+  color: var(--whisper-color);
   font-size: var(--font-sm);
   line-height: 1.4;
 }
 
 .mic-banner strong {
-  color: #93bbfd;
+  color: var(--text-primary);
 }
 
 .mic-banner-action {
   background: none;
   border: none;
-  color: #93bbfd;
+  color: var(--whisper-color);
   cursor: pointer;
   font-weight: 600;
   text-decoration: underline;
@@ -738,14 +762,14 @@ body {
 }
 
 .mic-banner-action:hover {
-  color: #bdd4fe;
+  color: var(--text-primary);
 }
 
 .mic-banner-dismiss {
   margin-left: auto;
   background: none;
   border: none;
-  color: #60a5fa;
+  color: var(--whisper-color);
   cursor: pointer;
   font-size: var(--font-sm);
   padding: 4px;
@@ -775,14 +799,14 @@ body {
 
 .status-card {
   background: var(--bg-card);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 8px 32px rgba(0, 0, 0, 0.4);
   border-radius: 12px;
   border: 1px solid var(--border-color);
   padding: 1rem;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+  transition: border-color 0.3s cubic-bezier(0.23, 1, 0.32, 1),
+              box-shadow 0.3s cubic-bezier(0.23, 1, 0.32, 1),
+              transform 0.3s cubic-bezier(0.23, 1, 0.32, 1);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -897,6 +921,7 @@ body {
   background: oklch(15% 0.01 255 / 0.98) !important;
   backdrop-filter: blur(8px);
   border: 1px solid rgba(var(--accent-primary-rgb), 0.4) !important;
+  font-size: var(--font-xs) !important; /* H2 fix: was 10px hardcoded */
   color: var(--accent-primary) !important;
   font-family: 'Martian Mono', monospace !important;
   font-size: 10px !important;
@@ -929,7 +954,7 @@ body {
   border: 1px solid rgba(var(--accent-primary-rgb), 0.5);
   color: var(--accent-primary);
   font-family: 'Martian Mono', monospace;
-  font-size: 9px; /* Small, sharp hardware text */
+  font-size: var(--font-xs); /* H2 fix: was 9px (off-scale); use fluid token */
   line-height: 1.3;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1037,6 +1062,7 @@ body {
   background: var(--accent-primary);
   box-shadow: 0 0 10px var(--accent-glow), 0 0 0 1px rgba(var(--accent-primary-rgb), 0.4);
   animation: ledTransfer 1.2s ease-in-out infinite;
+  will-change: transform, opacity;
 }
 
 @keyframes ledTransfer {
@@ -1057,13 +1083,13 @@ body {
               opacity 0.4s ease !important;
 }
 
-/* High-Speed Data Packet Stream */
+/* High-Speed Data Packet Stream — uses transform (compositor) instead of background-position (paint) */
 @keyframes data-stream-slide {
   0% {
-    background-position: 200% 0;
+    transform: translateX(200%);
   }
   100% {
-    background-position: -200% 0;
+    transform: translateX(-200%);
   }
 }
 
@@ -1088,8 +1114,9 @@ body {
   content: "";
   position: absolute;
   top: 0;
-  left: 0;
-  right: 0;
+  /* Wider than parent so the gradient packet is fully off-screen at start/end */
+  left: -100%;
+  width: 300%;
   bottom: 0;
   background: linear-gradient(
     90deg,
@@ -1101,8 +1128,8 @@ body {
     transparent 65%,
     transparent 100%
   );
-  background-size: 200% 100%;
   animation: data-stream-slide 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite !important;
+  will-change: transform;
   border-radius: 2px;
   filter: drop-shadow(0 0 4px rgba(var(--accent-primary-rgb), 0.8)) drop-shadow(0 0 8px var(--accent-glow));
 }
@@ -1117,13 +1144,12 @@ body {
   animation: title-scramble 0.5s steps(5) forwards;
 }
 
+/* M4 fix: removed `content:` lines — they only work on pseudo-elements,
+ * not on real elements like <h1>; the blur+letter-spacing effect is preserved. */
 @keyframes title-scramble {
-  0% { opacity: 0.5; filter: blur(2px); letter-spacing: 0.5em; }
-  20% { opacity: 1; filter: blur(0); letter-spacing: 0.25em; content: "T#UR$CR1B&"; }
-  40% { content: "TAUR5CR1BE"; }
-  60% { content: "TAU RSCRIBE"; }
-  80% { content: "TAURSCRIBE"; }
-  100% { opacity: 1; filter: blur(0); letter-spacing: 0.25em; }
+  0%   { opacity: 0.5; filter: blur(2px); letter-spacing: 0.5em; }
+  40%  { opacity: 1;   filter: blur(0);   letter-spacing: 0.35em; }
+  100% { opacity: 1;   filter: blur(0);   letter-spacing: 0.25em; }
 }
 
 
@@ -1179,8 +1205,6 @@ body {
 /* ---- Model section ---- */
 .model-section {
   background: var(--bg-card);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 8px 32px rgba(0, 0, 0, 0.4);
   border-radius: 12px;
   border: 1px solid var(--border-color);
@@ -1224,7 +1248,7 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 10px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%236b6b76' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
@@ -1248,8 +1272,19 @@ body {
   cursor: not-allowed;
 }
 
-.model-select option {
-  background: var(--bg-secondary);
+.model-select option,
+.mic-selector-dropdown option {
+  /* rgba backgrounds are unsupported on <option> in most browsers — they fall
+   * back to the OS default (white), making near-white text invisible. Use a
+   * solid opaque dark colour instead. */
+  background: #1c1c1f;
+  color: #ededef;
+}
+
+.mic-selector-dropdown:hover,
+.mic-selector-dropdown:focus,
+.model-select:hover:not(:disabled),
+.model-select:focus {
   color: var(--text-primary);
 }
 
@@ -1322,7 +1357,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+  transition: color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    background 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1),
     width 0.35s ease,
     height 0.35s ease,
     font-size 0.35s ease;
@@ -1344,6 +1383,7 @@ body {
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
   animation: ringBreath 2.5s ease-in-out infinite;
+  will-change: transform, opacity;
   pointer-events: none;
 }
 
@@ -1370,6 +1410,7 @@ body {
   border-radius: 50%;
   border: 2px solid rgba(220, 38, 38, 0.5);
   animation: ringPulse 1.2s ease-in-out infinite;
+  will-change: transform, opacity;
   pointer-events: none;
 }
 
@@ -1521,6 +1562,9 @@ body {
   min-height: 8rem;
   overflow-y: auto;
   box-shadow: none;
+  /* L1 fix: restore text selection in the transcript output area */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* When containing the unified feed, let the feed control all internal spacing */
@@ -1768,7 +1812,10 @@ body {
   white-space: nowrap;
 }
 
-/* ---- Page load animation ---- */
+/* ---- Page load animation ----
+ * M6 fix: scoped to .container--booting so it only fires once on first
+ * mount, not on every re-render that adds children (e.g. settings modal).
+ * App.tsx removes the class after the boot delay. */
 @keyframes fadeInUp {
   from {
     opacity: 0;
@@ -1781,49 +1828,20 @@ body {
   }
 }
 
-.container>* {
+.container--booting>* {
   animation: fadeInUp 0.5s ease-out forwards;
 }
 
-.container>*:nth-child(1) {
-  animation-delay: 0ms;
-}
-
-.container>*:nth-child(2) {
-  animation-delay: 80ms;
-}
-
-.container>*:nth-child(3) {
-  animation-delay: 160ms;
-}
-
-.container>*:nth-child(4) {
-  animation-delay: 240ms;
-}
-
-.container>*:nth-child(5) {
-  animation-delay: 320ms;
-}
-
-.container>*:nth-child(6) {
-  animation-delay: 400ms;
-}
-
-.container>*:nth-child(7) {
-  animation-delay: 480ms;
-}
-
-.container>*:nth-child(8) {
-  animation-delay: 560ms;
-}
-
-.container>*:nth-child(9) {
-  animation-delay: 640ms;
-}
-
-.container>*:nth-child(10) {
-  animation-delay: 720ms;
-}
+.container--booting>*:nth-child(1) { animation-delay: 0ms; }
+.container--booting>*:nth-child(2) { animation-delay: 80ms; }
+.container--booting>*:nth-child(3) { animation-delay: 160ms; }
+.container--booting>*:nth-child(4) { animation-delay: 240ms; }
+.container--booting>*:nth-child(5) { animation-delay: 320ms; }
+.container--booting>*:nth-child(6) { animation-delay: 400ms; }
+.container--booting>*:nth-child(7) { animation-delay: 480ms; }
+.container--booting>*:nth-child(8) { animation-delay: 560ms; }
+.container--booting>*:nth-child(9) { animation-delay: 640ms; }
+.container--booting>*:nth-child(10) { animation-delay: 720ms; }
 
 /* ---- LLM section (inside model card) ---- */
 .llm-section {
@@ -1870,7 +1888,7 @@ body {
   border-radius: 4px;
   border: 1px solid transparent;
   line-height: 1.6;
-  transition: all 0.3s ease;
+  transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
   flex-shrink: 0;
 }
 
@@ -1919,7 +1937,7 @@ body {
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   border-radius: 7px;
-  transition: all 0.25s ease;
+  transition: background 0.25s ease, border-color 0.25s ease;
   position: relative;
 }
 
@@ -1932,7 +1950,7 @@ body {
   border-radius: 50%;
   top: 2px;
   left: 2px;
-  transition: all 0.25s ease;
+  transition: transform 0.25s ease, background 0.25s ease;
 }
 
 .mini-toggle input:checked+.mini-toggle-track {
@@ -1977,12 +1995,13 @@ body {
   padding: 4px 5px;
   border-radius: 8px;
   background: var(--bg-card);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 8px 32px rgba(0, 0, 0, 0.4);
   border: 1px solid var(--border-color);
   cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+  transition: background 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
     padding 0.35s ease,
     gap 0.35s ease,
     border-radius 0.35s ease;
@@ -2607,6 +2626,34 @@ body {
 .history-badge-engine--granite_speech {
   color: var(--granite-color);
   border-color: rgba(15, 98, 254, 0.4);
+}
+
+.history-badge-source {
+  color: #a0a0b0;
+  border-color: rgba(160, 160, 176, 0.3);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-badge-model {
+  color: #8b8b9e;
+  border-color: rgba(139, 139, 158, 0.25);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-badge-duration {
+  color: #a0a0b0;
+  border-color: rgba(160, 160, 176, 0.25);
+}
+
+.history-badge-speed {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.35);
 }
 
 .history-delete-btn {
@@ -3305,6 +3352,34 @@ body {
   background: rgba(224, 159, 62, 0.07);
 }
 
+/* Compact inline variant — shown in the non-empty drop zone alongside the hint */
+.file-browse-btn--compact {
+  margin-top: 0;
+  padding: 4px 12px;
+  font-size: 0.72rem;
+}
+
+/* Loading state for drop zone icon */
+.file-drop-icon--loading {
+  opacity: 0.3;
+  animation: fileDropIconPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes fileDropIconPulse {
+  0%, 100% { opacity: 0.2; }
+  50%       { opacity: 0.45; }
+}
+
+.file-drop-title--loading {
+  opacity: 0.45;
+}
+
+/* Disabled mode-toggle-btn (locked during file transcription) */
+.mode-toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Queue */
 .file-queue {
   display: flex;
@@ -3449,6 +3524,54 @@ body {
   border-radius: 99px;
 }
 
+/* Metadata row below file card header */
+.file-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.file-meta-badge {
+  font-family: 'Martian Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.file-meta-badge--speed {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.3);
+}
+
+.file-meta-badge--engine {
+  color: var(--whisper-color);
+  border-color: rgba(104, 149, 210, 0.3);
+}
+
+.file-meta-toggle {
+  font-family: 'Martian Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.35);
+  color: var(--accent-primary);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-left: auto;
+}
+
+.file-meta-toggle:hover {
+  background: rgba(var(--accent-primary-rgb), 0.08);
+}
+
 .file-card-error {
   font-size: 0.75rem;
   color: #f87171;
@@ -3459,4 +3582,62 @@ body {
   font-size: 0.72rem;
   color: var(--text-muted);
   margin: 0;
+}
+
+/* ── H4 fix: prefers-reduced-motion — main app ─────────────────────────────
+ * The overlay already has its own reduced-motion block; this covers the main
+ * app surfaces. Disables all infinite background animations and stagger
+ * entrances so vestibular-sensitive users get a static UI. */
+@media (prefers-reduced-motion: reduce) {
+  /* Stagger entrance */
+  .container--booting > * {
+    animation: none;
+  }
+
+  /* Record button rings */
+  .record-btn.idle::before,
+  .record-btn.recording::before,
+  .record-btn.recording::after,
+  .record-btn.processing::before {
+    animation: none;
+  }
+
+  /* Ticker tape */
+  .header-ticker-track {
+    animation: none;
+  }
+
+  /* Title boot scramble */
+  .app-title--boot {
+    animation: none;
+  }
+
+  /* Ambient recording hum overlay */
+  .app-body--recording::before {
+    animation: none;
+    opacity: 0.6;
+  }
+
+  /* LED dot animations */
+  .led-dot.loading,
+  .led-dot.loaded {
+    animation: none;
+  }
+
+  /* Processing flicker */
+  .header-status-message--processing {
+    animation: none;
+  }
+
+  /* Feed entrance animations */
+  .feed-item-wrapper--entering,
+  .feed-item--entering,
+  .feed-item--fading-in {
+    animation: none;
+  }
+
+  /* Data stream transfer line */
+  .status-bar-transfer-line--active::after {
+    animation: none;
+  }
 }

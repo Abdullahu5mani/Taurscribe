@@ -157,6 +157,10 @@ pub fn run() {
                 } else {
                     let _ = window.hide();
                     api.prevent_close();
+                    // Notify the frontend so it can close the settings modal before the
+                    // window is hidden (hotkey won't work while settings is open).
+                    use tauri::Emitter;
+                    let _ = window.emit("window-hidden", ());
                     println!("[INFO] Window close → hide to tray (close_behavior=tray)");
                 }
             }

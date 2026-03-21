@@ -236,7 +236,7 @@ pub async fn check_microphone_permission() -> String {
 #[cfg(target_os = "macos")]
 fn check_microphone_permission_blocking() -> String {
     // AVAuthorizationStatus: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
-    // We call [AVCaptureDevice authorizationStatusForMediaType:@"soun"] via objc runtime.
+    // [AVCaptureDevice authorizationStatusForMediaType:] is a pure read — never shows a dialog.
     use std::ffi::CStr;
 
     extern "C" {
@@ -275,7 +275,8 @@ fn check_microphone_permission_blocking() -> String {
 
         match status {
             3 => "granted".to_string(),
-            2 | 1 => "denied".to_string(),
+            2 => "denied".to_string(),
+            1 => "restricted".to_string(), // MDM / parental controls — user cannot change this
             _ => "undetermined".to_string(),
         }
     }
@@ -297,41 +298,61 @@ pub async fn request_microphone_permission() -> String {
 }
 
 fn request_microphone_permission_blocking() -> String {
+    // If already determined, skip the prompt entirely.
+    #[cfg(target_os = "macos")]
+    {
+        let current = check_microphone_permission_blocking();
+        if current != "undetermined" {
+            return current;
+        }
+    }
+
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
     let host = cpal::default_host();
     let device = match host.default_input_device() {
         Some(d) => d,
-        None => return "denied".to_string(),
+        None => {
+            // No device found — return actual status rather than assuming "denied"
+            #[cfg(target_os = "macos")]
+            return check_microphone_permission_blocking();
+            #[cfg(not(target_os = "macos"))]
+            return "granted".to_string();
+        }
     };
     let config = match device.default_input_config() {
         Ok(c) => c,
-        Err(_) => return "denied".to_string(),
+        Err(_) => {
+            #[cfg(target_os = "macos")]
+            return check_microphone_permission_blocking();
+            #[cfg(not(target_os = "macos"))]
+            return "granted".to_string();
+        }
     };
     let config: cpal::StreamConfig = config.into();
 
-    // Open a short-lived stream to trigger the macOS mic permission dialog
+    // Attempting to open an audio input stream on macOS 10.14+ with status
+    // "notDetermined" triggers the AVFoundation permission dialog. The build
+    // call may fail immediately (before the user responds) — that is expected;
+    // we must NOT return "denied" here. The frontend polls every 1.5 s so it
+    // will pick up the granted/denied state once the user taps Allow/Deny.
     let stream = device.build_input_stream(
         &config,
         move |_data: &[f32], _: &_| {},
         move |_err| {},
         None,
     );
-    match stream {
-        Ok(s) => {
-            let _ = s.play();
-            // Keep stream alive briefly so macOS registers the request
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            drop(s);
-
-            // Re-check permission status
-            #[cfg(target_os = "macos")]
-            { return check_microphone_permission_blocking(); }
-            #[cfg(not(target_os = "macos"))]
-            { return "granted".to_string(); }
-        }
-        Err(_) => "denied".to_string(),
+    if let Ok(s) = stream {
+        let _ = s.play();
+        // Keep alive briefly so CoreAudio registers the session
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        drop(s);
     }
+    // Always return the live status — never hard-code "denied"
+    #[cfg(target_os = "macos")]
+    return check_microphone_permission_blocking();
+    #[cfg(not(target_os = "macos"))]
+    return "granted".to_string();
 }
 
 // ── GPU detection ─────────────────────────────────────────────────────────────

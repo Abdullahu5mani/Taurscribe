@@ -11,7 +11,16 @@ interface FileItem {
     status: "queued" | "processing" | "done" | "error" | "cancelled";
     progress: number;
     transcript: string;
+    audioDurationMs?: number;
+    processingTimeMs?: number;
+    expanded: boolean;
     error?: string;
+}
+
+interface FileTranscriptionResult {
+    transcript: string;
+    audio_duration_ms: number;
+    processing_time_ms: number;
 }
 
 interface ProgressPayload {
@@ -23,12 +32,19 @@ interface ProgressPayload {
 
 interface FileTranscriptionPanelProps {
     activeEngine: string;
+    currentModel?: string | null;
+    currentParakeetModel?: string | null;
+    currentGraniteModel?: string | null;
+    isModelLoading?: boolean;
+    onFileProcessingChange?: (processing: boolean) => void;
 }
 
-export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelProps) {
+export function FileTranscriptionPanel({ activeEngine, currentModel, currentParakeetModel, currentGraniteModel, isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
     const isParakeet = activeEngine === "parakeet";
     const isParakeetRef = useRef(isParakeet);
+    const isModelLoadingRef = useRef(isModelLoading);
     useEffect(() => { isParakeetRef.current = isParakeet; }, [isParakeet]);
+    useEffect(() => { isModelLoadingRef.current = isModelLoading; }, [isModelLoading]);
 
     const [files, setFiles] = useState<FileItem[]>([]);
     const [isDragOver, setIsDragOver] = useState(false);
@@ -39,8 +55,14 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
 
     const getExt = (name: string) => name.split(".").pop()?.toLowerCase() ?? "";
 
+    // Notify parent whenever a file transitions to/from active transcription
+    const isFileProcessing = files.some(f => f.status === "processing");
+    useEffect(() => {
+        onFileProcessingChange?.(isFileProcessing);
+    }, [isFileProcessing, onFileProcessingChange]);
+
     const addPaths = useCallback((paths: string[]) => {
-        if (isParakeetRef.current) return;
+        if (isParakeetRef.current || isModelLoadingRef.current) return;
         const audio = paths.filter(p => AUDIO_EXTS.includes(getExt(p)));
         if (audio.length === 0) return;
         setFiles(prev => {
@@ -54,6 +76,7 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
                     status: "queued",
                     progress: 0,
                     transcript: "",
+                    expanded: false,
                 }));
             return [...prev, ...newItems];
         });
@@ -64,11 +87,12 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
         let unlisten: (() => void) | undefined;
         getCurrentWebview()
             .onDragDropEvent(event => {
+                const blocked = isParakeetRef.current || isModelLoadingRef.current;
                 if (event.payload.type === "over") {
-                    setIsDragOver(true);
+                    if (!blocked) setIsDragOver(true);
                 } else if (event.payload.type === "drop") {
                     setIsDragOver(false);
-                    addPaths((event.payload as { type: "drop"; paths: string[] }).paths);
+                    if (!blocked) addPaths((event.payload as { type: "drop"; paths: string[] }).paths);
                 } else {
                     setIsDragOver(false);
                 }
@@ -122,14 +146,35 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
         );
 
         try {
-            const transcript = await invoke<string>("transcribe_file", { path: queued.path });
+            const result = await invoke<FileTranscriptionResult>("transcribe_file", { path: queued.path });
             setFiles(prev =>
                 prev.map(f =>
                     f.id === queued.id
-                        ? { ...f, status: "done", progress: 100, transcript }
+                        ? {
+                              ...f,
+                              status: "done",
+                              progress: 100,
+                              transcript: result.transcript,
+                              audioDurationMs: result.audio_duration_ms,
+                              processingTimeMs: result.processing_time_ms,
+                          }
                         : f
                 )
             );
+            // Persist to history
+            const modelId =
+                activeEngine === "whisper" ? (currentModel ?? null) :
+                activeEngine === "parakeet" ? (currentParakeetModel ?? null) :
+                activeEngine === "granite_speech" ? (currentGraniteModel ?? null) : null;
+            invoke("save_transcript_history", {
+                transcript: result.transcript,
+                engine: activeEngine,
+                durationMs: result.audio_duration_ms,
+                grammarLlmUsed: false,
+                processingTimeMs: result.processing_time_ms,
+                modelId,
+                audioSource: queued.name,
+            }).catch(() => {});
         } catch (e) {
             const msg = `${e ?? ""}`;
             const cancelled =
@@ -150,7 +195,6 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
             );
         } finally {
             processingRef.current = false;
-            // Trigger next in queue
             setTimeout(() => {
                 const next = queueRef.current.find(f => f.status === "queued");
                 if (next) processNext();
@@ -162,10 +206,28 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
         setFiles(prev =>
             prev.map(f =>
                 f.id === item.id
-                    ? { ...f, status: "queued", progress: 0, transcript: "", error: undefined }
+                    ? { ...f, status: "queued", progress: 0, transcript: "", expanded: false, audioDurationMs: undefined, processingTimeMs: undefined, error: undefined }
                     : f
             )
         );
+    };
+
+    const toggleExpanded = (id: string) => {
+        setFiles(prev => prev.map(f => f.id === id ? { ...f, expanded: !f.expanded } : f));
+    };
+
+    const formatDuration = (ms: number) => {
+        const s = Math.round(ms / 1000);
+        if (s < 60) return `${s}s`;
+        const m = Math.floor(s / 60);
+        const rem = s % 60;
+        return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+    };
+
+    const formatRealtime = (audioDurationMs: number, processingTimeMs: number) => {
+        if (audioDurationMs <= 0 || processingTimeMs <= 0) return null;
+        const ratio = audioDurationMs / processingTimeMs;
+        return `${ratio.toFixed(1)}x`;
     };
 
     const removeFile = (id: string) => {
@@ -192,11 +254,13 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
     };
 
     // HTML5 drag events (visual feedback for webview drags)
-    const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); };
+    const isDisabled = isParakeet || isModelLoading;
+    const onDragOver = (e: React.DragEvent) => { e.preventDefault(); if (!isDisabled) setIsDragOver(true); };
     const onDragLeave = () => setIsDragOver(false);
     const onDrop = (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragOver(false);
+        if (isDisabled) return;
         const paths: string[] = [];
         for (const item of Array.from(e.dataTransfer.items)) {
             const file = item.getAsFile();
@@ -209,14 +273,25 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
 
     const isEmpty = files.length === 0;
 
+    // Determine drop zone class
+    const dropZoneClass = [
+        "file-drop-zone",
+        isDisabled
+            ? "file-drop-zone--disabled"
+            : isDragOver
+              ? "file-drop-zone--active"
+              : "",
+        isEmpty ? "file-drop-zone--empty" : "file-drop-zone--compact",
+    ].filter(Boolean).join(" ");
+
     return (
         <div className="file-panel">
             {/* Drop zone */}
             <div
-                className={`file-drop-zone${!isParakeet && isDragOver ? " file-drop-zone--active" : ""}${isEmpty ? " file-drop-zone--empty" : " file-drop-zone--compact"}${isParakeet ? " file-drop-zone--disabled" : ""}`}
-                onDragOver={isParakeet ? undefined : onDragOver}
-                onDragLeave={isParakeet ? undefined : onDragLeave}
-                onDrop={isParakeet ? undefined : onDrop}
+                className={dropZoneClass}
+                onDragOver={isDisabled ? undefined : onDragOver}
+                onDragLeave={isDisabled ? undefined : onDragLeave}
+                onDrop={isDisabled ? undefined : onDrop}
             >
                 {isParakeet ? (
                     <>
@@ -229,6 +304,18 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
                         </div>
                         <p className="file-drop-title" style={{ opacity: 0.35 }}>File transcription unavailable</p>
                         <p className="file-drop-hint">Parakeet is a streaming engine · switch to Whisper or Granite for file transcription</p>
+                    </>
+                ) : isModelLoading ? (
+                    <>
+                        <div className="file-drop-icon file-drop-icon--loading" aria-hidden="true">
+                            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="17 8 12 3 7 8" />
+                                <line x1="12" y1="3" x2="12" y2="15" />
+                            </svg>
+                        </div>
+                        <p className="file-drop-title file-drop-title--loading">Model loading…</p>
+                        <p className="file-drop-hint">Drop zone will be ready once the model finishes loading</p>
                     </>
                 ) : isEmpty ? (
                     <>
@@ -244,9 +331,12 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
                         <button className="file-browse-btn" onClick={handleBrowse}>Browse files</button>
                     </>
                 ) : (
-                    <p className="file-drop-hint file-drop-hint--inline">
-                        {isDragOver ? "Drop to add more files" : "Drop more files to queue them"}
-                    </p>
+                    <>
+                        <p className="file-drop-hint file-drop-hint--inline">
+                            {isDragOver ? "Drop to add more files" : "Drop more files or"}
+                        </p>
+                        <button className="file-browse-btn file-browse-btn--compact" onClick={handleBrowse}>Browse</button>
+                    </>
                 )}
             </div>
 
@@ -338,8 +428,36 @@ export function FileTranscriptionPanel({ activeEngine }: FileTranscriptionPanelP
                                 <p className="file-card-error" role="alert">{item.error}</p>
                             )}
 
-                            {/* Transcript */}
-                            {item.status === "done" && item.transcript && (
+                            {/* Metadata row */}
+                            {item.status === "done" && (
+                                <div className="file-card-meta">
+                                    {item.audioDurationMs != null && (
+                                        <span className="file-meta-badge">
+                                            {formatDuration(item.audioDurationMs)}
+                                        </span>
+                                    )}
+                                    {item.audioDurationMs != null && item.processingTimeMs != null && formatRealtime(item.audioDurationMs, item.processingTimeMs) && (
+                                        <span className="file-meta-badge file-meta-badge--speed" title="Transcription speed vs real-time">
+                                            {formatRealtime(item.audioDurationMs, item.processingTimeMs)} speed
+                                        </span>
+                                    )}
+                                    <span className="file-meta-badge file-meta-badge--engine">
+                                        {activeEngine === "parakeet" ? "Parakeet" : activeEngine === "granite_speech" ? "Granite" : "Whisper"}
+                                    </span>
+                                    {item.transcript && (
+                                        <button
+                                            type="button"
+                                            className="file-meta-toggle"
+                                            onClick={() => toggleExpanded(item.id)}
+                                        >
+                                            {item.expanded ? "Hide transcript ▲" : "Show transcript ▼"}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Transcript — collapsed by default */}
+                            {item.status === "done" && item.transcript && item.expanded && (
                                 <div className="file-card-transcript">
                                     {item.transcript}
                                 </div>

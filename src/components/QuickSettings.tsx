@@ -216,11 +216,11 @@ export function QuickSettings({
 
                 {/* ── Personalisation ─────────────────────────── */}
                 <Section label="Personalisation" />
-                <button type="button" className="qs-personal-row" onClick={() => onOpenSettingsTab('dictionary')}>
+                <button type="button" className="qs-personal-row" onClick={() => onOpenSettingsTab('text')}>
                     <span>Dictionary</span>
                     <span className="qs-personal-count">{dictionaryCount} entries →</span>
                 </button>
-                <button type="button" className="qs-personal-row" onClick={() => onOpenSettingsTab('snippets')}>
+                <button type="button" className="qs-personal-row" onClick={() => onOpenSettingsTab('text')}>
                     <span>Snippets</span>
                     <span className="qs-personal-count">{snippetsCount} entries →</span>
                 </button>

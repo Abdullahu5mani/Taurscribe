@@ -4,7 +4,6 @@ import { TitleBar } from './TitleBar';
 import {
   ONBOARDING_USE_CASES,
   computeModelRecommendation,
-  getEngineLabel,
   type OnboardingUseCase,
   type SystemInfo,
 } from '../modelRecommendations';
@@ -258,7 +257,6 @@ function StepHardware({
 // ─────────────────────────────────────────────────────────────────
 function StepEngines({
   sysInfo,
-  platform,
   isAppleSilicon,
   useCase,
   onUseCaseChange,
@@ -279,7 +277,7 @@ function StepEngines({
     <>
       <p className="setup-eyebrow">Step 3 of 6</p>
       <h2 className="setup-heading">Recommended Setup</h2>
-      <p className="setup-sub">Pick what you do most often and Taurscribe will steer you toward the best starting model for this machine.</p>
+      <p className="setup-sub">Pick what you do most often.</p>
 
       <div className="setup-use-cases">
         {ONBOARDING_USE_CASES.map((option) => (
@@ -291,7 +289,6 @@ function StepEngines({
           >
             <span className="setup-use-case-kicker">{option.audience}</span>
             <span className="setup-use-case-title">{option.label}</span>
-            <span className="setup-use-case-copy">{option.description}</span>
           </button>
         ))}
       </div>
@@ -299,18 +296,13 @@ function StepEngines({
       <div className="setup-recommendation-stack">
         <div className="setup-recommendation-card setup-recommendation-card--primary">
           <div className="setup-recommendation-topline">
-            <span className="setup-recommendation-badge">Primary</span>
+            <span className="setup-recommendation-badge">Start with</span>
             <span className={`setup-recommendation-engine setup-recommendation-engine--${recommendation.primaryEngine}`}>
               {recommendation.primaryEngineLabel}
             </span>
           </div>
           <div className="setup-recommendation-model">{recommendation.primaryLabel}</div>
           <p className="setup-recommendation-summary">{recommendation.summary}</p>
-          <ul className="setup-recommendation-list">
-            {recommendation.primaryReasoning.map((reason) => (
-              <li key={reason} className="setup-recommendation-item">{reason}</li>
-            ))}
-          </ul>
         </div>
 
         {recommendation.backupModelId && recommendation.backupLabel && recommendation.backupEngine && recommendation.backupEngineLabel && (
@@ -322,38 +314,11 @@ function StepEngines({
               </span>
             </div>
             <div className="setup-recommendation-model">{recommendation.backupLabel}</div>
-            <p className="setup-recommendation-summary">
-              Keep this nearby if you want a smaller download, a safer fallback, or a second engine to compare against.
-            </p>
           </div>
         )}
       </div>
 
       <p className="engines-note">{recommendation.hardwareLine}</p>
-
-      {platform === 'macos' && (
-        <div className="engines-coreml-note">
-          <span className="engines-coreml-badge">CoreML</span>
-          {isAppleSilicon
-            ? 'Apple Silicon detected. When you download a Whisper model, Taurscribe can pair it with a CoreML encoder for lower-power transcription.'
-            : 'On Apple Silicon, Whisper can pair with CoreML encoder downloads for faster, lower-power transcription.'}
-        </div>
-      )}
-
-      <div className="setup-engine-legend">
-        <div className="setup-engine-legend-item">
-          <strong>{getEngineLabel('whisper')}</strong>
-          <span>Highest overall accuracy and the safest multilingual choice.</span>
-        </div>
-        <div className="setup-engine-legend-item">
-          <strong>{getEngineLabel('parakeet')}</strong>
-          <span>Best when you want live English text with the lowest latency.</span>
-        </div>
-        <div className="setup-engine-legend-item">
-          <strong>{getEngineLabel('granite_speech')}</strong>
-          <span>Reliable extra option when you want another local English engine on deck.</span>
-        </div>
-      </div>
 
       <div className="setup-nav setup-nav--spread">
         <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
@@ -428,6 +393,7 @@ function StepPermissions({
   const [accGranted, setAccGranted] = useState<boolean | null>(null);
   const [restartNeeded, setRestartNeeded] = useState(false);
   const [micRequesting, setMicRequesting] = useState(false);
+  const [initialCheckDone, setInitialCheckDone] = useState(false);
   const initialAccRef = useRef<boolean | null>(null);
 
   const checkStatuses = useCallback(async () => {
@@ -442,6 +408,7 @@ function StepPermissions({
         setRestartNeeded(true);
       }
     } catch { setAccGranted(false); }
+    setInitialCheckDone(true);
   }, []);
 
   useEffect(() => {
@@ -453,6 +420,17 @@ function StepPermissions({
     const timer = setInterval(checkStatuses, 1500);
     return () => clearInterval(timer);
   }, [isMac, checkStatuses]);
+
+  const micOk = micStatus === 'granted';
+  const accOk = accGranted === true;
+
+  // Auto-advance once the initial status check confirms both are already granted.
+  // This avoids showing the permissions step at all on repeat launches.
+  useEffect(() => {
+    if (initialCheckDone && micOk && accOk) {
+      onNext();
+    }
+  }, [initialCheckDone, micOk, accOk, onNext]);
 
   const requestMic = async () => {
     setMicRequesting(true);
@@ -469,14 +447,15 @@ function StepPermissions({
     try { await invoke('relaunch_app'); } catch {}
   };
 
-  const micOk = micStatus === 'granted';
-  const accOk = accGranted === true;
+  // While the first check is in flight, render nothing to avoid a flash of
+  // the permissions UI before auto-advancing.
+  if (!initialCheckDone) return null;
 
   return (
     <>
       <p className="setup-eyebrow">Step 5 of 6</p>
       <h2 className="setup-heading">Permissions</h2>
-      <p className="setup-sub">Taurscribe needs these two permissions to work properly.</p>
+      <p className="setup-sub">Two permissions needed to record and type text system-wide.</p>
 
       <div className="perm-list">
         {/* ── Microphone ─────────────────────────────── */}
@@ -494,11 +473,15 @@ function StepPermissions({
           <div className="perm-action">
             {micOk
               ? <span className="perm-badge perm-badge--ok">Granted</span>
-              : micStatus === 'denied'
-                ? <span className="perm-badge perm-badge--denied">Denied — open System Settings</span>
-                : <button className="setup-btn setup-btn--primary perm-btn" onClick={requestMic} disabled={micRequesting}>
-                    {micRequesting ? 'Requesting…' : 'Grant Access'}
-                  </button>
+              : micStatus === 'restricted'
+                ? <span className="perm-badge perm-badge--denied">Restricted by policy</span>
+                : micStatus === 'denied'
+                  ? <button className="setup-btn setup-btn--primary perm-btn" onClick={() => invoke('open_accessibility_settings').catch(() => {})}>
+                      Open Settings
+                    </button>
+                  : <button className="setup-btn setup-btn--primary perm-btn" onClick={requestMic} disabled={micRequesting}>
+                      {micRequesting ? 'Requesting…' : 'Grant Access'}
+                    </button>
             }
           </div>
         </div>
@@ -528,7 +511,7 @@ function StepPermissions({
 
       {restartNeeded && (
         <div className="perm-restart-notice">
-          <strong>Restart required.</strong> Accessibility permission was granted — restart Taurscribe so the global hotkey activates.
+          <strong>Restart required.</strong> Accessibility was granted — restart so the hotkey activates.
           <button className="setup-btn setup-btn--primary perm-restart-btn" onClick={relaunchApp}>
             Restart Now
           </button>

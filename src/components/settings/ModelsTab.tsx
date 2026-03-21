@@ -296,11 +296,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                 </div>
                 <div className="model-list">
                     {parakeetModels.map(m => (
-                        <div
-                            key={m.id}
-                            className={`model-item-wrapper ${recommendationBadge(m.id) ? 'model-item-wrapper--rec' : ''}`}
-                        >
-                            {recommendationBadge(m.id) && <span className="badge-rec">{recommendationBadge(m.id)}</span>}
+                        <div key={m.id} className="model-item-wrapper">
                             <ModelRow model={m} {...rowProps} />
                         </div>
                     ))}

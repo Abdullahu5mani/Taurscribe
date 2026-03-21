@@ -1,10 +1,41 @@
+/* Overlay design tokens — mirrored from App.css since this WebView is isolated */
+:root {
+  --recording:          #dc2626;
+  --recording-glow:     rgba(220, 38, 38, 0.5);
+  --processing:         #eab308;
+  --processing-glow:    rgba(234, 179, 8, 0.4);
+  --success:            #3ecfa5;
+  --text-primary:       #ededef;
+  --border-color:       rgba(255, 255, 255, 0.08);
+
+  /* Engine-neutral accent — overridden per engine theme class below */
+  --overlay-accent:     #e09f3e;
+  --overlay-accent-rgb: 224, 159, 62;
+}
+
+/* ── Engine theme overrides ──────────────────────────────────────────────── */
+.overlay-engine--whisper {
+  --overlay-accent:     #6895d2;
+  --overlay-accent-rgb: 104, 149, 210;
+}
+.overlay-engine--parakeet {
+  --overlay-accent:     #3ecfa5;
+  --overlay-accent-rgb: 62, 207, 165;
+}
+.overlay-engine--granite_speech {
+  --overlay-accent:     #4589ff;
+  --overlay-accent-rgb: 69, 137, 255;
+}
+
+/* Use :root specificity to beat App.css's :root { background-color } rule */
+:root,
 html, body, #root {
   margin: 0;
   padding: 0;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: transparent;
+  background: transparent !important;
 }
 
 body {
@@ -21,9 +52,9 @@ body {
   padding: 16px 16px 14px;
   color: #f4efe3;
   background:
-    radial-gradient(circle at top left, rgba(224, 159, 62, 0.14), transparent 42%),
+    radial-gradient(circle at top left, rgba(var(--overlay-accent-rgb), 0.14), transparent 42%),
     linear-gradient(180deg, rgba(17, 15, 12, 0.96) 0%, rgba(10, 9, 8, 0.96) 100%);
-  border: 1px solid rgba(224, 159, 62, 0.16);
+  border: 1px solid rgba(var(--overlay-accent-rgb), 0.2);
   border-radius: 18px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
@@ -65,29 +96,30 @@ body {
 }
 
 .overlay-phase-dot--recording {
-  background: #f05a44;
-  box-shadow: 0 0 12px rgba(240, 90, 68, 0.65);
+  background: var(--recording);
+  box-shadow: 0 0 12px var(--recording-glow);
 }
 
 .overlay-phase-dot--paused {
-  background: #f2b84b;
-  box-shadow: 0 0 12px rgba(242, 184, 75, 0.45);
+  background: var(--processing);
+  box-shadow: 0 0 12px var(--processing-glow);
 }
 
 .overlay-phase-dot--transcribing,
 .overlay-phase-dot--correcting {
-  background: #f2b84b;
+  background: var(--overlay-accent);
+  box-shadow: 0 0 10px rgba(var(--overlay-accent-rgb), 0.5);
 }
 
 .overlay-phase-dot--done {
-  background: #3ecfa5;
+  background: var(--success);
   box-shadow: 0 0 12px rgba(62, 207, 165, 0.42);
 }
 
 .overlay-phase-dot--too_short,
 .overlay-phase-dot--paste_failed,
 .overlay-phase-dot--cancelled {
-  background: #d8614f;
+  background: var(--recording);
 }
 
 .overlay-phase-copy {
@@ -101,7 +133,7 @@ body {
   font-size: 0.68rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(244, 239, 227, 0.7);
+  color: rgba(var(--overlay-accent-rgb), 0.8);
 }
 
 .overlay-status {
@@ -124,8 +156,8 @@ body {
   color: rgba(244, 239, 227, 0.7);
   padding: 6px 8px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(var(--overlay-accent-rgb), 0.18);
+  background: rgba(var(--overlay-accent-rgb), 0.06);
 }
 
 .overlay-transcript {
@@ -133,8 +165,8 @@ body {
   min-height: 56px;
   padding: 12px 13px;
   border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(var(--overlay-accent-rgb), 0.1);
+  background: rgba(var(--overlay-accent-rgb), 0.04);
   color: rgba(248, 242, 232, 0.9);
   font-size: 0.87rem;
   line-height: 1.45;
@@ -161,70 +193,19 @@ body {
 .overlay-waveform-bar {
   width: 4px;
   border-radius: 999px;
-  background: linear-gradient(180deg, #f6bd68 0%, #f05a44 100%);
+  background: linear-gradient(180deg, rgba(var(--overlay-accent-rgb), 0.9) 0%, rgba(var(--overlay-accent-rgb), 0.35) 100%);
   transition: height 0.12s ease-out, opacity 0.18s ease-out;
-}
-
-.overlay-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.overlay-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 12px;
-  border-radius: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
-  color: #f4efe3;
-  font-family: 'Martian Mono', monospace;
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
-}
-
-.overlay-action:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.overlay-action:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.overlay-action--primary {
-  border-color: rgba(224, 159, 62, 0.26);
-  background: rgba(224, 159, 62, 0.11);
-}
-
-.overlay-action--primary:hover:not(:disabled) {
-  background: rgba(224, 159, 62, 0.18);
-}
-
-.overlay-action--danger {
-  border-color: rgba(216, 97, 79, 0.24);
-  background: rgba(216, 97, 79, 0.1);
-}
-
-.overlay-action--danger:hover:not(:disabled) {
-  background: rgba(216, 97, 79, 0.16);
 }
 
 .overlay-shell--recording {
   box-shadow:
-    inset 0 0 0 1px rgba(240, 90, 68, 0.14),
+    inset 0 0 0 1px rgba(var(--overlay-accent-rgb), 0.14),
     0 18px 44px rgba(0, 0, 0, 0.42);
 }
 
 .overlay-shell--paused {
   box-shadow:
-    inset 0 0 0 1px rgba(242, 184, 75, 0.14),
+    inset 0 0 0 1px rgba(234, 179, 8, 0.14),
     0 18px 44px rgba(0, 0, 0, 0.42);
 }
 
@@ -236,7 +217,6 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .overlay-shell,
-  .overlay-action,
   .overlay-waveform-bar {
     animation: none !important;
     transition: none !important;
@@ -244,15 +224,20 @@ body {
 }
 
 /* ── Minimal pill ─────────────────────────────────────────────────────────── */
+/* The window is resized to match the pill (230×34 logical px) so the pill
+   just fills the entire window — no need for absolute positioning. */
 .overlay-pill {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 13px 7px 10px;
+  gap: 6px;
+  padding: 0 12px 0 9px;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
   border-radius: 999px;
   background:
     linear-gradient(135deg, rgba(22, 19, 14, 0.97) 0%, rgba(12, 10, 8, 0.97) 100%);
-  border: 1px solid rgba(224, 159, 62, 0.16);
+  border: 1px solid rgba(var(--overlay-accent-rgb), 0.2);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
     0 8px 24px rgba(0, 0, 0, 0.45);
@@ -262,10 +247,6 @@ body {
   color: rgba(244, 239, 227, 0.88);
   white-space: nowrap;
   animation: overlayFadeIn 0.18s ease-out both;
-  /* Position the pill at the top-right of the transparent overlay window */
-  position: fixed;
-  top: 12px;
-  right: 12px;
 }
 
 .overlay-pill-dot {
@@ -276,31 +257,32 @@ body {
 }
 
 .overlay-pill-dot--recording {
-  background: #f05a44;
-  box-shadow: 0 0 8px rgba(240, 90, 68, 0.7);
+  background: var(--recording);
+  box-shadow: 0 0 8px var(--recording-glow);
   animation: pillDotBreathe 1.4s ease-in-out infinite alternate;
 }
 
 .overlay-pill-dot--paused {
-  background: #f2b84b;
-  box-shadow: 0 0 8px rgba(242, 184, 75, 0.5);
+  background: var(--processing);
+  box-shadow: 0 0 8px var(--processing-glow);
 }
 
 .overlay-pill-dot--transcribing,
 .overlay-pill-dot--correcting {
-  background: #f2b84b;
+  background: var(--overlay-accent);
+  box-shadow: 0 0 8px rgba(var(--overlay-accent-rgb), 0.5);
   animation: pillDotBreathe 0.9s ease-in-out infinite alternate;
 }
 
 .overlay-pill-dot--done {
-  background: #3ecfa5;
+  background: var(--success);
   box-shadow: 0 0 8px rgba(62, 207, 165, 0.5);
 }
 
 .overlay-pill-dot--too_short,
 .overlay-pill-dot--paste_failed,
 .overlay-pill-dot--cancelled {
-  background: #d8614f;
+  background: var(--recording);
 }
 
 @keyframes pillDotBreathe {
@@ -309,7 +291,7 @@ body {
 }
 
 .overlay-pill-engine {
-  color: rgba(244, 239, 227, 0.5);
+  color: rgba(var(--overlay-accent-rgb), 0.7);
   font-size: 0.66rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
