@@ -518,6 +518,38 @@ fn clear_app_data_root(base: &Path) -> Result<(), String> {
     remove_path_with_retries(base)
 }
 
+fn clear_app_data_root_runtime_safe(base: &Path) -> Result<(), String> {
+    if !base.exists() {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(base)
+        .map_err(|e| format!("Failed to read app data directory {}: {}", base.display(), e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            format!(
+                "Failed to inspect app data directory {}: {}",
+                base.display(),
+                e
+            )
+        })?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+
+        // On Windows WebView2 keeps EBWebView locked while the app is running.
+        // We skip it in dev-mode resets and let the page reload handle the rest.
+        if name.to_ascii_lowercase().starts_with("ebwebview") {
+            continue;
+        }
+
+        remove_path_with_retries(&path)?;
+    }
+
+    Ok(())
+}
+
 pub fn perform_pending_factory_reset_on_startup() -> Result<(), String> {
     let marker_path = factory_reset_marker_path()?;
     if !marker_path.exists() {
@@ -542,7 +574,7 @@ pub fn perform_pending_factory_reset_on_startup() -> Result<(), String> {
 pub async fn factory_reset_app_data(
     app: tauri::AppHandle,
     state: tauri::State<'_, AudioState>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if state.recording_handle.lock().unwrap().is_some() {
         return Err("Stop the current recording before running a factory reset.".to_string());
     }
@@ -593,6 +625,14 @@ pub async fn factory_reset_app_data(
     let _ = crate::system_audio::force_unmute();
     let _ = crate::tray::update_tray_icon(&app, AppState::Ready);
     crate::overlay::hide(&app);
+
+    if cfg!(debug_assertions) {
+        let app_data = data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
+        for name in ["Taurscribe", "taurscribe"] {
+            clear_app_data_root_runtime_safe(&app_data.join(name))?;
+        }
+        return Ok(false);
+    }
 
     let marker_path = factory_reset_marker_path()?;
     fs::write(&marker_path, b"pending")
