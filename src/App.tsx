@@ -22,7 +22,7 @@ import type { DownloadableModel } from "./components/settings/types";
 import type { OnboardingUseCase } from "./modelRecommendations";
 import "./components/TitleBar.css";
 import "./App.css";
-import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, InfoTooltip } from "./components/Icons";
+import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, IconSettings, InfoTooltip } from "./components/Icons";
 
 const ANIMATED_LOGOS = [
   "animated_logo_assemble.svg",
@@ -165,11 +165,19 @@ function App() {
   const [isLogoShuttering, setIsLogoShuttering] = useState(false);
 
   const [isBooting, setIsBooting] = useState(true);
+  // M6 fix: containerBooting controls the CSS stagger class; cleared after
+  // the boot animation completes so re-mounts don't re-trigger the stagger.
+  const [containerBooting, setContainerBooting] = useState(true);
 
   useEffect(() => {
-    // Initial boot sequence delay
-    const timer = setTimeout(() => setIsBooting(false), 600);
-    return () => clearTimeout(timer);
+    // Boot title scramble: 600ms
+    const titleTimer = setTimeout(() => setIsBooting(false), 600);
+    // Container stagger: clear after all children finish (10 × 80ms + 500ms duration)
+    const staggerTimer = setTimeout(() => setContainerBooting(false), 1400);
+    return () => {
+      clearTimeout(titleTimer);
+      clearTimeout(staggerTimer);
+    };
   }, []);
 
   const handleLogoClick = useCallback(() => {
@@ -190,6 +198,15 @@ function App() {
     return () => { unlisten.then(fn => fn()); };
   }, [pickRandomLogo]);
 
+  // Close the settings modal when the window is hidden to tray so the hotkey
+  // works immediately when the user restores the window.
+  useEffect(() => {
+    const unlisten = listen("window-hidden", () => {
+      setIsSettingsOpen(false);
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
   const storeRef = useRef<Store | null>(null);
   const [backendInfo, setBackendInfo] = useState("Loading...");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
@@ -202,6 +219,8 @@ function App() {
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   /** Whether the output area is in file-transcription mode vs mic-recording mode */
   const [fileMode, setFileMode] = useState(false);
+  /** True while FileTranscriptionPanel has a file actively transcribing */
+  const [isFileTranscribing, setIsFileTranscribing] = useState(false);
 
   // macOS fix: Detect the runtime platform so we can hide/adjust UI elements
   // that don't apply on macOS (e.g. GPU/CPU toggle, VRAM display).
@@ -784,8 +803,8 @@ function App() {
         if (now - lastStartTime.current < HOTKEY_DEBOUNCE_MS) return;
         lastStartTime.current = now;
 
-        // Don't start if already recording, starting, or processing a previous stop
-        if (isRecordingRef.current || startingRecordingRef.current || stopInProgressRef.current) return;
+        // Don't start if model is loading, already recording, starting, or processing a previous stop
+        if (isLoadingRef.current || isRecordingRef.current || startingRecordingRef.current || stopInProgressRef.current) return;
 
         startingRecordingRef.current = true;
         pendingStopRef.current = false;
@@ -907,7 +926,7 @@ function App() {
     });
   }, [isMac]);
 
-  const tickerContent = (
+  const tickerContent = useMemo(() => (
     <>
       {filteredTickerPhrases.flatMap((phrase, i) => [
         i > 0 ? <span key={`sep-${i}`} className="ticker-sep"> — </span> : null,
@@ -920,7 +939,7 @@ function App() {
         </span>,
       ]).filter(Boolean)}
     </>
-  );
+  ), [filteredTickerPhrases]);
 
   // --- Derived UI state ---
   const noWhisperModel = models.length === 0;
@@ -975,7 +994,7 @@ function App() {
 
   if (showSetupWizard === null) {
     return (
-      <div className="app-loading" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-primary, #09090b)", color: "var(--text-secondary, #9494a0)" }}>
+      <div className="app-loading" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-primary, #09090b)", color: "var(--text-secondary)" }}>
         Loading…
       </div>
     );
@@ -989,18 +1008,26 @@ function App() {
     <>
       <TitleBar />
       <div className={`app-body ${isRecording ? "app-body--recording" : ""} theme-${activeEngine}`}>
-        <main className="container">
+        <main className={`container${containerBooting ? " container--booting" : ""}`}>
           <div>
             <div className="app-header">
               <div className="app-title-container">
-                <img
-                  key={randomLogo}
-                  src={`/logos/${randomLogo}`}
-                  alt=""
-                  className={`app-title-logo ${isLogoShuttering ? "app-title-logo--shutter" : ""}`}
+                {/* H1 fix: wrapped in <button> so it's keyboard-reachable and
+                    announced as interactive by screen readers */}
+                <button
+                  type="button"
+                  className="logo-btn"
                   onClick={handleLogoClick}
+                  aria-label="Cycle logo animation"
                   title="Cycle Logo"
-                />
+                >
+                  <img
+                    key={randomLogo}
+                    src={`/logos/${randomLogo}`}
+                    alt=""
+                    className={`app-title-logo ${isLogoShuttering ? "app-title-logo--shutter" : ""}`}
+                  />
+                </button>
                 <h1 className={`app-title ${isBooting ? "app-title--boot" : ""}`}>
                   TAURSCRIBE
                 </h1>
@@ -1022,6 +1049,7 @@ function App() {
                   </div>
                 )}
               </div>
+              {/* L4 fix: replaced inline SVG with IconSettings from Icons.tsx */}
               <button
                 type="button"
                 className="settings-btn"
@@ -1029,10 +1057,7 @@ function App() {
                 title="Settings"
                 aria-label="Settings"
               >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
+                <IconSettings size={20} />
               </button>
             </div>
             <div className="hardware-bar">
@@ -1041,15 +1066,18 @@ function App() {
                   Metal automatically and there is no discrete GPU to switch. */}
               {!isMac && (
                 <div className="backend-toggle-inline">
+                  {/* M5 fix: aria-pressed communicates toggle state to screen readers */}
                   <button
                     className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
                     onClick={() => handleToggleAsrBackend('gpu')}
                     disabled={isLoading}
+                    aria-pressed={asrBackend === 'gpu'}
                   ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
                   <button
                     className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
                     onClick={() => handleToggleAsrBackend('cpu')}
                     disabled={isLoading}
+                    aria-pressed={asrBackend === 'cpu'}
                   ><IconCpu size={11} /> CPU</button>
                   <InfoTooltip size={11} text="GPU for max speed; CPU if no GPU or to save VRAM." />
                 </div>
@@ -1067,8 +1095,10 @@ function App() {
                 <line x1="12" y1="19" x2="12" y2="23" />
                 <line x1="8" y1="23" x2="16" y2="23" />
               </svg>
+              {/* H5 fix: aria-label names the control for screen readers */}
               <select
                 className="mic-selector-dropdown"
+                aria-label="Input device"
                 value={activeMic ?? ''}
                 onChange={(e) => handleMicChange(e.target.value)}
                 onFocus={() => {
@@ -1422,6 +1452,8 @@ function App() {
               type="button"
               className={`mode-toggle-btn${!fileMode ? " mode-toggle-btn--active" : ""}`}
               onClick={() => setFileMode(false)}
+              disabled={fileMode && isFileTranscribing}
+              title={fileMode && isFileTranscribing ? "Wait for file transcription to finish" : undefined}
             >
               <IconMic size={13} /> Microphone
             </button>
@@ -1436,7 +1468,14 @@ function App() {
 
           <div className="output-area output-area--feed">
             <div style={fileMode ? undefined : { display: 'none' }}>
-              <FileTranscriptionPanel activeEngine={activeEngine} />
+              <FileTranscriptionPanel
+                activeEngine={activeEngine}
+                currentModel={currentModel}
+                currentParakeetModel={currentParakeetModel}
+                currentGraniteModel={currentGraniteModel}
+                isModelLoading={isLoading}
+                onFileProcessingChange={setIsFileTranscribing}
+              />
             </div>
             {!fileMode && (activeEngineHasNoModel ? (
               <div className="empty-state">

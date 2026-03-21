@@ -15,6 +15,15 @@ pub struct FileTranscriptionProgress {
     pub error: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct FileTranscriptionResult {
+    pub transcript: String,
+    /// Duration of the original audio file in milliseconds.
+    pub audio_duration_ms: i64,
+    /// Wall-clock time taken to transcribe in milliseconds.
+    pub processing_time_ms: i64,
+}
+
 // ── Cancellation (same pattern as model downloads) ───────────────────────────
 
 static FILE_TRANSCRIBE_CANCEL: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
@@ -55,7 +64,7 @@ pub async fn transcribe_file(
     app: AppHandle,
     state: State<'_, AudioState>,
     path: String,
-) -> Result<String, String> {
+) -> Result<FileTranscriptionResult, String> {
     let cancel = register_cancel_flag(&path);
     let whisper = state.whisper.clone();
     let parakeet = state.parakeet.clone();
@@ -125,7 +134,8 @@ fn transcribe_file_blocking(
     granite: Arc<Mutex<crate::granite_speech::GraniteSpeechManager>>,
     vad: Arc<Mutex<crate::vad::VADManager>>,
     cancel: Arc<AtomicBool>,
-) -> Result<String, String> {
+) -> Result<FileTranscriptionResult, String> {
+    let transcribe_start = std::time::Instant::now();
     // Validate extension
     let ext = std::path::Path::new(path)
         .extension()
@@ -167,6 +177,9 @@ fn transcribe_file_blocking(
         mono = resample_to_16k(mono, sample_rate)?;
     }
 
+    // Capture audio duration after resampling (always 16kHz at this point).
+    let audio_duration_ms = (mono.len() as f64 / 16000.0 * 1000.0) as i64;
+
     ensure_not_cancelled(app, path, &cancel)?;
 
     emit_progress(app, path, 30, "transcribing", None);
@@ -194,7 +207,11 @@ fn transcribe_file_blocking(
             mono.len() as f32 / 16000.0
         );
         emit_progress(app, path, 100, "done", None);
-        return Ok(String::new());
+        return Ok(FileTranscriptionResult {
+            transcript: String::new(),
+            audio_duration_ms,
+            processing_time_ms: transcribe_start.elapsed().as_millis() as i64,
+        });
     }
 
     println!(
@@ -279,10 +296,15 @@ fn transcribe_file_blocking(
     };
 
     let final_text = clean_transcript(&text);
+    let processing_time_ms = transcribe_start.elapsed().as_millis() as i64;
 
     emit_progress(app, path, 100, "done", None);
 
-    Ok(final_text)
+    Ok(FileTranscriptionResult {
+        transcript: final_text,
+        audio_duration_ms,
+        processing_time_ms,
+    })
 }
 
 /// Decode an audio file to interleaved f32 samples using symphonia.

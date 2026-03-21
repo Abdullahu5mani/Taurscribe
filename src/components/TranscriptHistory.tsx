@@ -10,6 +10,8 @@ type TranscriptRecord = {
     duration_ms: number | null;
     grammar_llm_used: boolean;
     processing_time_ms: number | null;
+    model_id: string | null;
+    audio_source: string | null;
 };
 
 interface TranscriptHistoryProps {
@@ -30,9 +32,25 @@ const formatTimestamp = (iso: string) => {
 const truncate = (text: string, max = 140) =>
     text.length > max ? text.slice(0, max).trimEnd() + "…" : text;
 
-const formatProcessingTime = (ms: number | null) => {
-    if (ms == null) return null;
-    return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+const formatRealTimeRatio = (durationMs: number | null, processingMs: number | null) => {
+    if (!durationMs || !processingMs || durationMs <= 0 || processingMs <= 0) return null;
+    const ratio = durationMs / processingMs;
+    return `${ratio.toFixed(1)}x`;
+};
+
+const formatAudioDuration = (ms: number | null) => {
+    if (!ms) return null;
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+};
+
+const shortModelId = (id: string | null) => {
+    if (!id) return null;
+    // Strip common prefix patterns, keep the variant portion
+    return id.replace(/^whisper-/, '').replace(/^parakeet-/, '').replace(/^granite-speech-/, 'granite-');
 };
 
 export function TranscriptHistory({ refreshKey }: TranscriptHistoryProps) {
@@ -134,17 +152,35 @@ export function TranscriptHistory({ refreshKey }: TranscriptHistoryProps) {
                                             {copiedId === item.id && (
                                                 <span className="history-badge history-badge-copied"><IconCheck size={11} /> Typed</span>
                                             )}
+                                            {item.audio_source && item.audio_source !== "microphone" && (
+                                                <span className="history-badge history-badge-source" title={item.audio_source}>
+                                                    📄 {item.audio_source.length > 20 ? item.audio_source.slice(0, 18) + '…' : item.audio_source}
+                                                </span>
+                                            )}
+                                            {item.audio_source === "microphone" && (
+                                                <span className="history-badge history-badge-source">🎤 mic</span>
+                                            )}
                                             <span className={`history-badge history-badge-engine history-badge-engine--${item.engine}`}>
                                                 {item.engine === "parakeet" ? "Parakeet" : item.engine === "granite_speech" ? "Granite" : "Whisper"}
                                             </span>
+                                            {shortModelId(item.model_id) && (
+                                                <span className="history-badge history-badge-model" title={item.model_id ?? undefined}>
+                                                    {shortModelId(item.model_id)}
+                                                </span>
+                                            )}
+                                            {formatAudioDuration(item.duration_ms) && (
+                                                <span className="history-badge history-badge-duration" title="Audio duration">
+                                                    {formatAudioDuration(item.duration_ms)}
+                                                </span>
+                                            )}
+                                            {formatRealTimeRatio(item.duration_ms, item.processing_time_ms) && (
+                                                <span className="history-badge history-badge-speed" title="Transcription speed vs real-time">
+                                                    ⚡ {formatRealTimeRatio(item.duration_ms, item.processing_time_ms)} speed
+                                                </span>
+                                            )}
                                             {item.grammar_llm_used && (
                                                 <span className="history-badge history-badge-llm">
                                                     LLM
-                                                </span>
-                                            )}
-                                            {formatProcessingTime(item.processing_time_ms) && (
-                                                <span className="history-badge history-badge-latency" title="AI processing time">
-                                                    ⚡ {formatProcessingTime(item.processing_time_ms)}
                                                 </span>
                                             )}
                                             <button

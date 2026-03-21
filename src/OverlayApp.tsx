@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
-import { IconPause, IconPlay, IconStop } from "./components/Icons";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "./OverlayApp.css";
 
 type Phase =
@@ -51,7 +50,6 @@ export function OverlayApp() {
     const [latencyMs, setLatencyMs] = useState<number | null>(null);
     const [elapsedMs, setElapsedMs] = useState(0);
     const [levels, setLevels] = useState<number[]>(() => Array(BAR_COUNT).fill(0));
-    const [actionBusy, setActionBusy] = useState<string | null>(null);
     const [overlayStyle, setOverlayStyle] = useState<'minimal' | 'full'>('full');
 
     const smoothedRef = useRef<number[]>(Array(BAR_COUNT).fill(0));
@@ -75,6 +73,19 @@ export function OverlayApp() {
 
         return () => { if (unlisten) unlisten(); };
     }, []);
+
+    // Resize the Tauri window to match the overlay style so the transparent
+    // window box never extends beyond the visible content.
+    useEffect(() => {
+        const win = getCurrentWindow();
+        if (overlayStyle === 'minimal') {
+            // Tight fit around the pill content — content is ~190px at 0.72rem Martian Mono
+            // with padding 11+14px + dot 7px + gaps. 230px gives comfortable clearance.
+            win.setSize(new LogicalSize(230, 34)).catch(() => {});
+        } else {
+            win.setSize(new LogicalSize(380, 170)).catch(() => {});
+        }
+    }, [overlayStyle]);
 
     useEffect(() => {
         let unlisten: (() => void) | undefined;
@@ -181,18 +192,6 @@ export function OverlayApp() {
         };
     }, [phase]);
 
-    const requestAction = async (action: "pause" | "resume" | "cancel") => {
-        if (actionBusy) return;
-        setActionBusy(action);
-        try {
-            await invoke("request_overlay_action", { action });
-        } catch (error) {
-            console.error("Overlay action failed:", error);
-        } finally {
-            window.setTimeout(() => setActionBusy(null), 220);
-        }
-    };
-
     const statusLabel = phase === "recording"
         ? "Listening"
         : phase === "paused"
@@ -220,11 +219,11 @@ export function OverlayApp() {
                         ? "Recording discarded."
                         : "Working on your transcript...");
 
-    const canControl = phase === "recording" || phase === "paused";
+    const engineClass = `overlay-engine--${engine}`;
 
     if (overlayStyle === 'minimal') {
         return (
-            <div className={`overlay-pill overlay-pill--${phase}`}>
+            <div className={`overlay-pill overlay-pill--${phase} ${engineClass}`}>
                 <span className={`overlay-pill-dot overlay-pill-dot--${phase}`} />
                 <span className="overlay-pill-engine">{formatEngine(engine)}</span>
                 <span className="overlay-pill-sep">·</span>
@@ -240,7 +239,7 @@ export function OverlayApp() {
     }
 
     return (
-        <div className={`overlay-shell overlay-shell--${phase}`}>
+        <div className={`overlay-shell overlay-shell--${phase} ${engineClass}`}>
             <div className="overlay-topline">
                 <div className="overlay-phase-group">
                     <span className={`overlay-phase-dot overlay-phase-dot--${phase}`} />
@@ -273,29 +272,6 @@ export function OverlayApp() {
                         />
                     ))}
                 </div>
-
-                {canControl && (
-                    <div className="overlay-actions">
-                        <button
-                            type="button"
-                            className="overlay-action overlay-action--primary"
-                            onClick={() => requestAction(phase === "paused" ? "resume" : "pause")}
-                            disabled={Boolean(actionBusy)}
-                        >
-                            {phase === "paused" ? <IconPlay size={12} /> : <IconPause size={12} />}
-                            <span>{phase === "paused" ? "Resume" : "Pause"}</span>
-                        </button>
-                        <button
-                            type="button"
-                            className="overlay-action overlay-action--danger"
-                            onClick={() => requestAction("cancel")}
-                            disabled={Boolean(actionBusy)}
-                        >
-                            <IconStop size={11} />
-                            <span>Cancel</span>
-                        </button>
-                    </div>
-                )}
             </div>
         </div>
     );

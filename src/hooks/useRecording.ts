@@ -354,12 +354,17 @@ export function useRecording({
             // Persist a lightweight history entry regardless of paste outcome —
             // the transcript was generated successfully and is visible in the UI.
             try {
+                const activeModelId =
+                    currentEngine === "whisper" ? currentModel :
+                    currentEngine === "parakeet" ? currentParakeetModel : null;
                 await invoke("save_transcript_history", {
                     transcript: finalTrans,
                     engine: currentEngine,
                     durationMs: recordingDurationMs,
                     grammarLlmUsed: enableGrammarLMRef.current,
                     processingTimeMs: totalMs,
+                    modelId: activeModelId ?? null,
+                    audioSource: "microphone",
                 });
                 onHistorySaved?.();
             } catch (e) {
