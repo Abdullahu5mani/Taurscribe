@@ -154,11 +154,14 @@ impl GraniteSpeechManager {
             return Err(format!("Model directory not found: {}", model_dir.display()));
         }
 
-        println!(
-            "[GRANITE] Loading model from: {}{}",
-            model_dir.display(),
-            if force_cpu { " [CPU-only mode]" } else { "" }
-        );
+        let mode_label = if force_cpu {
+            " [CPU-only mode]"
+        } else if cfg!(target_os = "macos") {
+            " [XNNPACK/CPU]"
+        } else {
+            ""
+        };
+        println!("[GRANITE] Loading model from: {}{}", model_dir.display(), mode_label);
 
         // q4f16 variants: FP16 activations, faster on CUDA tensor cores (~1.5 GB)
         // q4 variants: FP32 I/O, runs on any hardware (~1.8 GB)
@@ -181,7 +184,7 @@ impl GraniteSpeechManager {
             return Err(format!("Missing tokenizer.json (expected at {})", tokenizer_path.display()));
         }
 
-        let (backend, encoder, embed, decoder) = if force_cpu {
+        let (backend, encoder, embed, decoder) = if force_cpu || cfg!(target_os = "macos") {
             // Prefer q4 on CPU; fall back to q4f16 if only the GPU download is present.
             let (ep, eb, dp) = if has_q4 { (&encoder_path, &embed_path, &decoder_path) }
                                else       { (&enc_q4f16,   &emb_q4f16,   &dec_q4f16)   };

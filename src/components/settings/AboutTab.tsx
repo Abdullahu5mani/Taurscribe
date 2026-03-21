@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
+import { Store } from '@tauri-apps/plugin-store';
 
 export function AboutTab() {
     const [platform, setPlatform] = useState('');
@@ -42,7 +43,14 @@ export function AboutTab() {
         try {
             setResetting(true);
             setResetError('');
-            await invoke('factory_reset_app_data');
+            const restarted = await invoke<boolean>('factory_reset_app_data');
+            if (!restarted) {
+                const store = await Store.load('settings.json');
+                await store.clear();
+                await store.save();
+                await store.close();
+                window.location.reload();
+            }
         } catch (err) {
             setResetting(false);
             setResetError(String(err));
