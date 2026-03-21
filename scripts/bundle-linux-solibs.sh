@@ -96,7 +96,7 @@ while IFS= read -r candidate; do
     break
   fi
 done < <(find "$BUILD_BASE/release/build" "$TARGET_DIR/release/build" \
-    -name "libonnxruntime.so" 2>/dev/null | sort -u)
+    \( -name "libonnxruntime.so" -o -name "libonnxruntime.so.*" \) 2>/dev/null | sort -u)
 
 if [ -n "$ORT_SO" ]; then
   ORT_DIR="$(dirname "$ORT_SO")"
