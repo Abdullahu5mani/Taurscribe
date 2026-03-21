@@ -292,17 +292,17 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
                 ModelFile {
                     filename: "decoder_joint.onnx",
                     remote_path: "nemotron-speech-streaming-en-0.6b/decoder_joint.onnx",
-                    sha1: "3111f21cc147631e6038422239d974547c80915b8a7e5139a67fa5bed63d4a31",
+                    sha1: "8bcfde85fa9039a70caeb90204273f837923d63a706c186bd33e2ada25a91700",
                 },
                 ModelFile {
                     filename: "encoder.onnx",
                     remote_path: "nemotron-speech-streaming-en-0.6b/encoder.onnx",
-                    sha1: "4c3acc1fe273b710b818012919a53ac0d535b5cbb614eb65e240ddd9480df27b",
+                    sha1: "5c5110ca2e961c3ff5edc2b0ff49f29888b5213287624f7865c60f7384ac02f0",
                 },
                 ModelFile {
                     filename: "encoder.onnx.data",
                     remote_path: "nemotron-speech-streaming-en-0.6b/encoder.onnx.data",
-                    sha1: "2c43a65deb934ad505bf3a5c9f2e47bc59ed43daf8a806c64597e2030fcc3278",
+                    sha1: "44f65771e1570546f61106b3d0c604a60b398d061476fda8042bb05432601bd4",
                 },
                 ModelFile {
                     filename: "tokenizer.model",

@@ -199,13 +199,17 @@ pub async fn get_download_status(
 
             let downloaded = all_exist && total_size > 0;
 
-            // Verification: compare stored fingerprint against the current registry.
+            // Verification check.
+            // HuggingFace models: verified = has a verified.json entry (fingerprint was
+            // computed from live LFS hashes at download time, not static registry values).
+            // Non-HF models: compare stored fingerprint against registry hashes as before.
             let verified = if !downloaded {
                 false
+            } else if !config.repo.starts_with("github:") {
+                store.contains_key(&id)
             } else {
                 let expected_fp = registry_fingerprint(&config.files);
                 if fingerprint_is_empty(&expected_fp) {
-                    // No hashes in registry → treat as verified (nothing to check).
                     true
                 } else {
                     match store.get(&id) {
@@ -235,6 +239,34 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
     result
 }
 
+/// Fetches the LFS pointer for a HuggingFace file and returns its SHA-256 hash.
+/// Returns None if the fetch fails or the response is not an LFS pointer.
+async fn fetch_hf_lfs_sha256(
+    client: &Client,
+    repo: &str,
+    branch: &str,
+    remote_path: &str,
+) -> Option<String> {
+    let url = format!(
+        "https://huggingface.co/{}/raw/{}/{}",
+        repo, branch, remote_path
+    );
+    let res = client.get(&url).send().await.ok()?;
+    if !res.status().is_success() {
+        return None;
+    }
+    let text = res.text().await.ok()?;
+    for line in text.lines() {
+        if let Some(hash) = line.strip_prefix("oid sha256:") {
+            let hash = hash.trim();
+            if hash.len() == 64 {
+                return Some(hash.to_string());
+            }
+        }
+    }
+    None
+}
+
 async fn download_model_inner(
     app: &AppHandle,
     model_id: &str,
@@ -257,6 +289,13 @@ async fn download_model_inner(
     }
 
     let files_count = config.files.len();
+    let is_hf_repo = !config.repo.starts_with("github:");
+
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
     // ── Download phase ────────────────────────────────────────────────────────
     for (i, file_spec) in config.files.iter().enumerate() {
@@ -287,12 +326,6 @@ async fn download_model_inner(
             files_count,
             url
         );
-
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(15))
-            .read_timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
         let emit_error = |app: &AppHandle, model_id: &str, i: usize, files_count: usize, msg: &str| {
             emit_download_error_and_cleanup(
@@ -490,8 +523,9 @@ async fn download_model_inner(
     // ── Auto-verify phase ─────────────────────────────────────────────────────
     let expected_fp = registry_fingerprint(&config.files);
 
-    if fingerprint_is_empty(&expected_fp) {
-        // No hashes registered — skip verification, mark as done.
+    // Only skip verification entirely for non-HuggingFace repos with no hashes.
+    // HuggingFace repos always verify via live LFS pointer fetch.
+    if fingerprint_is_empty(&expected_fp) && !is_hf_repo {
         let _ = app.emit(
             "download-progress",
             DownloadProgressPayload {
@@ -506,19 +540,15 @@ async fn download_model_inner(
         return Ok(format!("Downloaded to {:?}", base_dir));
     }
 
-    // Pre-calculate total bytes to verify so we can report real progress.
-    // Directories (e.g. .mlmodelc CoreML bundles) are skipped — they can't
-    // be meaningfully byte-hashed and are trusted after successful extraction.
+    // Pre-calculate total bytes for progress reporting (all non-directory files).
     let mut total_verify_bytes: u64 = 0;
     for file_spec in &config.files {
-        if !file_spec.sha1.is_empty() {
-            let file_path = base_dir.join(file_spec.filename);
-            if file_path.is_dir() {
-                continue;
-            }
-            if let Ok(meta) = std::fs::metadata(&file_path) {
-                total_verify_bytes += meta.len();
-            }
+        let file_path = base_dir.join(file_spec.filename);
+        if file_path.is_dir() {
+            continue;
+        }
+        if let Ok(meta) = std::fs::metadata(&file_path) {
+            total_verify_bytes += meta.len();
         }
     }
 
@@ -528,8 +558,18 @@ async fn download_model_inner(
     let emit_threshold: u64 = 512 * 1024; // emit every 512 KiB
 
     for (i, file_spec) in config.files.iter().enumerate() {
-        // Skip files without a registered hash.
-        if file_spec.sha1.is_empty() {
+        // For HuggingFace repos, fetch the current expected hash from the LFS pointer.
+        // Fall back to the registry sha1 if the fetch fails (e.g. brief network blip).
+        let expected_hash: String = if is_hf_repo {
+            match fetch_hf_lfs_sha256(&client, config.repo, config.branch, file_spec.remote_path).await {
+                Some(h) => h,
+                None => file_spec.sha1.to_string(),
+            }
+        } else {
+            file_spec.sha1.to_string()
+        };
+
+        if expected_hash.is_empty() {
             computed_fp_parts.push(String::new());
             continue;
         }
@@ -559,7 +599,7 @@ async fn download_model_inner(
         // Directories (e.g. .mlmodelc CoreML bundles) can't be file-hashed.
         // Trust the extraction; push the expected hash so the fingerprint matches.
         if file_path.is_dir() {
-            computed_fp_parts.push(file_spec.sha1.to_string());
+            computed_fp_parts.push(expected_hash);
             continue;
         }
 
@@ -629,10 +669,10 @@ async fn download_model_inner(
         let hash_hex = hex::encode(hasher.finalize());
         println!(
             "[VERIFY] {} — Expected: {}, Got: {}",
-            file_spec.filename, file_spec.sha1, hash_hex
+            file_spec.filename, expected_hash, hash_hex
         );
 
-        if hash_hex != file_spec.sha1 {
+        if hash_hex != expected_hash {
             eprintln!("[VERIFY] Hash mismatch! Deleting corrupted files.");
             let msg = format!(
                 "Download failed — file may be corrupted ({}). Try again.",
