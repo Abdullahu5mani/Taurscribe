@@ -10,6 +10,7 @@ type TranscriptRecord = {
     engine: string;
     duration_ms: number | null;
     grammar_llm_used: boolean;
+    audio_source: string | null;
 };
 
 interface TranscriptFeedProps {
@@ -88,10 +89,12 @@ export function TranscriptFeed({
 
     const loadHistory = useCallback(async () => {
         try {
-            const rows = await invoke<TranscriptRecord[]>("list_transcript_history", {
+            const all = await invoke<TranscriptRecord[]>("list_transcript_history", {
                 limit: 50,
                 offset: 0,
             });
+            // Only show mic recordings here; file transcriptions have their own panel.
+            const rows = all.filter(r => !r.audio_source || r.audio_source === "microphone");
             // Detect a newly added top item and trigger its enter animation.
             const isNewItem = rows.length > 0 && rows[0].id !== prevTopIdRef.current;
             if (isNewItem) {

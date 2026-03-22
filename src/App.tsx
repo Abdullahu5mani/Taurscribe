@@ -240,10 +240,8 @@ function App() {
   const [closeBehavior, setCloseBehavior] = useState<'tray' | 'quit'>('tray');
   // Overlay HUD style: 'full' = interactive card with controls, 'minimal' = compact status pill
   const [overlayStyle, setOverlayStyle] = useState<'minimal' | 'full'>('full');
-  const [isAppleSilicon, setIsAppleSilicon] = useState(false);
   useEffect(() => {
     invoke<string>('get_platform').then(setPlatform).catch(() => {});
-    invoke<boolean>('is_apple_silicon').then(setIsAppleSilicon).catch(() => {});
   }, []);
   const isMac = platform === 'macos';
 
@@ -343,33 +341,15 @@ function App() {
   const downloadProgressRef = useRef(downloadProgress);
   useEffect(() => { downloadProgressRef.current = downloadProgress; });
 
-  // On Apple Silicon, automatically download the matching CoreML encoder alongside any Whisper model.
-  const WHISPER_TO_COREML: Record<string, string> = {
-    'whisper-tiny-en': 'whisper-tiny-en-coreml',       'whisper-tiny-en-q5_1': 'whisper-tiny-en-coreml',
-    'whisper-tiny': 'whisper-tiny-coreml',              'whisper-tiny-q5_1': 'whisper-tiny-coreml',
-    'whisper-base-en': 'whisper-base-en-coreml',        'whisper-base-en-q5_1': 'whisper-base-en-coreml',
-    'whisper-base': 'whisper-base-coreml',              'whisper-base-q5_1': 'whisper-base-coreml',
-    'whisper-small-en': 'whisper-small-en-coreml',      'whisper-small-en-q5_1': 'whisper-small-en-coreml',
-    'whisper-small': 'whisper-small-coreml',            'whisper-small-q5_1': 'whisper-small-coreml',
-    'whisper-medium-en': 'whisper-medium-en-coreml',    'whisper-medium-en-q5_0': 'whisper-medium-en-coreml',
-    'whisper-medium': 'whisper-medium-coreml',          'whisper-medium-q5_0': 'whisper-medium-coreml',
-    'whisper-large-v3-turbo': 'whisper-large-v3-turbo-coreml', 'whisper-large-v3-turbo-q5_0': 'whisper-large-v3-turbo-coreml',
-    'whisper-large-v3': 'whisper-large-v3-coreml',      'whisper-large-v3-q5_0': 'whisper-large-v3-coreml',
-  };
   const handleDownloadWithCoreml = (id: string, name: string) => {
     handleDownload(id, name);
-    if (isAppleSilicon) {
-      const coremlId = WHISPER_TO_COREML[id];
-      if (coremlId) {
-        const coremlModel = settingsModels.find(m => m.id === coremlId);
-        if (coremlModel && !coremlModel.downloaded) {
-          handleDownload(coremlId, coremlModel.name);
-        }
-      }
-    }
   };
 
   const handleDeleteModel = async (id: string, _name: string) => {
+    const isActiveModel = id === currentModel || id === currentParakeetModel || id === currentGraniteModel;
+    if (isFileTranscribing && isActiveModel) {
+      throw new Error("Cannot delete the active model while a file is being transcribed.");
+    }
     try {
       await invoke("delete_model", { modelId: id });
       setSettingsModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false, verified: false } : m));
@@ -956,14 +936,16 @@ function App() {
   const recordBtnBusy = isLoading || isCorrecting || isProcessingTranscript;
   const recordBtnClass =
     noModel ? "record-btn disabled" :
-      isRecording ? "record-btn recording" :
-        recordBtnBusy ? "record-btn processing" :
-          "record-btn idle";
+      isFileTranscribing ? "record-btn disabled" :
+        isRecording ? "record-btn recording" :
+          recordBtnBusy ? "record-btn processing" :
+            "record-btn idle";
   const recordBtnLabel =
     noModel ? "NO MODEL" :
-      isRecording ? "STOP" :
-        recordBtnBusy ? "..." : "REC";
-  const recordBtnDisabled = (isLoading && !isRecording) || isCorrecting || isProcessingTranscript;
+      isFileTranscribing ? "BUSY" :
+        isRecording ? "STOP" :
+          recordBtnBusy ? "..." : "REC";
+  const recordBtnDisabled = isFileTranscribing || (isLoading && !isRecording) || isCorrecting || isProcessingTranscript;
 
   const onRecordClick = () => {
     if (noModel) { setIsSettingsOpen(true); return; }
@@ -1289,12 +1271,16 @@ function App() {
                 {activeEngine === "whisper" ? (
                   <>
                     <label htmlFor="model-select" className="model-label">Active model</label>
+                    {isFileTranscribing && (
+                      <span className="model-in-use-warning">Model in use — file transcription in progress</span>
+                    )}
                     <select
                       id="model-select"
                       className="model-select"
                       value={currentModel || ""}
                       onChange={(e) => handleModelChange(e.target.value)}
-                      disabled={isRecording || isLoading || isInitialLoading}
+                      disabled={isRecording || isLoading || isInitialLoading || isFileTranscribing}
+                      title={isFileTranscribing ? "Cannot switch model while a file is being transcribed" : undefined}
                     >
                       {isInitialLoading && <option value="">Loading models...</option>}
                       {!isInitialLoading && models.filter(m => !downloadProgress['whisper-' + m.id.replace('.', '-')]).length === 0 && (
@@ -1430,7 +1416,7 @@ function App() {
                 className={recordBtnClass}
                 disabled={!noModel && recordBtnDisabled}
                 onClick={onRecordClick}
-                title={noModel ? "Download a model first in Settings" : recordBtnBusy ? "Please wait…" : isRecording ? "Stop recording" : "Start recording"}
+                title={noModel ? "Download a model first in Settings" : isFileTranscribing ? "Cannot record while a file is being transcribed" : recordBtnBusy ? "Please wait…" : isRecording ? "Stop recording" : "Start recording"}
               >
                 {recordBtnLabel}
               </button>

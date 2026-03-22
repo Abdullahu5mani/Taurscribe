@@ -46,7 +46,7 @@
 }
 
 .titlebar-title {
-  font-family: "Zodiak", serif;
+  font-family: 'Poppins', sans-serif;
   font-size: var(--font-sm);
   font-weight: 700;
   letter-spacing: 0.05em;

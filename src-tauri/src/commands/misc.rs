@@ -580,6 +580,19 @@ pub fn perform_pending_factory_reset_on_startup() -> Result<(), String> {
     let app_data = data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
     println!("[RESET] Pending factory reset detected. Clearing app data before startup...");
 
+    // Delete CoreML encoder directories first — .mlmodelc bundles can contain
+    // locked sub-files on macOS that cause remove_dir_all to fail on the parent.
+    if let Ok(models_dir) = crate::utils::get_models_dir() {
+        if let Ok(entries) = std::fs::read_dir(&models_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() && entry.file_name().to_string_lossy().ends_with(".mlmodelc") {
+                    let _ = std::fs::remove_dir_all(&path);
+                }
+            }
+        }
+    }
+
     for name in ["Taurscribe", "taurscribe"] {
         clear_app_data_root(&app_data.join(name))?;
     }
@@ -599,6 +612,10 @@ pub async fn factory_reset_app_data(
     if state.recording_handle.lock().unwrap().is_some() {
         return Err("Stop the current recording before running a factory reset.".to_string());
     }
+
+    // Signal any in-progress downloads to cancel so they clean up partial files
+    // before the process is killed by app.restart().
+    crate::commands::cancel_all_downloads();
 
     if let Ok(mut whisper) = state.whisper.lock() {
         whisper.unload();
@@ -646,6 +663,22 @@ pub async fn factory_reset_app_data(
     let _ = crate::system_audio::force_unmute();
     let _ = crate::tray::update_tray_icon(&app, AppState::Ready);
     crate::overlay::hide(&app);
+
+    // Explicitly delete CoreML encoder directories (.mlmodelc) from the models
+    // directory before restarting. The full app-data wipe on next launch should
+    // handle these too, but .mlmodelc bundles can have locked sub-files on macOS
+    // that survive a directory delete, so we nuke them now while engines are unloaded.
+    if let Ok(models_dir) = crate::utils::get_models_dir() {
+        if let Ok(entries) = std::fs::read_dir(&models_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() && entry.file_name().to_string_lossy().ends_with(".mlmodelc") {
+                    let _ = std::fs::remove_dir_all(&path);
+                    println!("[RESET] Removed CoreML encoder: {}", path.display());
+                }
+            }
+        }
+    }
 
     if cfg!(debug_assertions) {
         let app_data = data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;

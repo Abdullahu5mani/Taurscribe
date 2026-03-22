@@ -348,17 +348,20 @@ fn decode_audio(path: &str) -> Result<(Vec<f32>, u32, u32), String> {
         .codec_params
         .sample_rate
         .ok_or("File has unknown sample rate")?;
-    let channels = track
+    // Prefer codec_params channel count; will be corrected from the first decoded
+    // packet's spec if codec_params reports None (e.g. some MP3/M4A containers).
+    let hint_channels = track
         .codec_params
         .channels
         .map(|c| c.count() as u32)
-        .unwrap_or(1);
+        .unwrap_or(0); // 0 = unknown; resolved below
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| format!("Cannot create audio decoder: {}", e))?;
 
     let mut all_samples: Vec<f32> = Vec::new();
+    let mut actual_channels: u32 = hint_channels;
 
     loop {
         let packet = match format.next_packet() {
@@ -374,6 +377,10 @@ fn decode_audio(path: &str) -> Result<(Vec<f32>, u32, u32), String> {
         match decoder.decode(&packet) {
             Ok(decoded) => {
                 let spec = *decoded.spec();
+                // Resolve channel count from the first decoded frame if not known.
+                if actual_channels == 0 {
+                    actual_channels = spec.channels.count() as u32;
+                }
                 let capacity = decoded.capacity() as u64;
                 if capacity == 0 {
                     continue;
@@ -392,7 +399,12 @@ fn decode_audio(path: &str) -> Result<(Vec<f32>, u32, u32), String> {
         return Err("Audio file is empty or could not be decoded".to_string());
     }
 
-    Ok((all_samples, sample_rate, channels))
+    // Final fallback: if we still couldn't determine channels, assume mono.
+    if actual_channels == 0 {
+        actual_channels = 1;
+    }
+
+    Ok((all_samples, sample_rate, actual_channels))
 }
 
 /// Resample mono audio from `from_rate` to 16 kHz using the same rubato

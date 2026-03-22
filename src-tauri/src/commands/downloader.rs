@@ -55,6 +55,14 @@ pub async fn cancel_download(model_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Cancel all in-progress downloads. Called before factory reset so tasks get
+/// a clean cancellation signal before the process is killed.
+pub fn cancel_all_downloads() {
+    for flag in cancel_flags().lock().unwrap().values() {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
 use super::model_registry::{get_model_config, ModelConfig, ModelFile};
 
 // ── Verification store ────────────────────────────────────────────────────────
@@ -780,9 +788,30 @@ pub async fn delete_model(app: AppHandle, model_id: String) -> Result<String, St
         let _ = std::fs::remove_dir(&base_dir);
     }
 
-    // Remove verification record.
+    // Delete the paired CoreML encoder directory (.mlmodelc) if one exists.
+    // Convention: ggml-{base}-encoder.mlmodelc, where {base} is the .bin stem
+    // with any quantization suffix stripped (e.g. "ggml-tiny.en-q5_1.bin" → "ggml-tiny.en").
+    let mut coreml_encoder_stem: Option<String> = None;
+    for file_spec in &config.files {
+        if file_spec.filename.ends_with(".bin") {
+            let stem = file_spec.filename.trim_end_matches(".bin");
+            let base = if let Some(pos) = stem.find("-q") { &stem[..pos] } else { stem };
+            let encoder_dir = models_dir.join(format!("{}-encoder.mlmodelc", base));
+            if encoder_dir.is_dir() {
+                let _ = std::fs::remove_dir_all(&encoder_dir);
+                println!("[DELETE] Removed CoreML encoder: {}", encoder_dir.display());
+                coreml_encoder_stem = Some(base["ggml-".len()..].to_string());
+            }
+            break;
+        }
+    }
+
+    // Remove verification records (the model itself + its CoreML encoder if deleted).
     let mut store = load_verified_store();
     store.remove(&model_id);
+    if let Some(stem) = coreml_encoder_stem {
+        store.retain(|k, _| !(k.ends_with("-coreml") && k.contains(&stem)));
+    }
     save_verified_store(&store);
 
     // Emit final progress so frontend can clean up.
