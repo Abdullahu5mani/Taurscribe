@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -12,7 +12,9 @@ type Phase =
     | "done"
     | "too_short"
     | "paste_failed"
-    | "cancelled";
+    | "cancelled"
+    | "no_model"
+    | "model_loading";
 
 interface Payload {
     phase: Phase | "hidden";
@@ -52,11 +54,40 @@ export function OverlayApp() {
     const [levels, setLevels] = useState<number[]>(() => Array(BAR_COUNT).fill(0));
     const [overlayStyle, setOverlayStyle] = useState<'minimal' | 'full'>('full');
 
+    const confettiCanvasRef = useRef<HTMLCanvasElement>(null);
     const smoothedRef = useRef<number[]>(Array(BAR_COUNT).fill(0));
     const sessionStartedAtRef = useRef(0);
     const pauseStartedAtRef = useRef<number | null>(null);
     const pausedTotalMsRef = useRef(0);
     const previousPhaseRef = useRef<Phase | "hidden">("hidden");
+
+    // Listen for milestone events from the main window and fire confetti here too
+    const fireConfetti = useCallback((count: number) => {
+        const canvas = confettiCanvasRef.current;
+        if (!canvas) return;
+        import("canvas-confetti").then(mod => {
+            const confetti = mod.create(canvas, { resize: true, useWorker: false });
+            confetti({
+                particleCount: count === 1 ? 40 : 80,
+                spread: count === 1 ? 60 : 80,
+                startVelocity: 18,
+                ticks: 80,
+                gravity: 1.4,
+                origin: { x: 0.5, y: 1.0 },
+                colors: ['#e09f3e', '#c8882a', '#fef08a', '#ededef', '#3ecfa5'],
+                disableForReducedMotion: true,
+            });
+        }).catch(() => {});
+    }, []);
+
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        listen<{ count: number }>("transcription-milestone", (event) => {
+            fireConfetti(event.payload.count);
+        }).then((fn) => { unlisten = fn; });
+
+        return () => { if (unlisten) unlisten(); };
+    }, [fireConfetti]);
 
     // Load overlay style from store on mount, then listen for live changes
     useEffect(() => {
@@ -78,14 +109,14 @@ export function OverlayApp() {
     // window box never extends beyond the visible content.
     useEffect(() => {
         const win = getCurrentWindow();
-        if (overlayStyle === 'minimal') {
-            // Tight fit around the pill content — content is ~190px at 0.72rem Martian Mono
-            // with padding 11+14px + dot 7px + gaps. 230px gives comfortable clearance.
+        if (phase === 'no_model' || phase === 'model_loading') {
+            win.setSize(new LogicalSize(380, 110)).catch(() => {});
+        } else if (overlayStyle === 'minimal') {
             win.setSize(new LogicalSize(230, 34)).catch(() => {});
         } else {
             win.setSize(new LogicalSize(380, 170)).catch(() => {});
         }
-    }, [overlayStyle]);
+    }, [overlayStyle, phase]);
 
     useEffect(() => {
         let unlisten: (() => void) | undefined;
@@ -206,7 +237,9 @@ export function OverlayApp() {
                             ? "Too Short"
                             : phase === "paste_failed"
                                 ? "Paste Failed"
-                                : "Discarded";
+                                : phase === "no_model"
+                                    ? "No Model"
+                                    : "Discarded";
 
     const transcriptBody = transcript.trim()
         || (phase === "recording"
@@ -217,29 +250,59 @@ export function OverlayApp() {
                     ? "Transcript sent back to the main app."
                     : phase === "cancelled"
                         ? "Recording discarded."
-                        : "Working on your transcript...");
+                        : phase === "no_model"
+                            ? "No model loaded. Load a model before recording."
+                            : "Working on your transcript...");
 
     const engineClass = `overlay-engine--${engine}`;
 
-    if (overlayStyle === 'minimal') {
+    if (phase === 'no_model') {
         return (
-            <div className={`overlay-pill overlay-pill--${phase} ${engineClass}`}>
-                <span className={`overlay-pill-dot overlay-pill-dot--${phase}`} />
-                <span className="overlay-pill-engine">{formatEngine(engine)}</span>
-                <span className="overlay-pill-sep">·</span>
-                <span className="overlay-pill-status">{statusLabel}</span>
-                {(phase === "recording" || phase === "paused") && (
-                    <span className="overlay-pill-time">{formatElapsed(elapsedMs)}</span>
-                )}
-                {phase === "done" && formatLatency(latencyMs) && (
-                    <span className="overlay-pill-time">{formatLatency(latencyMs)}</span>
-                )}
+            <div className="overlay-error-panel">
+                <div className="overlay-error-glyph">⊗</div>
+                <div className="overlay-error-body">
+                    <span className="overlay-error-title">No Model Loaded</span>
+                    <span className="overlay-error-sub">Load a model in settings before recording</span>
+                </div>
             </div>
         );
     }
 
+    if (phase === 'model_loading') {
+        return (
+            <div className="overlay-error-panel overlay-loading-panel">
+                <div className="overlay-error-glyph overlay-loading-glyph">⟳</div>
+                <div className="overlay-error-body">
+                    <span className="overlay-error-title">Model Loading</span>
+                    <span className="overlay-error-sub">Please wait until the model finishes loading</span>
+                </div>
+            </div>
+        );
+    }
+
+    if (overlayStyle === 'minimal') {
+        return (
+            <>
+                <canvas ref={confettiCanvasRef} style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 9999 }} />
+                <div className={`overlay-pill overlay-pill--${phase} ${engineClass}`}>
+                    <span className={`overlay-pill-dot overlay-pill-dot--${phase}`} />
+                    <span className="overlay-pill-engine">{formatEngine(engine)}</span>
+                    <span className="overlay-pill-sep">·</span>
+                    <span className="overlay-pill-status">{statusLabel}</span>
+                    {(phase === "recording" || phase === "paused") && (
+                        <span className="overlay-pill-time">{formatElapsed(elapsedMs)}</span>
+                    )}
+                    {phase === "done" && formatLatency(latencyMs) && (
+                        <span className="overlay-pill-time">{formatLatency(latencyMs)}</span>
+                    )}
+                </div>
+            </>
+        );
+    }
+
     return (
-        <div className={`overlay-shell overlay-shell--${phase} ${engineClass}`}>
+        <div className={`overlay-shell overlay-shell--${phase} ${engineClass}`} style={{ position: 'relative' }}>
+            <canvas ref={confettiCanvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 9999 }} />
             <div className="overlay-topline">
                 <div className="overlay-phase-group">
                     <span className={`overlay-phase-dot overlay-phase-dot--${phase}`} />

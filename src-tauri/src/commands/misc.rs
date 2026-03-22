@@ -715,3 +715,61 @@ fn macos_accessibility_trusted_query() -> bool {
 
     unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) }
 }
+
+/// Open one of the app's storage folders in the system file manager.
+///
+/// `folder` is one of: "models", "recordings", "settings"
+/// - "models"     → opens %LOCALAPPDATA%\Taurscribe\models\
+/// - "recordings" → opens %LOCALAPPDATA%\Taurscribe\temp\
+/// - "settings"   → reveals settings.json in its parent folder
+#[tauri::command]
+pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let app_data = data_local_dir().ok_or("Could not resolve app data directory")?;
+    let base = app_data.join("Taurscribe");
+
+    let path = match folder.as_str() {
+        "models" => base.join("models"),
+        "recordings" => base.join("temp"),
+        "settings" => base.clone(), // open the parent directory; settings.json lives here
+        _ => return Err(format!("Unknown folder: {}", folder)),
+    };
+
+    // Ensure the directory exists before trying to open it.
+    if !path.exists() {
+        std::fs::create_dir_all(&path)
+            .map_err(|e| format!("Could not create directory {}: {}", path.display(), e))?;
+    }
+
+    app.opener()
+        .open_path(path.to_string_lossy().as_ref(), None::<&str>)
+        .map_err(|e| format!("Failed to open folder: {}", e))
+}
+
+/// Unloads whichever ASR engine is currently active, freeing VRAM/RAM without
+/// requiring the user to quit the app. Returns the name of the engine that was unloaded.
+#[allow(dead_code)]
+#[tauri::command]
+pub async fn unload_current_model(
+    state: tauri::State<'_, AudioState>,
+) -> Result<String, String> {
+    let active = state.active_engine.lock().map_err(|e| e.to_string())?;
+    match *active {
+        ASREngine::Whisper => {
+            let mut w = state.whisper.lock().map_err(|e| e.to_string())?;
+            w.unload();
+            Ok("whisper".to_string())
+        }
+        ASREngine::Parakeet => {
+            let mut p = state.parakeet.lock().map_err(|e| e.to_string())?;
+            p.unload();
+            Ok("parakeet".to_string())
+        }
+        ASREngine::GraniteSpeech => {
+            let mut g = state.granite_speech.lock().map_err(|e| e.to_string())?;
+            g.unload();
+            Ok("granite_speech".to_string())
+        }
+    }
+}

@@ -840,6 +840,111 @@
   border-color: rgba(var(--accent-primary-rgb), 0.5);
 }
 
+/* ── Ready step: inline model download ─────────────────────── */
+.ready-download-card {
+  width: 100%;
+  max-width: 380px;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.2);
+  border-radius: 8px;
+  background: rgba(var(--accent-primary-rgb), 0.05);
+  padding: 14px 16px;
+  margin: 12px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ready-download-done {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-primary, #e09f3e);
+  font-size: 0.78rem;
+  font-family: var(--font-mono, 'Martian Mono', monospace);
+  letter-spacing: 0.04em;
+}
+
+.ready-download-done svg {
+  flex-shrink: 0;
+  color: #3ecfa5;
+}
+
+.ready-download-prompt {
+  font-size: 0.72rem;
+  color: var(--text-secondary, #6b6b76);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.ready-download-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ready-download-name {
+  font-size: 0.74rem;
+  font-family: var(--font-mono, 'Martian Mono', monospace);
+  color: var(--text-primary, #ededef);
+  letter-spacing: 0.02em;
+}
+
+.ready-download-pct {
+  font-size: 0.7rem;
+  font-family: var(--font-mono, 'Martian Mono', monospace);
+  color: var(--accent-primary, #e09f3e);
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.ready-download-bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.ready-download-bar-fill {
+  height: 100%;
+  background: var(--accent-primary, #e09f3e);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+  box-shadow: 0 0 8px rgba(var(--accent-primary-rgb), 0.5);
+}
+
+.ready-download-cancel {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #6b6b76);
+  font-size: 0.7rem;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  letter-spacing: 0.04em;
+}
+.ready-download-cancel:hover { color: var(--text-primary, #ededef); }
+
+.ready-download-size {
+  opacity: 0.65;
+  font-size: 0.85em;
+}
+
+.ready-skip-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #6b6b76);
+  font-size: 0.72rem;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: center;
+  letter-spacing: 0.04em;
+  transition: color 0.15s;
+}
+.ready-skip-btn:hover { color: var(--text-primary, #ededef); }
+
 /* ═══════════════════════════════════════════════════════════
    STEP 4 — PERMISSIONS
    ═══════════════════════════════════════════════════════════ */

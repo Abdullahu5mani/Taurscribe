@@ -29,13 +29,19 @@ pub fn init_nemotron(path: &PathBuf, force_cpu: bool) -> Result<(Nemotron, GpuBa
             let m = try_cpu_nemotron(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        if let Ok(m) = try_gpu_nemotron(path.to_str().unwrap()) {
-            println!("[PARAKEET] Loaded Nemotron with CUDA");
-            return Ok((m, GpuBackend::Cuda));
+        match try_gpu_nemotron(path.to_str().unwrap()) {
+            Ok(m) => {
+                println!("[PARAKEET] Loaded Nemotron with CUDA");
+                return Ok((m, GpuBackend::Cuda));
+            }
+            Err(e) => eprintln!("[PARAKEET] CUDA failed for Nemotron: {e}"),
         }
-        if let Ok(m) = try_directml_nemotron(path.to_str().unwrap()) {
-            println!("[PARAKEET] Loaded Nemotron with DirectML");
-            return Ok((m, GpuBackend::DirectML));
+        match try_directml_nemotron(path.to_str().unwrap()) {
+            Ok(m) => {
+                println!("[PARAKEET] Loaded Nemotron with DirectML");
+                return Ok((m, GpuBackend::DirectML));
+            }
+            Err(e) => eprintln!("[PARAKEET] DirectML failed for Nemotron: {e}"),
         }
         println!("[PARAKEET] Fallback to CPU for Nemotron");
         let m = try_cpu_nemotron(path.to_str().unwrap())?;
@@ -94,13 +100,19 @@ pub fn init_ctc(path: &PathBuf, force_cpu: bool) -> Result<(Parakeet, GpuBackend
             let m = try_cpu_ctc(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        if let Ok(m) = try_gpu_ctc(path.to_str().unwrap()) {
-            println!("[PARAKEET] Loaded CTC with CUDA");
-            return Ok((m, GpuBackend::Cuda));
+        match try_gpu_ctc(path.to_str().unwrap()) {
+            Ok(m) => {
+                println!("[PARAKEET] Loaded CTC with CUDA");
+                return Ok((m, GpuBackend::Cuda));
+            }
+            Err(e) => eprintln!("[PARAKEET] CUDA failed for CTC: {e}"),
         }
-        if let Ok(m) = try_directml_ctc(path.to_str().unwrap()) {
-            println!("[PARAKEET] Loaded CTC with DirectML");
-            return Ok((m, GpuBackend::DirectML));
+        match try_directml_ctc(path.to_str().unwrap()) {
+            Ok(m) => {
+                println!("[PARAKEET] Loaded CTC with DirectML");
+                return Ok((m, GpuBackend::DirectML));
+            }
+            Err(e) => eprintln!("[PARAKEET] DirectML failed for CTC: {e}"),
         }
         println!("[PARAKEET] Fallback to CPU for CTC");
         let m = try_cpu_ctc(path.to_str().unwrap())?;
@@ -158,12 +170,21 @@ pub fn init_eou(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetEOU, GpuBack
             let m = try_cpu_eou(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        if let Ok(m) = try_gpu_eou(path.to_str().unwrap()) {
-            return Ok((m, GpuBackend::Cuda));
+        match try_gpu_eou(path.to_str().unwrap()) {
+            Ok(m) => {
+                println!("[PARAKEET] Loaded EOU with CUDA");
+                return Ok((m, GpuBackend::Cuda));
+            }
+            Err(e) => eprintln!("[PARAKEET] CUDA failed for EOU: {e}"),
         }
-        if let Ok(m) = try_directml_eou(path.to_str().unwrap()) {
-            return Ok((m, GpuBackend::DirectML));
+        match try_directml_eou(path.to_str().unwrap()) {
+            Ok(m) => {
+                println!("[PARAKEET] Loaded EOU with DirectML");
+                return Ok((m, GpuBackend::DirectML));
+            }
+            Err(e) => eprintln!("[PARAKEET] DirectML failed for EOU: {e}"),
         }
+        println!("[PARAKEET] Fallback to CPU for EOU");
         let m = try_cpu_eou(path.to_str().unwrap())?;
         Ok((m, GpuBackend::Cpu))
     }
@@ -219,12 +240,21 @@ pub fn init_tdt(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetTDT, GpuBack
             let m = try_cpu_tdt(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        if let Ok(m) = try_gpu_tdt(path.to_str().unwrap()) {
-            return Ok((m, GpuBackend::Cuda));
+        match try_gpu_tdt(path.to_str().unwrap()) {
+            Ok(m) => {
+                println!("[PARAKEET] Loaded TDT with CUDA");
+                return Ok((m, GpuBackend::Cuda));
+            }
+            Err(e) => eprintln!("[PARAKEET] CUDA failed for TDT: {e}"),
         }
-        if let Ok(m) = try_directml_tdt(path.to_str().unwrap()) {
-            return Ok((m, GpuBackend::DirectML));
+        match try_directml_tdt(path.to_str().unwrap()) {
+            Ok(m) => {
+                println!("[PARAKEET] Loaded TDT with DirectML");
+                return Ok((m, GpuBackend::DirectML));
+            }
+            Err(e) => eprintln!("[PARAKEET] DirectML failed for TDT: {e}"),
         }
+        println!("[PARAKEET] Fallback to CPU for TDT");
         let m = try_cpu_tdt(path.to_str().unwrap())?;
         Ok((m, GpuBackend::Cpu))
     }

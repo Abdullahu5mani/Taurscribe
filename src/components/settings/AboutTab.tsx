@@ -22,16 +22,39 @@ export function AboutTab() {
         unknown: 'Unknown',
     };
 
-    const storagePaths: { label: string; path: string; platform?: string }[] = [
-        { label: 'Models & recordings', path: '%LOCALAPPDATA%\\Taurscribe\\', platform: 'windows' },
-        { label: 'Models & recordings', path: '~/Library/Application Support/Taurscribe/', platform: 'macos' },
-        { label: 'Models & recordings', path: '~/.local/share/Taurscribe/', platform: 'linux' },
-        { label: 'Settings', path: '%LOCALAPPDATA%\\Taurscribe\\settings.json', platform: 'windows' },
-        { label: 'Settings', path: '~/Library/Application Support/Taurscribe/settings.json', platform: 'macos' },
-        { label: 'Settings', path: '~/.local/share/Taurscribe/settings.json', platform: 'linux' },
+    const storageFolders: { label: string; folder: string; pathByPlatform: Record<string, string> }[] = [
+        {
+            label: 'Models',
+            folder: 'models',
+            pathByPlatform: {
+                windows: '%LOCALAPPDATA%\\Taurscribe\\models\\',
+                macos: '~/Library/Application Support/Taurscribe/models/',
+                linux: '~/.local/share/Taurscribe/models/',
+            },
+        },
+        {
+            label: 'Recordings',
+            folder: 'recordings',
+            pathByPlatform: {
+                windows: '%LOCALAPPDATA%\\Taurscribe\\temp\\',
+                macos: '~/Library/Application Support/Taurscribe/temp/',
+                linux: '~/.local/share/Taurscribe/temp/',
+            },
+        },
+        {
+            label: 'Settings',
+            folder: 'settings',
+            pathByPlatform: {
+                windows: '%LOCALAPPDATA%\\Taurscribe\\',
+                macos: '~/Library/Application Support/Taurscribe/',
+                linux: '~/.local/share/Taurscribe/',
+            },
+        },
     ];
 
-    const relevantPaths = storagePaths.filter(p => !p.platform || p.platform === platform);
+    const openFolder = (folder: string) => {
+        invoke('open_app_folder', { folder }).catch(err => console.warn('open_app_folder failed:', err));
+    };
 
     const handleFactoryReset = async () => {
         if (resetting) return;
@@ -82,10 +105,18 @@ export function AboutTab() {
             <div className="setting-card" style={{ marginTop: '12px' }}>
                 <h4 className="setting-card-label-plain">Storage Locations</h4>
                 <p className="setting-card-desc">All data is stored locally on your machine.</p>
-                {relevantPaths.map(({ label, path }) => (
-                    <div className="about-row" key={path}>
+                {storageFolders.map(({ label, folder, pathByPlatform }) => (
+                    <div className="about-row about-row--folder" key={folder}>
                         <span className="about-row-label">{label}</span>
-                        <code className="about-path">{path}</code>
+                        <code className="about-path">{pathByPlatform[platform] ?? pathByPlatform['windows']}</code>
+                        <button
+                            type="button"
+                            className="about-open-btn"
+                            onClick={() => openFolder(folder)}
+                            title={`Open ${label} folder`}
+                        >
+                            Open ↗
+                        </button>
                     </div>
                 ))}
             </div>

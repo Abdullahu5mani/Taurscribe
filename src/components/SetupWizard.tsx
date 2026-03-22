@@ -7,10 +7,15 @@ import {
   type OnboardingUseCase,
   type SystemInfo,
 } from '../modelRecommendations';
+import type { DownloadableModel, DownloadProgress } from './settings/types';
 import './SetupWizard.css';
 
 interface Props {
   onComplete: (result: { openSettings: boolean; useCase: OnboardingUseCase }) => void;
+  handleDownload: (id: string, name: string) => void;
+  handleCancelDownload: (id: string) => void;
+  downloadProgress: Record<string, DownloadProgress>;
+  settingsModels: DownloadableModel[];
 }
 
 // Step entry tracks which step and which direction it entered from
@@ -22,7 +27,7 @@ interface StepEntry {
 
 const STEPS = 6;
 
-export function SetupWizard({ onComplete }: Props) {
+export function SetupWizard({ onComplete, handleDownload, handleCancelDownload, downloadProgress, settingsModels }: Props) {
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
   const [platform, setPlatform] = useState<string>('');
   const [isAppleSilicon, setIsAppleSilicon] = useState(false);
@@ -81,13 +86,13 @@ export function SetupWizard({ onComplete }: Props) {
         />
       );
       case 3: return <StepHotkey onNext={next} onBack={back} platform={platform} />;
-      case 4: 
+      case 4:
         // Skip permissions step on non-macOS platforms
         if (platform !== 'macos') {
-          return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} />;
+          return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
         }
         return <StepPermissions onNext={next} onBack={back} platform={platform} />;
-      case 5: return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} />;
+      case 5: return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
       default: return null;
     }
   };
@@ -536,14 +541,43 @@ function StepReady({
   platform,
   recommendation,
   useCase,
+  handleDownload,
+  handleCancelDownload,
+  downloadProgress,
+  settingsModels,
 }: {
   onComplete: (result: { openSettings: boolean; useCase: OnboardingUseCase }) => void;
   platform: string;
   recommendation: ReturnType<typeof computeModelRecommendation>;
   useCase: OnboardingUseCase;
+  handleDownload: (id: string, name: string) => void;
+  handleCancelDownload: (id: string) => void;
+  downloadProgress: Record<string, DownloadProgress>;
+  settingsModels: DownloadableModel[];
 }) {
   const isMac = platform === 'macos';
   const comboLabel = isMac ? 'Ctrl + Option' : 'Ctrl + Win';
+
+  const modelId = recommendation.primaryModelId;
+  const modelEntry = settingsModels.find(m => m.id === modelId);
+  const alreadyDownloaded = modelEntry?.downloaded === true;
+
+  const progress = downloadProgress[modelId];
+  const activeStatuses = ['starting', 'downloading', 'extracting', 'verifying', 'finalizing'];
+  const isDownloading = !!progress && activeStatuses.includes(progress.status);
+
+  const progressPct = isDownloading && progress.total > 0
+    ? Math.min(100, Math.round((progress.bytes / progress.total) * 100))
+    : 0;
+
+  const progressLabel =
+    progress?.status === 'verifying' ? 'Verifying…' :
+    progress?.status === 'extracting' ? 'Extracting…' :
+    progress?.status === 'finalizing' ? 'Finalizing…' :
+    progress?.status === 'starting' ? 'Starting…' :
+    `${progressPct}%`;
+
+  const canLaunch = alreadyDownloaded;
 
   return (
     <>
@@ -569,23 +603,64 @@ function StepReady({
         ))}
       </ul>
 
-      <p className="ready-cta-note">
-        Start with <strong>{recommendation.primaryLabel}</strong>
-        {recommendation.backupLabel ? <> and keep <strong>{recommendation.backupLabel}</strong> as your fallback.</> : <> in Settings → Models.</>}
-      </p>
+      {/* ── Inline model download ───────────────────────────────── */}
+      <div className="ready-download-card">
+        {alreadyDownloaded ? (
+          <div className="ready-download-done">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+              <polyline points="1.5,6.5 5,10 11.5,3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span>{recommendation.primaryLabel} — ready</span>
+          </div>
+        ) : isDownloading ? (
+          <>
+            <div className="ready-download-header">
+              <span className="ready-download-name">{recommendation.primaryLabel}</span>
+              <span className="ready-download-pct">{progressLabel}</span>
+            </div>
+            <div className="ready-download-bar">
+              <div
+                className="ready-download-bar-fill"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+            <button
+              className="ready-download-cancel"
+              onClick={() => handleCancelDownload(modelId)}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="ready-download-prompt">
+              Download your recommended model to start recording immediately.
+            </p>
+            <button
+              className="setup-btn setup-btn--primary setup-btn--full"
+              onClick={() => handleDownload(modelId, recommendation.primaryLabel)}
+            >
+              Download {recommendation.primaryLabel}
+              {modelEntry?.size ? <span className="ready-download-size"> · {modelEntry.size}</span> : null}
+            </button>
+          </>
+        )}
+      </div>
 
       <div className="setup-nav--ready">
         <button
           className="setup-btn setup-btn--primary setup-btn--full"
-          onClick={() => onComplete({ openSettings: true, useCase })}
+          disabled={!canLaunch}
+          style={!canLaunch ? { opacity: 0.35, cursor: 'not-allowed' } : undefined}
+          onClick={() => canLaunch && onComplete({ openSettings: false, useCase })}
         >
-          Open Models & Download Recommended
+          Launch App →
         </button>
         <button
-          className="setup-btn setup-btn--settings setup-btn--full"
-          onClick={() => onComplete({ openSettings: false, useCase })}
+          className="ready-skip-btn"
+          onClick={() => onComplete({ openSettings: !alreadyDownloaded, useCase })}
         >
-          Launch App
+          {alreadyDownloaded ? 'Open Models tab instead' : 'Skip — set up models manually'}
         </button>
       </div>
     </>
