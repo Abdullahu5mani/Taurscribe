@@ -1255,7 +1255,7 @@
 }
 
 .about-app-name {
-  font-family: 'Zodiak', serif;
+  font-family: 'Poppins', sans-serif;
   font-weight: 700;
   font-size: var(--font-md);
   color: var(--text-primary);

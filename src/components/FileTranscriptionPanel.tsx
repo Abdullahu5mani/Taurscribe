@@ -9,6 +9,7 @@ interface FileItem {
     id: string;
     path: string;
     name: string;
+    modelId?: string | null;
     status: "queued" | "processing" | "done" | "error" | "cancelled";
     progress: number;
     transcript: string;
@@ -47,6 +48,14 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
     useEffect(() => { isParakeetRef.current = isParakeet; }, [isParakeet]);
     useEffect(() => { isModelLoadingRef.current = isModelLoading; }, [isModelLoading]);
 
+    // Keep a ref to the active model ID so addPaths (a stable callback) can read it.
+    const activeModelIdRef = useRef<string | null>(null);
+    const currentActiveModelId =
+        activeEngine === "whisper" ? (currentModel ?? null) :
+        activeEngine === "parakeet" ? (currentParakeetModel ?? null) :
+        (currentGraniteModel ?? null);
+    useEffect(() => { activeModelIdRef.current = currentActiveModelId; }, [currentActiveModelId]);
+
     const [files, setFiles] = useState<FileItem[]>([]);
     const [isDragOver, setIsDragOver] = useState(false);
     const processingRef = useRef(false);
@@ -66,19 +75,24 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
         if (isParakeetRef.current || isModelLoadingRef.current) return;
         const audio = paths.filter(p => AUDIO_EXTS.includes(getExt(p)));
         if (audio.length === 0) return;
+        const model = activeModelIdRef.current;
         setFiles(prev => {
-            const existing = new Set(prev.map(f => f.path));
-            const newItems: FileItem[] = audio
-                .filter(p => !existing.has(p))
-                .map(p => ({
+            const newItems: FileItem[] = audio.map(p => {
+                const baseName = p.split(/[\\/]/).pop() ?? p;
+                // If this exact path + model combo already exists anywhere in the list,
+                // suffix the display name with " (1)" so the user can tell it apart.
+                const isDupe = prev.some(f => f.path === p && f.modelId === model);
+                return {
                     id: `${p}-${Date.now()}`,
                     path: p,
-                    name: p.split(/[\\/]/).pop() ?? p,
+                    name: isDupe ? `${baseName} (1)` : baseName,
+                    modelId: model,
                     status: "queued",
                     progress: 0,
                     transcript: "",
                     expanded: false,
-                }));
+                };
+            });
             return [...prev, ...newItems];
         });
     }, []);
@@ -419,16 +433,15 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
                                             Run · {engineLabel()}
                                         </button>
                                     )}
-                                    {item.status !== "processing" && (
-                                        <button
-                                            className={`file-card-btn file-card-btn--remove${item.status === "queued" ? " file-card-btn--remove-queued" : ""}`}
-                                            onClick={() => removeFile(item.id)}
-                                            title={item.status === "queued" ? "Remove from queue" : "Remove"}
-                                            aria-label={`Remove ${item.name}`}
-                                        >
-                                            {item.status === "queued" ? "Remove" : "✕"}
-                                        </button>
-                                    )}
+                                    <button
+                                        className={`file-card-btn file-card-btn--remove${item.status === "queued" ? " file-card-btn--remove-queued" : ""}`}
+                                        onClick={() => item.status !== "processing" && removeFile(item.id)}
+                                        disabled={item.status === "processing"}
+                                        title={item.status === "processing" ? "Cannot remove — file is being transcribed" : item.status === "queued" ? "Remove from queue" : "Remove"}
+                                        aria-label={`Remove ${item.name}`}
+                                    >
+                                        {item.status === "queued" ? "Remove" : "✕"}
+                                    </button>
                                 </div>
                             </div>
 

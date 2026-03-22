@@ -44,6 +44,35 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: 'Poppins';
+  src: url('./assets/fonts/Poppins-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Poppins';
+  src: url('./assets/fonts/Poppins-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Poppins';
+  src: url('./assets/fonts/Poppins-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Poppins';
+  src: url('./assets/fonts/Poppins-ExtraBold.ttf') format('truetype');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* =========================================================================
    * 60-30-10 COLOUR DISTRIBUTION
@@ -544,7 +573,7 @@ body {
 
 .app-title {
   margin: 0;
-  font-family: 'Zodiak', serif; /* M8 fix: was 'Inter'; Zodiak is the loaded display font */
+  font-family: 'Poppins', sans-serif;
   font-size: var(--font-xl);
   font-weight: 700;
   letter-spacing: 0.25em;
@@ -1270,6 +1299,13 @@ body {
 .model-select:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.model-in-use-warning {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--warning);
+  margin-bottom: 5px;
 }
 
 .model-select option,
@@ -3489,6 +3525,12 @@ body {
 .file-card-btn:hover {
   background: var(--bg-card);
   color: var(--text-primary);
+}
+
+.file-card-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .file-card-btn--secondary {
