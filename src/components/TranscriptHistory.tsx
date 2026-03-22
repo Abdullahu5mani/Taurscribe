@@ -39,6 +39,11 @@ const formatRealTimeRatio = (durationMs: number | null, processingMs: number | n
     return `${ratio.toFixed(1)}x`;
 };
 
+const formatProcessingTime = (ms: number | null) => {
+    if (!ms || ms <= 0) return null;
+    return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+};
+
 const formatAudioDuration = (ms: number | null) => {
     if (!ms) return null;
     const s = Math.round(ms / 1000);
@@ -168,6 +173,11 @@ export function TranscriptHistory({ refreshKey }: TranscriptHistoryProps) {
                                             {formatAudioDuration(item.duration_ms) && (
                                                 <span className="history-badge history-badge-duration" title="Audio duration">
                                                     {formatAudioDuration(item.duration_ms)}
+                                                </span>
+                                            )}
+                                            {formatProcessingTime(item.processing_time_ms) && (
+                                                <span className="history-badge history-badge-latency" title="Transcription processing time">
+                                                    {formatProcessingTime(item.processing_time_ms)}
                                                 </span>
                                             )}
                                             {formatRealTimeRatio(item.duration_ms, item.processing_time_ms) && (

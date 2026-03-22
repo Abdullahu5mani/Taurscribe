@@ -19,10 +19,11 @@ import { QuickSettings } from "./components/QuickSettings";
 import { useDownloads } from "./hooks/useDownloads";
 import { MODELS } from "./components/settings/types";
 import type { DownloadableModel } from "./components/settings/types";
+import { formatSize, beautifyModelName } from "./utils/modelDisplay";
 import type { OnboardingUseCase } from "./modelRecommendations";
 import "./components/TitleBar.css";
 import "./App.css";
-import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, IconSettings, InfoTooltip } from "./components/Icons";
+import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, IconSettings, IconEject, InfoTooltip } from "./components/Icons";
 
 const ANIMATED_LOGOS = [
   "animated_logo_assemble.svg",
@@ -129,32 +130,6 @@ const setTrayState = async (newState: "ready" | "recording" | "processing") => {
   }
 };
 
-const formatSize = (sizeMb: number): string => {
-  if (sizeMb >= 1024) return `${(sizeMb / 1024).toFixed(1)} GB`;
-  return `${Math.round(sizeMb)} MB`;
-};
-
-const beautifyModelName = (rawName: string) => {
-  let name = rawName
-    .replace("ggml-", "")
-    .replace(".bin", "")
-    .replace("distil-", "Distil ")
-    .replace("medium.en", "Medium")
-    .replace("small.en", "Small")
-    .replace("tiny.en", "Tiny")
-    .replace("base.en", "Base")
-    .replace("-q8_0", " (Fast)")
-    .replace("-q5_1", " (Balanced)")
-    .replace("nemotron", "Nemotron")
-    .replace("parakeet", "")
-    .replace("ctc-", "CTC ")
-    .replace("tdt-", "TDT ")
-    .replace("streaming", "Streaming")
-    .replace("-", " ")
-    .replace("_", " ")
-    .trim();
-  return name.replace(/\b\w/g, l => l.toUpperCase());
-};
 
 function App() {
   const pickRandomLogo = useCallback(() => {
@@ -163,6 +138,7 @@ function App() {
 
   const [randomLogo, setRandomLogo] = useState(pickRandomLogo);
   const [isLogoShuttering, setIsLogoShuttering] = useState(false);
+  const [rippleTile, setRippleTile] = useState<string | null>(null);
 
   const [isBooting, setIsBooting] = useState(true);
   // M6 fix: containerBooting controls the CSS stagger class; cleared after
@@ -174,6 +150,7 @@ function App() {
     const titleTimer = setTimeout(() => setIsBooting(false), 600);
     // Container stagger: clear after all children finish (10 × 80ms + 500ms duration)
     const staggerTimer = setTimeout(() => setContainerBooting(false), 1400);
+
     return () => {
       clearTimeout(titleTimer);
       clearTimeout(staggerTimer);
@@ -289,52 +266,29 @@ function App() {
   const setHeaderStatusRef = useRef(setHeaderStatus);
   useEffect(() => { setHeaderStatusRef.current = setHeaderStatus; }, [setHeaderStatus]);
 
-  const onModelDownloadedImpl = async (id: string) => {
-    // Refresh the main-menu model lists immediately AND query verified status
-    // in parallel so the Whisper/Parakeet cards update without delay.
+  // Factory: refreshes model status after a download event. `fallbackDownloaded`
+  // is what we assume if the status check fails — true on success, false on failure.
+  const makeDownloadStatusHandler = (fallbackDownloaded: boolean) => async (id: string) => {
     const [statuses] = await Promise.all([
-      invoke<any[]>("get_download_status", { modelIds: [id] }).catch(() => null),
+      invoke<{ id: string; downloaded: boolean; verified: boolean }[]>("get_download_status", { modelIds: [id] }).catch(() => null),
       refreshModels(false),
     ]);
-    if (statuses) {
-      const s = statuses.find((x: any) => x.id === id);
-      setSettingsModels(prev => prev.map(m =>
-        m.id === id ? { ...m, downloaded: true, verified: s?.verified ?? false } : m
-      ));
-    } else {
-      setSettingsModels(prev => prev.map(m =>
-        m.id === id ? { ...m, downloaded: true, verified: false } : m
-      ));
-    }
+    const s = statuses?.find(x => x.id === id);
+    setSettingsModels(prev => prev.map(m =>
+      m.id === id ? { ...m, downloaded: s?.downloaded ?? fallbackDownloaded, verified: s?.verified ?? false } : m
+    ));
   };
-  // Keep a stable function reference so useDownloads doesn't re-subscribe its
-  // event listener on every render (which would cause missed events).
+
+  // Keep stable references so useDownloads doesn't re-subscribe its event
+  // listener on every render (which would cause missed events).
+  // NOTE: the ref is updated again after useEngineSwitch to include auto-load logic.
+  const onModelDownloadedImpl = makeDownloadStatusHandler(true);
   const onModelDownloadedRef = useRef(onModelDownloadedImpl);
-  useEffect(() => { onModelDownloadedRef.current = onModelDownloadedImpl; });
   const onModelDownloaded = useCallback((id: string) => onModelDownloadedRef.current(id), []);
 
-  const onDownloadFailedImpl = async (id: string) => {
-    const [statuses] = await Promise.all([
-      invoke<any[]>("get_download_status", { modelIds: [id] }).catch(() => null),
-      refreshModels(false),
-    ]);
-    if (statuses) {
-      const s = statuses.find((x: any) => x.id === id);
-      setSettingsModels((prev) =>
-        prev.map((m) =>
-          m.id === id
-            ? { ...m, downloaded: s?.downloaded ?? false, verified: s?.verified ?? false }
-            : m,
-        ),
-      );
-    } else {
-      setSettingsModels((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, downloaded: false, verified: false } : m)),
-      );
-    }
-  };
+  const onDownloadFailedImpl = makeDownloadStatusHandler(false);
   const onDownloadFailedRef = useRef(onDownloadFailedImpl);
-  useEffect(() => { onDownloadFailedRef.current = onDownloadFailedImpl; });
+  useEffect(() => { onDownloadFailedRef.current = makeDownloadStatusHandler(false); });
   const onDownloadFailed = useCallback((id: string) => onDownloadFailedRef.current(id), []);
 
   const { downloadProgress, handleDownload, handleCancelDownload } = useDownloads(onModelDownloaded, onDownloadFailed);
@@ -413,6 +367,26 @@ function App() {
     onHistorySaved: () => setHistoryRefreshKey(k => k + 1),
   });
 
+  // Eject / Load handlers for the header button
+  const handleEjectModel = async () => {
+    if (isLoading || isLoadingRef.current || isRecording) return;
+    try {
+      setHeaderStatus("Unloading model…", 10_000);
+      await invoke("unload_current_model");
+      setLoadedEngine(null);
+      setHeaderStatus("Model unloaded — VRAM freed");
+      await setTrayState("ready");
+    } catch (e) {
+      setHeaderStatus(`Failed to unload: ${e}`, 4000);
+    }
+  };
+
+  const handleLoadCurrentEngine = () => {
+    if (activeEngine === "whisper") handleSwitchToWhisper();
+    else if (activeEngine === "parakeet") handleSwitchToParakeet();
+    else handleSwitchToGranite();
+  };
+
   // Track the engine that was loaded before a switch began (for power-routing-out visual)
   const prevLoadedEngineRef = useRef<string | null>(null);
   useEffect(() => {
@@ -431,6 +405,36 @@ function App() {
       prevLoadedEngineRef.current = loadedEngine;
     }
   }, [loadedEngine, loadingTargetEngine]);
+
+  // --- Auto-load after download ---
+  // Runs after every render so the closure always captures the latest engine state.
+  // When a download completes for the active engine and nothing is loaded yet, load it.
+  useEffect(() => {
+    onModelDownloadedRef.current = async (id: string) => {
+      // 1. Refresh UI state (same as makeDownloadStatusHandler(true))
+      const [statuses] = await Promise.all([
+        invoke<{ id: string; downloaded: boolean; verified: boolean }[]>("get_download_status", { modelIds: [id] }).catch(() => null),
+        refreshModels(false),
+      ]);
+      const s = statuses?.find(x => x.id === id);
+      setSettingsModels(prev => prev.map(m =>
+        m.id === id ? { ...m, downloaded: s?.downloaded ?? true, verified: s?.verified ?? false } : m
+      ));
+
+      // 2. Auto-load if this engine is active and nothing is loaded yet
+      const engineForModel =
+        id.startsWith('parakeet') ? 'parakeet' :
+        id.startsWith('granite') ? 'granite_speech' :
+        id.startsWith('whisper') ? 'whisper' :
+        null;
+
+      if (engineForModel && engineForModel === activeEngineRef.current && !loadedEngine && !isLoadingRef.current) {
+        if (engineForModel === 'whisper') handleModelChange(id);
+        else if (engineForModel === 'parakeet') handleSwitchToParakeet();
+        else handleSwitchToGranite();
+      }
+    };
+  });
 
   // Helper to compute power-routing classes for engine cards
   const engineCardRouting = (engine: string) => {
@@ -752,6 +756,8 @@ function App() {
   const handleStopRecordingRef = useRef(handleStopRecording);
   const handleCancelRecordingRef = useRef(handleCancelRecording);
   const handleTranscriptionChunkRef = useRef(handleTranscriptionChunk);
+  const loadedEngineRef = useRef(loadedEngine);
+  const playErrorRef = useRef(playError);
   useEffect(() => {
     handleStartRecordingRef.current = handleStartRecording;
     handlePauseRecordingRef.current = handlePauseRecording;
@@ -759,6 +765,8 @@ function App() {
     handleStopRecordingRef.current = handleStopRecording;
     handleCancelRecordingRef.current = handleCancelRecording;
     handleTranscriptionChunkRef.current = handleTranscriptionChunk;
+    loadedEngineRef.current = loadedEngine;
+    playErrorRef.current = playError;
   });
 
   const startingRecordingRef = useRef(false);
@@ -777,14 +785,39 @@ function App() {
     let unlistenAudioFallback: (() => void) | undefined;
     let unlistenAudioDisconnect: (() => void) | undefined;
     let unlistenOverlayAction: (() => void) | undefined;
+    let unlistenModelUnloaded: (() => void) | undefined;
     const setup = async () => {
       const unsub1 = await listen("hotkey-start-recording", async () => {
         const now = Date.now();
         if (now - lastStartTime.current < HOTKEY_DEBOUNCE_MS) return;
         lastStartTime.current = now;
 
-        // Don't start if model is loading, already recording, starting, or processing a previous stop
-        if (isLoadingRef.current || isRecordingRef.current || startingRecordingRef.current || stopInProgressRef.current) return;
+        // Don't start if already recording, starting, or processing a previous stop
+        if (isRecordingRef.current || startingRecordingRef.current || stopInProgressRef.current) return;
+
+        // Block hotkey while model is loading
+        if (isLoadingRef.current) {
+          playErrorRef.current();
+          invoke("show_overlay").catch(() => {});
+          invoke("set_overlay_state", { phase: "model_loading", engine: activeEngineRef.current }).catch(() => {});
+          setTimeout(() => {
+            invoke("hide_overlay").catch(() => {});
+            invoke("set_overlay_state", { phase: "hidden", engine: activeEngineRef.current }).catch(() => {});
+          }, 2500);
+          return;
+        }
+
+        // Block hotkey if no model is currently loaded
+        if (loadedEngineRef.current === null) {
+          playErrorRef.current();
+          invoke("show_overlay").catch(() => {});
+          invoke("set_overlay_state", { phase: "no_model", engine: activeEngineRef.current }).catch(() => {});
+          setTimeout(() => {
+            invoke("hide_overlay").catch(() => {});
+            invoke("set_overlay_state", { phase: "hidden", engine: activeEngineRef.current }).catch(() => {});
+          }, 2500);
+          return;
+        }
 
         startingRecordingRef.current = true;
         pendingStopRef.current = false;
@@ -866,6 +899,11 @@ function App() {
         }
       });
 
+      const unsub8 = await listen("model-unloaded", () => {
+        setLoadedEngine(null);
+        setHeaderStatusRef.current("Model unloaded — VRAM freed");
+      });
+
       if (active) {
         unlistenStart = unsub1;
         unlistenStop = unsub2;
@@ -874,8 +912,9 @@ function App() {
         unlistenAudioFallback = unsub5;
         unlistenAudioDisconnect = unsub6;
         unlistenOverlayAction = unsub7;
+        unlistenModelUnloaded = unsub8;
       } else {
-        unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7();
+        unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8();
       }
     };
 
@@ -889,6 +928,7 @@ function App() {
       if (unlistenAudioFallback) unlistenAudioFallback();
       if (unlistenAudioDisconnect) unlistenAudioDisconnect();
       if (unlistenOverlayAction) unlistenOverlayAction();
+      if (unlistenModelUnloaded) unlistenModelUnloaded();
     };
   }, []);
 
@@ -983,7 +1023,15 @@ function App() {
   }
 
   if (showSetupWizard === true) {
-    return <SetupWizard onComplete={handleSetupComplete} />;
+    return (
+      <SetupWizard
+        onComplete={handleSetupComplete}
+        handleDownload={handleDownload}
+        handleCancelDownload={handleCancelDownload}
+        downloadProgress={downloadProgress}
+        settingsModels={settingsModels}
+      />
+    );
   }
 
   return (
@@ -1031,6 +1079,34 @@ function App() {
                   </div>
                 )}
               </div>
+              {/* Eject / Load button — hidden while loading or recording */}
+              {!isLoading && !isRecording && !isProcessingTranscript && (
+                loadedEngine !== null ? (
+                  <button
+                    type="button"
+                    className="eject-btn"
+                    onClick={handleEjectModel}
+                    title="Unload model (free VRAM)"
+                    aria-label="Unload model"
+                  >
+                    <IconEject size={18} />
+                  </button>
+                ) : (
+                  (activeEngine === "whisper" ? models.length > 0 :
+                   activeEngine === "parakeet" ? parakeetModels.length > 0 :
+                   graniteModels.length > 0) && (
+                    <button
+                      type="button"
+                      className="eject-btn eject-btn--load"
+                      onClick={handleLoadCurrentEngine}
+                      title="Load model"
+                      aria-label="Load model"
+                    >
+                      <IconCpu size={18} />
+                    </button>
+                  )
+                )
+              )}
               {/* L4 fix: replaced inline SVG with IconSettings from Icons.tsx */}
               <button
                 type="button"
@@ -1391,8 +1467,12 @@ function App() {
                     return (
                       <button
                         key={s.value}
-                        className={`tone-tile ${isActive ? 'tone-tile--active' : ''}`}
-                        onClick={() => setTranscriptionStyle(s.value)}
+                        className={`tone-tile ${isActive ? 'tone-tile--active' : ''}${rippleTile === s.value ? ' tone-tile--burst' : ''}`}
+                        onClick={() => {
+                          setTranscriptionStyle(s.value);
+                          setRippleTile(s.value);
+                          setTimeout(() => setRippleTile(null), 500);
+                        }}
                         disabled={!enableGrammarLM || llmStatus !== 'Loaded'}
                         style={{
                           '--tile-accent': s.accent,

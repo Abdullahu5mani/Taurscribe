@@ -243,7 +243,7 @@ export function SettingsModal({
                             ))}
                         </nav>
 
-                        <div className="settings-content">
+                        <div className="settings-content" key={activeTab}>
                             {renderContent()}
                         </div>
                     </div>

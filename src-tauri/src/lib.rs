@@ -214,6 +214,8 @@ pub fn run() {
             commands::request_microphone_permission,
             commands::check_accessibility_permission,
             commands::open_accessibility_settings,
+            commands::open_app_folder,
+            commands::unload_current_model,
             commands::relaunch_app,
             commands::factory_reset_app_data,
             commands::get_close_behavior,

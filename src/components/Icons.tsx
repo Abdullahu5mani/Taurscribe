@@ -248,6 +248,13 @@ export const IconLightbulb = ({ size = 16, ...props }: IconProps) => (
 
 // ── Utility ───────────────────────────────────────────────────────────
 
+export const IconEject = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <polyline points="5,15 12,7 19,15" />
+        <line x1="5" y1="19" x2="19" y2="19" />
+    </svg>
+);
+
 export const IconSettings = ({ size = 16, ...props }: IconProps) => (
     <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
         <circle cx="12" cy="12" r="3" />

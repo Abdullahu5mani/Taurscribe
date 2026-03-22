@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
 import { IconCheck, IconCopy } from "./Icons";
 
@@ -10,6 +11,7 @@ type TranscriptRecord = {
     engine: string;
     duration_ms: number | null;
     grammar_llm_used: boolean;
+    processing_time_ms: number | null;
     audio_source: string | null;
 };
 
@@ -142,6 +144,9 @@ export function TranscriptFeed({
                     });
                 }).catch(() => {});
 
+                // Notify the overlay window so it can fire its own confetti burst
+                emit("transcription-milestone", { count: newCount }).catch(() => {});
+
                 if (milestoneTimerRef.current) clearTimeout(milestoneTimerRef.current);
                 milestoneTimerRef.current = setTimeout(() => {
                     setMilestoneMsg(null);
@@ -202,7 +207,18 @@ export function TranscriptFeed({
 
             {items.length === 0 && !showLive && (
                 <div className="feed-empty">
-                    Your transcriptions will appear here
+                    <div className="feed-empty-waveform" aria-hidden="true">
+                        {[4, 8, 14, 18, 14, 8, 4].map((h, i) => (
+                            <span
+                                key={i}
+                                className="feed-empty-bar"
+                                style={{ '--bar-h': `${h}px`, '--bar-i': i } as React.CSSProperties}
+                            />
+                        ))}
+                    </div>
+                    <span className="feed-empty-text">
+                        READY<span className="feed-empty-cursor" aria-hidden="true">_</span>
+                    </span>
                 </div>
             )}
 
@@ -220,11 +236,17 @@ export function TranscriptFeed({
                             <div className="feed-item-header">
                                 <span className="feed-timestamp">{formatTimestamp(item.created_at)}</span>
                                 <div className="feed-badges">
-                                    {isLatest && latestLatency !== null && (
+                                    {isLatest && latestLatency !== null ? (
                                         <span className="latency-badge">
                                             {isNew ? <LatencyOdometer target={latestLatency} /> : <>{latestLatency} ms</>}
                                         </span>
-                                    )}
+                                    ) : !isLatest && item.processing_time_ms ? (
+                                        <span className="latency-badge latency-badge--muted">
+                                            {item.processing_time_ms >= 1000
+                                                ? `${(item.processing_time_ms / 1000).toFixed(1)}s`
+                                                : `${item.processing_time_ms} ms`}
+                                        </span>
+                                    ) : null}
                                     <span className={`feed-badge feed-badge-engine--${item.engine}`}>
                                         {item.engine === "parakeet" ? "Parakeet" : item.engine === "granite_speech" ? "Granite" : "Whisper"}
                                     </span>

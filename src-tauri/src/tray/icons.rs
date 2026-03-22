@@ -84,15 +84,32 @@ pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> 
     Ok(())
 }
 
+fn do_unload(app: &AppHandle) {
+    use crate::state::AudioState;
+    use crate::types::ASREngine;
+    use tauri::Emitter;
+    let state = app.state::<AudioState>();
+    if let Ok(active) = state.active_engine.lock() {
+        match *active {
+            ASREngine::Whisper => { if let Ok(mut w) = state.whisper.lock() { w.unload(); } }
+            ASREngine::Parakeet => { if let Ok(mut p) = state.parakeet.lock() { p.unload(); } }
+            ASREngine::GraniteSpeech => { if let Ok(mut g) = state.granite_speech.lock() { g.unload(); } }
+        }
+    }
+    let _ = app.emit("model-unloaded", ());
+    let _ = crate::tray::update_tray_icon(app, AppState::Ready);
+}
+
 /// Setup the system tray icon and menu (called from `setup()` closure)
 #[allow(dead_code)]
 pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
     let show_item = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>)?;
+    let unload_item = MenuItem::with_id(app, "unload", "Unload Model", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show_item, &separator, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show_item, &unload_item, &separator, &quit_item])?;
 
     let icon = tray_icon_ready!();
 
@@ -108,6 +125,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.set_focus();
                 }
             }
+            "unload" => do_unload(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -139,9 +157,10 @@ pub fn setup_tray_from_handle(app: &AppHandle) -> Result<(), Box<dyn std::error:
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 
     let show_item = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>)?;
+    let unload_item = MenuItem::with_id(app, "unload", "Unload Model", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show_item, &separator, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show_item, &unload_item, &separator, &quit_item])?;
 
     let icon = tray_icon_ready!();
 
@@ -157,6 +176,7 @@ pub fn setup_tray_from_handle(app: &AppHandle) -> Result<(), Box<dyn std::error:
                     let _ = window.set_focus();
                 }
             }
+            "unload" => do_unload(app),
             "quit" => app.exit(0),
             _ => {}
         })

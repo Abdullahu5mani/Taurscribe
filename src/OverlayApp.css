@@ -118,7 +118,8 @@ body {
 
 .overlay-phase-dot--too_short,
 .overlay-phase-dot--paste_failed,
-.overlay-phase-dot--cancelled {
+.overlay-phase-dot--cancelled,
+.overlay-phase-dot--no_model {
   background: var(--recording);
 }
 
@@ -281,7 +282,8 @@ body {
 
 .overlay-pill-dot--too_short,
 .overlay-pill-dot--paste_failed,
-.overlay-pill-dot--cancelled {
+.overlay-pill-dot--cancelled,
+.overlay-pill-dot--no_model {
   background: var(--recording);
 }
 
@@ -318,4 +320,97 @@ body {
   .overlay-pill-dot--correcting {
     animation: none !important;
   }
+}
+
+/* ── No-model error panel ─────────────────────────────────────────────────── */
+.overlay-error-panel {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 20px 22px;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: rgba(18, 6, 6, 0.92);
+  border: 1px solid rgba(220, 38, 38, 0.5);
+  border-radius: 12px;
+  animation: error-border-pulse 1.6s ease-in-out infinite;
+}
+
+.overlay-error-glyph {
+  font-size: 2.6rem;
+  line-height: 1;
+  color: #dc2626;
+  font-family: 'Martian Mono', monospace;
+  font-weight: 700;
+  flex-shrink: 0;
+  text-shadow: 0 0 24px rgba(220, 38, 38, 0.55);
+  animation: error-glyph-pulse 1.6s ease-in-out infinite;
+}
+
+.overlay-error-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.overlay-error-title {
+  display: block;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ef4444;
+}
+
+.overlay-error-sub {
+  display: block;
+  font-family: 'Barlow', sans-serif;
+  font-size: 0.76rem;
+  font-weight: 400;
+  color: rgba(237, 237, 239, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes error-border-pulse {
+  0%, 100% {
+    border-color: rgba(220, 38, 38, 0.5);
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+  }
+  50% {
+    border-color: rgba(220, 38, 38, 0.85);
+    box-shadow: 0 0 18px rgba(220, 38, 38, 0.18);
+  }
+}
+
+@keyframes error-glyph-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* ── Model loading panel (amber, spinning glyph) ─────────────────────────── */
+.overlay-loading-panel {
+  background: rgba(20, 14, 4, 0.92);
+  border-color: rgba(234, 179, 8, 0.5);
+  animation: loading-border-pulse 1.6s ease-in-out infinite;
+}
+
+.overlay-loading-glyph {
+  color: #eab308;
+  text-shadow: 0 0 24px rgba(234, 179, 8, 0.55);
+  animation: loading-spin 1.2s linear infinite;
+}
+
+@keyframes loading-border-pulse {
+  0%, 100% { border-color: rgba(234, 179, 8, 0.5); box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); }
+  50% { border-color: rgba(234, 179, 8, 0.85); box-shadow: 0 0 18px rgba(234, 179, 8, 0.18); }
+}
+
+@keyframes loading-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }

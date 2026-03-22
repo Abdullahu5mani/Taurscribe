@@ -175,6 +175,12 @@
   padding: 32px;
   overflow-y: auto;
   background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(var(--accent-primary-rgb), 0.03) 0%, transparent 50%);
+  animation: settingsTabIn 0.2s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes settingsTabIn {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .settings-section-title {
@@ -1302,6 +1308,30 @@
   text-align: right;
 }
 
+.about-row--folder {
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+
+.about-open-btn {
+  font-family: 'Martian Mono', monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: var(--accent-primary);
+  border: 1px solid rgba(224, 159, 62, 0.3);
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.about-open-btn:hover {
+  background: rgba(224, 159, 62, 0.08);
+}
+
 .about-reset-actions {
   display: flex;
   align-items: center;
@@ -1725,6 +1755,10 @@
   }
   .settings-overlay {
     transition: none;
+  }
+
+  .settings-content {
+    animation: none !important;
   }
 }
 
