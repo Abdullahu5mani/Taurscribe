@@ -41,7 +41,7 @@ rdev = { git = "https://github.com/rustdesk-org/rdev.git" }
 regex = "1.12.2"
 tauri-plugin-store = "2.4.2"
 enigo = "0.6.1"
-arboard = "3"
+arboard = { version = "3", features = ["image-data"] }
 sysinfo = "0.32"
 # llama-cpp-2: llama.cpp bindings for Rust (replaces Candle)
 # dynamic-link builds ggml/llama as shared libs (DLLs) to avoid LNK2005
