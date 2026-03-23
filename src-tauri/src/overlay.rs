@@ -514,6 +514,8 @@ mod mac {
             "cancelled" => "✕  Recording discarded".to_string(),
             "too_short" => "⚠  Too short".to_string(),
             "paste_failed" => "⚠  Couldn't paste".to_string(),
+            "no_model" => "⊗  No model loaded".to_string(),
+            "model_loading" => "⟳  Model loading...".to_string(),
             _ => String::new(),
         }
     }

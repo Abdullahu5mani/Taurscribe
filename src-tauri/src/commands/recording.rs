@@ -745,10 +745,10 @@ fn insert_text(text: &str) -> Result<(), String> {
     clipboard_paste(text)
 }
 
-/// Returns true when the frontmost application is a web browser or Electron app
-/// whose web content fields don't expose AXSelectedText. In these apps,
-/// ax_insert() always fails, wasting ~260ms on retries before falling back
-/// to clipboard paste anyway. Skip straight to Cmd+V for speed and reliability.
+/// Returns true when the frontmost application is a browser, terminal, or Electron
+/// app whose text fields don't expose AXSelectedText. In these apps ax_insert()
+/// always fails, wasting ~260ms on retries before falling back to clipboard paste.
+/// Skip straight to Cmd+V for speed and reliability.
 #[cfg(target_os = "macos")]
 fn should_prefer_clipboard_paste() -> bool {
     use std::ffi::{c_void, CStr};
@@ -793,19 +793,63 @@ fn should_prefer_clipboard_paste() -> bool {
         let bid_lower = bid.to_lowercase();
         println!("[INSERT] Frontmost app bundle ID: {}", bid);
 
-        const BROWSER_BUNDLES: &[&str] = &[
+        const PREFER_CLIPBOARD_BUNDLES: &[&str] = &[
+            // ── Browsers (web content does not expose AXSelectedText) ───────
             "com.google.chrome",
             "org.mozilla.firefox",
             "com.apple.safari",
-            "company.thebrowser.browser",   // Arc
+            "company.thebrowser.browser",       // Arc
             "com.brave.browser",
             "com.operasoftware.opera",
             "com.vivaldi.vivaldi",
-            "com.microsoft.edgemac",
+            "com.microsoft.edgemac",            // Edge
             "org.chromium.chromium",
+            "app.zen-browser",                  // Zen
+            "com.kagi.kagimacOS",               // Orion
+            "com.naver.whale",                  // Whale
+            // Google Meet has no standalone macOS app — covered by browsers above
+            // ── Terminals (AXSelectedText write is unsupported) ──────────────
+            "com.apple.terminal",
+            "com.googlecode.iterm2",
+            "com.github.wez.wezterm",
+            "org.alacritty",
+            "net.kovidgoyal.kitty",
+            // ── Electron / web-rendered apps ─────────────────────────────────
+            "com.microsoft.vscode",             // VS Code
+            "com.tinyspeck.slackmacgap",        // Slack
+            "com.hnc.discord",                  // Discord
+            "notion.id",                        // Notion
+            "md.obsidian",                      // Obsidian
+            "net.whatsapp.whatsapp",            // WhatsApp
+            "com.evernote.evernote",            // Evernote
+            "abnerworks.typora",                // Typora
+            "com.todesktop",                    // Cursor + other ToDesktop Electron apps
+            "com.github.atom",                  // Atom
+            "org.zotero.zotero",                // Zotero
+            "com.superhuman",                   // Superhuman
+            "com.goodnotesapp",                 // GoodNotes
+            // ── Custom rendering engines ──────────────────────────────────────
+            "com.sublimetext",                  // Sublime Text (Skia renderer, no AX text)
+            // ── Communication & productivity ──────────────────────────────────
+            "com.apple.mail",                   // Apple Mail
+            "com.apple.mobilesms",              // Apple Messages
+            "us.zoom.xos",                      // Zoom
+            "com.raycast.macos",                // Raycast
+            // ── Writing & note-taking apps ────────────────────────────────────
+            "net.shinyfrog.bear",               // Bear
+            "com.ulyssesapp.mac",               // Ulysses
+            "com.apple.notes",                  // Apple Notes
+            "com.apple.iwork.pages",            // Apple Pages
+            // ── Microsoft Office ──────────────────────────────────────────────
+            "com.microsoft.word",               // Word
+            "com.microsoft.excel",              // Excel
+            "com.microsoft.outlook",            // Outlook
+            // ── Other productivity ────────────────────────────────────────────
+            "com.ideasoncanvas",                // MindNode
+            "com.adobe.indesign",               // Adobe InDesign
         ];
 
-        BROWSER_BUNDLES.iter().any(|b| bid_lower.starts_with(b))
+        PREFER_CLIPBOARD_BUNDLES.iter().any(|b| bid_lower.starts_with(b))
     }
 }
 
@@ -830,7 +874,22 @@ fn clipboard_paste(text: &str) -> Result<(), String> {
         }
     };
 
-    let previous = clipboard.get_text().ok();
+    enum SavedClipboard {
+        Text(String),
+        Image(arboard::ImageData<'static>),
+        Nothing,
+    }
+    let previous = if let Ok(t) = clipboard.get_text() {
+        SavedClipboard::Text(t)
+    } else if let Ok(img) = clipboard.get_image() {
+        SavedClipboard::Image(arboard::ImageData {
+            width: img.width,
+            height: img.height,
+            bytes: std::borrow::Cow::Owned(img.bytes.into_owned()),
+        })
+    } else {
+        SavedClipboard::Nothing
+    };
 
     if let Err(e) = clipboard.set_text(text) {
         eprintln!("[INSERT] Failed to set clipboard: {}", e);
@@ -850,7 +909,7 @@ fn clipboard_paste(text: &str) -> Result<(), String> {
         // std::thread (background thread), that assertion fails with
         // EXC_BREAKPOINT (SIGTRAP), crashing the app. CGEvent's
         // CGEventPost works safely from any thread.
-        simulate_cmd_v_cgevent();
+        simulate_cmd_v_cgevent()?;
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -877,8 +936,10 @@ fn clipboard_paste(text: &str) -> Result<(), String> {
     // 150 ms was too short for heavy apps (Word, LibreOffice) that process
     // paste asynchronously through their own undo/format pipeline.
     std::thread::sleep(std::time::Duration::from_millis(300));
-    if let Some(prev) = previous {
-        let _ = clipboard.set_text(prev);
+    match previous {
+        SavedClipboard::Text(t) => { let _ = clipboard.set_text(t); }
+        SavedClipboard::Image(img) => { let _ = clipboard.set_image(img); }
+        SavedClipboard::Nothing => {}
     }
     Ok(())
 }
@@ -888,37 +949,35 @@ fn clipboard_paste(text: &str) -> Result<(), String> {
 /// requires the main dispatch queue and crashes from background threads.
 /// CGEvent's CGEventPost has no such restriction and is thread-safe.
 #[cfg(target_os = "macos")]
-fn simulate_cmd_v_cgevent() {
+fn simulate_cmd_v_cgevent() -> Result<(), String> {
     use core_graphics::event::{CGEvent, CGEventFlags, CGKeyCode};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
     // kVK_ANSI_V = 0x09
     const VK_V: CGKeyCode = 0x09;
 
-    let source = match CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
-        Ok(s) => s,
-        Err(_) => {
-            eprintln!("[INSERT] CGEventSource creation failed");
-            return;
-        }
-    };
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_| {
+        eprintln!("[INSERT] CGEventSource creation failed");
+        "cgevent_source".to_string()
+    })?;
 
-    if let (Ok(key_down), Ok(key_up)) = (
-        CGEvent::new_keyboard_event(source.clone(), VK_V, true),
-        CGEvent::new_keyboard_event(source, VK_V, false),
-    ) {
-        key_down.set_flags(CGEventFlags::CGEventFlagCommand);
-        key_up.set_flags(CGEventFlags::CGEventFlagCommand);
-        // AnnotatedSession delivers the event after the window server has
-        // assigned it a target process and annotated it with process/window
-        // info. This is the level at which Carbon HIToolbox (used by Word,
-        // Excel, Outlook) intercepts keyboard shortcuts — posting at HID
-        // bypasses that layer and those apps silently ignore the event.
-        key_down.post(core_graphics::event::CGEventTapLocation::AnnotatedSession);
-        key_up.post(core_graphics::event::CGEventTapLocation::AnnotatedSession);
-    } else {
+    let key_down = CGEvent::new_keyboard_event(source.clone(), VK_V, true).map_err(|_| {
         eprintln!("[INSERT] Failed to create CGEvent for Cmd+V");
-    }
+        "cgevent_create".to_string()
+    })?;
+    let key_up = CGEvent::new_keyboard_event(source, VK_V, false)
+        .map_err(|_| "cgevent_create".to_string())?;
+
+    key_down.set_flags(CGEventFlags::CGEventFlagCommand);
+    key_up.set_flags(CGEventFlags::CGEventFlagCommand);
+    // AnnotatedSession delivers the event after the window server has
+    // assigned it a target process and annotated it with process/window
+    // info. This is the level at which Carbon HIToolbox (used by Word,
+    // Excel, Outlook) intercepts keyboard shortcuts — posting at HID
+    // bypasses that layer and those apps silently ignore the event.
+    key_down.post(core_graphics::event::CGEventTapLocation::AnnotatedSession);
+    key_up.post(core_graphics::event::CGEventTapLocation::AnnotatedSession);
+    Ok(())
 }
 
 /// macOS only: Insert text at the cursor via the Accessibility API.
