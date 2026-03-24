@@ -753,23 +753,34 @@ pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), Stri
 #[tauri::command]
 pub async fn unload_current_model(
     state: tauri::State<'_, AudioState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+
+    // Refuse to unload while a model is actively loading to avoid corrupting engine state.
+    if state.engine_loading.load(Ordering::Relaxed) {
+        return Err("A model is currently loading — please wait for it to finish".to_string());
+    }
+
     let active = state.active_engine.lock().map_err(|e| e.to_string())?;
-    match *active {
+    let engine_name = match *active {
         ASREngine::Whisper => {
             let mut w = state.whisper.lock().map_err(|e| e.to_string())?;
             w.unload();
-            Ok("whisper".to_string())
+            "whisper"
         }
         ASREngine::Parakeet => {
             let mut p = state.parakeet.lock().map_err(|e| e.to_string())?;
             p.unload();
-            Ok("parakeet".to_string())
+            "parakeet"
         }
         ASREngine::GraniteSpeech => {
             let mut g = state.granite_speech.lock().map_err(|e| e.to_string())?;
             g.unload();
-            Ok("granite_speech".to_string())
+            "granite_speech"
         }
-    }
+    };
+    state.model_loaded.store(false, Ordering::Relaxed);
+    crate::tray::update_tray_model_item(&app, false);
+    Ok(engine_name.to_string())
 }

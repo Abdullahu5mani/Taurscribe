@@ -70,15 +70,21 @@ interface ModelsTabProps {
     onDownload: (id: string, name: string) => void;
     onDelete: (id: string, name: string) => Promise<void>;
     onCancelDownload: (id: string) => void;
+    scrollTarget?: string;
+    onScrollHandled?: () => void;
 }
 
-export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCancelDownload }: ModelsTabProps) {
+export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCancelDownload, scrollTarget, onScrollHandled }: ModelsTabProps) {
     const [activeTier, setActiveTier] = useState<WhisperTier>('Small');
     const [platform, setPlatform] = useState('');
     const [isAppleSilicon, setIsAppleSilicon] = useState(false);
     const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
     const [useCase, setUseCase] = useState<OnboardingUseCase>('quick_notes');
     const hydratedTierRef = useRef(false);
+    const [pulseModelIds, setPulseModelIds] = useState<Set<string>>(new Set());
+    const whisperGroupRef = useRef<HTMLDivElement>(null);
+    const parakeetGroupRef = useRef<HTMLDivElement>(null);
+    const graniteGroupRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         invoke<string>('get_platform').then(setPlatform).catch(() => { });
@@ -118,23 +124,71 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
         }
     }, [recommendation]);
 
-    const recommendationBadge = (modelId: string) => {
-        if (modelId === recommendation.primaryModelId) return 'Primary';
-        if (modelId === recommendation.backupModelId) return 'Backup';
-        return null;
-    };
+    // Scroll to the target engine section and pulse the first downloadable model
+    useEffect(() => {
+        if (!scrollTarget) return;
 
-    const recommendedModels = Array.from(
-        new Map(
-            [recommendation.primaryModelId, recommendation.backupModelId]
-                .filter((id): id is string => Boolean(id))
-                .map((id) => {
-                    const model = models.find((entry) => entry.id === id);
-                    return model ? [id, model] : null;
-                })
-                .filter((entry): entry is [string, DownloadableModel] => entry !== null),
-        ).values(),
-    );
+        let groupRef: React.RefObject<HTMLDivElement | null>;
+        let targetModelId: string | undefined;
+
+        if (scrollTarget === 'whisper') {
+            groupRef = whisperGroupRef;
+            // Resolve the best tier from the recommendation so the right tab is active
+            const preferredTier: WhisperTier =
+                recommendation.whisperTier ??
+                getWhisperTierFromModelId(recommendation.primaryModelId) ??
+                getWhisperTierFromModelId(recommendation.backupModelId) ??
+                activeTier;
+            setActiveTier(preferredTier);
+            const recId = isAppleSilicon ? TIER_RECOMMENDED_ANS[preferredTier] : TIER_RECOMMENDED[preferredTier];
+            targetModelId = models.find(m => m.id === recId && !m.downloaded)?.id
+                ?? TIER_MODEL_IDS[preferredTier].map(id => models.find(m => m.id === id && !m.downloaded)).find(Boolean)?.id;
+        } else if (scrollTarget === 'parakeet') {
+            groupRef = parakeetGroupRef;
+            targetModelId = models.find(m => m.type === 'Parakeet' && !m.downloaded)?.id;
+        } else if (scrollTarget === 'granite_speech') {
+            groupRef = graniteGroupRef;
+            targetModelId = models.find(m => m.type === 'GraniteSpeech' && !m.downloaded)?.id;
+        } else {
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            const el = groupRef.current;
+            if (el) {
+                const container = el.closest('.settings-content') as HTMLElement | null;
+                if (container) {
+                    const start = container.scrollTop;
+                    const target = el.getBoundingClientRect().top
+                        - container.getBoundingClientRect().top
+                        + container.scrollTop
+                        - 16;
+                    const distance = target - start;
+                    const duration = 900;
+                    const t0 = performance.now();
+                    const step = (now: number) => {
+                        const p = Math.min((now - t0) / duration, 1);
+                        // ease-in-out cubic
+                        const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+                        container.scrollTop = start + distance * e;
+                        if (p < 1) requestAnimationFrame(step);
+                    };
+                    requestAnimationFrame(step);
+                } else {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }
+            if (targetModelId) {
+                const ids = new Set([targetModelId]);
+                setPulseModelIds(ids);
+                setTimeout(() => setPulseModelIds(new Set()), 7000);
+            }
+            onScrollHandled?.();
+        }, 300);
+
+        return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scrollTarget, recommendation]);
 
     const tierModels = (() => {
         const list = TIER_MODEL_IDS[activeTier]
@@ -155,45 +209,13 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
         .map(id => coremlModels.find(m => m.id === id))
         .filter((m): m is DownloadableModel => m !== undefined);
 
-    const recommendedId = isAppleSilicon ? TIER_RECOMMENDED_ANS[activeTier] : TIER_RECOMMENDED[activeTier];
-    const coremlRecommendedId = TIER_COREML_RECOMMENDED[activeTier];
-
     return (
         <div className="models-tab">
-            {recommendedModels.length > 0 && (
-                <div className="model-group model-group--recommended">
-                    <div className="model-group-header">
-                        <h3 className="settings-section-title">Recommended For You</h3>
-                        <span className="model-group-badge">{recommendation.useCaseLabel}</span>
-                    </div>
-                    <p className="model-group-desc model-group-desc--highlight">
-                        {recommendation.summary}
-                    </p>
-                    <p className="model-group-desc">
-                        {recommendation.hardwareLine}
-                    </p>
-                    <div className="model-list">
-                        {recommendedModels.map((model) => {
-                            const badge = recommendationBadge(model.id);
-                            return (
-                                <div
-                                    key={model.id}
-                                    className={`model-item-wrapper model-item-wrapper--rec${badge === 'Backup' ? ' model-item-wrapper--rec-secondary' : ''}`}
-                                >
-                                    {badge && <span className={`badge-rec${badge === 'Backup' ? ' badge-rec--secondary' : ''}`}>{badge}</span>}
-                                    <ModelRow model={model} {...rowProps} />
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            )}
-
             {/* ── Whisper ──────────────────────────────────────────── */}
-            <div className="model-group">
+            <div className="model-group" ref={whisperGroupRef}>
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Whisper</h3>
-                    <span className="model-group-sub">by OpenAI · multilingual · any hardware</span>
+                    <span className="model-group-sub model-group-sub--whisper">by OpenAI · multilingual · any hardware</span>
                 </div>
 
                 <div className="tier-tabs">
@@ -222,13 +244,8 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     {tierModels.map(m => (
                         <div
                             key={m.id}
-                            className={`model-item-wrapper ${m.id === recommendedId || recommendationBadge(m.id) ? 'model-item-wrapper--rec' : ''}${recommendationBadge(m.id) === 'Backup' ? ' model-item-wrapper--rec-secondary' : ''}`}
+                            className={`model-item-wrapper${pulseModelIds.has(m.id) ? ' model-item-wrapper--pulse' : ''}`}
                         >
-                            {(recommendationBadge(m.id) || (m.id === recommendedId ? 'Recommended' : null)) && (
-                                <span className={`badge-rec${recommendationBadge(m.id) === 'Backup' ? ' badge-rec--secondary' : ''}`}>
-                                    {recommendationBadge(m.id) || 'Recommended'}
-                                </span>
-                            )}
                             <ModelRow model={m} {...rowProps} />
                         </div>
                     ))}
@@ -248,8 +265,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     </p>
                     <div className="model-list">
                         {tierCoremlModels.map(m => (
-                            <div key={m.id} className={`model-item-wrapper ${m.id === coremlRecommendedId ? 'model-item-wrapper--rec' : ''}`}>
-                                {m.id === coremlRecommendedId && <span className="badge-rec">Recommended</span>}
+                            <div key={m.id} className="model-item-wrapper">
                                 <ModelRow model={m} {...rowProps} />
                             </div>
                         ))}
@@ -258,14 +274,14 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             )}
 
             {/* ── Parakeet ─────────────────────────────────────────── */}
-            <div className="model-group">
+            <div className="model-group" ref={parakeetGroupRef}>
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Parakeet</h3>
-                    <span className="model-group-sub">by NVIDIA Nemotron · English only</span>
+                    <span className="model-group-sub model-group-sub--parakeet">by NVIDIA Nemotron · English only</span>
                 </div>
                 <div className="model-list">
                     {parakeetModels.map(m => (
-                        <div key={m.id} className="model-item-wrapper">
+                        <div key={m.id} className={`model-item-wrapper${pulseModelIds.has(m.id) ? ' model-item-wrapper--pulse' : ''}`}>
                             <ModelRow model={m} {...rowProps} />
                         </div>
                     ))}
@@ -273,18 +289,17 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             </div>
 
             {/* ── Granite Speech ───────────────────────────────────── */}
-            <div className="model-group">
+            <div className="model-group" ref={graniteGroupRef}>
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Granite Speech</h3>
-                    <span className="model-group-sub">by IBM · English · ONNX</span>
+                    <span className="model-group-sub model-group-sub--granite">by IBM · English · ONNX</span>
                 </div>
                 <div className="model-list">
                     {graniteModels.map(m => (
                         <div
                             key={m.id}
-                            className={`model-item-wrapper ${recommendationBadge(m.id) ? 'model-item-wrapper--rec' : ''}`}
+                            className={`model-item-wrapper${pulseModelIds.has(m.id) ? ' model-item-wrapper--pulse' : ''}`}
                         >
-                            {recommendationBadge(m.id) && <span className="badge-rec">{recommendationBadge(m.id)}</span>}
                             <ModelRow model={m} {...rowProps} />
                         </div>
                     ))}

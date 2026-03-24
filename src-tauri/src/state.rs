@@ -72,6 +72,13 @@ pub struct AudioState {
 
     // Tracks whether the current recording stream is temporarily paused.
     pub recording_paused: Arc<AtomicBool>,
+
+    // True when an ASR model is fully loaded and ready.
+    // Used by the tray menu to show "Load Model" vs "Unload Model".
+    pub model_loaded: Arc<AtomicBool>,
+
+    // True while an ASR engine is actively loading (blocks unload attempts).
+    pub engine_loading: Arc<AtomicBool>,
 }
 
 impl AudioState {
@@ -98,6 +105,8 @@ impl AudioState {
             granite_speech: Arc::new(Mutex::new(granite_speech)),
             hotkey_suppressed: Arc::new(AtomicBool::new(false)),
             recording_paused: Arc::new(AtomicBool::new(false)),
+            model_loaded: Arc::new(AtomicBool::new(false)),
+            engine_loading: Arc::new(AtomicBool::new(false)),
         }
     }
 }

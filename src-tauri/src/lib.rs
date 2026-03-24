@@ -56,6 +56,7 @@ pub fn run() {
             )
         });
 
+    let whisper_loaded_at_startup = init_result.is_ok();
     match init_result {
         Ok(backend_msg) => {
             println!("[SUCCESS] {}", backend_msg);
@@ -104,7 +105,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AudioState::new(whisper, parakeet, vad, granite_speech))
-        .setup(|app| {
+        .setup(move |app| {
             // Safety: if the app crashed mid-recording while system audio was
             // muted, restore it now so the user doesn't start with no sound.
             if let Err(e) = system_audio::force_unmute() {
@@ -118,6 +119,14 @@ pub fn run() {
 
             // Setup System Tray
             tray::setup_tray(app)?;
+
+            // Sync initial model state with tray menu item.
+            // Whisper auto-loads at startup if a model is present; reflect that here.
+            if whisper_loaded_at_startup {
+                use std::sync::atomic::Ordering;
+                app.state::<AudioState>().model_loaded.store(true, Ordering::Relaxed);
+                tray::update_tray_model_item(app.handle(), true);
+            }
 
             // Start Hotkey Listener in Background Thread
             // Clone the hotkey_config Arc so the listener reacts to config changes immediately.
@@ -232,6 +241,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // macOS: clicking the Dock icon when all windows are hidden should show the main window.
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+
             if let tauri::RunEvent::Exit = event {
                 // Explicitly drop ggml/Metal resources BEFORE exit() runs C++ static
                 // destructors. Without this, ggml_metal_device's unique_ptr destructor
