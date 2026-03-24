@@ -549,7 +549,7 @@ fn factory_reset_marker_path() -> Result<std::path::PathBuf, String> {
 }
 
 fn remove_path_with_retries(path: &Path) -> Result<(), String> {
-    const MAX_ATTEMPTS: u32 = 5;
+    const MAX_ATTEMPTS: u32 = 10;
 
     if !path.exists() {
         return Ok(());
@@ -572,7 +572,7 @@ fn remove_path_with_retries(path: &Path) -> Result<(), String> {
             Err(err) => {
                 last_error = Some(err);
                 if attempt < MAX_ATTEMPTS {
-                    std::thread::sleep(std::time::Duration::from_millis(150 * attempt as u64));
+                    std::thread::sleep(std::time::Duration::from_millis(200 * attempt as u64));
                 }
             }
         }
@@ -593,6 +593,21 @@ fn clear_app_data_root(base: &Path) -> Result<(), String> {
         return Ok(());
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(root_err) = remove_path_with_retries(base) {
+            eprintln!(
+                "[RESET] Full directory delete failed for {}: {}. Falling back to entry-by-entry cleanup.",
+                base.display(),
+                root_err
+            );
+            clear_app_data_root_runtime_safe(base)?;
+            return Ok(());
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
     remove_path_with_retries(base)
 }
 
@@ -616,13 +631,36 @@ fn clear_app_data_root_runtime_safe(base: &Path) -> Result<(), String> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
 
-        // On Windows WebView2 keeps EBWebView locked while the app is running.
-        // We skip it in dev-mode resets and let the page reload handle the rest.
+        // WebView2 caches can remain locked briefly on Windows during reset /
+        // relaunch. They are disposable, so we skip them instead of failing the
+        // entire factory reset.
         if name.to_ascii_lowercase().starts_with("ebwebview") {
             continue;
         }
 
         remove_path_with_retries(&path)?;
+    }
+
+    // If only a skipped cache directory remains, don't fail the reset on
+    // Windows just because the root folder itself still exists.
+    #[cfg(target_os = "windows")]
+    {
+        match fs::read_dir(base) {
+            Ok(mut remaining) => {
+                if remaining.next().is_none() {
+                    let _ = fs::remove_dir(base);
+                }
+                return Ok(());
+            }
+            Err(err) if !base.exists() => return Ok(()),
+            Err(err) => {
+                return Err(format!(
+                    "Failed to verify app data directory {} after cleanup: {}",
+                    base.display(),
+                    err
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -673,6 +711,7 @@ pub async fn factory_reset_app_data(
     // Signal any in-progress downloads to cancel so they clean up partial files
     // before the process is killed by app.restart().
     crate::commands::cancel_all_downloads();
+    std::thread::sleep(std::time::Duration::from_millis(300));
 
     if let Ok(mut whisper) = state.whisper.lock() {
         whisper.unload();
@@ -749,7 +788,8 @@ pub async fn factory_reset_app_data(
     fs::write(&marker_path, b"pending")
         .map_err(|e| format!("Failed to create factory reset marker at {}: {}", marker_path.display(), e))?;
 
-    app.restart();
+    app.request_restart();
+    Ok(true)
 }
 
 /// Shared Accessibility trust check used by the commands.
