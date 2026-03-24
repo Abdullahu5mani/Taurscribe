@@ -73,7 +73,14 @@ export function AboutTab() {
                 await store.save();
                 await store.close();
                 window.location.reload();
+                return;
             }
+
+            window.setTimeout(() => {
+                setResetting(false);
+                setConfirmReset(false);
+                setResetError('Restart did not complete. Reopen Taurscribe manually; the pending reset will retry on next launch.');
+            }, 8000);
         } catch (err) {
             setResetting(false);
             setResetError(String(err));

@@ -1214,7 +1214,7 @@ fn stop_recording_blocking(
             }
             Err(e) => {
                 eprintln!("[ERROR] Final transcription failed: {}", e);
-                Ok(format!("Recording saved, but transcription failed: {}", e))
+                Err(format!("Final transcription failed: {}", e))
             }
         }
     } else {
