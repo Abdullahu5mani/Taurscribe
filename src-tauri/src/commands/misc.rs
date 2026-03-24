@@ -385,10 +385,14 @@ fn detect_gpu() -> (String, bool, Option<f32>) {
 }
 
 fn try_nvidia_smi() -> Option<(String, f32)> {
-    let out = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("nvidia-smi");
+    cmd.args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().ok()?;
 
     if !out.status.success() {
         return None;
@@ -405,8 +409,10 @@ fn try_nvidia_smi() -> Option<(String, f32)> {
 
 #[cfg(target_os = "windows")]
 fn try_wmic_gpu() -> Option<String> {
+    use std::os::windows::process::CommandExt;
     let out = std::process::Command::new("wmic")
         .args(["path", "win32_VideoController", "get", "name"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
         .output()
         .ok()?;
 
@@ -692,6 +698,14 @@ pub fn perform_pending_factory_reset_on_startup() -> Result<(), String> {
         clear_app_data_root(&app_data.join(name))?;
     }
 
+    // Also clear the Tauri-managed app data dir (Roaming AppData on Windows),
+    // which is where tauri-plugin-store saves settings.json.
+    if let Some(roaming) = dirs::data_dir() {
+        for name in ["taurscribe", "Taurscribe"] {
+            let _ = clear_app_data_root(&roaming.join(name));
+        }
+    }
+
     remove_path_with_retries(&marker_path)?;
     println!("[RESET] Factory reset completed successfully.");
     Ok(())
@@ -788,8 +802,33 @@ pub async fn factory_reset_app_data(
     fs::write(&marker_path, b"pending")
         .map_err(|e| format!("Failed to create factory reset marker at {}: {}", marker_path.display(), e))?;
 
-    app.request_restart();
-    Ok(true)
+    // On Windows, app.restart() spawns the new process before exiting, so the new
+    // instance starts while tauri-plugin-single-instance's mutex is still held by
+    // the current process. The new instance sees an existing instance, sends a focus
+    // signal, and immediately exits — so the app just closes with nothing happening.
+    //
+    // Fix: use a hidden PowerShell helper that waits for this process to fully exit
+    // (releasing the single-instance mutex) before spawning the new instance.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("Failed to get current exe path: {}", e))?;
+        let pid = std::process::id();
+        let exe_str = exe.to_string_lossy().replace('\'', "''");
+        let script = format!(
+            "while (Get-Process -Id {} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 100 }}; Start-Process -FilePath '{}'",
+            pid, exe_str
+        );
+        std::process::Command::new("powershell")
+            .args(["-WindowStyle", "Hidden", "-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| format!("Failed to spawn restart helper: {}", e))?;
+        std::process::exit(0);
+    }
+    #[cfg(not(target_os = "windows"))]
+    app.restart();
 }
 
 /// Shared Accessibility trust check used by the commands.
