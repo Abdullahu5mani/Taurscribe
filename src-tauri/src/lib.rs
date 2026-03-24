@@ -27,6 +27,40 @@ use tauri::Manager;
 use vad::VADManager;
 use whisper::WhisperManager;
 
+fn focus_main_window(app_handle: &tauri::AppHandle) {
+    let windows = app_handle.webview_windows();
+    if let Some(window) = windows.values().next() {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
+    // Explicitly drop ggml/Metal resources BEFORE exit() runs C++ static
+    // destructors. Without this, ggml_metal_device's unique_ptr destructor
+    // races with a background dispatch queue that may still be initializing
+    // Metal resource sets, causing ggml_abort → SIGABRT on quit.
+    println!("[EXIT] App exiting — cleaning up AI engine resources...");
+    if let Some(state) = app_handle.try_state::<AudioState>() {
+        if let Ok(mut whisper) = state.whisper.lock() {
+            whisper.unload();
+        }
+        if let Ok(mut parakeet) = state.parakeet.lock() {
+            parakeet.unload();
+        }
+        if let Ok(mut granite) = state.granite_speech.lock() {
+            granite.unload();
+        }
+        if let Ok(mut llm) = state.llm.lock() {
+            *llm = None;
+        }
+    }
+    // Safety unmute in case the app exits mid-recording
+    let _ = system_audio::force_unmute();
+    println!("[EXIT] Cleanup complete");
+}
+
 /// MAIN ENTRY POINT
 /// This is where the app starts!
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -93,13 +127,8 @@ pub fn run() {
             // This callback is called when a second instance tries to launch.
             // Instead of allowing it, we bring the existing window to the front.
             println!("[INFO] Second instance detected - focusing existing window");
-            
-            let windows = app.webview_windows();
-            if let Some(window) = windows.values().next() {
-                let _ = window.show();
-                let _ = window.set_focus();
-                let _ = window.unminimize();
-            }
+
+            focus_main_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -250,37 +279,15 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            // macOS: clicking the Dock icon when all windows are hidden should show the main window.
-            if let tauri::RunEvent::Reopen { .. } = event {
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+            match event {
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    // macOS: clicking the Dock icon when all windows are hidden should
+                    // show the main window.
+                    focus_main_window(app_handle);
                 }
-            }
-
-            if let tauri::RunEvent::Exit = event {
-                // Explicitly drop ggml/Metal resources BEFORE exit() runs C++ static
-                // destructors. Without this, ggml_metal_device's unique_ptr destructor
-                // races with a background dispatch queue that may still be initializing
-                // Metal resource sets, causing ggml_abort → SIGABRT on quit.
-                println!("[EXIT] App exiting — cleaning up AI engine resources...");
-                if let Some(state) = app_handle.try_state::<AudioState>() {
-                    if let Ok(mut whisper) = state.whisper.lock() {
-                        whisper.unload();
-                    }
-                    if let Ok(mut parakeet) = state.parakeet.lock() {
-                        parakeet.unload();
-                    }
-                    if let Ok(mut granite) = state.granite_speech.lock() {
-                        granite.unload();
-                    }
-                    if let Ok(mut llm) = state.llm.lock() {
-                        *llm = None;
-                    }
-                }
-                // Safety unmute in case the app exits mid-recording
-                let _ = system_audio::force_unmute();
-                println!("[EXIT] Cleanup complete");
+                tauri::RunEvent::Exit => cleanup_before_exit(app_handle),
+                _ => {}
             }
         });
 }
