@@ -120,7 +120,7 @@ export function useEngineSwitch({
         }
     };
 
-    const handleSwitchToParakeet = async () => {
+    const handleSwitchToParakeet = async (targetModelOverride?: string) => {
         const progress = downloadProgressRef.current ?? {};
         const parakeetDownloading = parakeetModels.some(m => progress[m.id]) ||
             Object.keys(progress).some(k => k.startsWith('parakeet'));
@@ -147,7 +147,7 @@ export function useEngineSwitch({
             }
         }
 
-        const targetModel = currentParakeetModel || parakeetModels[0].id;
+        const targetModel = targetModelOverride || currentParakeetModel || parakeetModels[0].id;
 
         isLoadingRef.current = true;
         setIsLoading(true);
@@ -190,7 +190,7 @@ export function useEngineSwitch({
         }
     };
 
-    const handleSwitchToGranite = async () => {
+    const handleSwitchToGranite = async (targetModelOverride?: string) => {
         const progress = downloadProgressRef.current ?? {};
         const graniteDownloading = graniteModels.some(m => progress[m.id]) ||
             Object.keys(progress).some(k => k.startsWith('granite'));
@@ -217,7 +217,7 @@ export function useEngineSwitch({
             }
         }
 
-        const targetModel = currentGraniteModel || graniteModels[0].id;
+        const targetModel = targetModelOverride || currentGraniteModel || graniteModels[0].id;
 
         isLoadingRef.current = true;
         setIsLoading(true);

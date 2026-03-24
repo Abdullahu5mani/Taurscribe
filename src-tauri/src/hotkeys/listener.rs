@@ -54,15 +54,21 @@ pub fn start_hotkey_listener(
     // telling the user to grant permission in System Settings.
     #[cfg(target_os = "macos")]
     {
-        // Silent check — do NOT prompt every launch. The Setup Wizard and About tab
-        // already provide a way to open System Settings when needed.
-        let trusted = macos_accessibility_trusted(false);
-        if !trusted {
-            eprintln!("[WARN] Accessibility permission NOT granted — hotkey listener will not receive key events.");
-            eprintln!("[WARN] Grant Taurscribe access in System Settings → Privacy & Security → Input Monitoring (and Accessibility).");
+        // Silent check — do NOT prompt every launch. The setup UI handles
+        // prompting and deep-links to System Settings when needed.
+        let accessibility_trusted = macos_accessibility_trusted(false);
+        let input_monitoring_trusted = macos_input_monitoring_trusted();
+        if !accessibility_trusted || !input_monitoring_trusted {
+            eprintln!(
+                "[WARN] Hotkey permissions missing — accessibility: {}, input monitoring: {}",
+                accessibility_trusted, input_monitoring_trusted
+            );
+            eprintln!(
+                "[WARN] Grant Taurscribe access in System Settings → Privacy & Security → Accessibility and Input Monitoring."
+            );
             let _ = app_handle.emit("accessibility-missing", ());
         } else {
-            println!("[INFO] Accessibility permission granted");
+            println!("[INFO] Hotkey permissions granted");
         }
     }
 
@@ -175,4 +181,14 @@ fn macos_accessibility_trusted(prompt: bool) -> bool {
     let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
 
     unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_input_monitoring_trusted() -> bool {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn CGPreflightListenEventAccess() -> bool;
+    }
+
+    unsafe { CGPreflightListenEventAccess() }
 }

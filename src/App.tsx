@@ -203,11 +203,11 @@ function App() {
   // macOS fix: Detect the runtime platform so we can hide/adjust UI elements
   // that don't apply on macOS (e.g. GPU/CPU toggle, VRAM display).
   const [platform, setPlatform] = useState('');
-  // macOS fix: Tracks whether macOS Accessibility/Input Monitoring permission
-  // is missing. The Rust backend emits an "accessibility-missing" event on
-  // launch if AXIsProcessTrustedWithOptions returns false — without it,
-  // rdev's global hotkey listener silently receives zero key events.
+  // macOS fix: Track the two separate permissions involved in the hotkey flow.
+  // Accessibility is needed for text insertion into other apps; Input Monitoring
+  // is needed for the global keyboard listener to receive events system-wide.
   const [accessibilityMissing, setAccessibilityMissing] = useState(false);
+  const [inputMonitoringMissing, setInputMonitoringMissing] = useState(false);
   // macOS fix: Track microphone permission so we can show a banner when denied.
   const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'undetermined' | null>(null);
   // Silence warning: shown when recording is active but no audio comes through
@@ -248,14 +248,29 @@ function App() {
     } catch (e) { console.error('Failed to set input device:', e); }
   };
 
-  // macOS fix: Check microphone permission on launch so the user sees a
-  // prompt before attempting to record.
-  useEffect(() => {
-    if (!isMac) return;
-    invoke<string>('check_microphone_permission')
-      .then((status) => setMicPermission(status as 'granted' | 'denied' | 'undetermined'))
-      .catch(() => {});
+  const refreshMacPermissions = useCallback(async () => {
+    if (!isMac) {
+      setAccessibilityMissing(false);
+      setInputMonitoringMissing(false);
+      return;
+    }
+
+    const [micStatus, accessibilityGranted, inputMonitoringGranted] = await Promise.all([
+      invoke<string>('check_microphone_permission').catch(() => null),
+      invoke<boolean>('check_accessibility_permission').catch(() => true),
+      invoke<boolean>('check_input_monitoring_permission').catch(() => true),
+    ]);
+
+    if (micStatus) {
+      setMicPermission(micStatus as 'granted' | 'denied' | 'undetermined');
+    }
+    setAccessibilityMissing(!accessibilityGranted);
+    setInputMonitoringMissing(!inputMonitoringGranted);
   }, [isMac]);
+
+  useEffect(() => {
+    void refreshMacPermissions();
+  }, [refreshMacPermissions]);
 
   const [settingsModels, setSettingsModels] = useState<DownloadableModel[]>(MODELS);
 
@@ -287,21 +302,52 @@ function App() {
   // Keep stable references so useDownloads doesn't re-subscribe its event
   // listener on every render (which would cause missed events).
   // NOTE: the ref is updated again after useEngineSwitch to include auto-load logic.
+  const pendingAutoLoadModelIdRef = useRef<string | null>(null);
   const onModelDownloadedImpl = makeDownloadStatusHandler(true);
   const onModelDownloadedRef = useRef(onModelDownloadedImpl);
   const onModelDownloaded = useCallback((id: string) => onModelDownloadedRef.current(id), []);
 
-  const onDownloadFailedImpl = makeDownloadStatusHandler(false);
+  const onDownloadFailedImpl = async (id: string) => {
+    if (pendingAutoLoadModelIdRef.current === id) {
+      pendingAutoLoadModelIdRef.current = null;
+    }
+    await makeDownloadStatusHandler(false)(id);
+  };
   const onDownloadFailedRef = useRef(onDownloadFailedImpl);
-  useEffect(() => { onDownloadFailedRef.current = makeDownloadStatusHandler(false); });
+  useEffect(() => {
+    onDownloadFailedRef.current = async (id: string) => {
+      if (pendingAutoLoadModelIdRef.current === id) {
+        pendingAutoLoadModelIdRef.current = null;
+      }
+      await makeDownloadStatusHandler(false)(id);
+    };
+  });
   const onDownloadFailed = useCallback((id: string) => onDownloadFailedRef.current(id), []);
 
   const { downloadProgress, handleDownload, handleCancelDownload } = useDownloads(onModelDownloaded, onDownloadFailed);
   const downloadProgressRef = useRef(downloadProgress);
   useEffect(() => { downloadProgressRef.current = downloadProgress; });
 
+  const getEngineForModelId = useCallback((id: string): "whisper" | "parakeet" | "granite_speech" | null => {
+    if (id.startsWith("parakeet")) return "parakeet";
+    if (id.startsWith("granite")) return "granite_speech";
+    if (id.startsWith("whisper")) return "whisper";
+    return null;
+  }, []);
+
   const handleDownloadWithCoreml = (id: string, name: string) => {
+    const engineForModel = getEngineForModelId(id);
+    if (engineForModel) {
+      pendingAutoLoadModelIdRef.current = id;
+    }
     handleDownload(id, name);
+  };
+
+  const handleCancelDownloadWithSelection = (id: string) => {
+    if (pendingAutoLoadModelIdRef.current === id) {
+      pendingAutoLoadModelIdRef.current = null;
+    }
+    handleCancelDownload(id);
   };
 
   const handleDeleteModel = async (id: string, _name: string) => {
@@ -427,19 +473,34 @@ function App() {
       ));
 
       // 2. Auto-load if this engine is active and nothing is loaded yet
-      const engineForModel =
-        id.startsWith('parakeet') ? 'parakeet' :
-        id.startsWith('granite') ? 'granite_speech' :
-        id.startsWith('whisper') ? 'whisper' :
-        null;
+      const engineForModel = getEngineForModelId(id);
+      const isExplicitSelection = pendingAutoLoadModelIdRef.current === id;
+      if (isExplicitSelection) {
+        pendingAutoLoadModelIdRef.current = null;
+      }
 
-      if (engineForModel && engineForModel === activeEngineRef.current && !loadedEngine && !isLoadingRef.current) {
+      if (engineForModel && engineForModel === activeEngineRef.current && !isLoadingRef.current) {
+        if (isExplicitSelection) {
+          if (engineForModel === 'whisper') {
+            await handleModelChange(id);
+          } else if (engineForModel === 'parakeet') {
+            await handleSwitchToParakeet(id);
+          } else {
+            await handleSwitchToGranite(id);
+          }
+          return;
+        }
+
+        if (loadedEngine) {
+          return;
+        }
+
         if (engineForModel === 'whisper') handleModelChange(id);
-        else if (engineForModel === 'parakeet') handleSwitchToParakeet();
-        else handleSwitchToGranite();
+        else if (engineForModel === 'parakeet') handleSwitchToParakeet(id);
+        else handleSwitchToGranite(id);
       }
     };
-  });
+  }, [getEngineForModelId, handleModelChange, handleSwitchToGranite, handleSwitchToParakeet, loadedEngine, refreshModels]);
 
   // Helper to compute power-routing classes for engine cards
   const engineCardRouting = (engine: string) => {
@@ -862,11 +923,10 @@ function App() {
         handleTranscriptionChunkRef.current(event.payload.text);
       });
 
-      // macOS fix: Listen for accessibility-missing event from the Rust backend.
-      // Shows a dismissible warning banner prompting the user to grant
-      // Accessibility & Input Monitoring permissions in System Settings.
+      // Re-check macOS permissions if the backend notices the hotkey listener
+      // cannot receive events. This avoids depending on a startup-only event.
       const unsub4 = await listen("accessibility-missing", () => {
-        setAccessibilityMissing(true);
+        void refreshMacPermissions();
       });
 
       const unsub5 = await listen("audio-fallback", (event) => {
@@ -1070,8 +1130,8 @@ function App() {
     return (
       <SetupWizard
         onComplete={handleSetupComplete}
-        handleDownload={handleDownload}
-        handleCancelDownload={handleCancelDownload}
+        handleDownload={handleDownloadWithCoreml}
+        handleCancelDownload={handleCancelDownloadWithSelection}
         downloadProgress={downloadProgress}
         settingsModels={settingsModels}
       />
@@ -1218,18 +1278,70 @@ function App() {
               <InfoTooltip size={11} text="Input device. Changes apply on next recording." />
             </div>
 
-            {/* macOS fix: Show a warning banner when Accessibility permission
-                is not granted. Without it, the global hotkey listener (rdev)
-                silently fails to receive any key events. */}
-            {accessibilityMissing && (
+            {/* macOS fix: Show a warning banner when the hotkey pipeline is missing
+                Input Monitoring and/or Accessibility permission. */}
+            {isMac && (accessibilityMissing || inputMonitoringMissing) && (
               <div className="accessibility-banner">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                   <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
                   <line x1="12" y1="9" x2="12" y2="13" />
                   <line x1="12" y1="17" x2="12.01" y2="17" />
                 </svg>
-                <span>Hotkeys disabled — grant <strong>Accessibility</strong> &amp; <strong>Input Monitoring</strong> permission in System Settings → Privacy &amp; Security, then restart the app.</span>
-                <button type="button" className="accessibility-banner-dismiss" onClick={() => setAccessibilityMissing(false)} aria-label="Dismiss">✕</button>
+                <span>
+                  Hotkeys disabled
+                  {inputMonitoringMissing ? <> — grant <strong>Input Monitoring</strong> so Taurscribe can hear the shortcut.</> : null}
+                  {accessibilityMissing ? <> Grant <strong>Accessibility</strong> so it can type text back into other apps.</> : null}
+                </span>
+                <div className="accessibility-banner-actions">
+                  {inputMonitoringMissing && (
+                    <>
+                      <button
+                        type="button"
+                        className="accessibility-banner-action"
+                        onClick={async () => {
+                          await invoke<boolean>('request_input_monitoring_permission').catch(() => false);
+                          await invoke('open_input_monitoring_settings').catch(() => {});
+                          setTimeout(() => { void refreshMacPermissions(); }, 700);
+                        }}
+                      >
+                        Enable Input Monitoring
+                      </button>
+                    </>
+                  )}
+                  {accessibilityMissing && (
+                    <button
+                      type="button"
+                      className="accessibility-banner-action"
+                      onClick={async () => {
+                        await invoke<boolean>('request_accessibility_permission').catch(() => false);
+                        await invoke('open_accessibility_settings').catch(() => {});
+                        setTimeout(() => { void refreshMacPermissions(); }, 700);
+                      }}
+                    >
+                      Enable Accessibility
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="accessibility-banner-action"
+                    onClick={async () => {
+                      await invoke('relaunch_app').catch(() => {});
+                    }}
+                  >
+                    Restart App
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="accessibility-banner-dismiss"
+                  onClick={() => {
+                    setAccessibilityMissing(false);
+                    setInputMonitoringMissing(false);
+                  }}
+                  aria-label="Dismiss"
+                >
+                  ✕
+                </button>
               </div>
             )}
 
@@ -1263,7 +1375,19 @@ function App() {
                     </button>
                   </span>
                 ) : (
-                  <span>Microphone access denied — open <strong>System Settings → Privacy &amp; Security → Microphone</strong> and enable Taurscribe, then restart the app.</span>
+                  <span>
+                    Microphone access denied — open <strong>System Settings → Privacy &amp; Security → Microphone</strong> and enable Taurscribe, then restart the app.
+                    {' '}
+                    <button
+                      type="button"
+                      className="mic-banner-action"
+                      onClick={async () => {
+                        await invoke('open_microphone_settings').catch(() => {});
+                      }}
+                    >
+                      Open Settings
+                    </button>
+                  </span>
                 )}
                 <button type="button" className="mic-banner-dismiss" onClick={() => setMicPermission(null)} aria-label="Dismiss">✕</button>
               </div>
@@ -1332,11 +1456,11 @@ function App() {
 
             <div
               className={`status-card parakeet ${activeEngine === "parakeet" ? "active" : ""}${engineCardRouting("parakeet")}`}
-              onClick={handleSwitchToParakeet}
+              onClick={() => { void handleSwitchToParakeet(); }}
               style={isLoading ? { pointerEvents: 'none' } : {}}
               role="button"
               tabIndex={0}
-              onKeyDown={(e) => e.key === "Enter" && handleSwitchToParakeet()}
+              onKeyDown={(e) => e.key === "Enter" && void handleSwitchToParakeet()}
             >
               <div className="status-card-header">
                 <span className="engine-badge">Parakeet</span>
@@ -1366,11 +1490,11 @@ function App() {
 
             <div
               className={`status-card granite ${activeEngine === "granite_speech" ? "active" : ""}${engineCardRouting("granite_speech")}`}
-              onClick={handleSwitchToGranite}
+              onClick={() => { void handleSwitchToGranite(); }}
               style={isLoading ? { pointerEvents: 'none' } : {}}
               role="button"
               tabIndex={0}
-              onKeyDown={(e) => e.key === "Enter" && handleSwitchToGranite()}
+              onKeyDown={(e) => e.key === "Enter" && void handleSwitchToGranite()}
             >
               <div className="status-card-header">
                 <span className="engine-badge">Granite</span>
@@ -1707,7 +1831,7 @@ function App() {
             downloadProgress={downloadProgress}
             onDownload={handleDownloadWithCoreml}
             onDelete={handleDeleteModel}
-            onCancelDownload={handleCancelDownload}
+            onCancelDownload={handleCancelDownloadWithSelection}
             closeBehavior={closeBehavior}
             setCloseBehavior={setCloseBehavior}
             overlayStyle={overlayStyle}

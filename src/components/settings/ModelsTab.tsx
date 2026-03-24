@@ -47,15 +47,6 @@ const TIER_RECOMMENDED_ANS: Record<WhisperTier, string> = {
     Large: 'whisper-large-v3-turbo',
 };
 
-// The corresponding recommended CoreML encoder for each tier on macOS.
-const TIER_COREML_RECOMMENDED: Record<WhisperTier, string> = {
-    Tiny: 'whisper-tiny-en-coreml',
-    Base: 'whisper-base-en-coreml',
-    Small: 'whisper-small-en-coreml',
-    Medium: 'whisper-medium-en-coreml',
-    Large: 'whisper-large-v3-turbo-coreml',
-};
-
 const TIER_COREML_IDS: Record<WhisperTier, string[]> = {
     Tiny: ['whisper-tiny-en-coreml', 'whisper-tiny-coreml'],
     Base: ['whisper-base-en-coreml', 'whisper-base-coreml'],

@@ -106,6 +106,10 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(AudioState::new(whisper, parakeet, vad, granite_speech))
         .setup(move |app| {
+            // Clean up any partial model files left over from a previous download
+            // that was interrupted by a crash or force-quit.
+            commands::downloader::scan_and_clean_stale_downloads();
+
             // Safety: if the app crashed mid-recording while system audio was
             // muted, restore it now so the user doesn't start with no sound.
             if let Err(e) = system_audio::force_unmute() {
@@ -222,7 +226,12 @@ pub fn run() {
             commands::check_microphone_permission,
             commands::request_microphone_permission,
             commands::check_accessibility_permission,
+            commands::request_accessibility_permission,
+            commands::check_input_monitoring_permission,
+            commands::request_input_monitoring_permission,
             commands::open_accessibility_settings,
+            commands::open_input_monitoring_settings,
+            commands::open_microphone_settings,
             commands::open_app_folder,
             commands::unload_current_model,
             commands::relaunch_app,
