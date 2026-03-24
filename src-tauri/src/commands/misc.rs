@@ -458,7 +458,49 @@ fn try_lspci_gpu() -> Option<String> {
 pub fn check_accessibility_permission() -> bool {
     #[cfg(target_os = "macos")]
     {
-        macos_accessibility_trusted_query()
+        macos_accessibility_trusted(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// Requests macOS Accessibility trust. On first run, this can trigger the
+/// system prompt. Returns the current trust state after requesting.
+#[tauri::command]
+pub fn request_accessibility_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos_accessibility_trusted(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// Returns true if this process is trusted for Input Monitoring on macOS.
+/// On all other platforms returns true immediately.
+#[tauri::command]
+pub fn check_input_monitoring_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos_input_monitoring_trusted(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// Requests macOS Input Monitoring trust. On first run, this can trigger the
+/// system prompt. Returns the current trust state after requesting.
+#[tauri::command]
+pub fn request_input_monitoring_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos_input_monitoring_trusted(true)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -472,10 +514,25 @@ pub fn check_accessibility_permission() -> bool {
 pub fn open_accessibility_settings() {
     #[cfg(target_os = "macos")]
     {
-        // x-apple.systempreferences: deep-link opens directly to the right pane.
-        let _ = std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-            .spawn();
+        open_macos_privacy_settings("Privacy_Accessibility");
+    }
+}
+
+/// Opens the macOS System Settings pane for Privacy & Security → Input Monitoring.
+#[tauri::command]
+pub fn open_input_monitoring_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        open_macos_privacy_settings("Privacy_ListenEvent");
+    }
+}
+
+/// Opens the macOS System Settings pane for Privacy & Security → Microphone.
+#[tauri::command]
+pub fn open_microphone_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        open_macos_privacy_settings("Privacy_Microphone");
     }
 }
 
@@ -695,9 +752,9 @@ pub async fn factory_reset_app_data(
     app.restart();
 }
 
-/// Non-prompting accessibility check used by the command (no dialog pop-up).
+/// Shared Accessibility trust check used by the commands.
 #[cfg(target_os = "macos")]
-fn macos_accessibility_trusted_query() -> bool {
+fn macos_accessibility_trusted(prompt: bool) -> bool {
     use core_foundation::base::TCFType;
     use core_foundation::boolean::CFBoolean;
     use core_foundation::dictionary::CFDictionary;
@@ -710,10 +767,42 @@ fn macos_accessibility_trusted_query() -> bool {
     }
 
     let key = CFString::new("AXTrustedCheckOptionPrompt");
-    let value = CFBoolean::false_value(); // do NOT prompt here — wizard controls when to prompt
+    let value = if prompt {
+        CFBoolean::true_value()
+    } else {
+        CFBoolean::false_value()
+    };
     let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
 
     unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) }
+}
+
+/// Shared Input Monitoring trust check used by the commands.
+#[cfg(target_os = "macos")]
+fn macos_input_monitoring_trusted(prompt: bool) -> bool {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn CGPreflightListenEventAccess() -> bool;
+        fn CGRequestListenEventAccess() -> bool;
+    }
+
+    unsafe {
+        if prompt {
+            CGRequestListenEventAccess()
+        } else {
+            CGPreflightListenEventAccess()
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_macos_privacy_settings(anchor: &str) {
+    let _ = std::process::Command::new("open")
+        .arg(format!(
+            "x-apple.systempreferences:com.apple.preference.security?{}",
+            anchor
+        ))
+        .spawn();
 }
 
 /// Open one of the app's storage folders in the system file manager.

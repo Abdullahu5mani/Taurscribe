@@ -396,10 +396,12 @@ function StepPermissions({
 
   const [micStatus, setMicStatus] = useState<string>('checking');
   const [accGranted, setAccGranted] = useState<boolean | null>(null);
+  const [inputGranted, setInputGranted] = useState<boolean | null>(null);
   const [restartNeeded, setRestartNeeded] = useState(false);
   const [micRequesting, setMicRequesting] = useState(false);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
   const initialAccRef = useRef<boolean | null>(null);
+  const initialInputRef = useRef<boolean | null>(null);
 
   const checkStatuses = useCallback(async () => {
     try {
@@ -413,6 +415,13 @@ function StepPermissions({
         setRestartNeeded(true);
       }
     } catch { setAccGranted(false); }
+    try {
+      const input = await invoke<boolean>('check_input_monitoring_permission');
+      setInputGranted(input);
+      if (initialInputRef.current === false && input === true) {
+        setRestartNeeded(true);
+      }
+    } catch { setInputGranted(false); }
     setInitialCheckDone(true);
   }, []);
 
@@ -421,6 +430,9 @@ function StepPermissions({
     invoke<boolean>('check_accessibility_permission')
       .then(v => { initialAccRef.current = v; })
       .catch(() => { initialAccRef.current = false; });
+    invoke<boolean>('check_input_monitoring_permission')
+      .then(v => { initialInputRef.current = v; })
+      .catch(() => { initialInputRef.current = false; });
     checkStatuses();
     const timer = setInterval(checkStatuses, 1500);
     return () => clearInterval(timer);
@@ -428,14 +440,15 @@ function StepPermissions({
 
   const micOk = micStatus === 'granted';
   const accOk = accGranted === true;
+  const inputOk = inputGranted === true;
 
-  // Auto-advance once the initial status check confirms both are already granted.
+  // Auto-advance once the initial status check confirms everything is already granted.
   // This avoids showing the permissions step at all on repeat launches.
   useEffect(() => {
-    if (initialCheckDone && micOk && accOk) {
+    if (initialCheckDone && micOk && accOk && inputOk) {
       onNext();
     }
-  }, [initialCheckDone, micOk, accOk, onNext]);
+  }, [initialCheckDone, micOk, accOk, inputOk, onNext]);
 
   const requestMic = async () => {
     setMicRequesting(true);
@@ -444,8 +457,28 @@ function StepPermissions({
     checkStatuses();
   };
 
-  const openAccessibility = async () => {
-    try { await invoke('open_accessibility_settings'); } catch {}
+  const requestAccessibility = async () => {
+    try {
+      const granted = await invoke<boolean>('request_accessibility_permission');
+      if (!granted) {
+        await invoke('open_accessibility_settings');
+      }
+    } catch {}
+    checkStatuses();
+  };
+
+  const requestInputMonitoring = async () => {
+    try {
+      const granted = await invoke<boolean>('request_input_monitoring_permission');
+      if (!granted) {
+        await invoke('open_input_monitoring_settings');
+      }
+    } catch {}
+    checkStatuses();
+  };
+
+  const openMicrophone = async () => {
+    try { await invoke('open_microphone_settings'); } catch {}
   };
 
   const relaunchApp = async () => {
@@ -460,7 +493,7 @@ function StepPermissions({
     <>
       <p className="setup-eyebrow">Step 5 of 6</p>
       <h2 className="setup-heading">Permissions</h2>
-      <p className="setup-sub">Two permissions needed to record and type text system-wide.</p>
+      <p className="setup-sub">Three permissions needed for recording, hotkeys, and typing text system-wide.</p>
 
       <div className="perm-list">
         {/* ── Microphone ─────────────────────────────── */}
@@ -481,7 +514,7 @@ function StepPermissions({
               : micStatus === 'restricted'
                 ? <span className="perm-badge perm-badge--denied">Restricted by policy</span>
                 : micStatus === 'denied'
-                  ? <button className="setup-btn setup-btn--primary perm-btn" onClick={() => invoke('open_accessibility_settings').catch(() => {})}>
+                  ? <button className="setup-btn setup-btn--primary perm-btn" onClick={openMicrophone}>
                       Open Settings
                     </button>
                   : <button className="setup-btn setup-btn--primary perm-btn" onClick={requestMic} disabled={micRequesting}>
@@ -501,13 +534,34 @@ function StepPermissions({
           </div>
           <div className="perm-info">
             <div className="perm-name">Accessibility</div>
-            <div className="perm-desc">Required for the global hotkey to work in all apps</div>
+            <div className="perm-desc">Required to type transcribed text back into other apps</div>
           </div>
           <div className="perm-action">
             {accOk
               ? <span className="perm-badge perm-badge--ok">Granted</span>
-              : <button className="setup-btn setup-btn--primary perm-btn" onClick={openAccessibility}>
-                  Open Settings
+              : <button className="setup-btn setup-btn--primary perm-btn" onClick={requestAccessibility}>
+                  Grant Access
+                </button>
+            }
+          </div>
+        </div>
+
+        <div className={`perm-row${inputOk ? ' perm-row--granted' : ''}`}>
+          <div className="perm-icon">
+            {inputOk
+              ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+              : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14" /><path d="M12 5v14" /><circle cx="12" cy="12" r="10" /></svg>
+            }
+          </div>
+          <div className="perm-info">
+            <div className="perm-name">Input Monitoring</div>
+            <div className="perm-desc">Required for the global hotkey to work in all apps</div>
+          </div>
+          <div className="perm-action">
+            {inputOk
+              ? <span className="perm-badge perm-badge--ok">Granted</span>
+              : <button className="setup-btn setup-btn--primary perm-btn" onClick={requestInputMonitoring}>
+                  Grant Access
                 </button>
             }
           </div>
@@ -516,7 +570,7 @@ function StepPermissions({
 
       {restartNeeded && (
         <div className="perm-restart-notice">
-          <strong>Restart required.</strong> Accessibility was granted — restart so the hotkey activates.
+          <strong>Restart required.</strong> Permissions changed — restart so the hotkey and text insertion activate.
           <button className="setup-btn setup-btn--primary perm-restart-btn" onClick={relaunchApp}>
             Restart Now
           </button>
@@ -526,7 +580,7 @@ function StepPermissions({
       <div className="setup-nav setup-nav--spread">
         <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
         <button className="setup-btn setup-btn--primary" onClick={onNext}>
-          {micOk && accOk ? 'Continue →' : 'Skip for now →'}
+          {micOk && accOk && inputOk ? 'Continue →' : 'Skip for now →'}
         </button>
       </div>
     </>

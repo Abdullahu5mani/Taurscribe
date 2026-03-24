@@ -46,6 +46,78 @@ fn delete_model_files(config: &ModelConfig, base_dir: &std::path::Path) {
     }
 }
 
+// ── Download lock files ───────────────────────────────────────────────────────
+//
+// A `<model_id>.downloading` sentinel is written into the models directory at
+// the very start of every download and removed when the download finishes
+// (success, network error, hash mismatch, or user cancellation).
+//
+// If the app is force-quit or crashes while a download is running the sentinel
+// is never removed, so on the next launch `scan_and_clean_stale_downloads`
+// finds it and wipes the orphaned partial files before the UI is shown.
+
+fn lock_file_path(model_id: &str) -> Option<std::path::PathBuf> {
+    crate::utils::get_models_dir()
+        .ok()
+        .map(|d| d.join(format!("{}.downloading", model_id)))
+}
+
+fn write_download_lock(model_id: &str) {
+    if let Some(path) = lock_file_path(model_id) {
+        let _ = std::fs::write(&path, model_id);
+    }
+}
+
+fn remove_download_lock(model_id: &str) {
+    if let Some(path) = lock_file_path(model_id) {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Called once at app startup.  Finds any leftover `*.downloading` sentinel
+/// files (from a crash or force-quit during a previous download), wipes the
+/// associated partial model files, and removes the sentinel.
+pub fn scan_and_clean_stale_downloads() {
+    let models_dir = match crate::utils::get_models_dir() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let entries = match std::fs::read_dir(&models_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        if !name.ends_with(".downloading") {
+            continue;
+        }
+        let model_id = name.trim_end_matches(".downloading");
+        println!(
+            "[STARTUP] Stale download lock found for '{}' — cleaning up orphaned files",
+            model_id
+        );
+        if let Some(config) = super::model_registry::get_model_config(model_id) {
+            let base_dir = if let Some(subdir) = config.subdirectory {
+                models_dir.join(subdir)
+            } else {
+                models_dir.clone()
+            };
+            delete_model_files(&config, &base_dir);
+            // Remove the stale verified.json entry if any
+            let mut store = load_verified_store();
+            if store.remove(model_id).is_some() {
+                save_verified_store(&store);
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+        println!("[STARTUP] Cleaned up stale download for '{}'", model_id);
+    }
+}
+
 /// Cancel an in-progress download. Deletes all partial files for that model.
 #[tauri::command]
 pub async fn cancel_download(model_id: String) -> Result<(), String> {
@@ -242,7 +314,9 @@ pub async fn get_download_status(
 #[tauri::command]
 pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, String> {
     let cancel_flag = register_cancel_flag(&model_id);
+    write_download_lock(&model_id);
     let result = download_model_inner(&app, &model_id, &cancel_flag).await;
+    remove_download_lock(&model_id);
     unregister_cancel_flag(&model_id);
     result
 }
@@ -290,6 +364,19 @@ async fn download_model_inner(
     } else {
         models_dir.clone()
     };
+
+    // Clean up any orphaned files from a previous partial/crashed download before
+    // starting fresh.  This covers the case where the app was force-quit after
+    // some files had already been written but before the lock was removed.
+    delete_model_files(&config, &base_dir);
+    // Also clear any stale verified.json entry so the UI won't flash "Verified"
+    // for a fraction of a second before the new download completes.
+    {
+        let mut store = load_verified_store();
+        if store.remove(model_id).is_some() {
+            save_verified_store(&store);
+        }
+    }
 
     if !base_dir.exists() {
         std::fs::create_dir_all(&base_dir)

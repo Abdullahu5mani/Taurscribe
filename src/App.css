@@ -771,8 +771,30 @@ body {
   color: var(--processing);
 }
 
-.accessibility-banner-dismiss {
+.accessibility-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin-left: auto;
+}
+
+.accessibility-banner-action {
+  background: none;
+  border: none;
+  color: var(--processing);
+  cursor: pointer;
+  font-weight: 600;
+  text-decoration: underline;
+  padding: 0;
+  font-size: inherit;
+  white-space: nowrap;
+}
+
+.accessibility-banner-action:hover {
+  color: var(--text-primary);
+}
+
+.accessibility-banner-dismiss {
   background: none;
   border: none;
   color: var(--processing);
