@@ -46,6 +46,8 @@ interface SettingsModalProps {
     onDownload: (id: string, name: string) => void;
     onDelete: (id: string, name: string) => Promise<void>;
     onCancelDownload: (id: string) => void;
+    scrollTarget?: string;
+    onScrollHandled?: () => void;
     closeBehavior: 'tray' | 'quit';
     setCloseBehavior: (val: 'tray' | 'quit') => void;
     overlayStyle: 'minimal' | 'full';
@@ -75,6 +77,7 @@ export function SettingsModal({
     dictionary, addDictEntry, updateDictEntry, removeDictEntry,
     snippets, addSnippet, updateSnippet, removeSnippet,
     settingsModels, downloadProgress, onDownload, onDelete, onCancelDownload,
+    scrollTarget, onScrollHandled,
     closeBehavior, setCloseBehavior,
     overlayStyle, setOverlayStyle,
 }: SettingsModalProps) {
@@ -145,6 +148,8 @@ export function SettingsModal({
                         onDownload={onDownload}
                         onDelete={onDelete}
                         onCancelDownload={onCancelDownload}
+                        scrollTarget={scrollTarget}
+                        onScrollHandled={onScrollHandled}
                     />
                 );
             case 'recording':

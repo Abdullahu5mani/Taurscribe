@@ -841,6 +841,42 @@ body {
   opacity: 1;
 }
 
+/* ---- Silence / no-audio warning banner ---- */
+.silence-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  color: var(--error-light);
+  font-size: var(--font-sm);
+  animation: banner-fade-in 0.25s ease-out;
+}
+
+@keyframes banner-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+.silence-banner-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--error-light);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  padding: 4px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.silence-banner-dismiss:hover {
+  opacity: 1;
+}
+
 .backend-toggle-inline-btn.active {
   color: var(--accent-primary);
   background: rgba(var(--accent-primary-rgb), 0.08);
@@ -973,30 +1009,28 @@ body {
 .info-icon::after {
   content: attr(data-tooltip);
   position: absolute;
-  top: calc(100% + 10px);
-  right: -10px;
-  width: 200px;
+  top: calc(100% + 8px);
+  right: -8px;
+  width: 150px;
   white-space: normal;
   background: oklch(15% 0.01 255 / 0.98) !important;
   backdrop-filter: blur(8px);
   border: 1px solid rgba(var(--accent-primary-rgb), 0.4) !important;
-  font-size: var(--font-xs) !important; /* H2 fix: was 10px hardcoded */
-  color: var(--accent-primary) !important;
-  font-family: 'Martian Mono', monospace !important;
-  font-size: 10px !important;
-  line-height: 1.4 !important;
+  font-family: 'Poppins', sans-serif !important;
+  font-size: 8px !important;
+  font-weight: 600 !important;
+  line-height: 1.5 !important;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 8px 12px !important;
+  letter-spacing: 0.18em;
+  color: var(--accent-primary) !important;
+  padding: 5px 8px !important;
   border-radius: 2px !important;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
   pointer-events: none;
   opacity: 0;
-  transform: translateY(-5px);
+  transform: translateY(-4px);
   transition: opacity 0.15s ease, transform 0.15s ease;
   z-index: 100;
-  background-image: linear-gradient(rgba(255, 255, 255, 0.03) 50%, transparent 50%) !important;
-  background-size: 100% 2px !important;
 }
 
 .info-icon:hover::after {
@@ -1007,23 +1041,22 @@ body {
 /* 2. React-based Tooltips (Portal to Body) — used in QuickSettings and LLM labels */
 .info-tooltip-popup {
   position: fixed;
-  width: 180px; /* Slightly narrower for better fit */
+  width: 150px;
   background: oklch(15% 0.01 255 / 0.98);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(var(--accent-primary-rgb), 0.5);
   color: var(--accent-primary);
-  font-family: 'Martian Mono', monospace;
-  font-size: var(--font-xs); /* H2 fix: was 9px (off-scale); use fluid token */
-  line-height: 1.3;
+  font-family: 'Poppins', sans-serif;
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1.5;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 8px 12px;
+  letter-spacing: 0.18em;
+  padding: 5px 8px;
   border-radius: 2px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.8);
   z-index: 999999;
   pointer-events: none;
-  background-image: linear-gradient(rgba(255, 255, 255, 0.03) 50%, transparent 50%);
-  background-size: 100% 2px;
   animation: tooltip-pop 0.12s cubic-bezier(0.23, 1, 0.32, 1);
   box-sizing: border-box;
 }

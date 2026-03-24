@@ -765,6 +765,7 @@
   gap: 36px;
 }
 
+
 .model-group-header {
   display: flex;
   align-items: baseline;
@@ -781,6 +782,10 @@
   color: var(--text-muted);
   font-family: 'Zodiak', serif;
 }
+
+.model-group-sub--whisper  { color: var(--whisper-color);  }
+.model-group-sub--parakeet { color: var(--parakeet-color); }
+.model-group-sub--granite  { color: var(--granite-color);  }
 
 .model-group-badge {
   font-size: var(--font-xs);
@@ -899,6 +904,33 @@
 
 .model-item-wrapper--rec-secondary {
   border-color: rgba(255,255,255,0.12);
+}
+
+/* Download-prompt pulse: draws attention to the download button when the user
+   arrives from the "Open Settings → Download Models" empty-state CTA. */
+@keyframes download-cta-pulse {
+  0%   { box-shadow: 0 0 0 0    rgba(var(--accent-primary-rgb), 0.75); }
+  50%  { box-shadow: 0 0 0 10px rgba(var(--accent-primary-rgb), 0.2);  }
+  100% { box-shadow: 0 0 0 0    rgba(var(--accent-primary-rgb), 0);    }
+}
+
+@keyframes row-container-pulse {
+  0%   { border-color: rgba(var(--accent-primary-rgb), 0.0);  box-shadow: 0 0 0   0 rgba(var(--accent-primary-rgb), 0);    }
+  15%  { border-color: rgba(var(--accent-primary-rgb), 0.7);  box-shadow: 0 0 12px 2px rgba(var(--accent-primary-rgb), 0.2); }
+  60%  { border-color: rgba(var(--accent-primary-rgb), 0.5);  box-shadow: 0 0 8px  1px rgba(var(--accent-primary-rgb), 0.12); }
+  100% { border-color: rgba(var(--accent-primary-rgb), 0.0);  box-shadow: 0 0 0   0 rgba(var(--accent-primary-rgb), 0);    }
+}
+
+.model-item-wrapper--pulse {
+  border-radius: 12px;
+  border: 1px solid transparent;
+  animation: row-container-pulse 4s ease-in-out forwards;
+  animation-delay: 0.4s;
+}
+
+.model-item-wrapper--pulse .download-btn:not(.downloaded) {
+  animation: download-cta-pulse 1.8s ease-in-out 3;
+  animation-delay: 0.4s;
 }
 
 .model-item-wrapper--rec .model-item {
@@ -1800,6 +1832,16 @@
 .model-tag--parakeet {
   background: rgba(52, 211, 153, 0.12);
   color: #34d399;
+}
+
+.model-tag--whisper {
+  background: rgba(104, 149, 210, 0.12);
+  color: var(--whisper-color);
+}
+
+.model-tag--granite {
+  background: rgba(15, 98, 254, 0.12);
+  color: var(--granite-color);
 }
 
 .model-tag--default {

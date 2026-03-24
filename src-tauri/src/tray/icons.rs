@@ -1,4 +1,5 @@
 use crate::types::AppState;
+use std::sync::atomic::Ordering;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
@@ -64,9 +65,17 @@ pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> 
         AppState::Processing => tray_icon_processing!(),
     };
 
-    // Pick the right hover text
+    // Pick the right hover text.
+    // When ready but no model is loaded, surface that in the tooltip so the
+    // user can tell at a glance without opening the app.
     let tooltip = match state {
-        AppState::Ready => "Taurscribe - Ready",
+        AppState::Ready => {
+            use crate::state::AudioState;
+            let no_model = app.try_state::<AudioState>()
+                .map(|s| !s.model_loaded.load(Ordering::Relaxed))
+                .unwrap_or(false);
+            if no_model { "Taurscribe — No model loaded" } else { "Taurscribe - Ready" }
+        }
         AppState::Recording => "Taurscribe - Recording...",
         AppState::Processing => "Taurscribe - Processing...",
     };
@@ -75,6 +84,9 @@ pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> 
     if let Some(tray) = app.tray_by_id("main-tray") {
         tray.set_icon(Some(icon))
             .map_err(|e| format!("Failed to set tray icon: {}", e))?;
+        #[cfg(target_os = "macos")]
+        tray.set_icon_as_template(true)
+            .map_err(|e| format!("Failed to set icon as template: {}", e))?;
         tray.set_tooltip(Some(tooltip))
             .map_err(|e| format!("Failed to set tooltip: {}", e))?;
 
@@ -84,11 +96,35 @@ pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> 
     Ok(())
 }
 
+/// Replaces the tray context menu so the "unload" item reads "Load Model" or
+/// "Unload Model" depending on whether a model is currently loaded.
+pub fn update_tray_model_item(app: &AppHandle, loaded: bool) {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    let Some(tray) = app.tray_by_id("main-tray") else { return };
+    let unload_label = if loaded { "Unload Model" } else { "Load Model" };
+    let Ok(show_item) = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>) else { return };
+    let Ok(unload_item) = MenuItem::with_id(app, "unload", unload_label, true, None::<&str>) else { return };
+    let Ok(quit_item) = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>) else { return };
+    let Ok(separator) = PredefinedMenuItem::separator(app) else { return };
+    if let Ok(menu) = Menu::with_items(app, &[&show_item, &unload_item, &separator, &quit_item]) {
+        let _ = tray.set_menu(Some(menu));
+    }
+    let tooltip = if loaded { "Taurscribe - Ready" } else { "Taurscribe — No model loaded" };
+    let _ = tray.set_tooltip(Some(tooltip));
+}
+
 fn do_unload(app: &AppHandle) {
     use crate::state::AudioState;
     use crate::types::ASREngine;
     use tauri::Emitter;
     let state = app.state::<AudioState>();
+
+    // Guard: refuse to unload while loading is in progress
+    if state.engine_loading.load(Ordering::Relaxed) {
+        eprintln!("[TRAY] Unload requested while engine is loading — ignoring");
+        return;
+    }
+
     if let Ok(active) = state.active_engine.lock() {
         match *active {
             ASREngine::Whisper => { if let Ok(mut w) = state.whisper.lock() { w.unload(); } }
@@ -96,8 +132,10 @@ fn do_unload(app: &AppHandle) {
             ASREngine::GraniteSpeech => { if let Ok(mut g) = state.granite_speech.lock() { g.unload(); } }
         }
     }
+    state.model_loaded.store(false, Ordering::Relaxed);
     let _ = app.emit("model-unloaded", ());
     let _ = crate::tray::update_tray_icon(app, AppState::Ready);
+    update_tray_model_item(app, false);
 }
 
 /// Setup the system tray icon and menu (called from `setup()` closure)
@@ -113,11 +151,16 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let icon = tray_icon_ready!();
 
-    let _tray = TrayIconBuilder::with_id("main-tray")
+    let builder = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
         .tooltip("Taurscribe - Ready")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(false);
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.icon_as_template(true);
+
+    let _tray = builder
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {
@@ -125,7 +168,18 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.set_focus();
                 }
             }
-            "unload" => do_unload(app),
+            "unload" => {
+                use crate::state::AudioState;
+                // If model is loaded → unload it; otherwise open the window so
+                // the user can click the Load Model button in the UI.
+                let loaded = app.state::<AudioState>().model_loaded.load(Ordering::Relaxed);
+                if loaded {
+                    do_unload(app);
+                } else if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
             "quit" => app.exit(0),
             _ => {}
         })
@@ -164,11 +218,16 @@ pub fn setup_tray_from_handle(app: &AppHandle) -> Result<(), Box<dyn std::error:
 
     let icon = tray_icon_ready!();
 
-    let _tray = TrayIconBuilder::with_id("main-tray")
+    let builder = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
         .tooltip("Taurscribe - Ready")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(false);
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.icon_as_template(true);
+
+    let _tray = builder
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {
@@ -176,7 +235,16 @@ pub fn setup_tray_from_handle(app: &AppHandle) -> Result<(), Box<dyn std::error:
                     let _ = window.set_focus();
                 }
             }
-            "unload" => do_unload(app),
+            "unload" => {
+                use crate::state::AudioState;
+                let loaded = app.state::<AudioState>().model_loaded.load(Ordering::Relaxed);
+                if loaded {
+                    do_unload(app);
+                } else if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
             "quit" => app.exit(0),
             _ => {}
         })

@@ -2,6 +2,7 @@ use crate::parakeet;
 use crate::state::AudioState;
 use crate::types::ASREngine;
 use crate::whisper;
+use std::sync::atomic::Ordering;
 use tauri::State;
 
 /// List all available AI models found in the models folder
@@ -25,12 +26,13 @@ pub fn get_current_model(state: State<AudioState>) -> Result<Option<String>, Str
 #[tauri::command]
 pub async fn switch_model(
     state: State<'_, AudioState>,
+    app: tauri::AppHandle,
     model_id: String,
     use_gpu: Option<bool>,
 ) -> Result<String, String> {
     let force_cpu = !use_gpu.unwrap_or(true);
 
-    // 1. Safety Check: Don't switch models while recording!
+    // 1. Safety check: don't switch models while recording.
     {
         let handle = state.recording_handle.lock().unwrap();
         if handle.is_some() {
@@ -38,32 +40,66 @@ pub async fn switch_model(
         }
     }
 
+    // 2. Atomically claim the loading slot — bail if another load is already in flight.
+    if state.engine_loading.compare_exchange(
+        false, true, Ordering::Acquire, Ordering::Relaxed,
+    ).is_err() {
+        return Err("A model is already loading — please wait".to_string());
+    }
+
     println!(
-        "[INFO] Switching to model: {}{}",
+        "[INFO] Switching to Whisper model: {}{}",
         model_id,
         if force_cpu { " [CPU-only]" } else { "" }
     );
 
-    let parakeet_arc = state.parakeet.clone();
-    let whisper_arc = state.whisper.clone();
+    let parakeet_arc   = state.parakeet.clone();
+    let granite_arc    = state.granite_speech.clone();
+    let whisper_arc    = state.whisper.clone();
     let active_engine_arc = state.active_engine.clone();
     let mid = model_id.clone();
 
-    tauri::async_runtime::spawn_blocking(move || {
-        // 2. Unload Parakeet if loaded (Exclusive Mode)
-        parakeet_arc.lock().unwrap().unload();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // 3. Check what is currently loaded.
+        let whisper_current  = whisper_arc.lock().unwrap().get_current_model().cloned();
+        let parakeet_loaded  = parakeet_arc.lock().unwrap().get_status().loaded;
+        let granite_loaded   = granite_arc.lock().unwrap().get_status().loaded;
+        let active           = *active_engine_arc.lock().unwrap();
 
-        // 3. Initialize the new model
+        // 4. Skip the load entirely if the same model is already active.
+        if whisper_current.as_deref() == Some(mid.as_str())
+            && active == ASREngine::Whisper
+            && !parakeet_loaded
+            && !granite_loaded
+        {
+            println!("[INFO] Whisper model '{}' is already loaded — skipping reload", mid);
+            return Ok("Already loaded".to_string());
+        }
+
+        // 5. Unload any competing engines before loading.
+        if parakeet_loaded {
+            println!("[INFO] Unloading Parakeet before switching to Whisper");
+            parakeet_arc.lock().unwrap().unload();
+        }
+        if granite_loaded {
+            println!("[INFO] Unloading Granite Speech before switching to Whisper");
+            granite_arc.lock().unwrap().unload();
+        }
+
+        // 6. Load the requested Whisper model.
         let mut whisper = whisper_arc.lock().unwrap();
         let res = whisper.initialize(Some(&mid), force_cpu);
-
-        // Update active engine
         *active_engine_arc.lock().unwrap() = ASREngine::Whisper;
-
         res
     })
     .await
-    .map_err(|e| format!("switch_model task failed: {}", e))?
+    .map_err(|e| format!("switch_model task failed: {}", e));
+    state.engine_loading.store(false, Ordering::Relaxed);
+
+    let msg = result??;
+    state.model_loaded.store(true, Ordering::Relaxed);
+    crate::tray::update_tray_model_item(&app, true);
+    Ok(msg)
 }
 
 /// List Parakeet models
@@ -80,30 +116,67 @@ pub fn list_parakeet_models() -> Result<Vec<parakeet::ParakeetModelInfo>, String
 #[tauri::command]
 pub async fn init_parakeet(
     state: State<'_, AudioState>,
+    app: tauri::AppHandle,
     model_id: Option<String>,
     use_gpu: Option<bool>,
 ) -> Result<String, String> {
     let force_cpu = !use_gpu.unwrap_or(true);
 
-    let whisper_arc = state.whisper.clone();
-    let parakeet_arc = state.parakeet.clone();
+    // 1. Atomically claim the loading slot — bail if another load is already in flight.
+    if state.engine_loading.compare_exchange(
+        false, true, Ordering::Acquire, Ordering::Relaxed,
+    ).is_err() {
+        return Err("A model is already loading — please wait".to_string());
+    }
+
+    let whisper_arc       = state.whisper.clone();
+    let parakeet_arc      = state.parakeet.clone();
+    let granite_arc       = state.granite_speech.clone();
     let active_engine_arc = state.active_engine.clone();
 
-    tauri::async_runtime::spawn_blocking(move || {
-        // 1. Unload Whisper if loaded (Exclusive Mode)
-        whisper_arc.lock().unwrap().unload();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // 2. Check what is currently loaded.
+        let parakeet_status  = parakeet_arc.lock().unwrap().get_status();
+        let whisper_loaded   = whisper_arc.lock().unwrap().get_current_model().is_some();
+        let granite_loaded   = granite_arc.lock().unwrap().get_status().loaded;
+        let active           = *active_engine_arc.lock().unwrap();
 
-        // 2. Load Parakeet
+        // 3. Skip if the same Parakeet model is already active.
+        let target_id = model_id.as_deref();
+        let already_loaded = parakeet_status.loaded
+            && active == ASREngine::Parakeet
+            && !whisper_loaded
+            && !granite_loaded
+            && (target_id.is_none() || parakeet_status.model_id.as_deref() == target_id);
+        if already_loaded {
+            println!("[INFO] Parakeet model is already loaded — skipping reload");
+            return Ok::<String, String>("Already loaded".to_string());
+        }
+
+        // 4. Unload any competing engines before loading.
+        if whisper_loaded {
+            println!("[INFO] Unloading Whisper before switching to Parakeet");
+            whisper_arc.lock().unwrap().unload();
+        }
+        if granite_loaded {
+            println!("[INFO] Unloading Granite Speech before switching to Parakeet");
+            granite_arc.lock().unwrap().unload();
+        }
+
+        // 5. Load Parakeet.
         let mut parakeet = parakeet_arc.lock().unwrap();
         let result = parakeet.initialize(model_id.as_deref(), force_cpu)?;
-
-        // Auto-switch to parakeet if initialized
         *active_engine_arc.lock().unwrap() = ASREngine::Parakeet;
-
-        Ok(result)
+        Ok::<String, String>(result)
     })
     .await
-    .map_err(|e| format!("init_parakeet task failed: {}", e))?
+    .map_err(|e| format!("init_parakeet task failed: {}", e));
+    state.engine_loading.store(false, Ordering::Relaxed);
+
+    let msg = result??;
+    state.model_loaded.store(true, Ordering::Relaxed);
+    crate::tray::update_tray_model_item(&app, true);
+    Ok(msg)
 }
 
 /// Ask for Parakeet status (Model, Type, Backend)

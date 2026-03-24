@@ -190,6 +190,7 @@ function App() {
   const [loadingMessage, setLoadingMessage] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<string | undefined>(undefined);
+  const [settingsScrollTarget, setSettingsScrollTarget] = useState<'whisper' | 'parakeet' | 'granite_speech' | null>(null);
   /** null = not yet loaded from store; true = show wizard (first run); false = show main app */
   const [showSetupWizard, setShowSetupWizard] = useState<boolean | null>(null);
   /** Incremented after each successful save_transcript_history; tells TranscriptFeed to reload. */
@@ -209,6 +210,10 @@ function App() {
   const [accessibilityMissing, setAccessibilityMissing] = useState(false);
   // macOS fix: Track microphone permission so we can show a banner when denied.
   const [micPermission, setMicPermission] = useState<'granted' | 'denied' | 'undetermined' | null>(null);
+  // Silence warning: shown when recording is active but no audio comes through
+  // (mic muted, wrong device, hardware issue, etc.).
+  const [showSilenceWarning, setShowSilenceWarning] = useState(false);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Active microphone name and full device list — shown as a dropdown on the
   // home view so the user can switch mics without opening Settings.
   const [activeMic, setActiveMic] = useState<string | null>(null);
@@ -786,6 +791,7 @@ function App() {
     let unlistenAudioDisconnect: (() => void) | undefined;
     let unlistenOverlayAction: (() => void) | undefined;
     let unlistenModelUnloaded: (() => void) | undefined;
+    let unlistenAudioLevel: (() => void) | undefined;
     const setup = async () => {
       const unsub1 = await listen("hotkey-start-recording", async () => {
         const now = Date.now();
@@ -904,6 +910,31 @@ function App() {
         setHeaderStatusRef.current("Model unloaded — VRAM freed");
       });
 
+      // Silence detection: if audio level stays near-zero for 3 s while recording,
+      // show a hint that the mic might be muted or wrong device selected.
+      const SILENCE_THRESHOLD = 0.02;
+      const SILENCE_DELAY_MS  = 3000;
+      const unsub9 = await listen<number>("audio-level", (event) => {
+        if (!isRecordingRef.current) return;
+        const level = event.payload;
+        if (level > SILENCE_THRESHOLD) {
+          // Audio coming through — clear any pending or visible warning
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+          }
+          setShowSilenceWarning(false);
+        } else {
+          // Near-silence — arm the timer if not already running
+          if (!silenceTimerRef.current) {
+            silenceTimerRef.current = setTimeout(() => {
+              if (isRecordingRef.current) setShowSilenceWarning(true);
+              silenceTimerRef.current = null;
+            }, SILENCE_DELAY_MS);
+          }
+        }
+      });
+
       if (active) {
         unlistenStart = unsub1;
         unlistenStop = unsub2;
@@ -913,8 +944,9 @@ function App() {
         unlistenAudioDisconnect = unsub6;
         unlistenOverlayAction = unsub7;
         unlistenModelUnloaded = unsub8;
+        unlistenAudioLevel = unsub9;
       } else {
-        unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8();
+        unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9();
       }
     };
 
@@ -929,8 +961,20 @@ function App() {
       if (unlistenAudioDisconnect) unlistenAudioDisconnect();
       if (unlistenOverlayAction) unlistenOverlayAction();
       if (unlistenModelUnloaded) unlistenModelUnloaded();
+      if (unlistenAudioLevel) unlistenAudioLevel();
     };
   }, []);
+
+  // Clear silence warning + any pending timer when recording ends
+  useEffect(() => {
+    if (!isRecording) {
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+      setShowSilenceWarning(false);
+    }
+  }, [isRecording]);
 
   // --- Ticker ---
   // macOS fix: Filter ticker phrases to remove "CUDA" from the scrolling
@@ -1224,6 +1268,20 @@ function App() {
                 <button type="button" className="mic-banner-dismiss" onClick={() => setMicPermission(null)} aria-label="Dismiss">✕</button>
               </div>
             )}
+
+            {showSilenceWarning && isRecording && !isPaused && (
+              <div className="silence-banner" role="alert">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                  <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
+                  <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" />
+                  <line x1="12" y1="19" x2="12" y2="23" />
+                  <line x1="8" y1="23" x2="16" y2="23" />
+                </svg>
+                <span>No audio detected — is your mic muted or the wrong device selected?</span>
+                <button type="button" className="silence-banner-dismiss" onClick={() => setShowSilenceWarning(false)} aria-label="Dismiss">✕</button>
+              </div>
+            )}
           </div>
 
           <div className="status-bar-container">
@@ -1249,8 +1307,8 @@ function App() {
               <div className="status-card-header">
                 <span className="engine-badge">Whisper</span>
                 <div className="status-card-header-right">
-                  <span className="info-icon" data-tooltip="OpenAI Whisper — general-purpose speech recognition. Supports multiple languages, sizes from Tiny to Large, and runs locally on CPU or GPU.">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <span className="info-icon" data-tooltip="OpenAI Whisper · General-purpose multilingual ASR · Tiny to Large-v3 · CPU/GPU">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="10" />
                       <line x1="12" y1="16" x2="12" y2="12" />
                       <line x1="12" y1="8" x2="12.01" y2="8" />
@@ -1283,8 +1341,8 @@ function App() {
               <div className="status-card-header">
                 <span className="engine-badge">Parakeet</span>
                 <div className="status-card-header-right">
-                  <span className="info-icon" data-tooltip="NVIDIA Parakeet — fast streaming ASR optimized for English. Real-time transcription with low latency using CTC decoding.">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <span className="info-icon" data-tooltip="NVIDIA Parakeet · English-only streaming ASR · Real-time CTC decoding">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="10" />
                       <line x1="12" y1="16" x2="12" y2="12" />
                       <line x1="12" y1="8" x2="12.01" y2="8" />
@@ -1317,8 +1375,8 @@ function App() {
               <div className="status-card-header">
                 <span className="engine-badge">Granite</span>
                 <div className="status-card-header-right">
-                  <span className="info-icon" data-tooltip="IBM Granite 4.0 1B Speech — encoder-decoder ONNX model. English speech recognition.">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <span className="info-icon" data-tooltip="IBM Granite 4.0 · English encoder-decoder · ONNX 1B model">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="10" />
                       <line x1="12" y1="16" x2="12" y2="12" />
                       <line x1="12" y1="8" x2="12.01" y2="8" />
@@ -1582,7 +1640,11 @@ function App() {
                 <button
                   type="button"
                   className="empty-state-cta"
-                  onClick={() => setIsSettingsOpen(true)}
+                  onClick={() => {
+                    setSettingsInitialTab('models');
+                    setSettingsScrollTarget(activeEngine as 'whisper' | 'parakeet' | 'granite_speech');
+                    setIsSettingsOpen(true);
+                  }}
                 >
                   Open Settings → Download Models
                 </button>
@@ -1613,6 +1675,8 @@ function App() {
               invoke<string[]>('list_input_devices').then(setInputDevices).catch(() => {});
             }}
             initialTab={settingsInitialTab as Parameters<typeof SettingsModal>[0]['initialTab']}
+            scrollTarget={settingsScrollTarget ?? undefined}
+            onScrollHandled={() => setSettingsScrollTarget(null)}
             enableGrammarLM={enableGrammarLM}
             setEnableGrammarLM={setEnableGrammarLM}
             llmStatus={llmStatus}
