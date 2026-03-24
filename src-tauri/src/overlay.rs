@@ -68,8 +68,10 @@ pub fn restore_focus(app: &AppHandle) {
 #[cfg(not(target_os = "macos"))]
 mod webview {
     use super::OverlayStatePayload;
-    use std::sync::{Mutex, OnceLock};
     use tauri::{AppHandle, Emitter, Manager};
+
+    #[cfg(target_os = "windows")]
+    use std::sync::{Mutex, OnceLock};
 
     #[cfg(target_os = "windows")]
     static LAST_FOREGROUND_HWND: OnceLock<Mutex<usize>> = OnceLock::new();
