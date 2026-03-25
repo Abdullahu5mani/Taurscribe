@@ -406,7 +406,7 @@ function App() {
   } = usePersonalization();
 
   const {
-    isRecording, isRecordingRef, isPaused, isProcessingTranscript, isCorrecting,
+    isRecording, isRecordingRef, isPaused, isProcessingTranscript,
     latestLatency,
     handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk,
   } = useRecording({
@@ -1077,7 +1077,7 @@ function App() {
   const noModel = activeEngineHasNoModel;
   const noLlm = llmStatus === "Not Downloaded";
 
-  const recordBtnBusy = isLoading || isCorrecting || isProcessingTranscript;
+  const recordBtnBusy = isLoading || isProcessingTranscript;
   const recordBtnClass =
     noModel ? "record-btn disabled" :
       isFileTranscribing ? "record-btn disabled" :
@@ -1089,7 +1089,7 @@ function App() {
       isFileTranscribing ? "BUSY" :
         isRecording ? "STOP" :
           recordBtnBusy ? "..." : "REC";
-  const recordBtnDisabled = isFileTranscribing || (isLoading && !isRecording) || isCorrecting || isProcessingTranscript;
+  const recordBtnDisabled = isFileTranscribing || (isLoading && !isRecording) || isProcessingTranscript;
 
   const onRecordClick = () => {
     if (noModel) { setIsSettingsOpen(true); return; }
@@ -1409,12 +1409,12 @@ function App() {
           </div>
 
           <div className="status-bar-container">
-            {(isLoading || transferLineFadingOut || isProcessingTranscript || isCorrecting) && (
+            {(isLoading || transferLineFadingOut || isProcessingTranscript) && (
               <div
                 className={`status-bar-transfer-line ${
                   transferLineFadingOut ? "status-bar-transfer-line--fade-out" : ""
                 } ${
-                  isProcessingTranscript || isCorrecting ? "status-bar-transfer-line--active" : ""
+                  isProcessingTranscript ? "status-bar-transfer-line--active" : ""
                 }`}
                 aria-hidden="true"
               />
@@ -1784,7 +1784,6 @@ function App() {
                 isRecording={isRecording}
                 isPaused={isPaused}
                 isProcessingTranscript={isProcessingTranscript}
-                isCorrecting={isCorrecting}
                 latestLatency={latestLatency}
               />
             ))}

@@ -65,7 +65,6 @@ export function useRecording({
     const [isRecording, setIsRecording] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
     const [isProcessingTranscript, setIsProcessingTranscript] = useState(false);
-    const [isCorrecting, setIsCorrecting] = useState(false);
     const [liveTranscript, setLiveTranscript] = useState("");
     const [latestLatency, setLatestLatency] = useState<number | null>(null);
 
@@ -326,8 +325,6 @@ export function useRecording({
                 }
             }
 
-            setIsCorrecting(false);
-
             // Apply text snippets last (after grammar LLM so expansions aren't mangled)
             finalTrans = applySnippets(finalTrans, snippetsRef.current ?? []);
 
@@ -425,7 +422,6 @@ export function useRecording({
                 playError?.();
             }
             isRecordingRef.current = false;
-            setIsCorrecting(false);
             setIsProcessingTranscript(false);
             await setTrayState("ready");
             if (isOverlay) {
@@ -453,7 +449,6 @@ export function useRecording({
             setIsRecording(false);
             isRecordingRef.current = false;
             setIsProcessingTranscript(false);
-            setIsCorrecting(false);
             await setTrayState("ready");
             resetRecordingSession();
             setHeaderStatus("Recording discarded", 1800);
@@ -492,7 +487,6 @@ export function useRecording({
         isRecordingRef,
         isPaused,
         isProcessingTranscript,
-        isCorrecting,
         liveTranscript,
         latestLatency,
         handleStartRecording,

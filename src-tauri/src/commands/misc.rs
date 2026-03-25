@@ -650,22 +650,19 @@ fn clear_app_data_root_runtime_safe(base: &Path) -> Result<(), String> {
     // If only a skipped cache directory remains, don't fail the reset on
     // Windows just because the root folder itself still exists.
     #[cfg(target_os = "windows")]
-    {
-        match fs::read_dir(base) {
-            Ok(mut remaining) => {
-                if remaining.next().is_none() {
-                    let _ = fs::remove_dir(base);
-                }
-                return Ok(());
+    match fs::read_dir(base) {
+        Ok(mut remaining) => {
+            if remaining.next().is_none() {
+                let _ = fs::remove_dir(base);
             }
-            Err(err) if !base.exists() => return Ok(()),
-            Err(err) => {
-                return Err(format!(
-                    "Failed to verify app data directory {} after cleanup: {}",
-                    base.display(),
-                    err
-                ));
-            }
+        }
+        Err(_) if !base.exists() => {}
+        Err(err) => {
+            return Err(format!(
+                "Failed to verify app data directory {} after cleanup: {}",
+                base.display(),
+                err
+            ));
         }
     }
 
@@ -809,6 +806,7 @@ pub async fn factory_reset_app_data(
     //
     // Fix: use a hidden PowerShell helper that waits for this process to fully exit
     // (releasing the single-instance mutex) before spawning the new instance.
+    // Use the full system path — Tauri apps run with a restricted PATH on Windows.
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -820,7 +818,10 @@ pub async fn factory_reset_app_data(
             "while (Get-Process -Id {} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 100 }}; Start-Process -FilePath '{}'",
             pid, exe_str
         );
-        std::process::Command::new("powershell")
+        // Resolve powershell.exe via %SYSTEMROOT% — never rely on PATH in packaged apps.
+        let sysroot = std::env::var("SYSTEMROOT").unwrap_or_else(|_| r"C:\Windows".to_string());
+        let powershell = format!(r"{}\System32\WindowsPowerShell\v1.0\powershell.exe", sysroot);
+        std::process::Command::new(&powershell)
             .args(["-WindowStyle", "Hidden", "-NoProfile", "-NonInteractive", "-Command", &script])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
@@ -917,7 +918,6 @@ pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), Stri
 
 /// Unloads whichever ASR engine is currently active, freeing VRAM/RAM without
 /// requiring the user to quit the app. Returns the name of the engine that was unloaded.
-#[allow(dead_code)]
 #[tauri::command]
 pub async fn unload_current_model(
     state: tauri::State<'_, AudioState>,

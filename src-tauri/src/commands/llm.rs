@@ -70,7 +70,7 @@ pub async fn run_llm_inference(
         }
     })
     .await
-    .map_err(|e| format!("Join Erorr: {}", e))??;
+    .map_err(|e| format!("Join Error: {}", e))??;
 
     Ok(output)
 }
