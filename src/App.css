@@ -406,33 +406,6 @@ body {
   100% { opacity: 1; }
 }
 
-/* Amber glow for transcription complete */
-.header-status-message--success {
-  color: var(--accent-primary);
-  font-weight: 600;
-  text-shadow:
-    0 0 8px rgba(var(--accent-primary-rgb), 0.9),
-    0 0 18px rgba(var(--accent-primary-rgb), 0.5),
-    0 0 32px rgba(var(--accent-primary-rgb), 0.25);
-  animation: header-success-glow 0.5s ease-out;
-}
-
-@keyframes header-success-glow {
-  from {
-    text-shadow:
-      0 0 12px rgba(var(--accent-primary-rgb), 1),
-      0 0 30px rgba(var(--accent-primary-rgb), 0.7),
-      0 0 50px rgba(var(--accent-primary-rgb), 0.4);
-  }
-
-  to {
-    text-shadow:
-      0 0 8px rgba(var(--accent-primary-rgb), 0.9),
-      0 0 18px rgba(var(--accent-primary-rgb), 0.5),
-      0 0 32px rgba(var(--accent-primary-rgb), 0.25);
-  }
-}
-
 /* Ticker tape strip (idle): fades in when returning from message */
 .header-ticker {
   width: 100%;  

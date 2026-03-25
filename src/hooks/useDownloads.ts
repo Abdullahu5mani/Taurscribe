@@ -178,14 +178,9 @@ export function useDownloads(
         }
     };
 
-    const handleVerify = async () => {
-        // Stub: verification is now automatic on download.
-    };
-
     return {
         downloadProgress,
         handleDownload,
         handleCancelDownload,
-        handleVerify,
     };
 }

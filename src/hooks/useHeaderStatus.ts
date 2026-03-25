@@ -7,21 +7,18 @@ import { useState, useRef } from "react";
 export function useHeaderStatus() {
     const [headerStatusMessage, setHeaderStatusMessage] = useState<string | null>(null);
     const [headerStatusIsProcessing, setHeaderStatusIsProcessing] = useState(false);
-    const [headerStatusIsSuccess, setHeaderStatusIsSuccess] = useState(false);
     const headerStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const setHeaderStatus = (message: string, durationMs = 3200, isProcessing = false, isSuccess = false) => {
+    const setHeaderStatus = (message: string, durationMs = 3200, isProcessing = false) => {
         if (headerStatusTimeoutRef.current) clearTimeout(headerStatusTimeoutRef.current);
         setHeaderStatusMessage(message);
         setHeaderStatusIsProcessing(isProcessing);
-        setHeaderStatusIsSuccess(isSuccess);
         headerStatusTimeoutRef.current = setTimeout(() => {
             setHeaderStatusMessage(null);
             setHeaderStatusIsProcessing(false);
-            setHeaderStatusIsSuccess(false);
             headerStatusTimeoutRef.current = null;
         }, durationMs);
     };
 
-    return { headerStatusMessage, headerStatusIsProcessing, headerStatusIsSuccess, setHeaderStatus };
+    return { headerStatusMessage, headerStatusIsProcessing, setHeaderStatus };
 }

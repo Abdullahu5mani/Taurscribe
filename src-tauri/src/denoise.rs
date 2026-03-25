@@ -66,18 +66,4 @@ impl Denoiser {
         output
     }
 
-    /// Flush any buffered remainder by zero-padding to a full frame.
-    /// Call once at end-of-stream if you need every last sample.
-    #[allow(dead_code)]
-    pub fn flush(&mut self) -> Vec<f32> {
-        if self.remainder.is_empty() {
-            return Vec::new();
-        }
-        let valid = self.remainder.len();
-        self.remainder.resize(FRAME_SIZE, 0.0);
-        let mut out_frame = [0.0f32; FRAME_SIZE];
-        self.state.process_frame(&mut out_frame, &self.remainder);
-        self.remainder.clear();
-        out_frame[..valid].to_vec()
-    }
 }

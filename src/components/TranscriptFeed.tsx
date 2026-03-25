@@ -20,7 +20,6 @@ interface TranscriptFeedProps {
     isRecording: boolean;
     isPaused: boolean;
     isProcessingTranscript: boolean;
-    isCorrecting: boolean;
     latestLatency: number | null;
 }
 
@@ -76,7 +75,6 @@ export function TranscriptFeed({
     isRecording,
     isPaused,
     isProcessingTranscript,
-    isCorrecting,
     latestLatency,
 }: TranscriptFeedProps) {
     const [items, setItems] = useState<TranscriptRecord[]>([]);
@@ -187,7 +185,7 @@ export function TranscriptFeed({
 
     /* ── Live status row ── */
     const showLive = isRecording || isProcessingTranscript;
-    const liveLabel = isRecording ? (isPaused ? "Paused" : "Listening") : isCorrecting ? "Correcting" : "Processing";
+    const liveLabel = isRecording ? (isPaused ? "Paused" : "Listening") : "Processing";
     const liveClass = isRecording && !isPaused ? "feed-live-row--recording" : "feed-live-row--processing";
 
     return (
