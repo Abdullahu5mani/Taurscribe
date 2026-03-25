@@ -2,7 +2,7 @@ use crate::types::{HotkeyBinding, RecordingMode};
 use rdev::{listen, Event, EventType, Key};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, RwLock,
 };
 
 const MAX_HOTKEY_KEYS: usize = 2;
@@ -41,7 +41,7 @@ fn key_to_code(key: &Key) -> Option<&'static str> {
 /// changes take effect immediately without restarting the thread.
 pub fn start_hotkey_listener(
     app_handle: tauri::AppHandle,
-    hotkey_config: Arc<Mutex<HotkeyBinding>>,
+    hotkey_config: Arc<RwLock<HotkeyBinding>>,
     hotkey_suppressed: Arc<AtomicBool>,
 ) {
     use tauri::Emitter;
@@ -73,7 +73,8 @@ pub fn start_hotkey_listener(
     }
 
     let recording_active = Arc::new(AtomicBool::new(false));
-    let held_keys: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    // &'static str: key_to_code() returns static strings — no String allocation per keypress
+    let held_keys: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::with_capacity(MAX_HOTKEY_KEYS)));
     // Prevents keyboard auto-repeat from firing the action multiple times per physical press.
     let combo_triggered = Arc::new(AtomicBool::new(false));
 
@@ -90,7 +91,7 @@ pub fn start_hotkey_listener(
             return;
         }
 
-        let config = config_c.lock().unwrap().clone();
+        let config = config_c.read().unwrap().clone();
 
         if config.keys.len() != MAX_HOTKEY_KEYS {
             return;
@@ -100,10 +101,10 @@ pub fn start_hotkey_listener(
             EventType::KeyPress(key) => {
                 if let Some(code) = key_to_code(&key) {
                     let mut held = held_keys_c.lock().unwrap();
-                    if config.keys.contains(&code.to_string()) && !held.contains(&code.to_string()) {
-                        held.push(code.to_string());
+                    if config.keys.iter().any(|k| k == code) && !held.contains(&code) {
+                        held.push(code);
                     }
-                    let all_held = config.keys.iter().all(|k| held.contains(k));
+                    let all_held = config.keys.iter().all(|k| held.iter().any(|h| k == h));
                     if all_held && !config.keys.is_empty() && !combo_triggered_c.load(Ordering::SeqCst) {
                         combo_triggered_c.store(true, Ordering::SeqCst);
                         drop(held);
@@ -133,8 +134,8 @@ pub fn start_hotkey_listener(
 
             EventType::KeyRelease(key) => {
                 if let Some(code) = key_to_code(&key) {
-                    held_keys_c.lock().unwrap().retain(|k| k != code);
-                    if config.keys.contains(&code.to_string()) {
+                    held_keys_c.lock().unwrap().retain(|k| *k != code);
+                    if config.keys.iter().any(|k| k == code) {
                         // Reset so the next physical key press can trigger the combo again.
                         combo_triggered_c.store(false, Ordering::SeqCst);
                         // Hold mode: releasing any combo key stops recording.

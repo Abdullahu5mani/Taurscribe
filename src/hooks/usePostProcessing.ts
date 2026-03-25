@@ -1,22 +1,27 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Store } from "@tauri-apps/plugin-store";
+import type { Store } from "@tauri-apps/plugin-store";
+import { useSyncedRef } from "../utils/useSyncedRef";
 
 /**
  * Manages LLM grammar correction toggle state.
- * All settings are persisted to settings.json and restored on startup.
+ * All settings are persisted via the storeRef passed in from App.tsx
+ * (single Store instance shared with the rest of the app — no second load).
  *
  * Persisted keys:
  *   enable_grammar_lm   boolean
  *   transcription_style string
  *   llm_backend         "gpu" | "cpu"
+ *   asr_backend         "gpu" | "cpu"
  *   enable_denoise      boolean
  *   enable_overlay      boolean
+ *   mute_background_audio boolean
  */
 export function usePostProcessing(
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void,
-    onOpenSettings?: () => void
+    onOpenSettings?: () => void,
+    storeRef?: React.RefObject<Store | null>
 ) {
     const [llmStatus, setLlmStatus] = useState("Not Loaded");
     const [enableGrammarLM, setEnableGrammarLMState] = useState(false);
@@ -31,67 +36,83 @@ export function usePostProcessing(
     // so the LLM initialises with the correct backend from the start.
     const [settingsLoaded, setSettingsLoaded] = useState(false);
 
-    const enableGrammarLMRef = useRef(enableGrammarLM);
-    const enableDenoiseRef = useRef(enableDenoise);
-    const enableOverlayRef = useRef(enableOverlay);
-    const muteBackgroundAudioRef = useRef(muteBackgroundAudio);
-    const transcriptionStyleRef = useRef(transcriptionStyle);
-    const storeRef = useRef<Store | null>(null);
-    const llmBackendRef = useRef<"gpu" | "cpu">(llmBackend);
-    const llmStatusRef = useRef<string>(llmStatus);
-
-    useEffect(() => { enableGrammarLMRef.current = enableGrammarLM; }, [enableGrammarLM]);
-    useEffect(() => { enableDenoiseRef.current = enableDenoise; }, [enableDenoise]);
-    useEffect(() => { enableOverlayRef.current = enableOverlay; }, [enableOverlay]);
-    useEffect(() => { muteBackgroundAudioRef.current = muteBackgroundAudio; }, [muteBackgroundAudio]);
-    useEffect(() => { transcriptionStyleRef.current = transcriptionStyle; }, [transcriptionStyle]);
-    useEffect(() => { llmStatusRef.current = llmStatus; }, [llmStatus]);
+    // useSyncedRef replaces the 6 useRef + useEffect sync pairs
+    const enableGrammarLMRef = useSyncedRef(enableGrammarLM);
+    const enableDenoiseRef = useSyncedRef(enableDenoise);
+    const enableOverlayRef = useSyncedRef(enableOverlay);
+    const muteBackgroundAudioRef = useSyncedRef(muteBackgroundAudio);
+    const transcriptionStyleRef = useSyncedRef(transcriptionStyle);
+    const llmBackendRef = useSyncedRef(llmBackend);
+    const llmStatusRef = useSyncedRef(llmStatus);
 
     // ── Load persisted settings on mount ──────────────────────────────────
+    // Uses the shared storeRef if provided; falls back to a local load so the
+    // hook remains self-contained when used in isolation (e.g. tests).
     useEffect(() => {
-        Store.load("settings.json")
-            .then(async (store) => {
-                storeRef.current = store;
+        const load = async (store: Store) => {
+            const grammarLM = await store.get<boolean>("enable_grammar_lm");
+            const denoise = await store.get<boolean>("enable_denoise");
+            const overlay = await store.get<boolean>("enable_overlay");
+            const muteBg = await store.get<boolean>("mute_background_audio");
+            const style = await store.get<string>("transcription_style");
+            const backend = await store.get<"gpu" | "cpu">("llm_backend");
+            const asrBe = await store.get<"gpu" | "cpu">("asr_backend");
 
-                const grammarLM = await store.get<boolean>("enable_grammar_lm");
-                const denoise = await store.get<boolean>("enable_denoise");
-                const overlay = await store.get<boolean>("enable_overlay");
-                const muteBg = await store.get<boolean>("mute_background_audio");
-                const style = await store.get<string>("transcription_style");
-                const backend = await store.get<"gpu" | "cpu">("llm_backend");
-                const asrBe = await store.get<"gpu" | "cpu">("asr_backend");
+            if (grammarLM != null) setEnableGrammarLMState(grammarLM);
+            if (denoise != null) setEnableDenoiseState(denoise);
+            if (overlay != null) setEnableOverlayState(overlay);
+            if (muteBg != null) setMuteBackgroundAudioState(muteBg);
+            if (style != null) setTranscriptionStyleState(style);
+            if (backend != null) setLlmBackendState(backend);
+            if (asrBe != null) setAsrBackendState(asrBe);
 
-                if (grammarLM != null) setEnableGrammarLMState(grammarLM);
-                if (denoise != null) setEnableDenoiseState(denoise);
-                if (overlay != null) setEnableOverlayState(overlay);
-                if (muteBg != null) setMuteBackgroundAudioState(muteBg);
-                if (style != null) setTranscriptionStyleState(style);
-                if (backend != null) setLlmBackendState(backend);
-                if (asrBe != null) setAsrBackendState(asrBe);
+            setSettingsLoaded(true);
+        };
 
-                setSettingsLoaded(true);
-            })
-            .catch((err) => {
+        const init = async () => {
+            try {
+                // Poll for the shared storeRef (populated async by useInitialLoad)
+                if (storeRef) {
+                    let attempts = 0;
+                    while (!storeRef.current && attempts < 50) {
+                        await new Promise(r => setTimeout(r, 100));
+                        attempts++;
+                    }
+                    if (storeRef.current) {
+                        await load(storeRef.current);
+                        return;
+                    }
+                }
+                // Fallback: load independently (no storeRef provided or timed out)
+                const { Store } = await import("@tauri-apps/plugin-store");
+                const store = await Store.load("settings.json");
+                await load(store);
+            } catch (err) {
                 console.error("Failed to load post-processing settings:", err);
                 setSettingsLoaded(true); // still allow auto-load to proceed
-            });
+            }
+        };
+
+        init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // ── Persist helper ────────────────────────────────────────────────────
     const persist = useCallback((key: string, value: unknown) => {
-        if (!storeRef.current) return;
-        storeRef.current
-            .set(key, value)
-            .then(() => storeRef.current?.save())
+        // Use shared store if available; the fallback path is a no-op until
+        // the store is ready (settings will be re-written on next change).
+        const store = storeRef?.current;
+        if (!store) return;
+        store.set(key, value)
+            .then(() => store.save())
             .catch(console.error);
-    }, []);
+    }, [storeRef]);
 
     // ── Public setters — update state AND persist ─────────────────────────
     const setEnableGrammarLM = useCallback((val: boolean) => {
         setEnableGrammarLMState(val);
         persist("enable_grammar_lm", val);
     }, [persist]);
-
 
     const setEnableDenoise = useCallback((val: boolean) => {
         setEnableDenoiseState(val);
@@ -168,7 +189,6 @@ export function usePostProcessing(
     useEffect(() => {
         // Skip on first render — llmBackendRef starts as the initial value
         if (llmBackendRef.current === llmBackend) return;
-        llmBackendRef.current = llmBackend;
 
         // Only hot-reload if the LLM is currently active
         if (llmStatusRef.current !== "Loaded") return;
@@ -189,7 +209,7 @@ export function usePostProcessing(
             });
     }, [llmBackend, setHeaderStatus]);
 
-    // ── Re-check LLM availability when models change (e.g. after download) ───
+    // ── Re-check LLM availability when models change (e.g. after download) ──
     useEffect(() => {
         if (llmStatus !== "Not Downloaded") return;
         let unlisten: (() => void) | undefined;
@@ -200,7 +220,6 @@ export function usePostProcessing(
         }).then((fn) => { unlisten = fn; });
         return () => { unlisten?.(); };
     }, [llmStatus]);
-
 
     return {
         llmStatus,

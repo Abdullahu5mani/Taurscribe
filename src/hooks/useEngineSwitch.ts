@@ -21,12 +21,14 @@ interface UseEngineSwitchParams {
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
     setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
     asrBackend: "gpu" | "cpu";
+    setAsrBackend: (backend: "gpu" | "cpu") => void;
+    isRecordingRef: React.RefObject<boolean>;
     downloadProgressRef: React.RefObject<Record<string, DownloadProgress>>;
 }
 
 /**
- * Manages the active ASR engine (Whisper / Parakeet), loading state,
- * and engine-switch handlers.
+ * Manages the active ASR engine (Whisper / Parakeet / Granite Speech),
+ * loading state, and engine-switch handlers.
  */
 export function useEngineSwitch({
     models,
@@ -43,6 +45,8 @@ export function useEngineSwitch({
     setHeaderStatus,
     setTrayState,
     asrBackend,
+    setAsrBackend,
+    isRecordingRef,
     downloadProgressRef,
 }: UseEngineSwitchParams) {
     const [activeEngine, setActiveEngine] = useState<ASREngine>("whisper");
@@ -56,6 +60,36 @@ export function useEngineSwitch({
     const isLoadingRef = useRef(false);
     const activeEngineRef = useRef(activeEngine);
 
+    // ── Loading lifecycle wrapper ─────────────────────────────────────────
+    // Handles the identical boilerplate that surrounded every engine-load:
+    //   set loading flags → set tray → run fn → clear flags → set tray ready
+    // Each handler only provides the unique message + async work (fn).
+    const withEngineLoad = async (
+        engine: ASREngine,
+        message: string,
+        fn: () => Promise<void>
+    ): Promise<void> => {
+        isLoadingRef.current = true;
+        setIsLoading(true);
+        setLoadedEngine(null);
+        setLoadingTargetEngine(engine);
+        setLoadingMessage(message);
+        setHeaderStatus(message, 60_000);
+
+        try {
+            await setTrayState("processing");
+            await fn();
+        } finally {
+            isLoadingRef.current = false;
+            setIsLoading(false);
+            setLoadingMessage("");
+            setLoadingTargetEngine(null);
+            setTransferLineFadingOut(true);
+            await setTrayState("ready");
+        }
+    };
+
+    // ── Whisper ───────────────────────────────────────────────────────────
     const handleModelChange = async (modelId: string) => {
         if (modelId === currentModel && activeEngine === "whisper") return;
         if (isLoading || isLoadingRef.current) {
@@ -63,19 +97,11 @@ export function useEngineSwitch({
             return;
         }
 
-        isLoadingRef.current = true;
-        setIsLoading(true);
-        setLoadedEngine(null);
-        setLoadingTargetEngine("whisper");
         const displayName = models.find(m => m.id === modelId)?.display_name || modelId;
-        const msg = `Loading ${displayName}...`;
-        setLoadingMessage(msg);
-        setHeaderStatus(msg, 60_000);
-        console.log("[LOADING] Loading Whisper model " + modelId);
 
-        try {
-            await setTrayState("processing");
+        await withEngineLoad("whisper", `Loading ${displayName}...`, async () => {
             await invoke("switch_model", { modelId, useGpu: asrBackend === "gpu" });
+
             if (activeEngine !== "whisper") {
                 setActiveEngine("whisper");
                 activeEngineRef.current = "whisper";
@@ -95,17 +121,9 @@ export function useEngineSwitch({
 
             const backend = await invoke("get_backend_info");
             setBackendInfo(backend as string);
-        } catch (e) {
+        }).catch(e => {
             setHeaderStatus(`Error switching model: ${e}`, 5000);
-        } finally {
-            console.log("[LOADING] Set loading FALSE — handleModelChange");
-            isLoadingRef.current = false;
-            setIsLoading(false);
-            setLoadingMessage("");
-            setLoadingTargetEngine(null);
-            setTransferLineFadingOut(true);
-            await setTrayState("ready");
-        }
+        });
     };
 
     const handleSwitchToWhisper = async () => {
@@ -120,10 +138,11 @@ export function useEngineSwitch({
         }
     };
 
+    // ── Parakeet ──────────────────────────────────────────────────────────
     const handleSwitchToParakeet = async (targetModelOverride?: string) => {
         const progress = downloadProgressRef.current ?? {};
         const parakeetDownloading = parakeetModels.some(m => progress[m.id]) ||
-            Object.keys(progress).some(k => k.startsWith('parakeet'));
+            Object.keys(progress).some(k => k.startsWith("parakeet"));
         if (parakeetDownloading) {
             setHeaderStatus("Parakeet is still downloading — please wait", 3000);
             return;
@@ -149,17 +168,7 @@ export function useEngineSwitch({
 
         const targetModel = targetModelOverride || currentParakeetModel || parakeetModels[0].id;
 
-        isLoadingRef.current = true;
-        setIsLoading(true);
-        setLoadedEngine(null);
-        setLoadingTargetEngine("parakeet");
-        const msg = `Loading Parakeet (${targetModel})...`;
-        setLoadingMessage(msg);
-        setHeaderStatus(msg, 60_000);
-        console.log("[LOADING] Loading Parakeet (" + targetModel + ")");
-
-        try {
-            await setTrayState("processing");
+        await withEngineLoad("parakeet", `Loading Parakeet (${targetModel})...`, async () => {
             await invoke("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
 
             setCurrentParakeetModel(targetModel);
@@ -174,26 +183,18 @@ export function useEngineSwitch({
             }
 
             setHeaderStatus("Switched to Parakeet");
-
             const backend = await invoke("get_backend_info");
             setBackendInfo(backend as string);
-        } catch (e) {
+        }).catch(e => {
             setHeaderStatus(`Error switching to Parakeet: ${e}`, 5000);
-        } finally {
-            console.log("[LOADING] Set loading FALSE — handleSwitchToParakeet");
-            isLoadingRef.current = false;
-            setIsLoading(false);
-            setLoadingMessage("");
-            setLoadingTargetEngine(null);
-            setTransferLineFadingOut(true);
-            await setTrayState("ready");
-        }
+        });
     };
 
+    // ── Granite Speech ────────────────────────────────────────────────────
     const handleSwitchToGranite = async (targetModelOverride?: string) => {
         const progress = downloadProgressRef.current ?? {};
         const graniteDownloading = graniteModels.some(m => progress[m.id]) ||
-            Object.keys(progress).some(k => k.startsWith('granite'));
+            Object.keys(progress).some(k => k.startsWith("granite"));
         if (graniteDownloading) {
             setHeaderStatus("Granite Speech is still downloading — please wait", 3000);
             return;
@@ -219,17 +220,7 @@ export function useEngineSwitch({
 
         const targetModel = targetModelOverride || currentGraniteModel || graniteModels[0].id;
 
-        isLoadingRef.current = true;
-        setIsLoading(true);
-        setLoadedEngine(null);
-        setLoadingTargetEngine("granite_speech");
-        const msg = `Loading Granite Speech...`;
-        setLoadingMessage(msg);
-        setHeaderStatus(msg, 60_000);
-        console.log("[LOADING] Loading Granite Speech (" + targetModel + ")");
-
-        try {
-            await setTrayState("processing");
+        await withEngineLoad("granite_speech", "Loading Granite Speech...", async () => {
             await invoke("init_granite_speech", { forceCpu: asrBackend === "cpu" });
 
             setCurrentGraniteModel(targetModel);
@@ -244,20 +235,63 @@ export function useEngineSwitch({
             }
 
             setHeaderStatus("Switched to Granite Speech");
-
             const backend = await invoke("get_backend_info");
             setBackendInfo(backend as string);
-        } catch (e) {
+        }).catch(e => {
             setHeaderStatus(`Error switching to Granite Speech: ${e}`, 5000);
-        } finally {
-            console.log("[LOADING] Set loading FALSE — handleSwitchToGranite");
-            isLoadingRef.current = false;
-            setIsLoading(false);
-            setLoadingMessage("");
-            setLoadingTargetEngine(null);
-            setTransferLineFadingOut(true);
-            await setTrayState("ready");
+        });
+    };
+
+    // ── CPU / GPU hot-swap ────────────────────────────────────────────────
+    const handleToggleAsrBackend = async (newBackend: "gpu" | "cpu") => {
+        if (newBackend === asrBackend) return;
+        if (isLoading || isLoadingRef.current) return;
+        if (isRecordingRef.current) return;
+
+        setAsrBackend(newBackend);
+
+        const useGpu = newBackend === "gpu";
+        const label = useGpu ? "GPU" : "CPU";
+        const engine = activeEngineRef.current;
+
+        // Fast-path: no model loaded — just update preference
+        const hasModel =
+            (engine === "whisper" && !!currentModel) ||
+            (engine === "parakeet" && !!(currentParakeetModel || parakeetModels.length > 0)) ||
+            (engine === "granite_speech" && graniteModels.length > 0);
+
+        if (!hasModel) {
+            setHeaderStatus(`ASR backend set to ${label}`);
+            return;
         }
+
+        // Heavy-path: reload active model on the new backend via withEngineLoad
+        await withEngineLoad(engine, `Reloading on ${label}...`, async () => {
+            if (engine === "whisper") {
+                const displayName = models.find(m => m.id === currentModel)?.display_name || currentModel;
+                setLoadingMessage(`Reloading ${displayName} on ${label}...`);
+                await invoke("switch_model", { modelId: currentModel, useGpu });
+                setLoadedEngine("whisper");
+                const info = await invoke("get_backend_info");
+                setBackendInfo(info as string);
+                setHeaderStatus(`Whisper running on ${label}`);
+            } else if (engine === "parakeet") {
+                const targetModel = currentParakeetModel || parakeetModels[0]?.id;
+                await invoke("init_parakeet", { modelId: targetModel, useGpu });
+                setLoadedEngine("parakeet");
+                const info = await invoke("get_backend_info");
+                setBackendInfo(info as string);
+                setHeaderStatus(`Parakeet running on ${label}`);
+            } else if (engine === "granite_speech") {
+                await invoke("init_granite_speech", { forceCpu: !useGpu });
+                setLoadedEngine("granite_speech");
+                const info = await invoke("get_backend_info");
+                setBackendInfo(info as string);
+                setHeaderStatus(`Granite Speech running on ${label}`);
+            }
+        }).catch(e => {
+            setHeaderStatus(`Failed to switch to ${label}: ${e}`, 5000);
+        });
     };
 
     return {
@@ -277,5 +311,6 @@ export function useEngineSwitch({
         handleSwitchToWhisper,
         handleSwitchToParakeet,
         handleSwitchToGranite,
+        handleToggleAsrBackend,
     };
 }

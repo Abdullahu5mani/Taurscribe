@@ -101,10 +101,10 @@ impl VADManager {
         let sr_tensor = Tensor::from_array((Vec::<i64>::new(), vec![16000_i64]))
             .map_err(|e| format!("Silero sr tensor error: {}", e))?;
 
-        // h / c: [2, 1, 64]
-        let h_tensor = Tensor::from_array(([2_usize, 1, 64], self.h.clone().into_boxed_slice()))
+        // h / c: [2, 1, 64] — copy into Box<[f32]> in one allocation (no intermediate Vec)
+        let h_tensor = Tensor::from_array(([2_usize, 1, 64], Box::from(self.h.as_slice())))
             .map_err(|e| format!("Silero h tensor error: {}", e))?;
-        let c_tensor = Tensor::from_array(([2_usize, 1, 64], self.c.clone().into_boxed_slice()))
+        let c_tensor = Tensor::from_array(([2_usize, 1, 64], Box::from(self.c.as_slice())))
             .map_err(|e| format!("Silero c tensor error: {}", e))?;
 
         let outputs = session
@@ -129,19 +129,17 @@ impl VADManager {
             }
         };
 
-        // Update LSTM state from hn / cn
+        // Update LSTM state from hn / cn — copy into existing buffers, no allocation
         if let Ok(hn) = outputs["hn"].try_extract_tensor::<f32>() {
             let (_, data) = hn;
-            let v = data.to_vec();
-            if v.len() == STATE_SIZE {
-                self.h = v;
+            if data.len() == STATE_SIZE {
+                self.h.copy_from_slice(data);
             }
         }
         if let Ok(cn) = outputs["cn"].try_extract_tensor::<f32>() {
             let (_, data) = cn;
-            let v = data.to_vec();
-            if v.len() == STATE_SIZE {
-                self.c = v;
+            if data.len() == STATE_SIZE {
+                self.c.copy_from_slice(data);
             }
         }
 

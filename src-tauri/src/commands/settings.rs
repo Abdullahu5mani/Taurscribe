@@ -51,7 +51,7 @@ pub fn get_active_engine(state: State<AudioState>) -> Result<ASREngine, String> 
 /// Return the current hotkey binding
 #[tauri::command]
 pub fn get_hotkey(state: State<AudioState>) -> HotkeyBinding {
-    state.hotkey_config.lock().unwrap().clone()
+    state.hotkey_config.read().unwrap().clone()
 }
 
 /// Update the hotkey binding — takes effect immediately (no restart needed).
@@ -64,7 +64,7 @@ pub fn set_hotkey(state: State<AudioState>, binding: HotkeyBinding) -> Result<()
             binding.keys.len()
         ));
     }
-    *state.hotkey_config.lock().unwrap() = binding;
+    *state.hotkey_config.write().unwrap() = binding;
     Ok(())
 }
 
