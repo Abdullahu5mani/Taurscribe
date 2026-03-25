@@ -10,6 +10,7 @@ import { useHeaderStatus } from "./hooks/useHeaderStatus";
 import { useModels } from "./hooks/useModels";
 import { usePostProcessing } from "./hooks/usePostProcessing";
 import { useEngineSwitch } from "./hooks/useEngineSwitch";
+import type { ASREngine } from "./hooks/useEngineSwitch";
 import { useRecording } from "./hooks/useRecording";
 import { useSounds } from "./hooks/useSounds";
 import { usePersonalization } from "./hooks/usePersonalization";
@@ -17,6 +18,10 @@ import { TranscriptFeed } from "./components/TranscriptFeed";
 import { FileTranscriptionPanel } from "./components/FileTranscriptionPanel";
 import { QuickSettings } from "./components/QuickSettings";
 import { useDownloads } from "./hooks/useDownloads";
+import { useInitialLoad } from "./hooks/useInitialLoad";
+import { useHotkeyListeners } from "./hooks/useHotkeyListeners";
+import { useModelsWatcher } from "./hooks/useModelsWatcher";
+import { useSyncedRef } from "./utils/useSyncedRef";
 import { MODELS } from "./components/settings/types";
 import type { DownloadableModel } from "./components/settings/types";
 import { formatSize, beautifyModelName } from "./utils/modelDisplay";
@@ -24,6 +29,8 @@ import type { OnboardingUseCase } from "./modelRecommendations";
 import "./components/TitleBar.css";
 import "./App.css";
 import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, IconSettings, IconEject, InfoTooltip } from "./components/Icons";
+import { TICKER_PHRASES } from "./constants/ticker";
+import { getEngineForModelId } from "./utils/engineUtils";
 
 const ANIMATED_LOGOS = [
   "animated_logo_assemble.svg",
@@ -61,58 +68,7 @@ const ANIMATED_LOGOS = [
   "animated_logo_debris.svg"
 ];
 
-// Ticker phrases defined outside the component so the array is never recreated on render
-type TickerHighlight = "accent" | "whisper" | "parakeet" | "granite";
-const TICKER_PHRASES: { parts: { text: string; highlight?: TickerHighlight }[] }[] = [
-  { parts: [{ text: "100% " }, { text: "local", highlight: "accent" }, { text: " · nothing leaves your machine" }] },
-  { parts: [{ text: "OpenAI " }, { text: "Whisper", highlight: "whisper" }, { text: " & NVIDIA " }, { text: "Parakeet", highlight: "parakeet" }, { text: " · GPU-accelerated" }] },
-  { parts: [{ text: "Hit " }, { text: "REC", highlight: "accent" }, { text: " · speech to text in real time" }] },
-  { parts: [{ text: "No cloud", highlight: "accent" }, { text: " · no API keys · no subscriptions" }] },
-  { parts: [{ text: "Switch between " }, { text: "Whisper", highlight: "whisper" }, { text: " and " }, { text: "Parakeet", highlight: "parakeet" }, { text: " anytime" }] },
-  { parts: [{ text: "IBM " }, { text: "Granite Speech", highlight: "granite" }, { text: " · 1B · ONNX · runs anywhere" }] },
-  { parts: [{ text: "Ctrl+Win", highlight: "accent" }, { text: " from anywhere to record" }] },
-  { parts: [{ text: "Grammar correction · optional " }, { text: "LLM", highlight: "accent" }, { text: "" }] },
-  { parts: [{ text: "Offline-first", highlight: "accent" }, { text: " · your data stays yours" }] },
-  { parts: [{ text: "Pick your engine · " }, { text: "Whisper", highlight: "whisper" }, { text: " · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " · " }, { text: "Granite Speech", highlight: "granite" }] },
-  { parts: [{ text: "Studio-grade", highlight: "accent" }, { text: " · runs on your hardware" }] },
-  { parts: [{ text: "Real-time transcription with " }, { text: "Whisper", highlight: "whisper" }, { text: " or " }, { text: "Parakeet", highlight: "parakeet" }] },
-  { parts: [{ text: "Your audio never leaves this device" }] },
-  { parts: [{ text: "CUDA · CPU · Metal · flexible backends" }] },
-  { parts: [{ text: "Download models once · use forever" }] },
-  { parts: [{ text: "Built for privacy · built for speed" }] },
-  { parts: [{ text: "Three engines · " }, { text: "Whisper", highlight: "whisper" }, { text: " · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " · " }, { text: "Granite Speech", highlight: "granite" }] },
-  { parts: [{ text: "Press REC and speak · that's it" }] },
-  { parts: [{ text: "No account", highlight: "accent" }, { text: " · no sign-up · no tracking" }] },
-  { parts: [{ text: "Low latency · high accuracy" }] },
-  { parts: [{ text: "Use " }, { text: "Whisper", highlight: "whisper" }, { text: " for batch · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " for streaming" }] },
-  { parts: [{ text: "Desktop-first · always ready" }] },
-  { parts: [{ text: "Your words · your machine · your rules" }] },
-  { parts: [{ text: "Multilingual " }, { text: "Whisper", highlight: "whisper" }, { text: " · real-time " }, { text: "Parakeet", highlight: "parakeet" }] },
-  { parts: [{ text: "Transcribe meetings · notes · ideas" }] },
-  { parts: [{ text: "One click to record", highlight: "accent" }, { text: " · one click to copy" }] },
-  { parts: [{ text: "GPU-accelerated when you have it" }] },
-  { parts: [{ text: "Open source models · open future" }] },
-  { parts: [{ text: "IBM " }, { text: "Granite Speech", highlight: "granite" }, { text: " · no GPU required" }] },
-  { parts: [{ text: "Privacy by design", highlight: "accent" }, { text: " · not as an afterthought" }] },
-  { parts: [{ text: "Capture every word · edit later" }] },
-  { parts: [{ text: "No internet? No problem." }] },
-  { parts: [{ text: "Tiny to large · pick your " }, { text: "Whisper", highlight: "whisper" }, { text: " size" }] },
-  { parts: [{ text: "Streaming with " }, { text: "Parakeet", highlight: "parakeet" }, { text: " · see text as you speak" }] },
-  { parts: [{ text: "Hotkey ready", highlight: "accent" }, { text: " · Ctrl+Win from any app" }] },
-  { parts: [{ text: "Local AI · no data in the cloud" }] },
-  { parts: [{ text: "Built for creators · built for you" }] },
-  { parts: [{ text: "Switch engines mid-workflow" }] },
-  { parts: [{ text: "Grammar correction · optional" }] },
-  { parts: [{ text: "Whisper", highlight: "whisper" }, { text: " for accuracy · " }, { text: "Parakeet", highlight: "parakeet" }, { text: " for speed · " }, { text: "Granite Speech", highlight: "granite" }, { text: " for reliability" }] },
-  { parts: [{ text: "Your microphone · your transcript" }] },
-  { parts: [{ text: "Download once · run anywhere" }] },
-  { parts: [{ text: "No subscriptions", highlight: "accent" }, { text: " · pay with your hardware" }] },
-  { parts: [{ text: "Transcription that respects you" }] },
-  { parts: [{ text: "Fast " }, { text: "Whisper", highlight: "whisper" }, { text: " · faster " }, { text: "Parakeet", highlight: "parakeet" }] },
-  { parts: [{ text: "Record · transcribe · copy · done" }] },
-  { parts: [{ text: "OpenAI · NVIDIA · IBM · three giants · one app" }] },
-  { parts: [{ text: "One app · three engines · zero compromise" }] },
-];
+
 
 const TONE_STYLES: { value: string; label: string; icon: React.ReactNode; accent: string; desc: string }[] = [
   { value: 'Casual', label: 'Casual', icon: <IconChat size={18} />, accent: '#6895d2', desc: 'Relaxed, conversational tone. Great for notes, emails, and quick messages.' },
@@ -283,9 +239,6 @@ function App() {
     refreshModels,
   } = useModels(setHeaderStatus);
 
-  const setHeaderStatusRef = useRef(setHeaderStatus);
-  useEffect(() => { setHeaderStatusRef.current = setHeaderStatus; }, [setHeaderStatus]);
-
   // Factory: refreshes model status after a download event. `fallbackDownloaded`
   // is what we assume if the status check fails — true on success, false on failure.
   const makeDownloadStatusHandler = (fallbackDownloaded: boolean) => async (id: string) => {
@@ -328,12 +281,6 @@ function App() {
   const downloadProgressRef = useRef(downloadProgress);
   useEffect(() => { downloadProgressRef.current = downloadProgress; });
 
-  const getEngineForModelId = useCallback((id: string): "whisper" | "parakeet" | "granite_speech" | null => {
-    if (id.startsWith("parakeet")) return "parakeet";
-    if (id.startsWith("granite")) return "granite_speech";
-    if (id.startsWith("whisper")) return "whisper";
-    return null;
-  }, []);
 
   const handleDownloadWithCoreml = (id: string, name: string) => {
     const engineForModel = getEngineForModelId(id);
@@ -350,29 +297,6 @@ function App() {
     handleCancelDownload(id);
   };
 
-  const handleDeleteModel = async (id: string, _name: string) => {
-    const isActiveModel = id === currentModel || id === currentParakeetModel || id === currentGraniteModel;
-    if (isFileTranscribing && isActiveModel) {
-      throw new Error("Cannot delete the active model while a file is being transcribed.");
-    }
-    try {
-      await invoke("delete_model", { modelId: id });
-      setSettingsModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false, verified: false } : m));
-
-      // If the deleted model was the one currently loaded, turn off the LED.
-      if (currentModel === id || currentParakeetModel === id || currentGraniteModel === id) {
-        setLoadedEngine(null);
-      }
-      if (currentModel === id) setCurrentModel(null);
-      if (currentParakeetModel === id) setCurrentParakeetModel(null);
-      if (currentGraniteModel === id) setCurrentGraniteModel(null);
-
-      await refreshModels(false);
-    } catch (e) {
-      console.error("Failed to delete model", e);
-      throw e; // re-throw so ModelRow can catch it
-    }
-  };
 
   const {
     llmStatus, enableGrammarLM, setEnableGrammarLM, enableGrammarLMRef,
@@ -382,21 +306,7 @@ function App() {
     transcriptionStyle, setTranscriptionStyle, transcriptionStyleRef,
     llmBackend, setLlmBackend,
     asrBackend, setAsrBackend,
-  } = usePostProcessing(setHeaderStatus, () => setIsSettingsOpen(true));
-
-  const {
-    activeEngine, setActiveEngine, activeEngineRef,
-    loadedEngine, setLoadedEngine,
-    isLoading, setIsLoading, isLoadingRef,
-    loadingTargetEngine, transferLineFadingOut, setTransferLineFadingOut,
-    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToGranite,
-  } = useEngineSwitch({
-    models, parakeetModels, graniteModels,
-    currentModel, currentParakeetModel, currentGraniteModel,
-    setCurrentModel, setCurrentParakeetModel, setCurrentGraniteModel,
-    setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
-    downloadProgressRef,
-  });
+  } = usePostProcessing(setHeaderStatus, () => setIsSettingsOpen(true), storeRef);
 
   const { volume, muted, setVolume, setMuted, playStart, playPaste, playError } = useSounds();
 
@@ -405,20 +315,118 @@ function App() {
     snippets, snippetsRef, addSnippet, updateSnippet, removeSnippet,
   } = usePersonalization();
 
+  // useEngineSwitch must be declared before useRecording is *used* but after
+  // useRecording is *called* (hooks cannot be moved past each other in call order).
+  // We use a forwarded ref so useEngineSwitch can populate activeEngineRef and
+  // setLoadedEngine before any handler runs — this is safe because React
+  // guarantees handlers only fire after everything renders.
+  const activeEngineForwarded = useRef<ASREngine>("whisper");
+  const setLoadedEngineForwarded = useRef<(e: ASREngine | null) => void>(() => {});
+
   const {
     isRecording, isRecordingRef, isPaused, isProcessingTranscript,
     latestLatency,
     handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk,
   } = useRecording({
-    activeEngineRef, models, parakeetModels, graniteModels, currentModel, currentParakeetModel,
-    setCurrentModel, setLoadedEngine, enableGrammarLMRef,
+    activeEngineRef: activeEngineForwarded,
+    models, parakeetModels, graniteModels, currentModel, currentParakeetModel,
+    setCurrentModel, setLoadedEngine: (e) => setLoadedEngineForwarded.current(e), enableGrammarLMRef,
     enableDenoiseRef, enableOverlayRef, muteBackgroundAudioRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
     playStart, playPaste, playError,
     dictionaryRef, snippetsRef,
     onHistorySaved: () => setHistoryRefreshKey(k => k + 1),
   });
 
-  // Eject / Load handlers for the header button
+  const {
+    activeEngine, setActiveEngine, activeEngineRef,
+    loadedEngine, setLoadedEngine,
+    isLoading, setIsLoading, isLoadingRef,
+    loadingTargetEngine, transferLineFadingOut, setTransferLineFadingOut,
+    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToGranite,
+    handleToggleAsrBackend,
+  } = useEngineSwitch({
+    models, parakeetModels, graniteModels,
+    currentModel, currentParakeetModel, currentGraniteModel,
+    setCurrentModel, setCurrentParakeetModel, setCurrentGraniteModel,
+    setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
+    setAsrBackend,
+    isRecordingRef,
+    downloadProgressRef,
+  });
+
+  // Wire the forwarded refs so useRecording's handlers use the real values
+  activeEngineForwarded.current = activeEngineRef.current;
+  setLoadedEngineForwarded.current = setLoadedEngine;
+
+  // handleDeleteModel moved here so setLoadedEngine is in scope
+  const handleDeleteModel = async (id: string, _name: string) => {
+    const isActiveModel = id === currentModel || id === currentParakeetModel || id === currentGraniteModel;
+    if (isFileTranscribing && isActiveModel) {
+      throw new Error("Cannot delete the active model while a file is being transcribed.");
+    }
+    try {
+      await invoke("delete_model", { modelId: id });
+      setSettingsModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false, verified: false } : m));
+      if (currentModel === id || currentParakeetModel === id || currentGraniteModel === id) {
+        setLoadedEngine(null);
+      }
+      if (currentModel === id) setCurrentModel(null);
+      if (currentParakeetModel === id) setCurrentParakeetModel(null);
+      if (currentGraniteModel === id) setCurrentGraniteModel(null);
+      await refreshModels(false);
+    } catch (e) {
+      console.error("Failed to delete model", e);
+      throw e;
+    }
+  };
+
+  // ── Stable handler refs for useHotkeyListeners ──
+  const handleStartRecordingRef = useSyncedRef(handleStartRecording);
+  const handleStopRecordingRef = useSyncedRef(handleStopRecording);
+  const handlePauseRecordingRef = useSyncedRef(handlePauseRecording);
+  const handleResumeRecordingRef = useSyncedRef(handleResumeRecording);
+  const handleCancelRecordingRef = useSyncedRef(handleCancelRecording);
+  const handleTranscriptionChunkRef = useSyncedRef(handleTranscriptionChunk);
+  const loadedEngineRef = useSyncedRef(loadedEngine);
+  const playErrorRef = useSyncedRef(playError);
+  const setHeaderStatusRef = useSyncedRef(setHeaderStatus);
+
+  // ── Hooks extracted from App.tsx ──
+  useInitialLoad({
+    setModels, setCurrentModel,
+    setParakeetModels, setCurrentParakeetModel,
+    setGraniteModels, setCurrentGraniteModel,
+    setSettingsModels,
+    setLoadedEngine, setActiveEngine, activeEngineRef,
+    isLoadingRef, setIsLoading, setLoadingMessage,
+    setBackendInfo, setHeaderStatus,
+    setShowSetupWizard, setIsInitialLoading,
+    setCloseBehavior, setOverlayStyle,
+    storeRef,
+  });
+
+  useHotkeyListeners({
+    isRecordingRef,
+    isLoadingRef,
+    activeEngineRef,
+    loadedEngineRef,
+    handleStartRecordingRef,
+    handleStopRecordingRef,
+    handlePauseRecordingRef,
+    handleResumeRecordingRef,
+    handleCancelRecordingRef,
+    handleTranscriptionChunkRef,
+    playErrorRef,
+    setHeaderStatusRef,
+    setLoadedEngine,
+    silenceTimerRef,
+    setShowSilenceWarning,
+    refreshMacPermissions,
+  });
+
+  useModelsWatcher({ refreshModels, downloadProgressRef, setSettingsModels });
+
+  // ── Small helpers (local, use hook outputs) ──
   const handleEjectModel = async () => {
     if (isLoading || isLoadingRef.current || isRecording) return;
     try {
@@ -438,71 +446,15 @@ function App() {
     else handleSwitchToGranite();
   };
 
-  // Track the engine that was loaded before a switch began (for power-routing-out visual)
+  // Track the engine that was loaded before a switch (for power-routing-out visual)
   const prevLoadedEngineRef = useRef<string | null>(null);
   useEffect(() => {
-    // When loading starts, snapshot the engine that was loaded just before
-    if (loadingTargetEngine && loadedEngine === null) {
-      // prevLoadedEngineRef already holds the previous value from the last render
-    }
-    // When loading ends, clear the prev
-    if (!loadingTargetEngine) {
-      prevLoadedEngineRef.current = null;
-    }
-  }, [loadingTargetEngine, loadedEngine]);
-  // Keep prev updated whenever loadedEngine changes (and we're not mid-switch)
+    if (!loadingTargetEngine) prevLoadedEngineRef.current = null;
+  }, [loadingTargetEngine]);
   useEffect(() => {
-    if (loadedEngine && !loadingTargetEngine) {
-      prevLoadedEngineRef.current = loadedEngine;
-    }
+    if (loadedEngine && !loadingTargetEngine) prevLoadedEngineRef.current = loadedEngine;
   }, [loadedEngine, loadingTargetEngine]);
 
-  // --- Auto-load after download ---
-  // Runs after every render so the closure always captures the latest engine state.
-  // When a download completes for the active engine and nothing is loaded yet, load it.
-  useEffect(() => {
-    onModelDownloadedRef.current = async (id: string) => {
-      // 1. Refresh UI state (same as makeDownloadStatusHandler(true))
-      const [statuses] = await Promise.all([
-        invoke<{ id: string; downloaded: boolean; verified: boolean }[]>("get_download_status", { modelIds: [id] }).catch(() => null),
-        refreshModels(false),
-      ]);
-      const s = statuses?.find(x => x.id === id);
-      setSettingsModels(prev => prev.map(m =>
-        m.id === id ? { ...m, downloaded: s?.downloaded ?? true, verified: s?.verified ?? false } : m
-      ));
-
-      // 2. Auto-load if this engine is active and nothing is loaded yet
-      const engineForModel = getEngineForModelId(id);
-      const isExplicitSelection = pendingAutoLoadModelIdRef.current === id;
-      if (isExplicitSelection) {
-        pendingAutoLoadModelIdRef.current = null;
-      }
-
-      if (engineForModel && engineForModel === activeEngineRef.current && !isLoadingRef.current) {
-        if (isExplicitSelection) {
-          if (engineForModel === 'whisper') {
-            await handleModelChange(id);
-          } else if (engineForModel === 'parakeet') {
-            await handleSwitchToParakeet(id);
-          } else {
-            await handleSwitchToGranite(id);
-          }
-          return;
-        }
-
-        if (loadedEngine) {
-          return;
-        }
-
-        if (engineForModel === 'whisper') handleModelChange(id);
-        else if (engineForModel === 'parakeet') handleSwitchToParakeet(id);
-        else handleSwitchToGranite(id);
-      }
-    };
-  }, [getEngineForModelId, handleModelChange, handleSwitchToGranite, handleSwitchToParakeet, loadedEngine, refreshModels]);
-
-  // Helper to compute power-routing classes for engine cards
   const engineCardRouting = (engine: string) => {
     if (!loadingTargetEngine) return "";
     if (engine === loadingTargetEngine) return " power-routing-in";
@@ -510,7 +462,7 @@ function App() {
     return "";
   };
 
-  // --- Transfer line fade ---
+  // Transfer line fade-out timer
   const transferLineFadeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!transferLineFadingOut) return;
@@ -522,508 +474,36 @@ function App() {
     return () => { if (transferLineFadeRef.current) clearTimeout(transferLineFadeRef.current); };
   }, [transferLineFadingOut]);
 
-  // --- CPU / GPU hot-swap: reload the currently active engine on the new backend immediately ---
-  const handleToggleAsrBackend = async (newBackend: "gpu" | "cpu") => {
-    if (newBackend === asrBackend) return;
-    if (isLoading || isLoadingRef.current) return;
-
-    // Persist the new preference first so any subsequent engine loads use it.
-    setAsrBackend(newBackend);
-
-    // Re-invoke the current engine's load command with the new useGpu value.
-    // We call the existing handlers which already manage all loading state
-    // but they read asrBackend from props which hasn't updated yet in this
-    // render — so we temporarily patch by doing a direct invoke pathway:
-    const useGpu = newBackend === "gpu";
-    const label = useGpu ? "GPU" : "CPU";
-    const engine = activeEngineRef.current;
-
-    // Fast-path: If the active engine has no loaded model, just update preference immediately.
-    const hasWhisperModel = engine === "whisper" && !!currentModel;
-    const hasParakeetModel = engine === "parakeet" && (currentParakeetModel || parakeetModels.length > 0);
-    const hasGraniteModel = engine === "granite_speech" && graniteModels.length > 0;
-
-    if (!hasWhisperModel && !hasParakeetModel && !hasGraniteModel) {
-      setHeaderStatus(`ASR backend set to ${label}`);
-      return;
-    }
-
-    // Heavy-path: Reloading the actual model into memory
-    isLoadingRef.current = true;
-    setIsLoading(true);
-    setLoadedEngine(null);
-    setLoadingMessage(`Reloading on ${label}...`);
-    setHeaderStatus(`Reloading on ${label}...`, 60_000);
-
-    try {
-      await setTrayState("processing");
-
-      if (engine === "whisper") {
-        const displayName = models.find(m => m.id === currentModel)?.display_name || currentModel;
-        setLoadingMessage(`Reloading ${displayName} on ${label}...`);
-        await invoke("switch_model", { modelId: currentModel, useGpu });
-        setLoadedEngine("whisper");
-        const info = await invoke("get_backend_info");
-        setBackendInfo(info as string);
-        setHeaderStatus(`Whisper running on ${label}`);
-      } else if (engine === "parakeet") {
-        const targetModel = currentParakeetModel || parakeetModels[0]?.id;
-        await invoke("init_parakeet", { modelId: targetModel, useGpu });
-        setLoadedEngine("parakeet");
-        const info = await invoke("get_backend_info");
-        setBackendInfo(info as string);
-        setHeaderStatus(`Parakeet running on ${label}`);
-      } else if (engine === "granite_speech") {
-        await invoke("init_granite_speech", { forceCpu: !useGpu });
-        setLoadedEngine("granite_speech");
-        const info = await invoke("get_backend_info");
-        setBackendInfo(info as string);
-        setHeaderStatus(`Granite Speech running on ${label}`);
-      }
-    } catch (e) {
-      setHeaderStatus(`Failed to switch to ${label}: ${e}`, 5000);
-    } finally {
-      isLoadingRef.current = false;
-      setIsLoading(false);
-      setLoadingMessage("");
-      setTransferLineFadingOut(true);
-      await setTrayState("ready");
-    }
-  };
-
-  // --- Initial data load ---
+  // Auto-load newly downloaded model if it matches the active engine.
+  // Status refresh is delegated to makeDownloadStatusHandler to avoid duplication.
   useEffect(() => {
-    let cancelled = false;
+    onModelDownloadedRef.current = async (id: string) => {
+      // Reuse the factory for the status-refresh step (invoke + refreshModels + setSettingsModels)
+      await makeDownloadStatusHandler(true)(id);
 
-    async function loadInitialData() {
-      try {
-        const backend = await invoke("get_backend_info");
-        if (cancelled) return;
-        setBackendInfo(backend as string);
+      const engineForModel = getEngineForModelId(id);
+      const isExplicitSelection = pendingAutoLoadModelIdRef.current === id;
+      if (isExplicitSelection) pendingAutoLoadModelIdRef.current = null;
 
-        // Pre-fetch the download status of all models
-        try {
-          const statuses = await invoke<any[]>("get_download_status", { modelIds: MODELS.map(m => m.id) });
-          if (!cancelled) {
-            setSettingsModels(prev => prev.map(m => {
-              const s = statuses.find(x => x.id === m.id);
-              return s ? { ...m, downloaded: s.downloaded, verified: s.verified } : m;
-            }));
-          }
-        } catch (e) {
-          console.error("Failed to fetch initial model statuses:", e);
+      if (engineForModel && engineForModel === activeEngineRef.current && !isLoadingRef.current) {
+        if (isExplicitSelection) {
+          if (engineForModel === 'whisper') await handleModelChange(id);
+          else if (engineForModel === 'parakeet') await handleSwitchToParakeet(id);
+          else await handleSwitchToGranite(id);
+          return;
         }
-
-        const modelList = await invoke("list_models") as typeof models;
-        if (cancelled) return;
-        setModels(modelList);
-
-        const current = await invoke("get_current_model") as string | null;
-        if (cancelled) return;
-        setCurrentModel(current ?? "");
-        if (current) setLoadedEngine("whisper");
-
-        const pModels = await invoke("list_parakeet_models") as typeof parakeetModels;
-        if (cancelled) return;
-        setParakeetModels(pModels);
-
-        const pStatus = await invoke("get_parakeet_status") as { loaded: boolean; model_id: string | null };
-        if (cancelled) return;
-        setCurrentParakeetModel(pStatus.model_id ?? "");
-
-        const gModels = await invoke("list_granite_models") as typeof graniteModels;
-        if (cancelled) return;
-        setGraniteModels(gModels);
-        if (gModels.length > 0) setCurrentGraniteModel(gModels[0].id);
-
-        let savedEngine: "whisper" | "parakeet" | "granite_speech" | null = null;
-        try {
-          const loadedStore = await Store.load("settings.json");
-          if (cancelled) return;
-          storeRef.current = loadedStore;
-          await loadedStore.save(); // ensure the file exists on disk from first launch
-
-          const setupComplete = await loadedStore.get<boolean>("setup_complete");
-          if (!cancelled) setShowSetupWizard(setupComplete !== true);
-
-          // Restore saved hotkey binding so the listener uses the user's preference immediately.
-          const savedHotkey = await loadedStore.get<{ keys: string[] }>("hotkey_binding");
-          if (savedHotkey?.keys?.length && !cancelled) {
-            invoke("set_hotkey", { binding: savedHotkey }).catch(() => { });
-          }
-
-          // Restore saved input device preference.
-          const savedDevice = await loadedStore.get<string>("input_device");
-          if (savedDevice && !cancelled) {
-            invoke("set_input_device", { name: savedDevice }).catch(() => { });
-          }
-
-          // Restore close-button behavior preference.
-          const savedCloseBehavior = await loadedStore.get<'tray' | 'quit'>("close_behavior");
-          if (savedCloseBehavior && !cancelled) {
-            setCloseBehavior(savedCloseBehavior);
-            invoke("set_close_behavior", { behavior: savedCloseBehavior }).catch(() => { });
-          }
-
-          // Restore overlay style preference.
-          const savedOverlayStyle = await loadedStore.get<'minimal' | 'full'>("overlay_style");
-          if (savedOverlayStyle && !cancelled) {
-            setOverlayStyle(savedOverlayStyle);
-          }
-
-          savedEngine = (await loadedStore.get<"whisper" | "parakeet" | "granite_speech">("active_engine")) || null;
-          if (savedEngine) {
-            setActiveEngine(savedEngine);
-            activeEngineRef.current = savedEngine;
-          }
-
-          const savedParakeet = await loadedStore.get<string>("parakeet_model");
-
-          if (savedEngine === "parakeet" && pModels.length > 0) {
-            const targetModel = (savedParakeet && pModels.find(m => m.id === savedParakeet))
-              ? savedParakeet
-              : pModels[0].id;
-
-            isLoadingRef.current = true;
-            setIsLoading(true);
-            setLoadingMessage(`Loading Parakeet (${targetModel})...`);
-            try {
-              if (cancelled) return;
-              await invoke("init_parakeet", { modelId: targetModel });
-              if (cancelled) return;
-              setCurrentParakeetModel(targetModel);
-              setLoadedEngine("parakeet");
-              setHeaderStatus("Parakeet model loaded");
-            } catch (e) {
-              if (cancelled) return;
-              setHeaderStatus(`Failed to auto-load Parakeet: ${e}`, 5000);
-            } finally {
-              if (!cancelled) {
-                isLoadingRef.current = false;
-                setIsLoading(false);
-                setLoadingMessage("");
-              }
-            }
-          } else if (savedEngine === "granite_speech" && gModels.length > 0) {
-            isLoadingRef.current = true;
-            setIsLoading(true);
-            setLoadingMessage("Loading Granite Speech...");
-            try {
-              if (cancelled) return;
-              await invoke("init_granite_speech", {});
-              if (cancelled) return;
-              setCurrentGraniteModel(gModels[0].id);
-              setLoadedEngine("granite_speech");
-              setHeaderStatus("Granite Speech model loaded");
-            } catch (e) {
-              if (cancelled) return;
-              setHeaderStatus(`Failed to auto-load Granite Speech: ${e}`, 5000);
-            } finally {
-              if (!cancelled) {
-                isLoadingRef.current = false;
-                setIsLoading(false);
-                setLoadingMessage("");
-              }
-            }
-          }
-        } catch (storeErr) {
-          console.warn("Store load failed:", storeErr);
-          if (!cancelled) setShowSetupWizard(true);
-        }
-
-        if (!cancelled && pStatus.loaded && !current && !savedEngine) {
-          setActiveEngine("parakeet");
-          activeEngineRef.current = "parakeet";
-        }
-      } catch (e) {
-        if (cancelled) return;
-        console.error("Failed to load initial data:", e);
-        setBackendInfo("Unknown");
-        setHeaderStatus(`Error loading models: ${e}`, 5000);
-        setShowSetupWizard(false);
-      } finally {
-        if (!cancelled) {
-          setIsInitialLoading(false);
-          invoke("show_main_window").catch(() => { });
-        }
-      }
-    }
-
-    loadInitialData();
-    return () => { cancelled = true; };
-  }, []);
-
-  // --- Sync active engine with backend & persist ---
-  useEffect(() => {
-    if (!isInitialLoading) {
-      invoke("set_active_engine", { engine: activeEngine }).catch(console.error);
-      if (storeRef.current) {
-        storeRef.current.set("active_engine", activeEngine).then(() => storeRef.current?.save());
-      }
-    }
-  }, [activeEngine, isInitialLoading]);
-
-  // --- File system watcher for models dir & verification status ---
-  const refreshModelsRef = useRef(refreshModels);
-  useEffect(() => { refreshModelsRef.current = refreshModels; });
-
-  // downloadProgressRef is defined near the top of the component (after useDownloads)
-  // so it's available to both useEngineSwitch and the FS watcher callback below.
-
-  useEffect(() => {
-    let active = true;
-    let unlisten: (() => void) | undefined;
-
-    const handleModelsChanged = async () => {
-      // Refresh backend model lists (Whisper + Parakeet)
-      refreshModelsRef.current(false);
-
-      // Also refresh AppMall status (downloaded / verified flags) so the UI
-      // reflects SHA-256 verification results as soon as they complete.
-      try {
-        const statuses = await invoke<any[]>("get_download_status", { modelIds: MODELS.map(m => m.id) });
-        if (!active) return;
-        const activeOps = downloadProgressRef.current;
-        setSettingsModels(prev =>
-          prev.map(m => {
-            // Don't overwrite state for models with an active operation
-            // (download, verify, delete) — the FS watcher sees partial
-            // files on disk and would prematurely report them as downloaded.
-            const op = activeOps[m.id];
-            if (op && ['starting', 'downloading', 'extracting', 'verifying', 'finalizing', 'deleting'].includes(op.status)) {
-              return m;
-            }
-            const s = statuses.find(x => x.id === m.id);
-            return s ? { ...m, downloaded: s.downloaded, verified: s.verified } : m;
-          }),
-        );
-      } catch (e) {
-        console.error("Failed to refresh model statuses after models-changed:", e);
+        if (loadedEngine) return;
+        if (engineForModel === 'whisper') handleModelChange(id);
+        else if (engineForModel === 'parakeet') handleSwitchToParakeet(id);
+        else handleSwitchToGranite(id);
       }
     };
+  }, [getEngineForModelId, handleModelChange, handleSwitchToGranite, handleSwitchToParakeet, loadedEngine, refreshModels]);
 
-    const setup = async () => {
-      const unsub = await listen("models-changed", handleModelsChanged);
-      if (active) unlisten = unsub;
-      else unsub();
-    };
 
-    setup();
-    return () => {
-      active = false;
-      if (unlisten) unlisten();
-    };
-  }, []);
 
-  // --- Hotkey listeners ---
-  const handleStartRecordingRef = useRef(handleStartRecording);
-  const handlePauseRecordingRef = useRef(handlePauseRecording);
-  const handleResumeRecordingRef = useRef(handleResumeRecording);
-  const handleStopRecordingRef = useRef(handleStopRecording);
-  const handleCancelRecordingRef = useRef(handleCancelRecording);
-  const handleTranscriptionChunkRef = useRef(handleTranscriptionChunk);
-  const loadedEngineRef = useRef(loadedEngine);
-  const playErrorRef = useRef(playError);
-  useEffect(() => {
-    handleStartRecordingRef.current = handleStartRecording;
-    handlePauseRecordingRef.current = handlePauseRecording;
-    handleResumeRecordingRef.current = handleResumeRecording;
-    handleStopRecordingRef.current = handleStopRecording;
-    handleCancelRecordingRef.current = handleCancelRecording;
-    handleTranscriptionChunkRef.current = handleTranscriptionChunk;
-    loadedEngineRef.current = loadedEngine;
-    playErrorRef.current = playError;
-  });
 
-  const startingRecordingRef = useRef(false);
-  const pendingStopRef = useRef(false);
-  const stopInProgressRef = useRef(false);
-  const lastStartTime = useRef(0);
-  const lastStopTime = useRef(0);
-  const HOTKEY_DEBOUNCE_MS = 700;
 
-  useEffect(() => {
-    let active = true;
-    let unlistenStart: (() => void) | undefined;
-    let unlistenStop: (() => void) | undefined;
-    let unlistenChunk: (() => void) | undefined;
-    let unlistenAccessibility: (() => void) | undefined;
-    let unlistenAudioFallback: (() => void) | undefined;
-    let unlistenAudioDisconnect: (() => void) | undefined;
-    let unlistenOverlayAction: (() => void) | undefined;
-    let unlistenModelUnloaded: (() => void) | undefined;
-    let unlistenAudioLevel: (() => void) | undefined;
-    const setup = async () => {
-      const unsub1 = await listen("hotkey-start-recording", async () => {
-        const now = Date.now();
-        if (now - lastStartTime.current < HOTKEY_DEBOUNCE_MS) return;
-        lastStartTime.current = now;
-
-        // Don't start if already recording, starting, or processing a previous stop
-        if (isRecordingRef.current || startingRecordingRef.current || stopInProgressRef.current) return;
-
-        // Block hotkey while model is loading
-        if (isLoadingRef.current) {
-          playErrorRef.current();
-          invoke("show_overlay").catch(() => {});
-          invoke("set_overlay_state", { phase: "model_loading", engine: activeEngineRef.current }).catch(() => {});
-          setTimeout(() => {
-            invoke("hide_overlay").catch(() => {});
-            invoke("set_overlay_state", { phase: "hidden", engine: activeEngineRef.current }).catch(() => {});
-          }, 2500);
-          return;
-        }
-
-        // Block hotkey if no model is currently loaded
-        if (loadedEngineRef.current === null) {
-          playErrorRef.current();
-          invoke("show_overlay").catch(() => {});
-          invoke("set_overlay_state", { phase: "no_model", engine: activeEngineRef.current }).catch(() => {});
-          setTimeout(() => {
-            invoke("hide_overlay").catch(() => {});
-            invoke("set_overlay_state", { phase: "hidden", engine: activeEngineRef.current }).catch(() => {});
-          }, 2500);
-          return;
-        }
-
-        startingRecordingRef.current = true;
-        pendingStopRef.current = false;
-        await handleStartRecordingRef.current(true);
-        startingRecordingRef.current = false;
-        if (pendingStopRef.current) {
-          pendingStopRef.current = false;
-          setTimeout(async () => { await handleStopRecordingRef.current(); }, 250);
-        }
-      });
-
-      const unsub2 = await listen("hotkey-stop-recording", async () => {
-        if (startingRecordingRef.current) {
-          pendingStopRef.current = true;
-          return;
-        }
-        if (stopInProgressRef.current) return;
-        if (!isRecordingRef.current) return;
-
-        stopInProgressRef.current = true;
-        const now = Date.now();
-        if (now - lastStopTime.current < HOTKEY_DEBOUNCE_MS) {
-          stopInProgressRef.current = false;
-          return;
-        }
-        lastStopTime.current = now;
-
-        try {
-          await handleStopRecordingRef.current();
-        } finally {
-          stopInProgressRef.current = false;
-        }
-      });
-
-      const unsub3 = await listen<{ text: string }>("transcription-chunk", (event) => {
-        handleTranscriptionChunkRef.current(event.payload.text);
-      });
-
-      // Re-check macOS permissions if the backend notices the hotkey listener
-      // cannot receive events. This avoids depending on a startup-only event.
-      const unsub4 = await listen("accessibility-missing", () => {
-        void refreshMacPermissions();
-      });
-
-      const unsub5 = await listen("audio-fallback", (event) => {
-        const deviceName = event.payload as string;
-        setHeaderStatusRef.current(`Mic lost, using fallback: ${deviceName}`, 6000);
-      });
-
-      const unsub6 = await listen("audio-disconnected", (_event) => {
-        setHeaderStatusRef.current("Microphone disconnected! Recording stopped.", 6000);
-        if (isRecordingRef.current && !stopInProgressRef.current) {
-          stopInProgressRef.current = true;
-          handleStopRecordingRef.current().finally(() => {
-            stopInProgressRef.current = false;
-          });
-        }
-      });
-
-      const unsub7 = await listen<string>("overlay-action", async (event) => {
-        const action = String(event.payload);
-        if (action === "pause") {
-          await handlePauseRecordingRef.current();
-          return;
-        }
-        if (action === "resume") {
-          await handleResumeRecordingRef.current();
-          return;
-        }
-        if (action === "cancel") {
-          if (stopInProgressRef.current) return;
-          stopInProgressRef.current = true;
-          try {
-            await handleCancelRecordingRef.current();
-          } finally {
-            stopInProgressRef.current = false;
-          }
-        }
-      });
-
-      const unsub8 = await listen("model-unloaded", () => {
-        setLoadedEngine(null);
-        setHeaderStatusRef.current("Model unloaded — VRAM freed");
-      });
-
-      // Silence detection: if audio level stays near-zero for 3 s while recording,
-      // show a hint that the mic might be muted or wrong device selected.
-      const SILENCE_THRESHOLD = 0.02;
-      const SILENCE_DELAY_MS  = 3000;
-      const unsub9 = await listen<number>("audio-level", (event) => {
-        if (!isRecordingRef.current) return;
-        const level = event.payload;
-        if (level > SILENCE_THRESHOLD) {
-          // Audio coming through — clear any pending or visible warning
-          if (silenceTimerRef.current) {
-            clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = null;
-          }
-          setShowSilenceWarning(false);
-        } else {
-          // Near-silence — arm the timer if not already running
-          if (!silenceTimerRef.current) {
-            silenceTimerRef.current = setTimeout(() => {
-              if (isRecordingRef.current) setShowSilenceWarning(true);
-              silenceTimerRef.current = null;
-            }, SILENCE_DELAY_MS);
-          }
-        }
-      });
-
-      if (active) {
-        unlistenStart = unsub1;
-        unlistenStop = unsub2;
-        unlistenChunk = unsub3;
-        unlistenAccessibility = unsub4;
-        unlistenAudioFallback = unsub5;
-        unlistenAudioDisconnect = unsub6;
-        unlistenOverlayAction = unsub7;
-        unlistenModelUnloaded = unsub8;
-        unlistenAudioLevel = unsub9;
-      } else {
-        unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9();
-      }
-    };
-
-    setup();
-    return () => {
-      active = false;
-      if (unlistenStart) unlistenStart();
-      if (unlistenStop) unlistenStop();
-      if (unlistenChunk) unlistenChunk();
-      if (unlistenAccessibility) unlistenAccessibility();
-      if (unlistenAudioFallback) unlistenAudioFallback();
-      if (unlistenAudioDisconnect) unlistenAudioDisconnect();
-      if (unlistenOverlayAction) unlistenOverlayAction();
-      if (unlistenModelUnloaded) unlistenModelUnloaded();
-      if (unlistenAudioLevel) unlistenAudioLevel();
-    };
-  }, []);
 
   // Clear silence warning + any pending timer when recording ends
   useEffect(() => {
@@ -1097,7 +577,8 @@ function App() {
     else handleStartRecording();
   };
 
-  const colorizeStatusMessage = (msg: string) => {
+  const colorizedStatus = useMemo(() => {
+    const msg = headerStatusMessage ?? "";
     const parts = msg.split(/(Granite Speech|Whisper|Parakeet|Granite|OpenAI|NVIDIA|IBM)/g);
     return parts.map((part, i) => {
       if (part === "Whisper" || part === "OpenAI") return <span key={i} style={{ color: 'var(--whisper-color)' }}>{part}</span>;
@@ -1105,7 +586,7 @@ function App() {
       if (part === "Granite Speech" || part === "Granite" || part === "IBM") return <span key={i} style={{ color: 'var(--granite-color)' }}>{part}</span>;
       return part;
     });
-  };
+  }, [headerStatusMessage]);
 
   const handleSetupComplete = useCallback(({ openSettings, useCase }: { openSettings: boolean; useCase: OnboardingUseCase }) => {
     storeRef.current?.set("setup_complete", true);
@@ -1172,7 +653,7 @@ function App() {
                     className={`header-status-message ${headerStatusIsProcessing ? "header-status-message--processing" : ""}`}
                     key={headerStatusMessage}
                   >
-                    {colorizeStatusMessage(headerStatusMessage)}
+                    {colorizedStatus}
                   </span>
                 ) : (
                   <div className="header-ticker header-ticker-fade-in" aria-hidden="true">

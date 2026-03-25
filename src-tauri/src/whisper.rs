@@ -453,10 +453,10 @@ impl WhisperManager {
 
             let (_, _, resampler) = self.resampler.as_mut().unwrap();
             let waves_in = vec![samples.to_vec()];
-            let waves_out = resampler
+            let mut waves_out = resampler
                 .process(&waves_in, None)
                 .map_err(|e| format!("Resampling failed: {:?}", e))?;
-            waves_out[0].clone()
+            waves_out.swap_remove(0)
         } else {
             samples.to_vec()
         };
@@ -676,7 +676,7 @@ impl WhisperManager {
             if padding > 0 {
                 padding = chunk_size - padding;
             }
-            let mut padded_samples = mono_samples.clone();
+            let mut padded_samples = mono_samples; // move — no clone needed, owned by value
             padded_samples.extend(std::iter::repeat(0.0).take(padding));
 
             for chunk in padded_samples.chunks(chunk_size) {

@@ -7,17 +7,17 @@ use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
 use std::sync::{
     atomic::AtomicBool,
-    Arc, Mutex,
+    Arc, Mutex, RwLock,
 };
 
 /// The Global "Brain" of the application.
 /// This struct holds all the data that needs to live as long as the app runs.
 ///
-/// macOS fix: Fields that were previously plain `Mutex<T>` are now wrapped in
-/// `Arc<Mutex<T>>` so they can be `.clone()`'d into `spawn_blocking` closures.
-/// Tauri 2 runs synchronous commands on the macOS AppKit main thread, so all
-/// heavy work must be offloaded to background threads via async + spawn_blocking.
-/// Arc wrapping enables moving owned handles into those closures.
+/// Every field is an `Arc<…>`, so `Clone` is derived and is free (just bumps
+/// ref-counts). This lets `start_recording` (and similar async commands) pass
+/// a single `state.clone()` into `spawn_blocking` instead of cloning every
+/// field individually before the closure.
+#[derive(Clone)]
 pub struct AudioState {
     // macOS fix: Arc-wrapped so it can be cloned into spawn_blocking closures
     // in start_recording / stop_recording async commands.
@@ -49,7 +49,8 @@ pub struct AudioState {
 
     // The user-configured global hotkey binding (keyboard combo or mouse button).
     // Shared with the hotkey listener thread so changes take effect immediately.
-    pub hotkey_config: Arc<Mutex<HotkeyBinding>>,
+    // RwLock: the listener reads on every key event; writes are rare (user reconfigures hotkey).
+    pub hotkey_config: Arc<RwLock<HotkeyBinding>>,
 
     // macOS fix: Arc-wrapped for async command access.
     pub selected_input_device: Arc<Mutex<Option<String>>>,
@@ -98,7 +99,7 @@ impl AudioState {
             active_engine: Arc::new(Mutex::new(ASREngine::Whisper)),
             session_transcript: Arc::new(Mutex::new(String::new())),
             llm: Arc::new(Mutex::new(None)),
-            hotkey_config: Arc::new(Mutex::new(HotkeyBinding::default())),
+            hotkey_config: Arc::new(RwLock::new(HotkeyBinding::default())),
             selected_input_device: Arc::new(Mutex::new(None)),
             denoiser: Arc::new(Mutex::new(None)),
             close_behavior: Arc::new(Mutex::new("tray".to_string())),

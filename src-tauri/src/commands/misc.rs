@@ -754,7 +754,7 @@ pub async fn factory_reset_app_data(
     if let Ok(mut selected_input_device) = state.selected_input_device.lock() {
         *selected_input_device = None;
     }
-    if let Ok(mut hotkey_config) = state.hotkey_config.lock() {
+    if let Ok(mut hotkey_config) = state.hotkey_config.write() {
         *hotkey_config = HotkeyBinding::default();
     }
     if let Ok(mut close_behavior) = state.close_behavior.lock() {

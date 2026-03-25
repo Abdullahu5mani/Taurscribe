@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use crossbeam_channel::unbounded;
+use crossbeam_channel::bounded;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
     Arc,
@@ -27,72 +27,31 @@ pub async fn start_recording(
     denoise: Option<bool>,
 ) -> Result<String, String> {
     // Guard: reject if already recording (e.g. spam hotkey)
-    {
-        let handle = state.recording_handle.lock().unwrap();
-        if handle.is_some() {
-            return Err("Already recording".to_string());
-        }
+    if state.recording_handle.lock().unwrap().is_some() {
+        return Err("Already recording".to_string());
     }
 
-    // macOS fix: Clone all Arc state so it can be moved into spawn_blocking.
-    // Fields were changed from Mutex<T> to Arc<Mutex<T>> in state.rs to
-    // allow cloning into the background closure.
-    let recording_handle_arc = state.recording_handle.clone();
-    let selected_input_device_arc = state.selected_input_device.clone();
-    let active_engine_arc = state.active_engine.clone();
-    let whisper_arc = state.whisper.clone();
-    let parakeet_arc = state.parakeet.clone();
-    let vad_arc = state.vad.clone();
-    let last_recording_path_arc = state.last_recording_path.clone();
-    let session_transcript_arc = state.session_transcript.clone();
-    let denoiser_state_arc = state.denoiser.clone();
-    let granite_speech_arc = state.granite_speech.clone();
-    let recording_paused_arc = state.recording_paused.clone();
-
-    tauri::async_runtime::spawn_blocking(move || {
-        start_recording_blocking(
-            app_handle,
-            denoise,
-            recording_handle_arc,
-            selected_input_device_arc,
-            active_engine_arc,
-            whisper_arc,
-            parakeet_arc,
-            vad_arc,
-            last_recording_path_arc,
-            session_transcript_arc,
-            denoiser_state_arc,
-            granite_speech_arc,
-            recording_paused_arc,
-        )
-    })
-    .await
-    .map_err(|e| format!("start_recording task failed: {}", e))?
+    // Clone the whole state — every field is Arc<…> so this is just ref-count bumps.
+    let state = (*state).clone();
+    tauri::async_runtime::spawn_blocking(move || start_recording_blocking(app_handle, state, denoise))
+        .await
+        .map_err(|e| format!("start_recording task failed: {}", e))?
 }
 
 /// The blocking core of start_recording, run inside spawn_blocking.
-#[allow(clippy::too_many_arguments)]
+/// Receives a cloned AudioState (cheap — all fields are Arc) instead of
+/// 13 individually-cloned Arc parameters.
 fn start_recording_blocking(
     app_handle: AppHandle,
+    state: AudioState,
     denoise: Option<bool>,
-    recording_handle_arc: Arc<std::sync::Mutex<Option<RecordingHandle>>>,
-    selected_input_device_arc: Arc<std::sync::Mutex<Option<String>>>,
-    active_engine_arc: Arc<std::sync::Mutex<ASREngine>>,
-    whisper_arc: Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
-    parakeet_arc: Arc<std::sync::Mutex<crate::parakeet::ParakeetManager>>,
-    vad_arc: Arc<std::sync::Mutex<crate::vad::VADManager>>,
-    last_recording_path_arc: Arc<std::sync::Mutex<Option<String>>>,
-    session_transcript_arc: Arc<std::sync::Mutex<String>>,
-    denoiser_state_arc: Arc<std::sync::Mutex<Option<Denoiser>>>,
-    granite_speech_arc: Arc<std::sync::Mutex<crate::granite_speech::GraniteSpeechManager>>,
-    recording_paused_arc: Arc<AtomicBool>,
 ) -> Result<String, String> {
     let denoise_enabled = denoise.unwrap_or(false);
-    recording_paused_arc.store(false, Ordering::Relaxed);
+    state.recording_paused.store(false, Ordering::Relaxed);
 
     // 1. Setup Microphone
     let host = cpal::default_host();
-    let preferred = selected_input_device_arc.lock().unwrap().clone();
+    let preferred = state.selected_input_device.lock().unwrap().clone();
     
     let mut device_opt = None;
     let mut fallback_triggered = false;
@@ -151,24 +110,24 @@ fn start_recording_blocking(
     println!("[INFO] Saving recording to: {}", path.display());
 
     // 3. Reset AI Context (Start fresh for new recording)
-    let active_engine = *active_engine_arc.lock().unwrap();
+    let active_engine = *state.active_engine.lock().unwrap();
     match active_engine {
-        ASREngine::Whisper => whisper_arc.lock().unwrap().clear_context(),
-        ASREngine::Parakeet => parakeet_arc.lock().unwrap().clear_context(),
+        ASREngine::Whisper => state.whisper.lock().unwrap().clear_context(),
+        ASREngine::Parakeet => state.parakeet.lock().unwrap().clear_context(),
         ASREngine::GraniteSpeech => { /* Granite Speech is stateless per chunk */ }
     }
     // Reset Silero VAD LSTM state so prior session context doesn't bleed in
-    vad_arc.lock().unwrap().reset_state();
+    state.vad.lock().unwrap().reset_state();
 
-    *last_recording_path_arc.lock().unwrap() = Some(path.to_string_lossy().into_owned());
-    session_transcript_arc.lock().unwrap().clear();
+    *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
+    state.session_transcript.lock().unwrap().clear();
 
     // Create a fresh denoiser for this session (RNNoise GRU state must not leak across sessions)
     if denoise_enabled {
-        *denoiser_state_arc.lock().unwrap() = Some(Denoiser::new());
+        *state.denoiser.lock().unwrap() = Some(Denoiser::new());
         println!("[INFO] RNNoise denoiser enabled for this session");
     } else {
-        *denoiser_state_arc.lock().unwrap() = None;
+        *state.denoiser.lock().unwrap() = None;
     }
 
     // 4. Create proper WAV header settings
@@ -182,8 +141,10 @@ fn start_recording_blocking(
     let writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
 
     // 5. Create COMMUNICATION PIPES (Channels)
-    let (file_tx, file_rx) = unbounded::<Vec<f32>>();
-    let (whisper_tx, whisper_rx) = unbounded::<Vec<f32>>();
+    // Bounded: prevents unbounded memory growth if file writer or transcriber falls behind.
+    // Audio callback uses try_send so it never blocks the real-time capture thread.
+    let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5s headroom at 48kHz/1024
+    let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(32); // transcriber has its own accumulator
 
     let file_tx_clone = file_tx.clone();
     let whisper_tx_clone = whisper_tx.clone();
@@ -231,13 +192,89 @@ fn start_recording_blocking(
         println!("WAV file saved.");
     });
 
-    // Get shared references to our AI tools
-    let whisper = whisper_arc.clone();
-    let parakeet_manager = parakeet_arc.clone();
-    let granite_speech = granite_speech_arc.clone();
-    let vad = vad_arc.clone();
-    let active_engine = *active_engine_arc.lock().unwrap();
-    let session_transcript = session_transcript_arc.clone();
+    // Pull shared references out of state for the transcriber thread
+    let whisper = state.whisper.clone();
+    let parakeet_manager = state.parakeet.clone();
+    let granite_speech = state.granite_speech.clone();
+    let vad = state.vad.clone();
+    let active_engine = *state.active_engine.lock().unwrap();
+    let session_transcript = state.session_transcript.clone();
+    let denoiser_arc = state.denoiser.clone();
+    let recording_handle_arc = state.recording_handle.clone();
+
+    /// VAD-gated transcription — shared logic for Whisper and Granite Speech.
+    /// Both managers expose the same `transcribe_chunk(&[f32], u32) -> Result<String, _>` API,
+    /// so the entire accumulate → normalize → VAD-check → transcribe → emit pipeline
+    /// lives here once instead of being copy-pasted per engine.
+    ///
+    /// Returns the transcript text if speech was detected and transcription succeeded,
+    /// or `None` when the chunk was silence or the transcription was empty.
+    #[allow(clippy::too_many_arguments)]
+    fn vad_gated_transcribe(
+        chunk: &mut Vec<f32>,
+        sample_rate: u32,
+        vad: &std::sync::Arc<std::sync::Mutex<crate::vad::VADManager>>,
+        transcribe: &mut impl FnMut(&[f32], u32) -> Result<String, String>,
+        method: &str,
+        emoji: &str,
+        app: &AppHandle,
+        session_transcript: &std::sync::Arc<std::sync::Mutex<String>>,
+    ) -> bool {
+        use crate::utils::normalize_audio;
+        normalize_audio(chunk);
+
+        // VAD expects 16 kHz — downsample from device rate before checking
+        let vad_chunk: Vec<f32> = if sample_rate != 16000 {
+            let ratio = sample_rate as f64 / 16000.0;
+            let out_len = (chunk.len() as f64 / ratio) as usize;
+            (0..out_len)
+                .map(|i| chunk[(i as f64 * ratio) as usize])
+                .collect()
+        } else {
+            chunk.clone()
+        };
+
+        let is_speech = vad.lock().unwrap().is_speech(&vad_chunk).unwrap_or(0.5);
+
+        if is_speech > 0.35 {
+            println!(
+                "[PROCESSING] {} Speech ({:.0}%) - {} transcribing {:.2}s chunk...",
+                emoji,
+                is_speech * 100.0,
+                method,
+                chunk.len() as f32 / sample_rate as f32,
+            );
+            let start = std::time::Instant::now();
+            match transcribe(chunk, sample_rate) {
+                Ok(text) if !text.trim().is_empty() => {
+                    let elapsed = start.elapsed().as_millis() as u32;
+                    println!("[TRANSCRIPT] {} \"{}\" (took {}ms)", emoji, text.trim(), elapsed);
+                    let _ = app.emit(
+                        "transcription-chunk",
+                        crate::types::TranscriptionChunk {
+                            text: text.clone(),
+                            processing_time_ms: elapsed,
+                            method: method.to_string(),
+                        },
+                    );
+                    session_transcript.lock().unwrap().push_str(&text);
+                    true
+                }
+                Ok(_) => false,
+                Err(e) => {
+                    eprintln!("[ERROR] {} transcription error: {}", method, e);
+                    false
+                }
+            }
+        } else {
+            println!(
+                "[VAD] 🔇 Silence ({:.0}%) - Skipping {} chunk",
+                (1.0 - is_speech) * 100.0,
+                method,
+            );
+            false
+        }
+    }
 
     // 7. SPAWN THREAD 2: THE REAL-TIME TRANSCRIBER
     let app_clone = app_handle.clone();
@@ -245,6 +282,8 @@ fn start_recording_blocking(
         let mut buffer = Vec::new();
         let chunk_size = (sample_rate * 6) as usize;
         let max_buffer_size = chunk_size * 2;
+        // Pre-allocated scratch buffer reused each iteration to avoid per-chunk Vec allocation
+        let mut chunk = Vec::with_capacity(chunk_size);
         println!(
             "[INFO] Runtime Transcriber thread started (Engine: {:?})",
             active_engine
@@ -256,156 +295,56 @@ fn start_recording_blocking(
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             };
-            if active_engine == ASREngine::Whisper {
-                buffer.extend(samples);
 
-                while buffer.len() >= chunk_size {
-                    if buffer.len() > max_buffer_size {
-                        println!("[WARNING] Buffer full, dropping old audio to catch up");
-                        buffer.drain(..chunk_size);
-                    }
-                    let mut chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
-                    normalize_audio(&mut chunk);
-                    // VAD expects 16kHz — downsample from device rate before checking
-                    let vad_chunk: Vec<f32> = if sample_rate != 16000 {
-                        let ratio = sample_rate as f64 / 16000.0;
-                        let out_len = (chunk.len() as f64 / ratio) as usize;
-                        (0..out_len)
-                            .map(|i| chunk[(i as f64 * ratio) as usize])
-                            .collect()
-                    } else {
-                        chunk.clone()
-                    };
-                    let is_speech = vad.lock().unwrap().is_speech(&vad_chunk).unwrap_or(0.5);
-
-                    if is_speech > 0.35 {
-                        println!(
-                            "[PROCESSING] 🎙️ Speech ({:.0}%) - Transcribing {:.2}s chunk...",
-                            is_speech * 100.0,
-                            6.0
-                        );
-                        let start_time = std::time::Instant::now();
-                        match whisper
-                            .lock()
-                            .unwrap()
-                            .transcribe_chunk(&chunk, sample_rate)
-                        {
-                            Ok(transcript) => {
-                                if !transcript.trim().is_empty() {
-                                    let elapsed = start_time.elapsed().as_millis() as u32;
-                                    println!(
-                                        "[TRANSCRIPT] \"{}\" (took {}ms)",
-                                        transcript, elapsed
-                                    );
-                                    let _ = app_clone.emit(
-                                        "transcription-chunk",
-                                        TranscriptionChunk {
-                                            text: transcript,
-                                            processing_time_ms: elapsed,
-                                            method: "Whisper".to_string(),
-                                        },
-                                    );
-                                }
-                            }
-                            Err(e) => eprintln!("[ERROR] Whisper error: {}", e),
+            match active_engine {
+                ASREngine::Whisper | ASREngine::GraniteSpeech => {
+                    buffer.extend(samples);
+                    while buffer.len() >= chunk_size {
+                        if buffer.len() > max_buffer_size {
+                            println!("[WARNING] Buffer full, dropping old audio to catch up");
+                            buffer.drain(..chunk_size);
                         }
-                    } else {
-                        println!(
-                            "[VAD] 🔇 Silence ({:.0}%) - Skipping Whisper chunk",
-                            (1.0 - is_speech) * 100.0
-                        );
+                        chunk.clear();
+                        chunk.extend_from_slice(&buffer[..chunk_size]);
+                        buffer.drain(..chunk_size);
+                        if active_engine == ASREngine::Whisper {
+                            let mut wm = whisper.lock().unwrap();
+                            let mut transcribe =
+                                |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                            vad_gated_transcribe(
+                                &mut chunk, sample_rate, &vad,
+                                &mut transcribe, "Whisper", "🎙️",
+                                &app_clone, &session_transcript,
+                            );
+                        } else {
+                            let mut gs = granite_speech.lock().unwrap();
+                            let mut transcribe =
+                                |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                            vad_gated_transcribe(
+                                &mut chunk, sample_rate, &vad,
+                                &mut transcribe, "GraniteSpeech", "🪨",
+                                &app_clone, &session_transcript,
+                            );
+                        }
                     }
                 }
-            } else if active_engine == ASREngine::GraniteSpeech {
-                // Granite Speech: VAD-gated, chunk-based (same pattern as Whisper)
-                buffer.extend(samples);
-
-                while buffer.len() >= chunk_size {
-                    if buffer.len() > max_buffer_size {
-                        println!("[WARNING] Buffer full, dropping old audio to catch up");
-                        buffer.drain(..chunk_size);
-                    }
-                    let mut chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
-                    normalize_audio(&mut chunk);
-                    let vad_chunk: Vec<f32> = if sample_rate != 16000 {
-                        let ratio = sample_rate as f64 / 16000.0;
-                        let out_len = (chunk.len() as f64 / ratio) as usize;
-                        (0..out_len)
-                            .map(|i| chunk[(i as f64 * ratio) as usize])
-                            .collect()
-                    } else {
-                        chunk.clone()
-                    };
-                    let is_speech = vad.lock().unwrap().is_speech(&vad_chunk).unwrap_or(0.5);
-
-                    if is_speech > 0.35 {
-                        println!(
-                            "[PROCESSING] 🪨 Speech ({:.0}%) - Granite transcribing {:.2}s chunk...",
-                            is_speech * 100.0,
-                            6.0
-                        );
-                        let start_time = std::time::Instant::now();
-                        match granite_speech
-                            .lock()
-                            .unwrap()
-                            .transcribe_chunk(&chunk, sample_rate)
-                        {
-                            Ok(transcript) => {
-                                if !transcript.trim().is_empty() {
-                                    let elapsed = start_time.elapsed().as_millis() as u32;
-                                    println!(
-                                        "[TRANSCRIPT] 🪨 \"{}\" (took {}ms)",
-                                        transcript, elapsed
-                                    );
-                                    let _ = app_clone.emit(
-                                        "transcription-chunk",
-                                        TranscriptionChunk {
-                                            text: transcript.clone(),
-                                            processing_time_ms: elapsed,
-                                            method: "GraniteSpeech".to_string(),
-                                        },
-                                    );
-                                    let mut session = session_transcript.lock().unwrap();
-                                    session.push_str(&transcript);
-                                }
-                            }
-                            Err(e) => eprintln!("[ERROR] Granite Speech error: {}", e),
+                ASREngine::Parakeet => {
+                    buffer.extend(samples);
+                    let parakeet_chunk_size = (sample_rate as f32 * 1.12) as usize;
+                    let max_buffer_size = parakeet_chunk_size * 2;
+                    while buffer.len() >= parakeet_chunk_size {
+                        if buffer.len() > max_buffer_size {
+                            buffer.drain(..parakeet_chunk_size);
                         }
-                    } else {
-                        println!(
-                            "[VAD] 🔇 Silence ({:.0}%) - Skipping Granite chunk",
-                            (1.0 - is_speech) * 100.0
-                        );
-                    }
-                }
-            } else {
-                buffer.extend(samples);
-
-                let parakeet_chunk_size = (sample_rate as f32 * 1.12) as usize;
-                let max_buffer_size = parakeet_chunk_size * 2;
-
-                while buffer.len() >= parakeet_chunk_size {
-                    if buffer.len() > max_buffer_size {
+                        chunk.clear();
+                        chunk.extend_from_slice(&buffer[..parakeet_chunk_size]);
                         buffer.drain(..parakeet_chunk_size);
-                    }
-
-                    let mut chunk: Vec<f32> = buffer.drain(..parakeet_chunk_size).collect();
-                    normalize_audio(&mut chunk);
-                    let start_time = std::time::Instant::now();
-
-                    match parakeet_manager
-                        .lock()
-                        .unwrap()
-                        .transcribe_chunk(&chunk, sample_rate)
-                    {
-                        Ok(transcript) => {
-                            if !transcript.is_empty() {
+                        normalize_audio(&mut chunk);
+                        let start_time = std::time::Instant::now();
+                        match parakeet_manager.lock().unwrap().transcribe_chunk(&chunk, sample_rate) {
+                            Ok(transcript) if !transcript.is_empty() => {
                                 let elapsed = start_time.elapsed().as_millis() as u32;
-                                println!(
-                                    "[TRANSCRIPT] 🦜 \"{}\" (took {}ms)",
-                                    transcript.trim(),
-                                    elapsed
-                                );
+                                println!("[TRANSCRIPT] 🦜 \"{}\" (took {}ms)", transcript.trim(), elapsed);
                                 let _ = app_clone.emit(
                                     "transcription-chunk",
                                     TranscriptionChunk {
@@ -414,85 +353,67 @@ fn start_recording_blocking(
                                         method: "Parakeet".to_string(),
                                     },
                                 );
-
-                                let mut session = session_transcript.lock().unwrap();
-                                session.push_str(&transcript);
+                                session_transcript.lock().unwrap().push_str(&transcript);
                             }
+                            Ok(_) => {}
+                            Err(e) => eprintln!("[ERROR] Parakeet error: {}", e),
                         }
-                        Err(e) => eprintln!("[ERROR] Parakeet error: {}", e),
                     }
                 }
             }
         }
 
         println!("[INFO] Recording stopped, processing remaining audio...");
-        // Fast drain any remaining audio chunks from the queue
+        // Drain any remaining samples from the channel into the buffer
         while let Ok(samples) = whisper_rx.try_recv() {
-            if active_engine == ASREngine::Whisper {
-                buffer.extend(samples);
-            } else {
-                buffer.extend(samples);
-            }
+            buffer.extend(samples);
         }
 
+        // Flush full-sized chunks from the tail buffer
         while buffer.len() >= chunk_size {
-            let chunk: Vec<f32> = buffer.drain(..chunk_size).collect();
-            if active_engine == ASREngine::Whisper {
-                whisper
-                    .lock()
-                    .unwrap()
-                    .transcribe_chunk(&chunk, sample_rate)
-                    .ok();
-            } else if active_engine == ASREngine::GraniteSpeech {
-                let mut gs = granite_speech.lock().unwrap();
-                match gs.transcribe_chunk(&chunk, sample_rate) {
-                    Ok(transcript) if !transcript.is_empty() => {
-                        let mut session = session_transcript.lock().unwrap();
-                        session.push_str(&transcript);
-                        println!("[TRANSCRIPT] 🪨 (Final) \"{}\"", transcript);
-                    }
-                    Ok(_) => {}
-                    Err(e) => eprintln!("[ERROR] Granite Speech error (final): {}", e),
+            chunk.clear();
+            chunk.extend_from_slice(&buffer[..chunk_size]);
+            buffer.drain(..chunk_size);
+            match active_engine {
+                ASREngine::Whisper => {
+                    let mut wm = whisper.lock().unwrap();
+                    let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript);
                 }
-            } else {
-                let mut p_manager = parakeet_manager.lock().unwrap();
-                if let Ok(transcript) = p_manager.transcribe_chunk(&chunk, sample_rate) {
-                    if !transcript.is_empty() {
-                        let mut session = session_transcript.lock().unwrap();
-                        session.push_str(&transcript);
-                        println!("[TRANSCRIPT] 🦜 (Final) \"{}\"", transcript);
+                ASREngine::GraniteSpeech => {
+                    let mut gs = granite_speech.lock().unwrap();
+                    let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript);
+                }
+                ASREngine::Parakeet => {
+                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&chunk, sample_rate) {
+                        if !transcript.is_empty() {
+                            session_transcript.lock().unwrap().push_str(&transcript);
+                            println!("[TRANSCRIPT] 🦜 (Final) \"{}\"", transcript.trim());
+                        }
                     }
                 }
             }
         }
 
-        if !buffer.is_empty() {
-            let chunk_duration = buffer.len() as f32 / sample_rate as f32;
-            if chunk_duration > 0.1 {
-                if active_engine == ASREngine::Whisper {
-                    whisper
-                        .lock()
-                        .unwrap()
-                        .transcribe_chunk(&buffer, sample_rate)
-                        .ok();
-                } else if active_engine == ASREngine::GraniteSpeech {
+        // Flush the sub-chunk tail (< chunk_size but > 0.1s)
+        if !buffer.is_empty() && buffer.len() as f32 / sample_rate as f32 > 0.1 {
+            match active_engine {
+                ASREngine::Whisper => {
+                    let mut wm = whisper.lock().unwrap();
+                    let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                    vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript);
+                }
+                ASREngine::GraniteSpeech => {
                     let mut gs = granite_speech.lock().unwrap();
-                    match gs.transcribe_chunk(&buffer, sample_rate) {
-                        Ok(transcript) if !transcript.is_empty() => {
-                            let mut session = session_transcript.lock().unwrap();
-                            session.push_str(&transcript);
-                            println!("[TRANSCRIPT] 🪨 (Final Partial) \"{}\"", transcript);
-                        }
-                        Ok(_) => {}
-                        Err(e) => eprintln!("[ERROR] Granite Speech error (final partial): {}", e),
-                    }
-                } else {
-                    let mut p_manager = parakeet_manager.lock().unwrap();
-                    if let Ok(transcript) = p_manager.transcribe_chunk(&buffer, sample_rate) {
+                    let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                    vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript);
+                }
+                ASREngine::Parakeet => {
+                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&buffer, sample_rate) {
                         if !transcript.is_empty() {
-                            let mut session = session_transcript.lock().unwrap();
-                            session.push_str(&transcript);
-                            println!("[TRANSCRIPT] 🦜 (Final Partial) \"{}\"", transcript);
+                            session_transcript.lock().unwrap().push_str(&transcript);
+                            println!("[TRANSCRIPT] 🦜 (Final Partial) \"{}\"", transcript.trim());
                         }
                     }
                 }
@@ -503,7 +424,6 @@ fn start_recording_blocking(
     });
 
     let channels = config.channels as usize;
-    let denoiser_arc = denoiser_state_arc.clone();
 
     // Audio level metering: the cpal callback writes a float (as AtomicU32 bits)
     // and a dedicated thread reads it every 50ms to emit the Tauri event.
@@ -531,7 +451,7 @@ fn start_recording_blocking(
             &config,
             move |data: &[f32], _: &_| {
                 // File writer always gets raw (unprocessed) audio
-                file_tx_clone.send(data.to_vec()).ok();
+                file_tx_clone.try_send(data.to_vec()).ok();
 
                 let mono_data: Vec<f32> = if channels > 1 {
                     data.chunks(channels)
@@ -561,7 +481,7 @@ fn start_recording_blocking(
                     audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
                 }
 
-                whisper_tx_clone.send(transcriber_data).ok();
+                whisper_tx_clone.try_send(transcriber_data).ok();
             },
             move |err| {
                 eprintln!("[ERROR] Audio input stream error: {}", err);
