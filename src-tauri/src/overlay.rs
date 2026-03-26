@@ -4,8 +4,8 @@
 ///          The panel lives at kCGScreenSaverWindowLevel so it pierces full-screen
 ///          app Spaces. NSTextField renders the current phase text.
 ///
-/// Win/Linux → Tauri WebView window "overlay" + emitted "overlay-state" events
-///             (unchanged from the original implementation).
+/// Windows → Tauri WebView window "overlay" + emitted "overlay-state" events.
+/// Linux    → no overlay window.
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -33,57 +33,62 @@ pub fn init(app: &AppHandle) {
 pub fn show(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     mac::show(app);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     webview::show(app);
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let _ = app;
 }
 
 /// Hide the overlay.
 pub fn hide(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     mac::hide(app);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     webview::hide(app);
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let _ = app;
 }
 
 /// Update the overlay state (phase + optional latency).
 /// macOS   → updates NSTextField and egui context directly.
-/// Win/Linux → emits "overlay-state" to the "overlay" WebView window.
+/// Windows → emits "overlay-state" to the "overlay" WebView window.
+/// Linux   → no-op.
 pub fn set_state(app: &AppHandle, payload: OverlayStatePayload) {
     #[cfg(target_os = "macos")]
     mac::set_state(app, payload);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     webview::set_state(app, payload);
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let _ = (app, payload);
 }
 
 /// Restores focus to the app that was active when the overlay opened.
 pub fn restore_focus(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     let _ = app;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     webview::restore_focus(app);
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let _ = app;
 }
 
-// ── WebView implementation (Windows / Linux) ──────────────────────────────────
+// ── WebView implementation (Windows) ───────────────────────────────────────────
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 mod webview {
     use super::OverlayStatePayload;
     use tauri::{AppHandle, Emitter, Manager};
 
-    #[cfg(target_os = "windows")]
     use std::sync::{Mutex, OnceLock};
 
-    #[cfg(target_os = "windows")]
     static LAST_FOREGROUND_HWND: OnceLock<Mutex<usize>> = OnceLock::new();
 
-    #[cfg(target_os = "windows")]
     fn last_foreground_hwnd() -> &'static Mutex<usize> {
         LAST_FOREGROUND_HWND.get_or_init(|| Mutex::new(0))
     }
 
     pub fn show(app: &AppHandle) {
         if let Some(overlay) = app.get_webview_window("overlay") {
-            #[cfg(target_os = "windows")]
             remember_foreground_window();
 
             let monitor = active_monitor(app)
@@ -121,14 +126,12 @@ mod webview {
     }
 
     pub fn restore_focus(_app: &AppHandle) {
-        #[cfg(target_os = "windows")]
         restore_foreground_window();
     }
 
     /// Returns the monitor containing the foreground window (the app the user
     /// was typing in when they triggered the hotkey). Falls back to the cursor
     /// position, then to None.
-    #[cfg(target_os = "windows")]
     pub fn active_monitor(app: &AppHandle) -> Option<tauri::Monitor> {
         foreground_monitor(app).or_else(|| cursor_monitor(app))
     }
@@ -136,7 +139,6 @@ mod webview {
     /// GetForegroundWindow → MonitorFromWindow → match against Tauri monitors.
     /// This is more accurate than cursor position: the cursor may be parked on
     /// a second screen while the user types on the primary.
-    #[cfg(target_os = "windows")]
     fn foreground_monitor(app: &AppHandle) -> Option<tauri::Monitor> {
         use std::ffi::c_void;
 
@@ -185,7 +187,6 @@ mod webview {
     }
 
     /// Cursor-position fallback (used when GetForegroundWindow returns null).
-    #[cfg(target_os = "windows")]
     fn cursor_monitor(app: &AppHandle) -> Option<tauri::Monitor> {
         #[repr(C)]
         struct POINT { x: i32, y: i32 }
@@ -201,12 +202,6 @@ mod webview {
         })
     }
 
-    #[cfg(not(target_os = "windows"))]
-    pub fn active_monitor(_app: &AppHandle) -> Option<tauri::Monitor> {
-        None
-    }
-
-    #[cfg(target_os = "windows")]
     fn remember_foreground_window() {
         use std::ffi::c_void;
 
@@ -224,7 +219,6 @@ mod webview {
         }
     }
 
-    #[cfg(target_os = "windows")]
     fn restore_foreground_window() {
         use std::ffi::c_void;
 
