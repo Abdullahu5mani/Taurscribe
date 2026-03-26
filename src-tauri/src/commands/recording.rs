@@ -46,7 +46,7 @@ fn start_recording_blocking(
     state: AudioState,
     denoise: Option<bool>,
 ) -> Result<String, String> {
-    let denoise_enabled = denoise.unwrap_or(false);
+    let denoise_enabled = denoise.unwrap_or(true);
     state.recording_paused.store(false, Ordering::Relaxed);
 
     // 1. Setup Microphone
@@ -369,6 +369,12 @@ fn start_recording_blocking(
             buffer.extend(samples);
         }
 
+        // Pad 400ms of silence so trailing words aren't clipped by the
+        // transcription engine. This is better than keeping the mic open
+        // longer because it adds zero background noise.
+        let silence_samples = (sample_rate as usize) * 400 / 1000;
+        buffer.extend(std::iter::repeat(0.0_f32).take(silence_samples));
+
         // Flush full-sized chunks from the tail buffer
         while buffer.len() >= chunk_size {
             chunk.clear();
@@ -397,17 +403,48 @@ fn start_recording_blocking(
         }
 
         // Flush the sub-chunk tail (< chunk_size but > 0.1s)
+        // For short tails (< 3s, e.g. a single word), bypass VAD entirely —
+        // VAD is designed for filtering silence in long streams, not for
+        // gating short utterances where every sample matters.
         if !buffer.is_empty() && buffer.len() as f32 / sample_rate as f32 > 0.1 {
+            let tail_secs = buffer.len() as f32 / sample_rate as f32;
+            let use_vad = tail_secs >= 3.0;
             match active_engine {
                 ASREngine::Whisper => {
                     let mut wm = whisper.lock().unwrap();
-                    let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript);
+                    if use_vad {
+                        let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript);
+                    } else {
+                        println!("[PROCESSING] 🎙️ Short tail ({:.2}s) — bypassing VAD for Whisper", tail_secs);
+                        if let Ok(text) = wm.transcribe_chunk(&buffer, sample_rate) {
+                            if !text.trim().is_empty() {
+                                println!("[TRANSCRIPT] 🎙️ (Tail) \"{}\"", text.trim());
+                                let _ = app_clone.emit("transcription-chunk", crate::types::TranscriptionChunk {
+                                    text: text.clone(), processing_time_ms: 0, method: "Whisper".to_string(),
+                                });
+                                session_transcript.lock().unwrap().push_str(&text);
+                            }
+                        }
+                    }
                 }
                 ASREngine::GraniteSpeech => {
                     let mut gs = granite_speech.lock().unwrap();
-                    let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript);
+                    if use_vad {
+                        let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript);
+                    } else {
+                        println!("[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for GraniteSpeech", tail_secs);
+                        if let Ok(text) = gs.transcribe_chunk(&buffer, sample_rate) {
+                            if !text.trim().is_empty() {
+                                println!("[TRANSCRIPT] 🪨 (Tail) \"{}\"", text.trim());
+                                let _ = app_clone.emit("transcription-chunk", crate::types::TranscriptionChunk {
+                                    text: text.clone(), processing_time_ms: 0, method: "GraniteSpeech".to_string(),
+                                });
+                                session_transcript.lock().unwrap().push_str(&text);
+                            }
+                        }
+                    }
                 }
                 ASREngine::Parakeet => {
                     if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&buffer, sample_rate) {
@@ -1057,9 +1094,9 @@ fn stop_recording_blocking(
     whisper_arc: Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
     vad_arc: Arc<std::sync::Mutex<crate::vad::VADManager>>,
 ) -> Result<String, String> {
-    // Tail capture: keep the mic open briefly to catch the last syllable
-    // before shutting the stream down and running the final pass.
-    teardown_recording(recording, 220);
+    // Brief tail capture for OS audio scheduling; silence padding in the
+    // transcriber thread handles the actual word-boundary safety margin.
+    teardown_recording(recording, 80);
 
     if active_engine == ASREngine::Parakeet || active_engine == ASREngine::GraniteSpeech {
         let engine_name = if active_engine == ASREngine::Parakeet { "Parakeet" } else { "Granite Speech" };
@@ -1092,12 +1129,25 @@ fn stop_recording_blocking(
         let whisper = whisper_arc.lock().unwrap();
         let mut audio_data = whisper.load_audio(&path)?;
 
+        // Pad 400ms of silence so trailing words aren't clipped by VAD or Whisper
+        audio_data.extend(std::iter::repeat(0.0_f32).take(16000 * 400 / 1000));
+
         // Normalize the full recording before VAD + final transcription
         normalize_audio(&mut audio_data);
 
         println!("[PROCESSING] Applying VAD filtering for Whisper...");
         let mut vad = vad_arc.lock().unwrap();
-        let timestamps = vad.get_speech_timestamps(&audio_data, 500)?;
+        // For short recordings (< 4s, likely a single word or phrase), use a
+        // more permissive VAD threshold and wider padding so short utterances
+        // aren't accidentally filtered out.
+        let audio_duration_s = audio_data.len() as f32 / 16000.0;
+        let (vad_padding, vad_threshold) = if audio_duration_s < 4.0 {
+            println!("[VAD] Short recording ({:.1}s) — using permissive threshold", audio_duration_s);
+            (800_usize, 0.2_f32)
+        } else {
+            (500_usize, 0.35_f32)
+        };
+        let timestamps = vad.get_speech_timestamps_with_threshold(&audio_data, vad_padding, vad_threshold)?;
 
         let mut clean = Vec::with_capacity(audio_data.len());
         if timestamps.is_empty() {

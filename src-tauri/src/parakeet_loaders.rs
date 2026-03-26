@@ -12,6 +12,55 @@ use std::path::PathBuf;
 
 use crate::parakeet::GpuBackend;
 
+// ─── Session config helpers ───────────────────────────────────────────────────
+
+/// Number of intra-op threads: half the physical cores, clamped to [2, 6].
+/// Parakeet runs chunks continuously alongside the audio capture thread,
+/// so we leave headroom rather than saturating all cores.
+fn intra_thread_count() -> usize {
+    (std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        / 2)
+    .max(2)
+    .min(6)
+}
+
+/// Build an `ExecutionConfig` for CPU inference with tuned session options.
+///
+/// - `intra_threads` — parallelism within a single ONNX operator
+/// - `inter_threads(1)` — Conformer/RNN-T is sequential; parallel inter-op adds sync overhead
+/// `parakeet-rs` 0.3.0 only exposes thread counts and execution provider selection
+/// through `ExecutionConfig`, so we keep the tuning here within that supported API.
+#[cfg(not(target_os = "macos"))]
+fn cpu_config() -> parakeet_rs::ExecutionConfig {
+    use parakeet_rs::ExecutionConfig;
+    ExecutionConfig::new()
+        .with_intra_threads(intra_thread_count())
+        .with_inter_threads(1)
+}
+
+/// Build an `ExecutionConfig` for CUDA inference.
+/// Same session options as `cpu_config` plus the CUDA execution provider.
+#[cfg(any(target_os = "linux", all(target_os = "windows", target_arch = "x86_64")))]
+fn cuda_config() -> parakeet_rs::ExecutionConfig {
+    use parakeet_rs::{ExecutionConfig, ExecutionProvider};
+    ExecutionConfig::new()
+        .with_execution_provider(ExecutionProvider::Cuda)
+        .with_intra_threads(intra_thread_count())
+        .with_inter_threads(1)
+}
+
+/// Build an `ExecutionConfig` for DirectML inference (Windows GPU/NPU).
+#[cfg(target_os = "windows")]
+fn directml_config() -> parakeet_rs::ExecutionConfig {
+    use parakeet_rs::{ExecutionConfig, ExecutionProvider};
+    ExecutionConfig::new()
+        .with_execution_provider(ExecutionProvider::DirectML)
+        .with_intra_threads(intra_thread_count())
+        .with_inter_threads(1)
+}
+
 // ─── Nemotron ────────────────────────────────────────────────────────────────
 
 pub fn init_nemotron(path: &PathBuf, force_cpu: bool) -> Result<(Nemotron, GpuBackend), String> {
@@ -56,9 +105,7 @@ fn try_gpu_nemotron(_path: &str) -> Result<Nemotron, String> {
         all(target_os = "windows", target_arch = "x86_64")
     ))]
     {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-        Nemotron::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
+        Nemotron::from_pretrained(_path, Some(cuda_config())).map_err(|e| format!("{}", e))
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -71,16 +118,21 @@ fn try_gpu_nemotron(_path: &str) -> Result<Nemotron, String> {
 fn try_directml_nemotron(_path: &str) -> Result<Nemotron, String> {
     #[cfg(target_os = "windows")]
     {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
-        Nemotron::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
+        Nemotron::from_pretrained(_path, Some(directml_config())).map_err(|e| format!("{}", e))
     }
     #[cfg(not(target_os = "windows"))]
     Err("DirectML feature not enabled".to_string())
 }
 
 fn try_cpu_nemotron(path: &str) -> Result<Nemotron, String> {
-    Nemotron::from_pretrained(path, None).map_err(|e| format!("{}", e))
+    #[cfg(not(target_os = "macos"))]
+    {
+        Nemotron::from_pretrained(path, Some(cpu_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Nemotron::from_pretrained(path, None).map_err(|e| format!("{}", e))
+    }
 }
 
 // ─── CTC ─────────────────────────────────────────────────────────────────────
@@ -127,9 +179,7 @@ fn try_gpu_ctc(_path: &str) -> Result<Parakeet, String> {
         all(target_os = "windows", target_arch = "x86_64")
     ))]
     {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-        Parakeet::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
+        Parakeet::from_pretrained(_path, Some(cuda_config())).map_err(|e| format!("{}", e))
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -142,16 +192,21 @@ fn try_gpu_ctc(_path: &str) -> Result<Parakeet, String> {
 fn try_directml_ctc(_path: &str) -> Result<Parakeet, String> {
     #[cfg(target_os = "windows")]
     {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
-        Parakeet::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
+        Parakeet::from_pretrained(_path, Some(directml_config())).map_err(|e| format!("{}", e))
     }
     #[cfg(not(target_os = "windows"))]
     Err("DirectML feature not enabled".to_string())
 }
 
 fn try_cpu_ctc(path: &str) -> Result<Parakeet, String> {
-    Parakeet::from_pretrained(path, None).map_err(|e| format!("{}", e))
+    #[cfg(not(target_os = "macos"))]
+    {
+        Parakeet::from_pretrained(path, Some(cpu_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Parakeet::from_pretrained(path, None).map_err(|e| format!("{}", e))
+    }
 }
 
 // ─── EOU ─────────────────────────────────────────────────────────────────────
@@ -197,9 +252,7 @@ fn try_gpu_eou(_path: &str) -> Result<ParakeetEOU, String> {
         all(target_os = "windows", target_arch = "x86_64")
     ))]
     {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-        ParakeetEOU::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
+        ParakeetEOU::from_pretrained(_path, Some(cuda_config())).map_err(|e| format!("{}", e))
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -212,16 +265,21 @@ fn try_gpu_eou(_path: &str) -> Result<ParakeetEOU, String> {
 fn try_directml_eou(_path: &str) -> Result<ParakeetEOU, String> {
     #[cfg(target_os = "windows")]
     {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
-        ParakeetEOU::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
+        ParakeetEOU::from_pretrained(_path, Some(directml_config())).map_err(|e| format!("{}", e))
     }
     #[cfg(not(target_os = "windows"))]
     Err("DirectML feature not enabled".to_string())
 }
 
 fn try_cpu_eou(path: &str) -> Result<ParakeetEOU, String> {
-    ParakeetEOU::from_pretrained(path, None).map_err(|e| format!("{}", e))
+    #[cfg(not(target_os = "macos"))]
+    {
+        ParakeetEOU::from_pretrained(path, Some(cpu_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ParakeetEOU::from_pretrained(path, None).map_err(|e| format!("{}", e))
+    }
 }
 
 // ─── TDT ─────────────────────────────────────────────────────────────────────
@@ -267,9 +325,7 @@ fn try_gpu_tdt(_path: &str) -> Result<ParakeetTDT, String> {
         all(target_os = "windows", target_arch = "x86_64")
     ))]
     {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-        ParakeetTDT::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
+        ParakeetTDT::from_pretrained(_path, Some(cuda_config())).map_err(|e| format!("{}", e))
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -282,14 +338,19 @@ fn try_gpu_tdt(_path: &str) -> Result<ParakeetTDT, String> {
 fn try_directml_tdt(_path: &str) -> Result<ParakeetTDT, String> {
     #[cfg(target_os = "windows")]
     {
-        use parakeet_rs::{ExecutionConfig, ExecutionProvider};
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::DirectML);
-        ParakeetTDT::from_pretrained(_path, Some(config)).map_err(|e| format!("{}", e))
+        ParakeetTDT::from_pretrained(_path, Some(directml_config())).map_err(|e| format!("{}", e))
     }
     #[cfg(not(target_os = "windows"))]
     Err("DirectML feature not enabled".to_string())
 }
 
 fn try_cpu_tdt(path: &str) -> Result<ParakeetTDT, String> {
-    ParakeetTDT::from_pretrained(path, None).map_err(|e| format!("{}", e))
+    #[cfg(not(target_os = "macos"))]
+    {
+        ParakeetTDT::from_pretrained(path, Some(cpu_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        ParakeetTDT::from_pretrained(path, None).map_err(|e| format!("{}", e))
+    }
 }

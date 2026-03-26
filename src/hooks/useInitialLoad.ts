@@ -30,7 +30,6 @@ interface UseInitialLoadParams {
     setShowSetupWizard: (v: boolean) => void;
     setIsInitialLoading: (v: boolean) => void;
     setCloseBehavior: (v: "tray" | "quit") => void;
-    setOverlayStyle: (v: "minimal" | "full") => void;
 
     // Store ref — populated by this hook so callers can use it later
     storeRef: React.MutableRefObject<Store | null>;
@@ -62,7 +61,6 @@ export function useInitialLoad({
     setShowSetupWizard,
     setIsInitialLoading,
     setCloseBehavior,
-    setOverlayStyle,
     storeRef,
 }: UseInitialLoadParams) {
     useEffect(() => {
@@ -143,12 +141,6 @@ export function useInitialLoad({
                     if (savedCloseBehavior && !cancelled) {
                         setCloseBehavior(savedCloseBehavior);
                         invoke("set_close_behavior", { behaviour: savedCloseBehavior }).catch(() => {});
-                    }
-
-                    // Restore overlay style preference
-                    const savedOverlayStyle = await loadedStore.get<"minimal" | "full">("overlay_style");
-                    if (savedOverlayStyle && !cancelled) {
-                        setOverlayStyle(savedOverlayStyle);
                     }
 
                     savedEngine =

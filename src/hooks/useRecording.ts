@@ -31,7 +31,7 @@ interface UseRecordingParams {
     onHistorySaved?: () => void;
 }
 
-const MIN_RECORDING_MS = 1500;
+const MIN_RECORDING_MS = 600;
 type OverlayPhase = "recording" | "paused" | "transcribing" | "correcting" | "done" | "too_short" | "paste_failed" | "cancelled" | "hidden";
 
 /**
@@ -292,7 +292,7 @@ export function useRecording({
 
             const recordingDurationMs = getEffectiveRecordingMs();
             if (recordingDurationMs < MIN_RECORDING_MS) {
-                setHeaderStatus("Recording too short — try at least 1.5 seconds", 5000);
+                setHeaderStatus("Recording too short — try holding a little longer", 5000);
                 if (muteBackgroundAudioRef.current) {
                     await invoke("unmute_system_audio").catch(() => {});
                 }

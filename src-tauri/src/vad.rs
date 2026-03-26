@@ -25,8 +25,6 @@ pub struct VADManager {
     h: Vec<f32>,
     /// LSTM cell state c — shape [2, 1, 64], flattened to 128 f32s.
     c: Vec<f32>,
-    /// Speech probability threshold (0.5 is the Silero-recommended default).
-    threshold: f32,
 }
 
 impl VADManager {
@@ -58,7 +56,6 @@ impl VADManager {
             session,
             h: vec![0.0_f32; STATE_SIZE],
             c: vec![0.0_f32; STATE_SIZE],
-            threshold: 0.35,
         })
     }
 
@@ -160,18 +157,6 @@ impl VADManager {
         } else {
             ((rms - threshold) / (threshold * 4.0)).min(1.0)
         }
-    }
-
-    /// Find speech segments in a full audio buffer (used on the final Whisper pass).
-    ///
-    /// Returns a list of `(start_sec, end_sec)` pairs covering all detected speech,
-    /// with `padding_ms` of silence kept around each segment for safety.
-    pub fn get_speech_timestamps(
-        &mut self,
-        audio: &[f32],
-        padding_ms: usize,
-    ) -> Result<Vec<(f32, f32)>, String> {
-        self.get_speech_timestamps_with_threshold(audio, padding_ms, self.threshold)
     }
 
     /// Variant of `get_speech_timestamps` that allows overriding the internal

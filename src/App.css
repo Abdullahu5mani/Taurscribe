@@ -2758,12 +2758,49 @@ body {
   cursor: pointer;
   letter-spacing: 0.03em;
   transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
 }
 
 .empty-state-cta:hover {
   background: rgba(var(--accent-primary-rgb), 0.18);
   border-color: rgba(var(--accent-primary-rgb), 0.8);
   box-shadow: 0 0 14px rgba(var(--accent-primary-rgb), 0.2);
+}
+
+.empty-state-cta--attention {
+  animation: emptyStateCtaPulse 1.15s ease-in-out infinite;
+}
+
+.empty-state-cta--attention::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border-radius: 16px;
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.32);
+  animation: emptyStateCtaHalo 1.15s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes emptyStateCtaPulse {
+  0%, 100% {
+    transform: translateY(0);
+    box-shadow: 0 0 0 rgba(var(--accent-primary-rgb), 0);
+  }
+  50% {
+    transform: translateY(-1px);
+    box-shadow: 0 0 22px rgba(var(--accent-primary-rgb), 0.22);
+  }
+}
+
+@keyframes emptyStateCtaHalo {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
 }
 
 .empty-state-llm-hint {

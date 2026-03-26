@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Store } from "@tauri-apps/plugin-store";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "./OverlayApp.css";
 
@@ -26,12 +26,8 @@ interface Payload {
 const BAR_COUNT = 17;
 const ATTACK = 0.35;
 const DECAY = 0.12;
-
-function formatEngine(engine: string) {
-    if (engine === "parakeet") return "Parakeet";
-    if (engine === "granite_speech") return "Granite";
-    return "Whisper";
-}
+const OVERLAY_WIDTH = 228;
+const OVERLAY_HEIGHT = 42;
 
 function formatElapsed(ms: number) {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -41,98 +37,82 @@ function formatElapsed(ms: number) {
 }
 
 function formatLatency(ms: number | null) {
-    if (ms == null) return null;
+    if (ms == null) return "--";
     return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
+function getStatusLabel(phase: Phase) {
+    switch (phase) {
+        case "recording":
+            return "Listening";
+        case "paused":
+            return "Paused";
+        case "transcribing":
+            return "Transcribing";
+        case "correcting":
+            return "Correcting";
+        case "done":
+            return "Done";
+        case "too_short":
+            return "Too short";
+        case "paste_failed":
+            return "Paste failed";
+        case "cancelled":
+            return "Discarded";
+        case "no_model":
+            return "No model";
+        case "model_loading":
+            return "Loading";
+    }
 }
 
 export function OverlayApp() {
     const [phase, setPhase] = useState<Phase>("recording");
-    const [engine, setEngine] = useState("whisper");
-    const [transcript, setTranscript] = useState("");
     const [latencyMs, setLatencyMs] = useState<number | null>(null);
     const [elapsedMs, setElapsedMs] = useState(0);
     const [levels, setLevels] = useState<number[]>(() => Array(BAR_COUNT).fill(0));
-    const [overlayStyle, setOverlayStyle] = useState<'minimal' | 'full'>('full');
 
-    const confettiCanvasRef = useRef<HTMLCanvasElement>(null);
     const smoothedRef = useRef<number[]>(Array(BAR_COUNT).fill(0));
-    const sessionStartedAtRef = useRef(0);
+    const sessionStartedAtRef = useRef(Date.now());
     const pauseStartedAtRef = useRef<number | null>(null);
     const pausedTotalMsRef = useRef(0);
     const previousPhaseRef = useRef<Phase | "hidden">("hidden");
+    const isOverlayActiveRef = useRef(false);
 
-    // Listen for milestone events from the main window and fire confetti here too
-    const fireConfetti = useCallback((count: number) => {
-        const canvas = confettiCanvasRef.current;
-        if (!canvas) return;
-        import("canvas-confetti").then(mod => {
-            const confetti = mod.create(canvas, { resize: true, useWorker: false });
-            confetti({
-                particleCount: count === 1 ? 40 : 80,
-                spread: count === 1 ? 60 : 80,
-                startVelocity: 18,
-                ticks: 80,
-                gravity: 1.4,
-                origin: { x: 0.5, y: 1.0 },
-                colors: ['#e09f3e', '#c8882a', '#fef08a', '#ededef', '#3ecfa5'],
-                disableForReducedMotion: true,
-            });
-        }).catch(() => {});
-    }, []);
-
-    useEffect(() => {
-        let unlisten: (() => void) | undefined;
-        listen<{ count: number }>("transcription-milestone", (event) => {
-            fireConfetti(event.payload.count);
-        }).then((fn) => { unlisten = fn; });
-
-        return () => { if (unlisten) unlisten(); };
-    }, [fireConfetti]);
-
-    // Load overlay style from store on mount, then listen for live changes
-    useEffect(() => {
-        Store.load('settings.json').then((store) => {
-            store.get<'minimal' | 'full'>('overlay_style').then((val) => {
-                if (val) setOverlayStyle(val);
-            });
-        });
-
-        let unlisten: (() => void) | undefined;
-        listen<'minimal' | 'full'>('overlay-style-changed', (event) => {
-            setOverlayStyle(event.payload);
-        }).then((fn) => { unlisten = fn; });
-
-        return () => { if (unlisten) unlisten(); };
-    }, []);
-
-    // Resize the Tauri window to match the overlay style so the transparent
-    // window box never extends beyond the visible content.
     useEffect(() => {
         const win = getCurrentWindow();
-        if (phase === 'no_model' || phase === 'model_loading') {
-            win.setSize(new LogicalSize(380, 110)).catch(() => {});
-        } else if (overlayStyle === 'minimal') {
-            win.setSize(new LogicalSize(230, 34)).catch(() => {});
-        } else {
-            win.setSize(new LogicalSize(380, 170)).catch(() => {});
-        }
-    }, [overlayStyle, phase]);
+        const size = new LogicalSize(OVERLAY_WIDTH, OVERLAY_HEIGHT);
+
+        const applySize = async () => {
+            await win.setMinSize(null).catch(() => {});
+            await win.setMaxSize(null).catch(() => {});
+            await win.setSize(new LogicalSize(1, 1)).catch(() => {});
+            await new Promise((r) => setTimeout(r, 16));
+            await win.setSize(size).catch(() => {});
+            await win.setMinSize(size).catch(() => {});
+            await win.setMaxSize(size).catch(() => {});
+
+            if (isOverlayActiveRef.current) {
+                await new Promise((r) => setTimeout(r, 30));
+                invoke("show_overlay").catch(() => {});
+            }
+        };
+
+        applySize();
+    }, []);
 
     useEffect(() => {
         let unlisten: (() => void) | undefined;
         listen<Payload>("overlay-state", (event) => {
             const payload = event.payload;
             if (payload.phase === "hidden") {
+                isOverlayActiveRef.current = false;
                 previousPhaseRef.current = "hidden";
                 return;
             }
 
-            if (payload.engine) {
-                setEngine(payload.engine);
-            }
-            if (typeof payload.text === "string") {
-                setTranscript(payload.text);
-            }
+            isOverlayActiveRef.current = true;
+
             if (typeof payload.ms === "number") {
                 setLatencyMs(payload.ms);
             } else if (payload.phase !== "done") {
@@ -148,8 +128,6 @@ export function OverlayApp() {
                     pausedTotalMsRef.current = 0;
                     pauseStartedAtRef.current = null;
                     setElapsedMs(0);
-                    setTranscript(payload.text ?? "");
-                    setLatencyMs(null);
                     smoothedRef.current = Array(BAR_COUNT).fill(0);
                     setLevels(Array(BAR_COUNT).fill(0));
                 }
@@ -192,7 +170,7 @@ export function OverlayApp() {
     useEffect(() => {
         let unlisten: (() => void) | undefined;
         listen<number>("audio-level", (event) => {
-            const raw = phase === "paused" ? 0 : event.payload;
+            const raw = phase === "recording" ? event.payload : 0;
             const prev = smoothedRef.current;
             const mid = Math.floor(BAR_COUNT / 2);
             const centred = [...prev];
@@ -223,118 +201,36 @@ export function OverlayApp() {
         };
     }, [phase]);
 
-    const statusLabel = phase === "recording"
-        ? "Listening"
-        : phase === "paused"
-            ? "Paused"
-            : phase === "transcribing"
-                ? "Transcribing"
-                : phase === "correcting"
-                    ? "Correcting"
-                    : phase === "done"
-                        ? "Inserted"
-                        : phase === "too_short"
-                            ? "Too Short"
-                            : phase === "paste_failed"
-                                ? "Paste Failed"
-                                : phase === "no_model"
-                                    ? "No Model"
-                                    : "Discarded";
-
-    const transcriptBody = transcript.trim()
-        || (phase === "recording"
-            ? "Listening for your first chunk..."
-            : phase === "paused"
-                ? "Recording paused. Resume when you're ready."
-                : phase === "done"
-                    ? "Transcript sent back to the main app."
-                    : phase === "cancelled"
-                        ? "Recording discarded."
-                        : phase === "no_model"
-                            ? "No model loaded. Load a model before recording."
-                            : "Working on your transcript...");
-
-    const engineClass = `overlay-engine--${engine}`;
-
-    if (phase === 'no_model') {
-        return (
-            <div className="overlay-error-panel">
-                <div className="overlay-error-glyph">⊗</div>
-                <div className="overlay-error-body">
-                    <span className="overlay-error-title">No Model Loaded</span>
-                    <span className="overlay-error-sub">Load a model in settings before recording</span>
-                </div>
-            </div>
-        );
-    }
-
-    if (phase === 'model_loading') {
-        return (
-            <div className="overlay-error-panel overlay-loading-panel">
-                <div className="overlay-error-glyph overlay-loading-glyph">⟳</div>
-                <div className="overlay-error-body">
-                    <span className="overlay-error-title">Model Loading</span>
-                    <span className="overlay-error-sub">Please wait until the model finishes loading</span>
-                </div>
-            </div>
-        );
-    }
-
-    if (overlayStyle === 'minimal') {
-        return (
-            <>
-                <canvas ref={confettiCanvasRef} style={{ position: 'fixed', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 9999 }} />
-                <div className={`overlay-pill overlay-pill--${phase} ${engineClass}`}>
-                    <span className={`overlay-pill-dot overlay-pill-dot--${phase}`} />
-                    <span className="overlay-pill-engine">{formatEngine(engine)}</span>
-                    <span className="overlay-pill-sep">·</span>
-                    <span className="overlay-pill-status">{statusLabel}</span>
-                    {(phase === "recording" || phase === "paused") && (
-                        <span className="overlay-pill-time">{formatElapsed(elapsedMs)}</span>
-                    )}
-                    {phase === "done" && formatLatency(latencyMs) && (
-                        <span className="overlay-pill-time">{formatLatency(latencyMs)}</span>
-                    )}
-                </div>
-            </>
-        );
-    }
+    const isLive = phase === "recording" || phase === "paused";
+    const isDone = phase === "done";
+    const isProcessing = phase === "transcribing" || phase === "correcting" || phase === "model_loading";
+    const isError = phase === "no_model" || phase === "too_short" || phase === "paste_failed" || phase === "cancelled";
 
     return (
-        <div className={`overlay-shell overlay-shell--${phase} ${engineClass}`} style={{ position: 'relative' }}>
-            <canvas ref={confettiCanvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 9999 }} />
-            <div className="overlay-topline">
-                <div className="overlay-phase-group">
-                    <span className={`overlay-phase-dot overlay-phase-dot--${phase}`} />
-                    <div className="overlay-phase-copy">
-                        <span className="overlay-engine">{formatEngine(engine)}</span>
-                        <span className="overlay-status">{statusLabel}</span>
-                    </div>
-                </div>
-                <div className="overlay-meta">
-                    {(phase === "recording" || phase === "paused") && (
-                        <span className="overlay-time">{formatElapsed(elapsedMs)}</span>
-                    )}
-                    {phase === "done" && formatLatency(latencyMs) && (
-                        <span className="overlay-time">{formatLatency(latencyMs)}</span>
-                    )}
-                </div>
+        <div className={`overlay-pill overlay-pill--${phase}`}>
+            <div className="overlay-pill__left">
+                {isDone ? (
+                    <span className="overlay-pill__icon overlay-pill__icon--done">✓</span>
+                ) : isProcessing ? (
+                    <span className="overlay-pill__spinner" />
+                ) : isError ? (
+                    <span className="overlay-pill__icon overlay-pill__icon--error">!</span>
+                ) : (
+                    <span className={`overlay-pill__dot${phase === "paused" ? " overlay-pill__dot--paused" : ""}`} />
+                )}
+                <span className="overlay-pill__time">
+                    {isDone ? formatLatency(latencyMs) : isLive ? formatElapsed(elapsedMs) : getStatusLabel(phase)}
+                </span>
             </div>
 
-            <div className="overlay-transcript">
-                {transcriptBody}
-            </div>
-
-            <div className="overlay-bottom">
-                <div className={`overlay-waveform${phase === "paused" ? " overlay-waveform--paused" : ""}`}>
-                    {levels.map((level, index) => (
-                        <span
-                            key={index}
-                            className="overlay-waveform-bar"
-                            style={{ height: `${Math.max(4, level * 28)}px` }}
-                        />
-                    ))}
-                </div>
+            <div className={`overlay-pill__wave${isLive ? "" : " overlay-pill__wave--inactive"}`}>
+                {levels.map((level, index) => (
+                    <span
+                        key={index}
+                        className="overlay-pill__bar"
+                        style={{ height: `${Math.max(3, Math.round(level * 24))}px` }}
+                    />
+                ))}
             </div>
         </div>
     );

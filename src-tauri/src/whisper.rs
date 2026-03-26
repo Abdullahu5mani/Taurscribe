@@ -341,6 +341,7 @@ impl WhisperManager {
         // Configure Whisper to use GPU
         let mut params = WhisperContextParameters::default();
         params.use_gpu(true);
+        params.flash_attn(true); // Flash Attention: fused QK^T·V kernel — faster + less VRAM on CUDA/Metal
 
         // Attempt load
         match WhisperContext::new_with_params(model_path.to_str().unwrap(), params) {
@@ -478,12 +479,30 @@ impl WhisperManager {
             .max(4)
             .min(8) as i32;
         params.set_n_threads(n_threads);
-        params.set_translate(false); // Don't translate to English, just transcribe
-        params.set_language(Some("en")); // Assume English for now
-        params.set_print_special(false); // Don't print <SOT>, <EOT>, etc.
-        params.set_print_progress(false); // Don't print "10%... 20%..."
+        params.set_translate(false);
+        params.set_language(Some("en"));
+        params.set_print_special(false);
+        params.set_print_progress(false);
         params.set_print_realtime(false);
-        params.set_print_timestamps(false); // Don't print timestamps "[00:01.000]"
+        params.set_print_timestamps(false);
+
+        // ── Speed optimizations for live chunked transcription ──────────────
+        // Dynamic audio context: whisper's encoder attention is O(n²) in frame
+        // count. Shrinking audio_ctx to match actual audio length (rounded up to
+        // the nearest multiple of 64) halves encoder time for typical 4–8s chunks
+        // without truncating any audio — we never set it smaller than the content.
+        let n_mel_frames = audio_data.len() / 160; // whisper hop_length = 160 samples
+        let audio_ctx = if n_mel_frames < 1500 {
+            ((n_mel_frames + 63) / 64 * 64).max(64) as i32
+        } else {
+            0 // full context for unusually long chunks
+        };
+        params.set_audio_ctx(audio_ctx);
+
+        params.set_no_timestamps(true);    // skip timestamp token generation entirely
+        params.set_single_segment(true);   // one chunk = one segment; no split overhead
+        params.set_max_tokens(128);        // cap decoder to prevent hallucination loops on noise
+        params.set_temperature_inc(0.0);   // disable fallback retries — VAD already filters silence
 
         // 🧠 STEP 4: Context / Prompting
         // We feed the PREVIOUS text as a "prompt" to the AI.
@@ -565,9 +584,9 @@ impl WhisperManager {
             beam_size: 5,
             patience: -1.0, // -1.0 = use whisper.cpp default (1.0)
         });
-        // Use all available cores — no audio capture thread to compete with.
+        // Cap at 8 threads — memory-bandwidth saturation means no benefit beyond that.
         let n_threads = std::thread::available_parallelism()
-            .map(|n| n.get().min(12) as i32)
+            .map(|n| n.get().min(8) as i32)
             .unwrap_or(8);
         params.set_n_threads(n_threads);
         params.set_translate(false);
@@ -577,6 +596,8 @@ impl WhisperManager {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_token_timestamps(false);
+        params.set_no_timestamps(true);  // timestamps never displayed; skip their generation
+        params.set_max_tokens(256);      // reasonable cap for a full recording pass
 
         // Inject active-app context as initial prompt so Whisper favours
         // domain-relevant vocabulary (e.g. code identifiers, document titles).
