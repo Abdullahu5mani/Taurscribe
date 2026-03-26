@@ -25,7 +25,7 @@ export function usePostProcessing(
 ) {
     const [llmStatus, setLlmStatus] = useState("Not Loaded");
     const [enableGrammarLM, setEnableGrammarLMState] = useState(false);
-    const [enableDenoise, setEnableDenoiseState] = useState(false);
+    const [enableDenoise, setEnableDenoiseState] = useState(true);
     const [enableOverlay, setEnableOverlayState] = useState(true);
     const [muteBackgroundAudio, setMuteBackgroundAudioState] = useState(false);
     const [llmBackend, setLlmBackendState] = useState<"gpu" | "cpu">("gpu");

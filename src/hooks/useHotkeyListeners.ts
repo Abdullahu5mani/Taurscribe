@@ -19,6 +19,7 @@ interface UseHotkeyListenersParams {
     handleTranscriptionChunkRef: React.RefObject<(text: string) => void>;
     playErrorRef: React.RefObject<() => void>;
     setHeaderStatusRef: React.RefObject<(msg: string, dur?: number) => void>;
+    triggerNoModelAttentionRef: React.RefObject<() => void>;
 
     // Direct setters needed by some events
     setLoadedEngine: (engine: ASREngine | null) => void;
@@ -47,6 +48,7 @@ export function useHotkeyListeners({
     handleTranscriptionChunkRef,
     playErrorRef,
     setHeaderStatusRef,
+    triggerNoModelAttentionRef,
     setLoadedEngine,
     silenceTimerRef,
     setShowSilenceWarning,
@@ -58,6 +60,7 @@ export function useHotkeyListeners({
     const stopInProgressRef = useRef(false);
     const lastStartTime = useRef(0);
     const lastStopTime = useRef(0);
+    const overlayFeedbackHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         let active = true;
@@ -74,11 +77,37 @@ export function useHotkeyListeners({
         const SILENCE_THRESHOLD = 0.02;
         const SILENCE_DELAY_MS = 3000;
 
+        const clearOverlayFeedbackHide = () => {
+            if (overlayFeedbackHideTimerRef.current !== null) {
+                clearTimeout(overlayFeedbackHideTimerRef.current);
+                overlayFeedbackHideTimerRef.current = null;
+            }
+        };
+
+        const showTimedOverlayFeedback = (phase: "model_loading" | "no_model") => {
+            clearOverlayFeedbackHide();
+            invoke("show_overlay").catch(() => {});
+            invoke("set_overlay_state", {
+                phase,
+                engine: activeEngineRef.current,
+            }).catch(() => {});
+            overlayFeedbackHideTimerRef.current = setTimeout(() => {
+                overlayFeedbackHideTimerRef.current = null;
+                invoke("hide_overlay").catch(() => {});
+                invoke("set_overlay_state", {
+                    phase: "hidden",
+                    engine: activeEngineRef.current,
+                }).catch(() => {});
+            }, 2500);
+        };
+
         const setup = async () => {
             const unsub1 = await listen("hotkey-start-recording", async () => {
                 const now = Date.now();
                 if (now - lastStartTime.current < HOTKEY_DEBOUNCE_MS) return;
                 lastStartTime.current = now;
+
+                clearOverlayFeedbackHide();
 
                 // Don't start if already recording, starting, or processing a previous stop
                 if (
@@ -90,36 +119,15 @@ export function useHotkeyListeners({
                 // Block hotkey while model is loading
                 if (isLoadingRef.current) {
                     playErrorRef.current?.();
-                    invoke("show_overlay").catch(() => {});
-                    invoke("set_overlay_state", {
-                        phase: "model_loading",
-                        engine: activeEngineRef.current,
-                    }).catch(() => {});
-                    setTimeout(() => {
-                        invoke("hide_overlay").catch(() => {});
-                        invoke("set_overlay_state", {
-                            phase: "hidden",
-                            engine: activeEngineRef.current,
-                        }).catch(() => {});
-                    }, 2500);
+                    showTimedOverlayFeedback("model_loading");
                     return;
                 }
 
                 // Block hotkey if no model is currently loaded
                 if (loadedEngineRef.current === null) {
                     playErrorRef.current?.();
-                    invoke("show_overlay").catch(() => {});
-                    invoke("set_overlay_state", {
-                        phase: "no_model",
-                        engine: activeEngineRef.current,
-                    }).catch(() => {});
-                    setTimeout(() => {
-                        invoke("hide_overlay").catch(() => {});
-                        invoke("set_overlay_state", {
-                            phase: "hidden",
-                            engine: activeEngineRef.current,
-                        }).catch(() => {});
-                    }, 2500);
+                    triggerNoModelAttentionRef.current?.();
+                    showTimedOverlayFeedback("no_model");
                     return;
                 }
 
@@ -251,6 +259,7 @@ export function useHotkeyListeners({
         setup();
         return () => {
             active = false;
+            clearOverlayFeedbackHide();
             unlistenStart?.();
             unlistenStop?.();
             unlistenChunk?.();

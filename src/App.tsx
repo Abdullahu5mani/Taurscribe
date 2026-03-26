@@ -123,24 +123,20 @@ function App() {
     }, 150);
   }, [isLogoShuttering, pickRandomLogo]);
 
-  // Re-randomize the logo animation when the window is restored from the tray
-  useEffect(() => {
-    const unlisten = listen("window-restored", () => {
-      setRandomLogo(pickRandomLogo());
-    });
-    return () => { unlisten.then(fn => fn()); };
-  }, [pickRandomLogo]);
-
   // Close the settings modal when the window is hidden to tray so the hotkey
   // works immediately when the user restores the window.
   useEffect(() => {
     const unlisten = listen("window-hidden", () => {
+      appHiddenRef.current = true;
       setIsSettingsOpen(false);
     });
     return () => { unlisten.then(fn => fn()); };
   }, []);
 
   const storeRef = useRef<Store | null>(null);
+  const appHiddenRef = useRef(false);
+  const pendingNoModelCtaPulseRef = useRef(false);
+  const noModelCtaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [backendInfo, setBackendInfo] = useState("Loading...");
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("");
@@ -155,6 +151,7 @@ function App() {
   const [fileMode, setFileMode] = useState(false);
   /** True while FileTranscriptionPanel has a file actively transcribing */
   const [isFileTranscribing, setIsFileTranscribing] = useState(false);
+  const [noModelCtaAttention, setNoModelCtaAttention] = useState(false);
 
   // macOS fix: Detect the runtime platform so we can hide/adjust UI elements
   // that don't apply on macOS (e.g. GPU/CPU toggle, VRAM display).
@@ -176,8 +173,6 @@ function App() {
   const [inputDevices, setInputDevices] = useState<string[]>([]);
   // Close-button behavior: 'tray' = hide to tray (default), 'quit' = exit process
   const [closeBehavior, setCloseBehavior] = useState<'tray' | 'quit'>('tray');
-  // Overlay HUD style: 'full' = interactive card with controls, 'minimal' = compact status pill
-  const [overlayStyle, setOverlayStyle] = useState<'minimal' | 'full'>('full');
   useEffect(() => {
     invoke<string>('get_platform').then(setPlatform).catch(() => {});
   }, []);
@@ -390,6 +385,50 @@ function App() {
   const loadedEngineRef = useSyncedRef(loadedEngine);
   const playErrorRef = useSyncedRef(playError);
   const setHeaderStatusRef = useSyncedRef(setHeaderStatus);
+  const startNoModelCtaAttention = useCallback(() => {
+    if (noModelCtaTimerRef.current !== null) {
+      clearTimeout(noModelCtaTimerRef.current);
+      noModelCtaTimerRef.current = null;
+    }
+    setNoModelCtaAttention(true);
+    noModelCtaTimerRef.current = setTimeout(() => {
+      noModelCtaTimerRef.current = null;
+      setNoModelCtaAttention(false);
+    }, 2600);
+  }, []);
+  const triggerNoModelAttention = useCallback(() => {
+    if (appHiddenRef.current) {
+      pendingNoModelCtaPulseRef.current = true;
+      return;
+    }
+
+    pendingNoModelCtaPulseRef.current = false;
+    setFileMode(false);
+    startNoModelCtaAttention();
+  }, [startNoModelCtaAttention]);
+  const triggerNoModelAttentionRef = useSyncedRef(triggerNoModelAttention);
+
+  useEffect(() => {
+    return () => {
+      if (noModelCtaTimerRef.current !== null) {
+        clearTimeout(noModelCtaTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Re-randomize the logo animation when the window is restored from the tray
+  useEffect(() => {
+    const unlisten = listen("window-restored", () => {
+      setRandomLogo(pickRandomLogo());
+      appHiddenRef.current = false;
+      if (pendingNoModelCtaPulseRef.current) {
+        pendingNoModelCtaPulseRef.current = false;
+        setFileMode(false);
+        startNoModelCtaAttention();
+      }
+    });
+    return () => { unlisten.then(fn => fn()); };
+  }, [pickRandomLogo, startNoModelCtaAttention]);
 
   // ── Hooks extracted from App.tsx ──
   useInitialLoad({
@@ -401,7 +440,7 @@ function App() {
     isLoadingRef, setIsLoading, setLoadingMessage,
     setBackendInfo, setHeaderStatus,
     setShowSetupWizard, setIsInitialLoading,
-    setCloseBehavior, setOverlayStyle,
+    setCloseBehavior,
     storeRef,
   });
 
@@ -418,6 +457,7 @@ function App() {
     handleTranscriptionChunkRef,
     playErrorRef,
     setHeaderStatusRef,
+    triggerNoModelAttentionRef,
     setLoadedEngine,
     silenceTimerRef,
     setShowSilenceWarning,
@@ -1244,8 +1284,9 @@ function App() {
                 )}
                 <button
                   type="button"
-                  className="empty-state-cta"
+                  className={`empty-state-cta${noModelCtaAttention ? " empty-state-cta--attention" : ""}`}
                   onClick={() => {
+                    setNoModelCtaAttention(false);
                     setSettingsInitialTab('models');
                     setSettingsScrollTarget(activeEngine as 'whisper' | 'parakeet' | 'granite_speech');
                     setIsSettingsOpen(true);
@@ -1314,8 +1355,6 @@ function App() {
             onCancelDownload={handleCancelDownloadWithSelection}
             closeBehavior={closeBehavior}
             setCloseBehavior={setCloseBehavior}
-            overlayStyle={overlayStyle}
-            setOverlayStyle={setOverlayStyle}
           />
         </main>
 

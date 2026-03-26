@@ -10,7 +10,7 @@
 // KV cache is float32 throughout: the q4 ONNX models only quantize internal
 // weight matrices; the past_key_values I/O tensors remain float32.
 
-use ndarray::{Array2, Array3, Array4};
+use ndarray::{s, Array2, Array3, Array4};
 use ort::session::Session;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -28,7 +28,7 @@ const AUDIO_TOKEN_INDEX: i64 = 100352;
 const NUM_HIDDEN_LAYERS: usize = 40;
 const NUM_KV_HEADS: usize = 4;
 const HEAD_DIM: usize = 128;
-const MAX_NEW_TOKENS: usize = 448;
+const MAX_NEW_TOKENS: usize = 200;
 const HIDDEN_SIZE: usize = 2048;
 
 // ───────────────────────── GPU Backend ────────────────────────────────────────
@@ -177,7 +177,7 @@ impl GraniteSpeechManager {
         let has_q4f16 = enc_q4f16.exists()    && emb_q4f16.exists()  && dec_q4f16.exists();
         if !has_q4 && !has_q4f16 {
             return Err(
-                "No Granite Speech model files found. Download the GPU or CPU variant from Settings > Models.".to_string()
+                "No Granite Speech model files found. Download Granite Speech from Settings > Models.".to_string()
             );
         }
         if !tokenizer_path.exists() {
@@ -246,10 +246,10 @@ impl GraniteSpeechManager {
         samples: &[f32],
         sample_rate: u32,
     ) -> Result<String, String> {
-        let audio = if sample_rate != 16000 {
-            self.resample(samples, sample_rate)?
+        let audio: std::borrow::Cow<[f32]> = if sample_rate != 16000 {
+            std::borrow::Cow::Owned(self.resample(samples, sample_rate)?)
         } else {
-            samples.to_vec()
+            std::borrow::Cow::Borrowed(samples)
         };
 
         let start = std::time::Instant::now();
@@ -415,36 +415,25 @@ impl GraniteSpeechManager {
             let total_len = text_seq_len - 1 + audio_seq_len;
             let mut combined = Array3::<f32>::zeros((1, total_len, HIDDEN_SIZE));
 
-            for t in 0..pos {
-                for h in 0..HIDDEN_SIZE {
-                    combined[[0, t, h]] = text_emb[[0, t, h]];
-                }
-            }
-            for t in 0..audio_seq_len {
-                for h in 0..HIDDEN_SIZE {
-                    combined[[0, pos + t, h]] = audio_embeddings[[0, t, h]];
-                }
-            }
-            for t in (pos + 1)..text_seq_len {
-                let dst = pos + audio_seq_len + (t - pos - 1);
-                for h in 0..HIDDEN_SIZE {
-                    combined[[0, dst, h]] = text_emb[[0, t, h]];
-                }
-            }
+            combined.slice_mut(s![0, ..pos, ..])
+                .assign(&text_emb.slice(s![0, ..pos, ..]));
+            combined.slice_mut(s![0, pos..pos + audio_seq_len, ..])
+                .assign(&audio_embeddings.slice(s![0, .., ..]));
+            let after_audio = pos + audio_seq_len;
+            let remaining = text_seq_len - pos - 1;
+            combined.slice_mut(s![0, after_audio..after_audio + remaining, ..])
+                .assign(&text_emb.slice(s![0, pos + 1.., ..]));
+
             combined
         } else {
             let total_len = audio_seq_len + text_seq_len;
             let mut combined = Array3::<f32>::zeros((1, total_len, HIDDEN_SIZE));
-            for t in 0..audio_seq_len {
-                for h in 0..HIDDEN_SIZE {
-                    combined[[0, t, h]] = audio_embeddings[[0, t, h]];
-                }
-            }
-            for t in 0..text_seq_len {
-                for h in 0..HIDDEN_SIZE {
-                    combined[[0, audio_seq_len + t, h]] = text_emb[[0, t, h]];
-                }
-            }
+
+            combined.slice_mut(s![0, ..audio_seq_len, ..])
+                .assign(&audio_embeddings.slice(s![0, .., ..]));
+            combined.slice_mut(s![0, audio_seq_len.., ..])
+                .assign(&text_emb.slice(s![0, .., ..]));
+
             combined
         };
 
@@ -498,6 +487,20 @@ impl GraniteSpeechManager {
             0
         };
 
+        // Pre-build KV input name strings — avoids format!() inside the hot decode loop.
+        let kv_names: Vec<(String, String)> = (0..NUM_HIDDEN_LAYERS)
+            .map(|l| (
+                format!("past_key_values.{}.key", l),
+                format!("past_key_values.{}.value", l),
+            ))
+            .collect();
+
+        // Pre-fill an attention mask buffer with 1s — slice into it each step
+        // instead of allocating and filling a growing Vec every iteration.
+        let max_attn_len = kv_cache_seq_len + MAX_NEW_TOKENS + 1;
+        let attn_buf = vec![1i64; max_attn_len];
+        let mut current_attn_len = kv_cache_seq_len + 1;
+
         for step in 0..MAX_NEW_TOKENS {
             if current_token == EOS_TOKEN_ID {
                 println!("[GRANITE] EOS reached at step {}", step);
@@ -545,8 +548,8 @@ impl GraniteSpeechManager {
 
             decoder_inputs.push(("inputs_embeds".into(), make_tensor_f32(vec![1, 1, HIDDEN_SIZE], emb_data.to_vec())?));
 
-            let attn_len = kv_cache_seq_len + 1;
-            decoder_inputs.push(("attention_mask".into(), make_tensor_i64(vec![1, attn_len], vec![1i64; attn_len])?));
+            decoder_inputs.push(("attention_mask".into(), make_tensor_i64(vec![1, current_attn_len], attn_buf[..current_attn_len].to_vec())?));
+            current_attn_len += 1;
 
             // Past KV cache tensors — model expects f32
             for layer in 0..NUM_HIDDEN_LAYERS {
@@ -556,14 +559,8 @@ impl GraniteSpeechManager {
                 let key_data = std::mem::take(&mut kv_cache[key_idx]);
                 let val_data = std::mem::take(&mut kv_cache[val_idx]);
 
-                decoder_inputs.push((
-                    format!("past_key_values.{}.key", layer),
-                    make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], key_data)?,
-                ));
-                decoder_inputs.push((
-                    format!("past_key_values.{}.value", layer),
-                    make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], val_data)?,
-                ));
+                decoder_inputs.push((kv_names[layer].0.clone(), make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], key_data)?));
+                decoder_inputs.push((kv_names[layer].1.clone(), make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], val_data)?));
             }
 
             let decoder_outputs = decoder

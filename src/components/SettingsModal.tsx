@@ -50,8 +50,6 @@ interface SettingsModalProps {
     onScrollHandled?: () => void;
     closeBehavior: 'tray' | 'quit';
     setCloseBehavior: (val: 'tray' | 'quit') => void;
-    overlayStyle: 'minimal' | 'full';
-    setOverlayStyle: (val: 'minimal' | 'full') => void;
 }
 
 type Tab = 'models' | 'recording' | 'grammar' | 'text' | 'app' | 'about';
@@ -79,7 +77,6 @@ export function SettingsModal({
     settingsModels, downloadProgress, onDownload, onDelete, onCancelDownload,
     scrollTarget, onScrollHandled,
     closeBehavior, setCloseBehavior,
-    overlayStyle, setOverlayStyle,
 }: SettingsModalProps) {
     const [activeTab, setActiveTab] = useState<Tab>('models');
     const modalRef = useRef<HTMLDivElement>(null);
@@ -157,8 +154,6 @@ export function SettingsModal({
                     <RecordingTab
                         enableOverlay={enableOverlay}
                         setEnableOverlay={setEnableOverlay}
-                        overlayStyle={overlayStyle}
-                        setOverlayStyle={setOverlayStyle}
                         enableDenoise={enableDenoise}
                         setEnableDenoise={setEnableDenoise}
                         muteBackgroundAudio={muteBackgroundAudio}

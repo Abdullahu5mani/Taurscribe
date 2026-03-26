@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
-import { emitTo } from '@tauri-apps/api/event';
 
 type RecordingMode = 'hold' | 'toggle';
 interface HotkeyBinding { keys: string[]; mode: RecordingMode; }
@@ -31,8 +30,6 @@ const DEFAULT_BINDING: HotkeyBinding = {
 interface RecordingTabProps {
     enableOverlay: boolean;
     setEnableOverlay: (val: boolean) => void;
-    overlayStyle: 'minimal' | 'full';
-    setOverlayStyle: (val: 'minimal' | 'full') => void;
     enableDenoise: boolean;
     setEnableDenoise: (val: boolean) => void;
     muteBackgroundAudio: boolean;
@@ -41,7 +38,6 @@ interface RecordingTabProps {
 
 export function RecordingTab({
     enableOverlay, setEnableOverlay,
-    overlayStyle, setOverlayStyle,
     enableDenoise, setEnableDenoise,
     muteBackgroundAudio, setMuteBackgroundAudio,
 }: RecordingTabProps) {
@@ -197,15 +193,6 @@ export function RecordingTab({
         }
     };
 
-    // ── Overlay style ────────────────────────────────────────────
-    const handleOverlayStyleChange = async (val: 'minimal' | 'full') => {
-        setOverlayStyle(val);
-        const store = await Store.load('settings.json');
-        await store.set('overlay_style', val);
-        await store.save();
-        emitTo('overlay', 'overlay-style-changed', val).catch(() => {});
-    };
-
     return (
         <div className="recording-tab">
 
@@ -311,47 +298,8 @@ export function RecordingTab({
                     </label>
                 </div>
                 <p className="setting-card-desc">
-                    Shows a floating HUD on screen while recording via the global hotkey.
+                    Shows the compact floating HUD on screen while recording via the global hotkey.
                 </p>
-            </div>
-
-            <div className="setting-card" style={{ marginTop: '12px' }}>
-                <div className="setting-card-header">
-                    <span className="setting-card-label-plain">Overlay Style</span>
-                </div>
-                <p className="setting-card-desc">How the overlay HUD looks while recording.</p>
-                <div className="close-behavior-options">
-                    <label className={`close-behavior-option${overlayStyle === 'full' ? ' close-behavior-option--active' : ''}`}>
-                        <input
-                            type="radio"
-                            name="overlay_style"
-                            value="full"
-                            checked={overlayStyle === 'full'}
-                            onChange={() => handleOverlayStyleChange('full')}
-                        />
-                        <div className="close-behavior-option-content">
-                            <span className="close-behavior-option-title">Full HUD</span>
-                            <span className="close-behavior-option-desc">
-                                Card with live transcript and waveform.
-                            </span>
-                        </div>
-                    </label>
-                    <label className={`close-behavior-option${overlayStyle === 'minimal' ? ' close-behavior-option--active' : ''}`}>
-                        <input
-                            type="radio"
-                            name="overlay_style"
-                            value="minimal"
-                            checked={overlayStyle === 'minimal'}
-                            onChange={() => handleOverlayStyleChange('minimal')}
-                        />
-                        <div className="close-behavior-option-content">
-                            <span className="close-behavior-option-title">Minimal</span>
-                            <span className="close-behavior-option-desc">
-                                Compact status pill — engine and phase only.
-                            </span>
-                        </div>
-                    </label>
-                </div>
             </div>
 
             {/* ── Audio ────────────────────────────────────────────── */}

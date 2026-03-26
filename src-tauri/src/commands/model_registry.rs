@@ -327,6 +327,7 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
         }),
 
         // ── Granite Speech ─────────────────────────────────────────────────────
+        // q4: FP32 I/O, runs on any hardware (~1.8 GB)
         "granite-speech-1b-cpu" => Some(ModelConfig {
             repo: "onnx-community/granite-4.0-1b-speech-ONNX",
             branch: "main",
@@ -341,7 +342,6 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             ],
             subdirectory: Some("granite-speech-1b"),
         }),
-
         _ => None,
     }
 }

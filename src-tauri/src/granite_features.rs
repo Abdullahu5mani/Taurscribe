@@ -14,6 +14,11 @@
 
 use ndarray::Array2;
 use rustfft::{num_complex::Complex, FftPlanner};
+use std::sync::{Arc, OnceLock};
+
+static FILTERBANK: OnceLock<Array2<f32>> = OnceLock::new();
+static HANN_WINDOW: OnceLock<Vec<f32>> = OnceLock::new();
+static FFT_PLAN: OnceLock<Arc<dyn rustfft::Fft<f32>>> = OnceLock::new();
 
 // ───────────────────────── Constants ──────────────────────────────────────────
 const SAMPLE_RATE: usize = 16000;
@@ -101,10 +106,11 @@ fn compute_mel_filterbank() -> Array2<f32> {
 /// (power, not magnitude) per frequency bin per frame — matching torchaudio's
 /// MelSpectrogram default of power=2.0.
 fn stft_power(signal: &[f32]) -> Array2<f32> {
-    let window = hann_window(WIN_LENGTH);
-
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(N_FFT);
+    let window = HANN_WINDOW.get_or_init(|| hann_window(WIN_LENGTH));
+    let fft = FFT_PLAN.get_or_init(|| {
+        let mut planner = FftPlanner::<f32>::new();
+        planner.plan_fft_forward(N_FFT)
+    });
 
     // Zero-pad by N_FFT/2 on each side (matches torchaudio center=True)
     let pad_len = N_FFT / 2;
@@ -155,7 +161,7 @@ fn stft_power(signal: &[f32]) -> Array2<f32> {
 /// (matching torchaudio MelSpectrogram + `.clip_(min=1e-10).log10_()`).
 fn log_mel_spectrogram(audio: &[f32]) -> Array2<f32> {
     let powers = stft_power(audio);
-    let filterbank = compute_mel_filterbank();
+    let filterbank = FILTERBANK.get_or_init(compute_mel_filterbank);
 
     // mel_spec = powers · filterbank^T  →  shape (n_frames, N_MELS)
     let mut mel_spec = powers.dot(&filterbank.t());
