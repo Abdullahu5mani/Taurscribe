@@ -229,3 +229,13 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 <p align="center">
   Built with ❤️ using <strong>Rust</strong> and <strong>Tauri</strong>.
 </p>
+
+## 🐞 Known Issues
+
+- **Bracketed Output Artifacts**: Granite and Whisper modes may sometimes output bracketed cues like `(music)` or `[music]` in transcriptions. These are typically non-speech event markers (e.g., background music, noise, or silence) inserted by the models. They are not always accurate and may appear unexpectedly, especially in noisy environments.
+
+- **RNNoise Denoiser**: The app uses RNNoise as its basic denoiser in the audio pipeline. RNNoise is a lightweight, neural network-based noise suppression library designed for real-time applications. While effective for general background noise, it may not fully suppress complex or non-stationary noise. For significantly improved results, consider integrating a more advanced denoiser like DeepFilterNet3 (see Roadmap).
+
+- **Improvement Suggestions**: The team is actively working to make bracketed outputs less intrusive and to improve denoising quality. Feedback and pull requests are welcome!
+
+- **Parakeet Success Sound on Empty Input**: Occasionally, when using the Parakeet model, the app plays the "success" audio sound even if no speech was detected (i.e., the user said nothing). In these cases, nothing is pasted or saved to the transcription history, but the sound still plays. This is a known issue and is being investigated.
