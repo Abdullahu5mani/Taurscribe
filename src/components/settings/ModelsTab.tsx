@@ -92,6 +92,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     }, []);
 
     const isMac = platform === 'macos';
+    const isWindows = platform === 'windows';
     const rowProps = { downloadProgress, onDownload, onDelete, onCancelDownload };
     const recommendation = useMemo(
         () => computeModelRecommendation({ sysInfo, isAppleSilicon, useCase }),
@@ -99,7 +100,11 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     );
 
     const parakeetModels = models.filter(m => m.type === 'Parakeet');
-    const graniteModels = models.filter(m => m.type === 'GraniteSpeech');
+    const graniteModels = models.filter(
+        m => m.type === 'GraniteSpeech'
+            && (!m.macosOnly || isMac)
+            && (!m.windowsOnly || isWindows),
+    );
     const llmModels = models.filter(m => m.type === 'LLM');
     const coremlModels = models.filter(m => m.type === 'CoreML');
 

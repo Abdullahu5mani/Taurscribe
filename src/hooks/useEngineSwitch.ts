@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import type { ModelInfo, ParakeetModelInfo, GraniteSpeechModelInfo } from "./useModels";
 import type { DownloadProgress } from "../components/settings/types";
+import { GRANITE_FP16_MODEL_ID } from "../utils/engineUtils";
 
 export type ASREngine = "whisper" | "parakeet" | "granite_speech";
 
@@ -22,6 +23,8 @@ interface UseEngineSwitchParams {
     setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
     asrBackend: "gpu" | "cpu";
     setAsrBackend: (backend: "gpu" | "cpu") => void;
+    /** True when FP16 Granite is loaded — ASR CPU/GPU toggle must stay on GPU. */
+    graniteGpuOnlyLocked: boolean;
     isRecordingRef: React.RefObject<boolean>;
     downloadProgressRef: React.RefObject<Record<string, DownloadProgress>>;
 }
@@ -46,6 +49,7 @@ export function useEngineSwitch({
     setTrayState,
     asrBackend,
     setAsrBackend,
+    graniteGpuOnlyLocked,
     isRecordingRef,
     downloadProgressRef,
 }: UseEngineSwitchParams) {
@@ -221,16 +225,27 @@ export function useEngineSwitch({
         const targetModel = targetModelOverride || currentGraniteModel || graniteModels[0].id;
 
         await withEngineLoad("granite_speech", "Loading Granite Speech...", async () => {
-            await invoke("init_granite_speech", { forceCpu: asrBackend === "cpu" });
+            const fp16 = targetModel === GRANITE_FP16_MODEL_ID;
+            await invoke("init_granite_speech", {
+                modelId: targetModel,
+                forceCpu: asrBackend === "cpu" && !fp16,
+            });
 
             setCurrentGraniteModel(targetModel);
             setActiveEngine("granite_speech");
             activeEngineRef.current = "granite_speech";
             setLoadedEngine("granite_speech");
 
+            if (fp16) {
+                setAsrBackend("gpu");
+            }
+
             if (storeRef.current) {
                 await storeRef.current.set("granite_model", targetModel);
                 await storeRef.current.set("active_engine", "granite_speech");
+                if (fp16) {
+                    await storeRef.current.set("asr_backend", "gpu");
+                }
                 await storeRef.current.save();
             }
 
@@ -245,6 +260,7 @@ export function useEngineSwitch({
     // ── CPU / GPU hot-swap ────────────────────────────────────────────────
     const handleToggleAsrBackend = async (newBackend: "gpu" | "cpu") => {
         if (newBackend === asrBackend) return;
+        if (graniteGpuOnlyLocked) return;
         if (isLoading || isLoadingRef.current) return;
         if (isRecordingRef.current) return;
 
@@ -283,7 +299,11 @@ export function useEngineSwitch({
                 setBackendInfo(info as string);
                 setHeaderStatus(`Parakeet running on ${label}`);
             } else if (engine === "granite_speech") {
-                await invoke("init_granite_speech", { forceCpu: !useGpu });
+                const gid = currentGraniteModel || graniteModels[0]?.id;
+                await invoke("init_granite_speech", {
+                    modelId: gid,
+                    forceCpu: !useGpu,
+                });
                 setLoadedEngine("granite_speech");
                 const info = await invoke("get_backend_info");
                 setBackendInfo(info as string);

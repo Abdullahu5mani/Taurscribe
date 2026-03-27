@@ -1,5 +1,8 @@
 import type { ASREngine } from "../hooks/useEngineSwitch";
 
+/** Full FP16 ONNX bundle (`granite-speech-1b-fp16`) — backend has no CPU path. */
+export const GRANITE_FP16_MODEL_ID = "granite-speech-1b-fp16";
+
 /**
  * Maps a model ID to the engine that owns it, by prefix convention.
  * Single source of truth — replaces the inline if-chain that appeared

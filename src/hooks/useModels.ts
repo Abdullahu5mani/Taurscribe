@@ -20,6 +20,8 @@ export interface GraniteSpeechModelInfo {
     id: string;
     display_name: string;
     size_mb: number;
+    /** True for the FP16 package — requires GPU; download INT4 for CPU-only machines. */
+    requires_gpu?: boolean;
 }
 
 export interface ParakeetStatus {

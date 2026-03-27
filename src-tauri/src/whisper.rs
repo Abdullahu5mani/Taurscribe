@@ -4,8 +4,62 @@ use rubato::{
 use std::ffi::c_void; // Import raw pointer types for interacting with C code
 use std::os::raw::c_char; // Import C-style character types
 use whisper_rs::{
-    set_log_callback, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+    print_system_info, set_log_callback, FullParams, SamplingStrategy, WhisperContext,
+    WhisperContextParameters,
 }; // Import the Whisper AI library functions
+
+/// whisper.cpp exposes GGML capability flags. Older builds used `CUDA = 1`; newer builds
+/// often use `CUDA : ARCHS = …` when the CUDA backend is compiled in and active.
+fn infer_whisper_backend_from_system_info(info: &str) -> Option<GpuBackend> {
+    if info.contains("CUDA = 1") || info.contains("CUDA=1") {
+        return Some(GpuBackend::Cuda);
+    }
+    if info.contains("CUDA : ARCHS") || info.contains("CUDA: ARCHS") {
+        return Some(GpuBackend::Cuda);
+    }
+    if info.contains("COREML = 1") {
+        return Some(GpuBackend::CoreML);
+    }
+    if info.contains("METAL = 1") {
+        return Some(GpuBackend::CoreML);
+    }
+    if info.contains("VULKAN = 1") {
+        return Some(GpuBackend::Vulkan);
+    }
+    None
+}
+
+fn log_whisper_system_report(context: &str, info: &str) {
+    println!(
+        "[WHISPER] GGML / whisper.cpp system info — {} (verify GPU flags below)",
+        context
+    );
+    for line in info.lines() {
+        let t = line.trim();
+        if !t.is_empty() {
+            println!("[WHISPER]   {}", t);
+        }
+    }
+}
+
+fn warn_whisper_backend_mismatch(info: &str, backend: &GpuBackend) {
+    if matches!(backend, GpuBackend::Cpu) {
+        return;
+    }
+    let has_gpu_flag = info.contains("CUDA = 1")
+        || info.contains("CUDA=1")
+        || info.contains("CUDA : ARCHS")
+        || info.contains("CUDA: ARCHS")
+        || info.contains("VULKAN = 1")
+        || info.contains("METAL = 1")
+        || info.contains("COREML = 1");
+    if !has_gpu_flag {
+        println!(
+            "[WHISPER] ⚠ Declared backend is {} but system info shows no CUDA/VULKAN/METAL/COREML = 1 — confirm GPU use with nvidia-smi / Task Manager during transcription.",
+            backend
+        );
+    }
+}
 
 // Note: We don't embed the model in the binary because it's too big (hundreds of MBs)
 // const MODEL_BYTES: &[u8] = ...;
@@ -227,6 +281,7 @@ impl WhisperManager {
             println!("[INFO] Unloading Whisper model...");
             self.context = None;
             self.current_model = None;
+            self.backend = GpuBackend::Cpu;
             // Also clear resampler to save a bit more
             self.resampler = None;
             println!("[SUCCESS] Whisper model unloaded");
@@ -315,15 +370,21 @@ impl WhisperManager {
 
         let backend_msg = format!("Backend: {}", backend);
         println!("[INFO] {}", backend_msg);
+        println!(
+            "[WHISPER] Resolved compute backend: {} (see GGML system info above when applicable)",
+            backend
+        );
         println!("[INFO] Model loaded: {}", target_model);
 
-        // "Warm Up" the GPU
-        println!("[INFO] Warming up GPU...");
+        println!(
+            "[INFO] Warming up {} compute backend...",
+            backend
+        );
         println!("[DEBUG] Creating warmup audio buffer...");
         let warmup_audio = vec![0.0_f32; 16000]; // Create 1 second of silence
         println!("[DEBUG] Starting transcribe_chunk for warmup...");
         match self.transcribe_chunk(&warmup_audio, 16000) {
-            Ok(_) => println!("[INFO] GPU warm-up complete"),
+            Ok(_) => println!("[INFO] {} warm-up complete", backend),
             Err(e) => println!("[WARN] Warm-up failed (not critical): {}", e),
         }
         println!("[DEBUG] Initialization sequence finished.");
@@ -346,9 +407,15 @@ impl WhisperManager {
         // Attempt load
         match WhisperContext::new_with_params(model_path.to_str().unwrap(), params) {
             Ok(ctx) => {
-                // Success! But which GPU backend? (CUDA vs Vulkan)
-                let backend = self.detect_gpu_backend();
-                println!("[SUCCESS] ✓ GPU acceleration enabled ({})", backend);
+                let info = print_system_info();
+                log_whisper_system_report("after GPU context creation (use_gpu=true)", info);
+                let backend = infer_whisper_backend_from_system_info(info)
+                    .unwrap_or_else(|| self.detect_gpu_backend());
+                warn_whisper_backend_mismatch(info, &backend);
+                println!(
+                    "[SUCCESS] ✓ Whisper loaded with GPU offload — inferred backend: {} (from GGML flags where available)",
+                    backend
+                );
                 Ok((ctx, backend))
             }
             Err(e) => {
@@ -358,20 +425,16 @@ impl WhisperManager {
         }
     }
 
-    /// Heuristic: Guess which GPU backend is active
+    /// Fallback when `print_system_info()` lacks CUDA/METAL/VULKAN/COREML = 1 tokens.
     fn detect_gpu_backend(&self) -> GpuBackend {
-        // If we can run 'nvidia-smi', the user definitely has NVIDIA drivers
         if self.is_cuda_available() {
             return GpuBackend::Cuda;
         }
 
-        // macOS: whisper-rs is compiled with the "coreml" feature, so the
-        // backend is CoreML (Apple Neural Engine / GPU) not Vulkan.
         if cfg!(target_os = "macos") {
             return GpuBackend::CoreML;
         }
 
-        // Windows/Linux without NVIDIA → Vulkan (AMD/Intel)
         GpuBackend::Vulkan
     }
 
@@ -398,12 +461,17 @@ impl WhisperManager {
     ) -> Result<(WhisperContext, GpuBackend), String> {
         println!("[GPU] Falling back to CPU...");
 
-        // Default params = CPU only
-        let params = WhisperContextParameters::default();
+        // whisper-rs `Default` sets `use_gpu` from `cfg!(feature = "_gpu")`, so on CUDA/Vulkan
+        // builds the default is `true` — we must force CPU explicitly.
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(false);
+        params.flash_attn(false);
 
         match WhisperContext::new_with_params(model_path.to_str().unwrap(), params) {
             Ok(ctx) => {
-                println!("[SUCCESS] ✓ CPU backend loaded");
+                let info = print_system_info();
+                log_whisper_system_report("after CPU context creation (use_gpu=false)", info);
+                println!("[SUCCESS] ✓ Whisper CPU backend loaded (no GPU offload)");
                 Ok((ctx, GpuBackend::Cpu))
             }
             Err(e) => Err(format!("Failed to load model: {:?}", e)),

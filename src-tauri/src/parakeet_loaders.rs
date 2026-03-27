@@ -79,17 +79,11 @@ pub fn init_nemotron(path: &PathBuf, force_cpu: bool) -> Result<(Nemotron, GpuBa
             return Ok((m, GpuBackend::Cpu));
         }
         match try_gpu_nemotron(path.to_str().unwrap()) {
-            Ok(m) => {
-                println!("[PARAKEET] Loaded Nemotron with CUDA");
-                return Ok((m, GpuBackend::Cuda));
-            }
+            Ok(m) => return Ok((m, GpuBackend::Cuda)),
             Err(e) => eprintln!("[PARAKEET] CUDA failed for Nemotron: {e}"),
         }
         match try_directml_nemotron(path.to_str().unwrap()) {
-            Ok(m) => {
-                println!("[PARAKEET] Loaded Nemotron with DirectML");
-                return Ok((m, GpuBackend::DirectML));
-            }
+            Ok(m) => return Ok((m, GpuBackend::DirectML)),
             Err(e) => eprintln!("[PARAKEET] DirectML failed for Nemotron: {e}"),
         }
         println!("[PARAKEET] Fallback to CPU for Nemotron");
@@ -153,17 +147,11 @@ pub fn init_ctc(path: &PathBuf, force_cpu: bool) -> Result<(Parakeet, GpuBackend
             return Ok((m, GpuBackend::Cpu));
         }
         match try_gpu_ctc(path.to_str().unwrap()) {
-            Ok(m) => {
-                println!("[PARAKEET] Loaded CTC with CUDA");
-                return Ok((m, GpuBackend::Cuda));
-            }
+            Ok(m) => return Ok((m, GpuBackend::Cuda)),
             Err(e) => eprintln!("[PARAKEET] CUDA failed for CTC: {e}"),
         }
         match try_directml_ctc(path.to_str().unwrap()) {
-            Ok(m) => {
-                println!("[PARAKEET] Loaded CTC with DirectML");
-                return Ok((m, GpuBackend::DirectML));
-            }
+            Ok(m) => return Ok((m, GpuBackend::DirectML)),
             Err(e) => eprintln!("[PARAKEET] DirectML failed for CTC: {e}"),
         }
         println!("[PARAKEET] Fallback to CPU for CTC");
@@ -226,17 +214,11 @@ pub fn init_eou(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetEOU, GpuBack
             return Ok((m, GpuBackend::Cpu));
         }
         match try_gpu_eou(path.to_str().unwrap()) {
-            Ok(m) => {
-                println!("[PARAKEET] Loaded EOU with CUDA");
-                return Ok((m, GpuBackend::Cuda));
-            }
+            Ok(m) => return Ok((m, GpuBackend::Cuda)),
             Err(e) => eprintln!("[PARAKEET] CUDA failed for EOU: {e}"),
         }
         match try_directml_eou(path.to_str().unwrap()) {
-            Ok(m) => {
-                println!("[PARAKEET] Loaded EOU with DirectML");
-                return Ok((m, GpuBackend::DirectML));
-            }
+            Ok(m) => return Ok((m, GpuBackend::DirectML)),
             Err(e) => eprintln!("[PARAKEET] DirectML failed for EOU: {e}"),
         }
         println!("[PARAKEET] Fallback to CPU for EOU");
@@ -299,17 +281,11 @@ pub fn init_tdt(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetTDT, GpuBack
             return Ok((m, GpuBackend::Cpu));
         }
         match try_gpu_tdt(path.to_str().unwrap()) {
-            Ok(m) => {
-                println!("[PARAKEET] Loaded TDT with CUDA");
-                return Ok((m, GpuBackend::Cuda));
-            }
+            Ok(m) => return Ok((m, GpuBackend::Cuda)),
             Err(e) => eprintln!("[PARAKEET] CUDA failed for TDT: {e}"),
         }
         match try_directml_tdt(path.to_str().unwrap()) {
-            Ok(m) => {
-                println!("[PARAKEET] Loaded TDT with DirectML");
-                return Ok((m, GpuBackend::DirectML));
-            }
+            Ok(m) => return Ok((m, GpuBackend::DirectML)),
             Err(e) => eprintln!("[PARAKEET] DirectML failed for TDT: {e}"),
         }
         println!("[PARAKEET] Fallback to CPU for TDT");
@@ -352,5 +328,28 @@ fn try_cpu_tdt(path: &str) -> Result<ParakeetTDT, String> {
     #[cfg(target_os = "macos")]
     {
         ParakeetTDT::from_pretrained(path, None).map_err(|e| format!("{}", e))
+    }
+}
+
+/// One-line summary after load. parakeet-rs registers GPU EP first then CPU without `error_on_failure`
+/// on CUDA, so a bad cuDNN path can still “load” but run on CPU — Granite uses stricter ORT options.
+pub fn log_parakeet_backend_resolution(model_type: &str, backend: &GpuBackend, force_cpu: bool) {
+    if force_cpu {
+        println!("[PARAKEET] {} — CPU-only (forced).", model_type);
+        return;
+    }
+    match backend {
+        GpuBackend::Cuda => println!(
+            "[PARAKEET] {} — CUDA EP loaded (CPU EP also registered as ORT fallback; use Task Manager or nvidia-smi during transcribing to confirm GPU if unsure).",
+            model_type
+        ),
+        GpuBackend::DirectML => println!(
+            "[PARAKEET] {} — DirectML EP loaded (CPU EP registered as ORT fallback).",
+            model_type
+        ),
+        GpuBackend::Cpu => println!(
+            "[PARAKEET] {} — CPU EP only (GPU paths failed).",
+            model_type
+        ),
     }
 }

@@ -5,6 +5,7 @@ import { MODELS } from "../components/settings/types";
 import type { DownloadableModel } from "../components/settings/types";
 import type { ModelInfo, ParakeetModelInfo, GraniteSpeechModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
+import { GRANITE_FP16_MODEL_ID } from "../utils/engineUtils";
 
 interface UseInitialLoadParams {
     // Model state setters
@@ -30,6 +31,9 @@ interface UseInitialLoadParams {
     setShowSetupWizard: (v: boolean) => void;
     setIsInitialLoading: (v: boolean) => void;
     setCloseBehavior: (v: "tray" | "quit") => void;
+
+    /** Sync ASR toggle when FP16 Granite forces GPU */
+    setAsrBackend: (v: "gpu" | "cpu") => void;
 
     // Store ref — populated by this hook so callers can use it later
     storeRef: React.MutableRefObject<Store | null>;
@@ -61,6 +65,7 @@ export function useInitialLoad({
     setShowSetupWizard,
     setIsInitialLoading,
     setCloseBehavior,
+    setAsrBackend,
     storeRef,
 }: UseInitialLoadParams) {
     useEffect(() => {
@@ -112,9 +117,9 @@ export function useInitialLoad({
                 const gModels = (await invoke("list_granite_models")) as GraniteSpeechModelInfo[];
                 if (cancelled) return;
                 setGraniteModels(gModels);
-                if (gModels.length > 0) setCurrentGraniteModel(gModels[0].id);
 
                 let savedEngine: ASREngine | null = null;
+                let savedGraniteModel: string | null = null;
                 try {
                     const loadedStore = await Store.load("settings.json");
                     if (cancelled) return;
@@ -151,6 +156,17 @@ export function useInitialLoad({
                     }
 
                     const savedParakeet = await loadedStore.get<string>("parakeet_model");
+                    savedGraniteModel = (await loadedStore.get<string>("granite_model")) ?? null;
+
+                    const granitePick =
+                        gModels.length > 0
+                            ? savedGraniteModel && gModels.some((m) => m.id === savedGraniteModel)
+                                ? savedGraniteModel
+                                : gModels[0].id
+                            : "";
+                    if (granitePick) setCurrentGraniteModel(granitePick);
+
+                    const savedAsrBackend = await loadedStore.get<"gpu" | "cpu">("asr_backend");
 
                     if (savedEngine === "parakeet" && pModels.length > 0) {
                         const targetModel =
@@ -178,16 +194,25 @@ export function useInitialLoad({
                                 setLoadingMessage("");
                             }
                         }
-                    } else if (savedEngine === "granite_speech" && gModels.length > 0) {
+                    } else if (savedEngine === "granite_speech" && granitePick) {
                         isLoadingRef.current = true;
                         setIsLoading(true);
                         setLoadingMessage("Loading Granite Speech...");
                         try {
                             if (cancelled) return;
-                            await invoke("init_granite_speech", {});
+                            await invoke("init_granite_speech", {
+                                modelId: granitePick,
+                                forceCpu:
+                                    savedAsrBackend === "cpu" &&
+                                    granitePick !== GRANITE_FP16_MODEL_ID,
+                            });
                             if (cancelled) return;
-                            setCurrentGraniteModel(gModels[0].id);
                             setLoadedEngine("granite_speech");
+                            if (granitePick === GRANITE_FP16_MODEL_ID) {
+                                setAsrBackend("gpu");
+                                await loadedStore.set("asr_backend", "gpu");
+                                await loadedStore.save();
+                            }
                             setHeaderStatus("Granite Speech model loaded");
                         } catch (e) {
                             if (cancelled) return;

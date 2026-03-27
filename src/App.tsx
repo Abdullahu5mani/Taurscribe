@@ -303,6 +303,9 @@ function App() {
     asrBackend, setAsrBackend,
   } = usePostProcessing(setHeaderStatus, () => setIsSettingsOpen(true), storeRef);
 
+  /** FP16 Granite loaded — no CPU path; lock header ASR toggle to GPU. */
+  const [graniteGpuOnlyLoaded, setGraniteGpuOnlyLoaded] = useState(false);
+
   const { volume, muted, setVolume, setMuted, playStart, playPaste, playError } = useSounds();
 
   const {
@@ -324,7 +327,9 @@ function App() {
     handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk,
   } = useRecording({
     activeEngineRef: activeEngineForwarded,
-    models, parakeetModels, graniteModels, currentModel, currentParakeetModel,
+    models, parakeetModels, graniteModels, currentModel, currentParakeetModel, currentGraniteModel,
+    asrBackend,
+    setAsrBackend,
     setCurrentModel, setLoadedEngine: (e) => setLoadedEngineForwarded.current(e), enableGrammarLMRef,
     enableDenoiseRef, enableOverlayRef, muteBackgroundAudioRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
     playStart, playPaste, playError,
@@ -345,9 +350,26 @@ function App() {
     setCurrentModel, setCurrentParakeetModel, setCurrentGraniteModel,
     setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
     setAsrBackend,
+    graniteGpuOnlyLocked: graniteGpuOnlyLoaded,
     isRecordingRef,
     downloadProgressRef,
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (loadedEngine !== "granite_speech") {
+      setGraniteGpuOnlyLoaded(false);
+      return () => { cancelled = true; };
+    }
+    invoke<{ loaded?: boolean; gpu_only?: boolean }>("get_granite_speech_status")
+      .then((s) => {
+        if (!cancelled) setGraniteGpuOnlyLoaded(!!s.loaded && !!s.gpu_only);
+      })
+      .catch(() => {
+        if (!cancelled) setGraniteGpuOnlyLoaded(false);
+      });
+    return () => { cancelled = true; };
+  }, [loadedEngine]);
 
   // Wire the forwarded refs so useRecording's handlers use the real values
   activeEngineForwarded.current = activeEngineRef.current;
@@ -441,6 +463,7 @@ function App() {
     setBackendInfo, setHeaderStatus,
     setShowSetupWizard, setIsInitialLoading,
     setCloseBehavior,
+    setAsrBackend,
     storeRef,
   });
 
@@ -748,21 +771,35 @@ function App() {
               {/* macOS fix: Hide the GPU/CPU toggle on macOS — Apple Silicon uses
                   Metal automatically and there is no discrete GPU to switch. */}
               {!isMac && (
-                <div className="backend-toggle-inline">
-                  {/* M5 fix: aria-pressed communicates toggle state to screen readers */}
-                  <button
-                    className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
-                    onClick={() => handleToggleAsrBackend('gpu')}
-                    disabled={isLoading}
-                    aria-pressed={asrBackend === 'gpu'}
-                  ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
-                  <button
-                    className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
-                    onClick={() => handleToggleAsrBackend('cpu')}
-                    disabled={isLoading}
-                    aria-pressed={asrBackend === 'cpu'}
-                  ><IconCpu size={11} /> CPU</button>
-                  <InfoTooltip size={11} text="GPU for max speed; CPU if no GPU or to save VRAM." />
+                <div className="hardware-bar-aside">
+                  <div className={`backend-toggle-inline${graniteGpuOnlyLoaded ? " backend-toggle-inline--locked" : ""}`}>
+                    {/* M5 fix: aria-pressed communicates toggle state to screen readers */}
+                    <button
+                      className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
+                      onClick={() => handleToggleAsrBackend('gpu')}
+                      disabled={isLoading || graniteGpuOnlyLoaded}
+                      aria-pressed={asrBackend === 'gpu'}
+                    ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
+                    <button
+                      className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
+                      onClick={() => handleToggleAsrBackend('cpu')}
+                      disabled={isLoading || graniteGpuOnlyLoaded}
+                      aria-pressed={asrBackend === 'cpu'}
+                    ><IconCpu size={11} /> CPU</button>
+                    <InfoTooltip
+                      size={11}
+                      text={
+                        graniteGpuOnlyLoaded
+                          ? "Granite FP16 is GPU-only. Download the INT4 “Granite 4.0 1B Speech” model in Settings → Models for CPU."
+                          : "GPU for max speed; CPU if no GPU or to save VRAM."
+                      }
+                    />
+                  </div>
+                  {graniteGpuOnlyLoaded && (
+                    <div className="granite-fp16-hardware-hint" role="status">
+                      Granite FP16 requires a GPU. For CPU-only PCs, download <strong>Granite 4.0 1B Speech</strong> (INT4) from Settings → Models.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -7,18 +7,41 @@
 // ndarray arrays because ort 2.0.0-rc.11 re-exports its own ndarray version
 // which is incompatible with the project's ndarray 0.15.
 //
-// KV cache is float32 throughout: the q4 ONNX models only quantize internal
-// weight matrices; the past_key_values I/O tensors remain float32.
+// KV cache is kept in f32 in Rust. The exported full-FP16 decoder ONNX uses float32
+// inputs_embeds and float16 past_key_values (weights are FP16 internally); q4 / q4f16 use f32 KV I/O.
 
+use half::f16;
 use ndarray::{s, Array2, Array3, Array4};
 use ort::session::Session;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::granite_features;
+
+/// FP16 (`granite-speech-1b-fp16`) has no CPU path — ORT CPU EP is unsupported for this bundle.
+fn err_granite_fp16_gpu_required(detail: &str) -> String {
+    format!(
+        "{} The FP16 (GPU-only) Granite package cannot run on CPU. \
+Download the CPU INT4 bundle “Granite 4.0 1B Speech” from Settings → Models.",
+        detail
+    )
+}
+
+/// **Linux only.** When set, Granite will not fall back to CPU if CUDA session creation fails.
+#[cfg(not(target_os = "windows"))]
+fn granite_require_cuda_env() -> bool {
+    std::env::var("TAURSCRIBE_GRANITE_REQUIRE_CUDA")
+        .map(|v| {
+            matches!(
+                v.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
 
 // ───────────────────────── Model Constants ────────────────────────────────────
 const EOS_TOKEN_ID: i64 = 100257;
@@ -30,12 +53,17 @@ const NUM_KV_HEADS: usize = 4;
 const HEAD_DIM: usize = 128;
 const MAX_NEW_TOKENS: usize = 200;
 const HIDDEN_SIZE: usize = 2048;
+/// Fused GQA attention builds O(seq²) buffers; cap seq to catch ORT shape bugs before multi-TB alloc attempts.
+const MAX_GRANITE_DECODER_SEQ_LEN: usize = 8192;
 
 // ───────────────────────── GPU Backend ────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum GpuBackend {
+    /// Encoder + embed on CUDA, decoder on CPU (CUDA GQA limitation). Linux, or Windows x86_64 fallback when DirectML fails.
     Cuda,
+    /// ONNX Runtime via DirectX 12 / DirectML (Windows). Does not require cuDNN like the CUDA EP.
+    DirectML,
     Cpu,
 }
 
@@ -43,6 +71,7 @@ impl std::fmt::Display for GpuBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GpuBackend::Cuda => write!(f, "CUDA"),
+            GpuBackend::DirectML => write!(f, "DirectML"),
             GpuBackend::Cpu => write!(f, "CPU"),
         }
     }
@@ -55,6 +84,8 @@ pub struct GraniteSpeechStatus {
     pub loaded: bool,
     pub model_id: Option<String>,
     pub backend: String,
+    /// FP16 bundle is loaded — CPU inference is not supported; UI should lock ASR to GPU.
+    pub gpu_only: bool,
 }
 
 // ───────────────────────── Helper: build ORT tensor ──────────────────────────
@@ -66,10 +97,35 @@ fn make_tensor_f32(shape: Vec<usize>, data: Vec<f32>) -> Result<ort::value::DynV
         .map_err(|e| format!("Tensor creation error: {}", e))
 }
 
+fn make_tensor_f16(shape: Vec<usize>, data: Vec<f16>) -> Result<ort::value::DynValue, String> {
+    ort::value::Value::from_array((shape, data))
+        .map(|t| t.into_dyn())
+        .map_err(|e| format!("Tensor creation error: {}", e))
+}
+
 fn make_tensor_i64(shape: Vec<usize>, data: Vec<i64>) -> Result<ort::value::DynValue, String> {
     ort::value::Value::from_array((shape, data))
         .map(|t| t.into_dyn())
         .map_err(|e| format!("Tensor creation error: {}", e))
+}
+
+/// ORT may report unresolved dynamic axes as 0 or negative; casting those to `usize` corrupts shapes.
+fn ort_positive_dim(d: i64, axis: &str) -> Result<usize, String> {
+    if d <= 0 {
+        return Err(format!(
+            "Granite ONNX tensor axis '{}' has invalid dim {} (unresolved dynamic axis?)",
+            axis, d
+        ));
+    }
+    Ok(d as usize)
+}
+
+/// Granite uses variable-length audio → variable `inputs_embeds` seq; ORT memory patterns must be off.
+fn granite_session_builder() -> Result<ort::session::builder::SessionBuilder, String> {
+    Session::builder()
+        .map_err(|e| format!("Session builder: {}", e))?
+        .with_memory_pattern(false)
+        .map_err(|e| format!("ORT DisableMemPattern (Granite dynamic shapes): {}", e))
 }
 
 /// Create an empty (zero-length sequence) KV cache tensor: [1, num_heads, 0, head_dim].
@@ -84,6 +140,13 @@ fn make_empty_kv_f32(num_heads: usize, head_dim: usize) -> Result<ort::value::Dy
         .map_err(|e| format!("Empty KV tensor creation error: {}", e))
 }
 
+fn make_empty_kv_f16(num_heads: usize, head_dim: usize) -> Result<ort::value::DynValue, String> {
+    let arr = Array4::<f16>::from_shape_vec((1, num_heads, 0, head_dim), vec![])
+        .map_err(|e| format!("Empty KV shape error: {}", e))?;
+    ort::value::Value::from_array(arr)
+        .map(|t| t.into_dyn())
+        .map_err(|e| format!("Empty KV tensor creation error: {}", e))
+}
 
 // ───────────────────────── Manager ────────────────────────────────────────────
 
@@ -94,6 +157,8 @@ pub struct GraniteSpeechManager {
     tokenizer: Option<tokenizers::Tokenizer>,
     backend: GpuBackend,
     model_name: Option<String>,
+    /// Full FP16 bundle: decoder expects float32 `inputs_embeds`, float16 `past_key_values`.
+    decoder_io_fp16: bool,
     resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>,
 }
 
@@ -106,15 +171,18 @@ impl GraniteSpeechManager {
             tokenizer: None,
             backend: GpuBackend::Cpu,
             model_name: None,
+            decoder_io_fp16: false,
             resampler: None,
         }
     }
 
     pub fn get_status(&self) -> GraniteSpeechStatus {
+        let loaded = self.encoder_session.is_some();
         GraniteSpeechStatus {
-            loaded: self.encoder_session.is_some(),
+            loaded,
             model_id: self.model_name.clone(),
             backend: self.backend.to_string(),
+            gpu_only: loaded && self.decoder_io_fp16,
         }
     }
 
@@ -127,6 +195,7 @@ impl GraniteSpeechManager {
             self.decoder_session = None;
             self.tokenizer = None;
             self.model_name = None;
+            self.decoder_io_fp16 = false;
             self.resampler = None;
             println!("[GRANITE] Model unloaded");
         }
@@ -134,25 +203,11 @@ impl GraniteSpeechManager {
 
     pub fn initialize(
         &mut self,
-        model_path: Option<&str>,
+        model_id: Option<&str>,
         force_cpu: bool,
     ) -> Result<String, String> {
         let models_dir = crate::utils::get_models_dir()?;
-        let model_dir = if let Some(p) = model_path {
-            PathBuf::from(p)
-        } else {
-            let default_dir = models_dir.join("granite-speech-1b");
-            if !default_dir.exists() {
-                return Err(
-                    "Granite Speech model not found. Please download it from Settings > Download Manager.".to_string()
-                );
-            }
-            default_dir
-        };
-
-        if !model_dir.exists() {
-            return Err(format!("Model directory not found: {}", model_dir.display()));
-        }
+        let model_dir = resolve_granite_model_dir(&models_dir, model_id)?;
 
         let mode_label = if force_cpu {
             " [CPU-only mode]"
@@ -163,66 +218,237 @@ impl GraniteSpeechManager {
         };
         println!("[GRANITE] Loading model from: {}{}", model_dir.display(), mode_label);
 
-        // q4f16 variants: FP16 activations, faster on CUDA tensor cores (~1.5 GB)
-        // q4 variants: FP32 I/O, runs on any hardware (~1.8 GB)
+        let tokenizer_path = model_dir.join("tokenizer.json");
+        if !tokenizer_path.exists() {
+            return Err(format!("Missing tokenizer.json (expected at {})", tokenizer_path.display()));
+        }
+
+        // ── Full FP16 bundle (separate download, ~4.6 GB) ─────────────────────
+        let enc_fp16 = model_dir.join("audio_encoder_fp16.onnx");
+        let emb_fp16 = model_dir.join("embed_tokens_fp16.onnx");
+        let dec_fp16 = model_dir.join("decoder_model_merged_fp16.onnx");
+        let has_fp16 = granite_fp16_bundle_ready(&model_dir);
+        let logical_id = if has_fp16 {
+            "granite-speech-1b-fp16".to_string()
+        } else {
+            "granite-speech-1b".to_string()
+        };
+
+        // ── INT4 / INT4+FP16 activation bundles ──────────────────────────────
         let enc_q4f16 = model_dir.join("audio_encoder_q4f16.onnx");
         let emb_q4f16 = model_dir.join("embed_tokens_q4f16.onnx");
         let dec_q4f16 = model_dir.join("decoder_model_merged_q4f16.onnx");
         let encoder_path = model_dir.join("audio_encoder_q4.onnx");
         let embed_path = model_dir.join("embed_tokens_q4.onnx");
         let decoder_path = model_dir.join("decoder_model_merged_q4.onnx");
-        let tokenizer_path = model_dir.join("tokenizer.json");
 
-        let has_q4    = encoder_path.exists() && embed_path.exists() && decoder_path.exists();
-        let has_q4f16 = enc_q4f16.exists()    && emb_q4f16.exists()  && dec_q4f16.exists();
-        if !has_q4 && !has_q4f16 {
+        let has_q4 = encoder_path.exists() && embed_path.exists() && decoder_path.exists();
+        let has_q4f16 = enc_q4f16.exists() && emb_q4f16.exists() && dec_q4f16.exists();
+
+        if !has_fp16 && !has_q4 && !has_q4f16 {
             return Err(
-                "No Granite Speech model files found. Download Granite Speech from Settings > Models.".to_string()
+                "No Granite Speech model files found. Download Granite Speech from Settings > Models.".to_string(),
             );
         }
-        if !tokenizer_path.exists() {
-            return Err(format!("Missing tokenizer.json (expected at {})", tokenizer_path.display()));
+
+        if has_fp16 && force_cpu {
+            return Err(err_granite_fp16_gpu_required(
+                "CPU mode was requested, but this model is GPU-only.",
+            ));
+        }
+        if has_fp16 && cfg!(target_os = "macos") {
+            return Err(err_granite_fp16_gpu_required(
+                "macOS does not load this FP16 GPU bundle.",
+            ));
         }
 
-        let (backend, encoder, embed, decoder) = if force_cpu || cfg!(target_os = "macos") {
+        #[cfg(not(target_os = "windows"))]
+        let require_cuda = granite_require_cuda_env() && !force_cpu && !cfg!(target_os = "macos");
+
+        let (backend, encoder, embed, decoder) = if has_fp16 {
+            println!("[GRANITE] Using full FP16 ONNX weights (GPU only — no CPU fallback)");
+            {
+                #[cfg(target_os = "windows")]
+                {
+                    match self.try_create_sessions_directml(&enc_fp16, &emb_fp16, &dec_fp16) {
+                        Ok((enc, emb, dec)) => {
+                            println!("[GRANITE] Using FP16 on DirectML (Windows)");
+                            (GpuBackend::DirectML, enc, emb, dec)
+                        }
+                        Err(dml_e) => {
+                            println!(
+                                "[GRANITE] DirectML failed ({}); trying CUDA for encoder/embed…",
+                                dml_e
+                            );
+                            #[cfg(target_arch = "x86_64")]
+                            {
+                                match self.try_create_sessions_cuda(&enc_fp16, &emb_fp16, &dec_fp16) {
+                                    Ok((enc, emb, dec)) => {
+                                        println!(
+                                            "[GRANITE] Using FP16: CUDA encoder/embed + CPU decoder (DirectML unavailable)"
+                                        );
+                                        (GpuBackend::Cuda, enc, emb, dec)
+                                    }
+                                    Err(cuda_e) => {
+                                        return Err(err_granite_fp16_gpu_required(&format!(
+                                            "DirectML failed ({dml_e}); CUDA failed ({cuda_e})."
+                                        )));
+                                    }
+                                }
+                            }
+                            #[cfg(not(target_arch = "x86_64"))]
+                            {
+                                return Err(err_granite_fp16_gpu_required(&format!(
+                                    "DirectML failed ({dml_e}). This Windows build has no CUDA fallback."
+                                )));
+                            }
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    match self.try_create_sessions_cuda(&enc_fp16, &emb_fp16, &dec_fp16) {
+                        Ok((enc, emb, dec)) => {
+                            println!("[GRANITE] Using FP16: CUDA encoder/embed + CPU decoder");
+                            (GpuBackend::Cuda, enc, emb, dec)
+                        }
+                        Err(e) => {
+                            if require_cuda {
+                                return Err(format!(
+                                    "TAURSCRIBE_GRANITE_REQUIRE_CUDA is set but FP16 CUDA failed: {e}"
+                                ));
+                            }
+                            return Err(err_granite_fp16_gpu_required(&format!(
+                                "CUDA could not load this model ({e})."
+                            )));
+                        }
+                    }
+                }
+            }
+        } else if force_cpu || cfg!(target_os = "macos") {
             // Prefer q4 on CPU; fall back to q4f16 if only the GPU download is present.
-            let (ep, eb, dp) = if has_q4 { (&encoder_path, &embed_path, &decoder_path) }
-                               else       { (&enc_q4f16,   &emb_q4f16,   &dec_q4f16)   };
+            let (ep, eb, dp) = if has_q4 {
+                (&encoder_path, &embed_path, &decoder_path)
+            } else {
+                (&enc_q4f16, &emb_q4f16, &dec_q4f16)
+            };
             let enc = self.create_session_cpu(ep)?;
             let emb = self.create_session_cpu(eb)?;
             let dec = self.create_session_cpu(dp)?;
             (GpuBackend::Cpu, enc, emb, dec)
         } else {
-            // Prefer q4f16 on CUDA (FP16 activations, faster on tensor cores).
-            // Fall back to q4 on CUDA, then to CPU with whatever files are present.
-            let cuda_q4f16 = if has_q4f16 {
-                self.try_create_sessions_cuda(&enc_q4f16, &emb_q4f16, &dec_q4f16)
-                    .map(|r| { println!("[GRANITE] Using q4f16 on CUDA"); r })
-                    .ok()
-            } else {
-                None
-            };
+            #[cfg(target_os = "windows")]
+            {
+                // Prefer DirectML (full GPU). If it fails (e.g. DML E_INVALIDARG on some ops), fall back to
+                // CUDA hybrid on x86_64, then CPU.
+                let mut picked: Option<(GpuBackend, Session, Session, Session)> = None;
 
-            if let Some((enc, emb, dec)) = cuda_q4f16 {
-                (GpuBackend::Cuda, enc, emb, dec)
-            } else if has_q4 {
-                match self.try_create_sessions_cuda(&encoder_path, &embed_path, &decoder_path) {
-                    Ok((enc, emb, dec)) => (GpuBackend::Cuda, enc, emb, dec),
-                    Err(e) => {
-                        println!("[GRANITE] CUDA failed ({}), falling back to CPU...", e);
-                        let enc = self.create_session_cpu(&encoder_path)?;
-                        let emb = self.create_session_cpu(&embed_path)?;
-                        let dec = self.create_session_cpu(&decoder_path)?;
-                        (GpuBackend::Cpu, enc, emb, dec)
+                if has_q4f16 {
+                    match self.try_create_sessions_directml(&enc_q4f16, &emb_q4f16, &dec_q4f16) {
+                        Ok((e, em, d)) => {
+                            println!("[GRANITE] Using q4f16 on DirectML");
+                            picked = Some((GpuBackend::DirectML, e, em, d));
+                        }
+                        Err(e) => println!("[GRANITE] q4f16 DirectML failed: {}", e),
                     }
                 }
-            } else {
-                // Only q4f16 available but CUDA failed — run q4f16 on CPU
-                println!("[GRANITE] CUDA unavailable, running q4f16 on CPU");
-                let enc = self.create_session_cpu(&enc_q4f16)?;
-                let emb = self.create_session_cpu(&emb_q4f16)?;
-                let dec = self.create_session_cpu(&dec_q4f16)?;
-                (GpuBackend::Cpu, enc, emb, dec)
+                #[cfg(target_arch = "x86_64")]
+                if picked.is_none() && has_q4f16 {
+                    match self.try_create_sessions_cuda(&enc_q4f16, &emb_q4f16, &dec_q4f16) {
+                        Ok((e, em, d)) => {
+                            println!("[GRANITE] Using q4f16: CUDA encoder/embed + CPU decoder");
+                            picked = Some((GpuBackend::Cuda, e, em, d));
+                        }
+                        Err(e) => println!("[GRANITE] q4f16 CUDA failed: {}", e),
+                    }
+                }
+                if picked.is_none() && has_q4 {
+                    match self.try_create_sessions_directml(&encoder_path, &embed_path, &decoder_path) {
+                        Ok((e, em, d)) => {
+                            println!("[GRANITE] Using INT4 on DirectML");
+                            picked = Some((GpuBackend::DirectML, e, em, d));
+                        }
+                        Err(e) => println!("[GRANITE] INT4 DirectML failed: {}", e),
+                    }
+                }
+                #[cfg(target_arch = "x86_64")]
+                if picked.is_none() && has_q4 {
+                    match self.try_create_sessions_cuda(&encoder_path, &embed_path, &decoder_path) {
+                        Ok((e, em, d)) => {
+                            println!("[GRANITE] Using INT4: CUDA encoder/embed + CPU decoder");
+                            picked = Some((GpuBackend::Cuda, e, em, d));
+                        }
+                        Err(e) => println!("[GRANITE] INT4 CUDA failed: {}", e),
+                    }
+                }
+
+                if let Some(t) = picked {
+                    t
+                } else if has_q4 {
+                    println!("[GRANITE] All GPU paths failed; running INT4 on CPU...");
+                    let enc = self.create_session_cpu(&encoder_path)?;
+                    let emb = self.create_session_cpu(&embed_path)?;
+                    let dec = self.create_session_cpu(&decoder_path)?;
+                    (GpuBackend::Cpu, enc, emb, dec)
+                } else {
+                    println!("[GRANITE] All GPU paths failed; running q4f16 on CPU...");
+                    let enc = self.create_session_cpu(&enc_q4f16)?;
+                    let emb = self.create_session_cpu(&emb_q4f16)?;
+                    let dec = self.create_session_cpu(&dec_q4f16)?;
+                    (GpuBackend::Cpu, enc, emb, dec)
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                // Linux: CUDA encoder/embed + CPU decoder, then CPU fallback.
+                let gpu_q4f16: Option<(GpuBackend, Session, Session, Session)> = if has_q4f16 {
+                    match self.try_create_sessions_cuda(&enc_q4f16, &emb_q4f16, &dec_q4f16) {
+                        Ok(r) => {
+                            println!("[GRANITE] Using q4f16: CUDA encoder/embed + CPU decoder");
+                            Some((GpuBackend::Cuda, r.0, r.1, r.2))
+                        }
+                        Err(e) => {
+                            if require_cuda {
+                                return Err(format!(
+                                    "TAURSCRIBE_GRANITE_REQUIRE_CUDA is set but q4f16 CUDA failed: {e}"
+                                ));
+                            }
+                            let _ = e;
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                if let Some((backend, enc, emb, dec)) = gpu_q4f16 {
+                    (backend, enc, emb, dec)
+                } else if has_q4 {
+                    match self.try_create_sessions_cuda(&encoder_path, &embed_path, &decoder_path) {
+                        Ok((enc, emb, dec)) => {
+                            println!("[GRANITE] Using INT4: CUDA encoder/embed + CPU decoder");
+                            (GpuBackend::Cuda, enc, emb, dec)
+                        }
+                        Err(e) => {
+                            if require_cuda {
+                                return Err(format!(
+                                    "TAURSCRIBE_GRANITE_REQUIRE_CUDA is set but INT4 CUDA failed: {e}"
+                                ));
+                            }
+                            println!("[GRANITE] CUDA failed ({}), falling back to CPU...", e);
+                            let enc = self.create_session_cpu(&encoder_path)?;
+                            let emb = self.create_session_cpu(&embed_path)?;
+                            let dec = self.create_session_cpu(&decoder_path)?;
+                            (GpuBackend::Cpu, enc, emb, dec)
+                        }
+                    }
+                } else {
+                    println!("[GRANITE] CUDA unavailable, running q4f16 on CPU");
+                    let enc = self.create_session_cpu(&enc_q4f16)?;
+                    let emb = self.create_session_cpu(&emb_q4f16)?;
+                    let dec = self.create_session_cpu(&dec_q4f16)?;
+                    (GpuBackend::Cpu, enc, emb, dec)
+                }
             }
         };
 
@@ -234,7 +460,8 @@ impl GraniteSpeechManager {
         self.decoder_session = Some(decoder);
         self.tokenizer = Some(tokenizer);
         self.backend = backend.clone();
-        self.model_name = Some("granite-speech-1b".to_string());
+        self.model_name = Some(logical_id);
+        self.decoder_io_fp16 = has_fp16;
 
         let msg = format!("[GRANITE] Model loaded ({})", backend);
         println!("{}", msg);
@@ -296,6 +523,11 @@ impl GraniteSpeechManager {
 
     // ─────────────────────── Session Creation ─────────────────────────────────
 
+    /// Linux always; Windows **x86_64 only** (CUDA EP not in ARM64 ort build).
+    #[cfg(any(
+        not(target_os = "windows"),
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
     fn try_create_sessions_cuda(
         &self,
         encoder_path: &std::path::Path,
@@ -304,34 +536,63 @@ impl GraniteSpeechManager {
     ) -> Result<(Session, Session, Session), String> {
         println!("[GRANITE] Attempting CUDA acceleration...");
 
-        let enc = Session::builder()
-            .map_err(|e| format!("Session builder: {}", e))?
-            .with_execution_providers([ort::execution_providers::CUDAExecutionProvider::default().build()])
-            .map_err(|e| format!("CUDA EP: {}", e))?
-            .commit_from_file(encoder_path)
-            .map_err(|e| format!("Encoder load: {}", e))?;
+        // Allocate ONNX initializers (weights) via the CUDA device allocator instead of the
+        // CPU arena, so weights land in VRAM rather than a long-lived CPU copy. See ONNX Runtime
+        // session option `session.use_device_allocator_for_initializers` (ort:
+        // `with_device_allocator_for_initializers`).
+        let build_cuda = |path: &std::path::Path, label: &str| -> Result<Session, String> {
+            granite_session_builder()?
+                .with_device_allocator_for_initializers()
+                .map_err(|e| format!("device_allocator_for_initializers: {}", e))?
+                .with_execution_providers([ort::execution_providers::CUDAExecutionProvider::default()
+                    .build()
+                    .error_on_failure()])
+                .map_err(|e| format!("CUDA EP: {}", e))?
+                .commit_from_file(path)
+                .map_err(|e| format!("{} load: {}", label, e))
+        };
 
-        let emb = Session::builder()
-            .map_err(|e| format!("Session builder: {}", e))?
-            .with_execution_providers([ort::execution_providers::CUDAExecutionProvider::default().build()])
-            .map_err(|e| format!("CUDA EP: {}", e))?
-            .commit_from_file(embed_path)
-            .map_err(|e| format!("Embed load: {}", e))?;
+        let enc = build_cuda(encoder_path, "Encoder")?;
+        let emb = build_cuda(embed_path, "Embed")?;
+        // ORT's CUDA GroupQueryAttention kernel rejects graphs with `position_ids` and
+        // `attention_bias` (Granite decoder export). CPU EP implements the full op.
+        let dec = self.create_session_cpu(decoder_path)?;
+        println!(
+            "[GRANITE] ✓ Encoder + embed on CUDA (device alloc); decoder on CPU (CUDA GQA lacks position_ids/attention_bias)"
+        );
+        Ok((enc, emb, dec))
+    }
 
-        let dec = Session::builder()
-            .map_err(|e| format!("Session builder: {}", e))?
-            .with_execution_providers([ort::execution_providers::CUDAExecutionProvider::default().build()])
-            .map_err(|e| format!("CUDA EP: {}", e))?
-            .commit_from_file(decoder_path)
-            .map_err(|e| format!("Decoder load: {}", e))?;
+    /// DirectML EP on Windows — uses the GPU via DirectX 12 without NVIDIA’s cuDNN DLLs required by the CUDA EP.
+    #[cfg(target_os = "windows")]
+    fn try_create_sessions_directml(
+        &self,
+        encoder_path: &std::path::Path,
+        embed_path: &std::path::Path,
+        decoder_path: &std::path::Path,
+    ) -> Result<(Session, Session, Session), String> {
+        println!("[GRANITE] Attempting DirectML (GPU via DirectX 12)...");
 
-        println!("[GRANITE] ✓ CUDA sessions created");
+        let build_dml = |path: &std::path::Path, label: &str| -> Result<Session, String> {
+            granite_session_builder()?
+                .with_execution_providers([ort::execution_providers::DirectMLExecutionProvider::default()
+                    .build()
+                    .error_on_failure()])
+                .map_err(|e| format!("DirectML EP: {}", e))?
+                .commit_from_file(path)
+                .map_err(|e| format!("{} load: {}", label, e))
+        };
+
+        let enc = build_dml(encoder_path, "Encoder")?;
+        let emb = build_dml(embed_path, "Embed")?;
+        let dec = build_dml(decoder_path, "Decoder")?;
+
+        println!("[GRANITE] ✓ DirectML sessions created");
         Ok((enc, emb, dec))
     }
 
     fn create_session_cpu(&self, path: &std::path::Path) -> Result<Session, String> {
-        Session::builder()
-            .map_err(|e| format!("Session builder: {}", e))?
+        granite_session_builder()?
             .commit_from_file(path)
             .map_err(|e| format!("CPU session load: {}", e))
     }
@@ -357,10 +618,9 @@ impl GraniteSpeechManager {
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("Extract encoder output: {}", e))?;
 
-        // Shape derefs to [i64]
-        let d0 = shape[0] as usize;
-        let d1 = shape[1] as usize;
-        let d2 = shape[2] as usize;
+        let d0 = ort_positive_dim(shape[0], "encoder batch")?;
+        let d1 = ort_positive_dim(shape[1], "encoder seq")?;
+        let d2 = ort_positive_dim(shape[2], "encoder hidden")?;
 
         let result = Array3::from_shape_vec((d0, d1, d2), data.to_vec())
             .map_err(|e| format!("Encoder output reshape: {}", e))?;
@@ -400,8 +660,14 @@ impl GraniteSpeechManager {
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("Extract text embeddings: {}", e))?;
 
-        let text_seq_len = text_shape[1] as usize;
-        let text_hidden = text_shape[2] as usize;
+        let text_seq_len = ort_positive_dim(text_shape[1], "embed seq")?;
+        let text_hidden = ort_positive_dim(text_shape[2], "embed hidden")?;
+        if text_hidden != HIDDEN_SIZE {
+            return Err(format!(
+                "Granite embed_tokens hidden dim is {} but decoder expects {}",
+                text_hidden, HIDDEN_SIZE
+            ));
+        }
 
         // Build text embeddings as Array3 for indexing
         let text_emb = Array3::from_shape_vec((1, text_seq_len, text_hidden), text_data.to_vec())
@@ -410,6 +676,12 @@ impl GraniteSpeechManager {
         // Find the audio token position and replace with audio embeddings
         let audio_token_pos = prompt_ids.iter().position(|&id| id == AUDIO_TOKEN_INDEX);
         let audio_seq_len = audio_embeddings.shape()[1];
+        if audio_seq_len > MAX_GRANITE_DECODER_SEQ_LEN {
+            return Err(format!(
+                "Granite audio embedding seq {} exceeds cap {}",
+                audio_seq_len, MAX_GRANITE_DECODER_SEQ_LEN
+            ));
+        }
 
         let combined_embeddings = if let Some(pos) = audio_token_pos {
             let total_len = text_seq_len - 1 + audio_seq_len;
@@ -438,22 +710,40 @@ impl GraniteSpeechManager {
         };
 
         let seq_len = combined_embeddings.shape()[1];
+        if seq_len > MAX_GRANITE_DECODER_SEQ_LEN {
+            return Err(format!(
+                "Granite decoder prefill seq {} exceeds cap {} — refusing run (avoids bogus ORT allocations)",
+                seq_len, MAX_GRANITE_DECODER_SEQ_LEN
+            ));
+        }
         println!("[GRANITE] Combined embeddings: 1 × {} × {}", seq_len, HIDDEN_SIZE);
 
-        // Build decoder inputs — inputs_embeds is float32; KV cache is float16
         let embeds_data: Vec<f32> = combined_embeddings.iter().cloned().collect();
         let attn_data: Vec<i64> = vec![1i64; seq_len];
 
         let mut decoder_inputs: Vec<(String, ort::value::DynValue)> = Vec::new();
 
-        decoder_inputs.push(("inputs_embeds".into(), make_tensor_f32(vec![1, seq_len, HIDDEN_SIZE], embeds_data)?));
+        decoder_inputs.push((
+            "inputs_embeds".into(),
+            make_tensor_f32(vec![1, seq_len, HIDDEN_SIZE], embeds_data)?,
+        ));
         decoder_inputs.push(("attention_mask".into(), make_tensor_i64(vec![1, seq_len], attn_data)?));
 
-        // Empty KV cache (past_sequence_length = 0) via ndarray::Array4 — ORT's raw-data API
-        // rejects zero-sized dimensions, but ndarray handles them correctly.
+        // Empty KV: float16 only for the full FP16 decoder ONNX; INT4 paths use float32.
         for layer in 0..NUM_HIDDEN_LAYERS {
-            decoder_inputs.push((format!("past_key_values.{}.key", layer), make_empty_kv_f32(NUM_KV_HEADS, HEAD_DIM)?));
-            decoder_inputs.push((format!("past_key_values.{}.value", layer), make_empty_kv_f32(NUM_KV_HEADS, HEAD_DIM)?));
+            let (pk, pv) = if self.decoder_io_fp16 {
+                (
+                    make_empty_kv_f16(NUM_KV_HEADS, HEAD_DIM)?,
+                    make_empty_kv_f16(NUM_KV_HEADS, HEAD_DIM)?,
+                )
+            } else {
+                (
+                    make_empty_kv_f32(NUM_KV_HEADS, HEAD_DIM)?,
+                    make_empty_kv_f32(NUM_KV_HEADS, HEAD_DIM)?,
+                )
+            };
+            decoder_inputs.push((format!("past_key_values.{}.key", layer), pk));
+            decoder_inputs.push((format!("past_key_values.{}.value", layer), pv));
         }
 
         let decoder_outputs = decoder
@@ -543,15 +833,16 @@ impl GraniteSpeechManager {
                 .try_extract_tensor::<f32>()
                 .map_err(|e| format!("Extract embedding: {}", e))?;
 
-            // Build decoder inputs — inputs_embeds is float32; KV cache is float16
             let mut decoder_inputs: Vec<(String, ort::value::DynValue)> = Vec::new();
 
-            decoder_inputs.push(("inputs_embeds".into(), make_tensor_f32(vec![1, 1, HIDDEN_SIZE], emb_data.to_vec())?));
+            decoder_inputs.push((
+                "inputs_embeds".into(),
+                make_tensor_f32(vec![1, 1, HIDDEN_SIZE], emb_data.to_vec())?,
+            ));
 
             decoder_inputs.push(("attention_mask".into(), make_tensor_i64(vec![1, current_attn_len], attn_buf[..current_attn_len].to_vec())?));
             current_attn_len += 1;
 
-            // Past KV cache tensors — model expects f32
             for layer in 0..NUM_HIDDEN_LAYERS {
                 let key_idx = layer * 2;
                 let val_idx = layer * 2 + 1;
@@ -559,8 +850,27 @@ impl GraniteSpeechManager {
                 let key_data = std::mem::take(&mut kv_cache[key_idx]);
                 let val_data = std::mem::take(&mut kv_cache[val_idx]);
 
-                decoder_inputs.push((kv_names[layer].0.clone(), make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], key_data)?));
-                decoder_inputs.push((kv_names[layer].1.clone(), make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], val_data)?));
+                if self.decoder_io_fp16 {
+                    let key_f16: Vec<f16> = key_data.iter().map(|x| f16::from_f32(*x)).collect();
+                    let val_f16: Vec<f16> = val_data.iter().map(|x| f16::from_f32(*x)).collect();
+                    decoder_inputs.push((
+                        kv_names[layer].0.clone(),
+                        make_tensor_f16(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], key_f16)?,
+                    ));
+                    decoder_inputs.push((
+                        kv_names[layer].1.clone(),
+                        make_tensor_f16(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], val_f16)?,
+                    ));
+                } else {
+                    decoder_inputs.push((
+                        kv_names[layer].0.clone(),
+                        make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], key_data)?,
+                    ));
+                    decoder_inputs.push((
+                        kv_names[layer].1.clone(),
+                        make_tensor_f32(vec![1, NUM_KV_HEADS, kv_cache_seq_len, HEAD_DIM], val_data)?,
+                    ));
+                }
             }
 
             let decoder_outputs = decoder
@@ -686,4 +996,61 @@ impl GraniteSpeechManager {
             .map_err(|e| e.to_string())?;
         Ok(waves[0].clone())
     }
+}
+
+fn resolve_granite_model_dir(models_dir: &Path, model_id: Option<&str>) -> Result<PathBuf, String> {
+    let dir = match model_id {
+        None => models_dir.join("granite-speech-1b"),
+        Some(id) => {
+            let pb = PathBuf::from(id);
+            if pb.is_absolute() {
+                pb
+            } else {
+                match id {
+                    "granite-speech-1b-fp16" => models_dir.join("granite-speech-1b-fp16"),
+                    "granite-speech-1b" => models_dir.join("granite-speech-1b"),
+                    other => {
+                        if other.contains('/') || other.contains('\\') {
+                            return Err(format!("Invalid granite model id: {}", other));
+                        }
+                        models_dir.join(other)
+                    }
+                }
+            }
+        }
+    };
+    if !dir.exists() {
+        return Err(format!(
+            "Granite Speech model not found at {}. Download it from Settings > Download Manager.",
+            dir.display()
+        ));
+    }
+    Ok(dir)
+}
+
+pub(crate) fn granite_int4_bundle_ready(dir: &Path) -> bool {
+    if !dir.is_dir() || !dir.join("tokenizer.json").exists() {
+        return false;
+    }
+    let q4 = dir.join("audio_encoder_q4.onnx").exists()
+        && dir.join("embed_tokens_q4.onnx").exists()
+        && dir.join("decoder_model_merged_q4.onnx").exists();
+    let q4f16 = dir.join("audio_encoder_q4f16.onnx").exists()
+        && dir.join("embed_tokens_q4f16.onnx").exists()
+        && dir.join("decoder_model_merged_q4f16.onnx").exists();
+    q4 || q4f16
+}
+
+pub(crate) fn granite_fp16_bundle_ready(dir: &Path) -> bool {
+    const FILES: &[&str] = &[
+        "audio_encoder_fp16.onnx",
+        "audio_encoder_fp16.onnx_data",
+        "embed_tokens_fp16.onnx",
+        "embed_tokens_fp16.onnx_data",
+        "decoder_model_merged_fp16.onnx",
+        "decoder_model_merged_fp16.onnx_data",
+        "decoder_model_merged_fp16.onnx_data_1",
+        "tokenizer.json",
+    ];
+    dir.is_dir() && FILES.iter().all(|f| dir.join(f).exists())
 }

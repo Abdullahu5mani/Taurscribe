@@ -9,25 +9,37 @@ pub struct GraniteSpeechModelInfo {
     pub id: String,
     pub display_name: String,
     pub size_mb: f32,
+    /// True for the FP16 package — needs GPU on Windows/Linux; use INT4 bundle for CPU.
+    pub requires_gpu: bool,
 }
 
-/// List available (downloaded) Granite Speech models.
-/// Returns a single-item array if the model directory exists, or empty if not downloaded.
+/// List available (downloaded) Granite Speech models (INT4 and/or FP16 bundles).
 #[tauri::command]
 pub fn list_granite_models() -> Vec<GraniteSpeechModelInfo> {
     let models_dir = match crate::utils::get_models_dir() {
         Ok(d) => d,
         Err(_) => return vec![],
     };
-    if models_dir.join("granite-speech-1b").exists() {
-        vec![GraniteSpeechModelInfo {
+    let mut out = Vec::new();
+    let d_int4 = models_dir.join("granite-speech-1b");
+    if crate::granite_speech::granite_int4_bundle_ready(&d_int4) {
+        out.push(GraniteSpeechModelInfo {
             id: "granite-speech-1b".to_string(),
-            display_name: "Granite 4.0 1B Speech".to_string(),
-            size_mb: 2048.0,
-        }]
-    } else {
-        vec![]
+            display_name: "Granite 4.0 1B Speech (INT4)".to_string(),
+            size_mb: 1843.0,
+            requires_gpu: false,
+        });
     }
+    let d_fp16 = models_dir.join("granite-speech-1b-fp16");
+    if crate::granite_speech::granite_fp16_bundle_ready(&d_fp16) {
+        out.push(GraniteSpeechModelInfo {
+            id: "granite-speech-1b-fp16".to_string(),
+            display_name: "Granite 4.0 1B Speech (FP16 · CUDA)".to_string(),
+            size_mb: 4700.0,
+            requires_gpu: true,
+        });
+    }
+    out
 }
 
 /// Initialize the Granite Speech engine (load ONNX models + tokenizer).
@@ -35,7 +47,7 @@ pub fn list_granite_models() -> Vec<GraniteSpeechModelInfo> {
 pub async fn init_granite_speech(
     state: State<'_, AudioState>,
     app: tauri::AppHandle,
-    model_path: Option<String>,
+    model_id: Option<String>,
     force_cpu: Option<bool>,
 ) -> Result<String, String> {
     use crate::types::ASREngine;
@@ -59,11 +71,14 @@ pub async fn init_granite_speech(
         let parakeet_loaded = parakeet_arc.lock().unwrap().get_status().loaded;
         let active          = *active_engine_arc.lock().unwrap();
 
-        // 3. Skip if Granite is already the active engine with a model loaded.
+        // 3. Skip only if Granite is active and CPU/GPU preference matches (toggle must reload).
+        let want_cpu = force_cpu.unwrap_or(false);
+        let granite_on_cpu = granite_status.backend == "CPU";
         if granite_status.loaded
             && active == ASREngine::GraniteSpeech
             && !whisper_loaded
             && !parakeet_loaded
+            && granite_on_cpu == want_cpu
         {
             println!("[GRANITE] Model is already loaded — skipping reload");
             return Ok::<String, String>("Already loaded".to_string());
@@ -81,7 +96,7 @@ pub async fn init_granite_speech(
 
         // 5. Load Granite Speech.
         let mut gs = granite_arc.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let msg = gs.initialize(model_path.as_deref(), force_cpu.unwrap_or(false))?;
+        let msg = gs.initialize(model_id.as_deref(), force_cpu.unwrap_or(false))?;
         *active_engine_arc.lock().unwrap() = ASREngine::GraniteSpeech;
         Ok(msg)
     })

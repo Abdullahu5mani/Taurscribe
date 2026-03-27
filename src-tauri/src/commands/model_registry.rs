@@ -342,6 +342,23 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             ],
             subdirectory: Some("granite-speech-1b"),
         }),
+
+        // Full FP16 ONNX (~4.6 GB) — Windows + NVIDIA CUDA oriented; same APIs as INT4 bundle.
+        "granite-speech-1b-fp16-cuda" => Some(ModelConfig {
+            repo: "onnx-community/granite-4.0-1b-speech-ONNX",
+            branch: "main",
+            files: vec![
+                ModelFile { filename: "audio_encoder_fp16.onnx", remote_path: "onnx/audio_encoder_fp16.onnx", sha1: "" },
+                ModelFile { filename: "audio_encoder_fp16.onnx_data", remote_path: "onnx/audio_encoder_fp16.onnx_data", sha1: "" },
+                ModelFile { filename: "embed_tokens_fp16.onnx", remote_path: "onnx/embed_tokens_fp16.onnx", sha1: "" },
+                ModelFile { filename: "embed_tokens_fp16.onnx_data", remote_path: "onnx/embed_tokens_fp16.onnx_data", sha1: "" },
+                ModelFile { filename: "decoder_model_merged_fp16.onnx", remote_path: "onnx/decoder_model_merged_fp16.onnx", sha1: "" },
+                ModelFile { filename: "decoder_model_merged_fp16.onnx_data", remote_path: "onnx/decoder_model_merged_fp16.onnx_data", sha1: "" },
+                ModelFile { filename: "decoder_model_merged_fp16.onnx_data_1", remote_path: "onnx/decoder_model_merged_fp16.onnx_data_1", sha1: "" },
+                ModelFile { filename: "tokenizer.json", remote_path: "tokenizer.json", sha1: "" },
+            ],
+            subdirectory: Some("granite-speech-1b-fp16"),
+        }),
         _ => None,
     }
 }
