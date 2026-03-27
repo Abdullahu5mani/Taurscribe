@@ -210,6 +210,13 @@ impl ParakeetManager {
             if force_cpu { " [CPU-only mode]" } else { "" }
         );
 
+        // Explicit unload so ONNX sessions are dropped before new ones are created (clear logs +
+        // predictable VRAM release when switching Parakeet models or reloading).
+        if self.model.is_some() {
+            println!("[PARAKEET] Unloading previous Parakeet model before loading new weights...");
+            self.unload();
+        }
+
         let subpath = target_id
             .split_once(':')
             .map(|(_, p)| p)
@@ -243,6 +250,12 @@ impl ParakeetManager {
         self.model = Some(model);
         self.model_name = Some(target_id.to_string());
         self.backend = backend.clone();
+
+        crate::parakeet_loaders::log_parakeet_backend_resolution(
+            &info.model_type,
+            &backend,
+            force_cpu,
+        );
 
         Ok(format!("Loaded {} ({})", info.display_name, backend))
     }

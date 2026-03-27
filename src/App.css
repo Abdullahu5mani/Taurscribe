@@ -640,6 +640,30 @@ body {
   color: var(--accent-primary);
 }
 
+.hardware-bar-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: min(420px, 55%);
+}
+
+.backend-toggle-inline--locked {
+  opacity: 0.75;
+}
+
+.backend-toggle-inline--locked .backend-toggle-inline-btn:disabled {
+  cursor: not-allowed;
+}
+
+.granite-fp16-hardware-hint {
+  font-size: var(--font-xs);
+  color: var(--accent-primary);
+  opacity: 0.85;
+  line-height: 1.35;
+  text-align: right;
+}
+
 .backend-toggle-inline {
   display: flex;
   border-radius: 6px;

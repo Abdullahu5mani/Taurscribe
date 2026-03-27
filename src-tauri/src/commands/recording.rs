@@ -11,7 +11,29 @@ use crate::context::get_active_context;
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
 use crate::types::{ASREngine, TranscriptionChunk};
-use crate::utils::{clean_transcript, get_recordings_dir, normalize_audio};
+use crate::utils::{
+    clean_transcript, get_recordings_dir, normalize_audio, strip_whitelisted_sound_captions,
+};
+
+/// Live Parakeet chunk length in seconds. Very short windows (~1s) hurt accuracy on
+/// streaming CTC; ~4s trades a bit of latency for much better context (see NeMo
+/// streaming / buffered-chunk guidance).
+const PARAKEET_LIVE_CHUNK_SECS: f32 = 4.0;
+
+#[inline]
+fn parakeet_min_samples(sample_rate: u32) -> usize {
+    (sample_rate as f32 * PARAKEET_LIVE_CHUNK_SECS) as usize
+}
+
+/// Normalize speech, then pad with trailing silence up to `PARAKEET_LIVE_CHUNK_SECS` so
+/// short clips get the same encoder context as full chunks.
+fn parakeet_prepare_buffer(buf: &mut Vec<f32>, sample_rate: u32) {
+    normalize_audio(buf);
+    let min_len = parakeet_min_samples(sample_rate);
+    if buf.len() < min_len {
+        buf.resize(min_len, 0.0);
+    }
+}
 
 /// COMMAND: START RECORDING
 /// This initializes the microphone, files, and processing threads.
@@ -247,6 +269,14 @@ fn start_recording_blocking(
             let start = std::time::Instant::now();
             match transcribe(chunk, sample_rate) {
                 Ok(text) if !text.trim().is_empty() => {
+                    let text = if matches!(method, "Whisper" | "GraniteSpeech") {
+                        strip_whitelisted_sound_captions(&text)
+                    } else {
+                        text
+                    };
+                    if text.trim().is_empty() {
+                        return false;
+                    }
                     let elapsed = start.elapsed().as_millis() as u32;
                     println!("[TRANSCRIPT] {} \"{}\" (took {}ms)", emoji, text.trim(), elapsed);
                     let _ = app.emit(
@@ -330,7 +360,8 @@ fn start_recording_blocking(
                 }
                 ASREngine::Parakeet => {
                     buffer.extend(samples);
-                    let parakeet_chunk_size = (sample_rate as f32 * 1.12) as usize;
+                    let parakeet_chunk_size =
+                        (sample_rate as f32 * PARAKEET_LIVE_CHUNK_SECS) as usize;
                     let max_buffer_size = parakeet_chunk_size * 2;
                     while buffer.len() >= parakeet_chunk_size {
                         if buffer.len() > max_buffer_size {
@@ -339,7 +370,7 @@ fn start_recording_blocking(
                         chunk.clear();
                         chunk.extend_from_slice(&buffer[..parakeet_chunk_size]);
                         buffer.drain(..parakeet_chunk_size);
-                        normalize_audio(&mut chunk);
+                        parakeet_prepare_buffer(&mut chunk, sample_rate);
                         let start_time = std::time::Instant::now();
                         match parakeet_manager.lock().unwrap().transcribe_chunk(&chunk, sample_rate) {
                             Ok(transcript) if !transcript.is_empty() => {
@@ -392,6 +423,7 @@ fn start_recording_blocking(
                     vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript);
                 }
                 ASREngine::Parakeet => {
+                    parakeet_prepare_buffer(&mut chunk, sample_rate);
                     if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&chunk, sample_rate) {
                         if !transcript.is_empty() {
                             session_transcript.lock().unwrap().push_str(&transcript);
@@ -418,6 +450,7 @@ fn start_recording_blocking(
                     } else {
                         println!("[PROCESSING] 🎙️ Short tail ({:.2}s) — bypassing VAD for Whisper", tail_secs);
                         if let Ok(text) = wm.transcribe_chunk(&buffer, sample_rate) {
+                            let text = strip_whitelisted_sound_captions(&text);
                             if !text.trim().is_empty() {
                                 println!("[TRANSCRIPT] 🎙️ (Tail) \"{}\"", text.trim());
                                 let _ = app_clone.emit("transcription-chunk", crate::types::TranscriptionChunk {
@@ -436,6 +469,7 @@ fn start_recording_blocking(
                     } else {
                         println!("[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for GraniteSpeech", tail_secs);
                         if let Ok(text) = gs.transcribe_chunk(&buffer, sample_rate) {
+                            let text = strip_whitelisted_sound_captions(&text);
                             if !text.trim().is_empty() {
                                 println!("[TRANSCRIPT] 🪨 (Tail) \"{}\"", text.trim());
                                 let _ = app_clone.emit("transcription-chunk", crate::types::TranscriptionChunk {
@@ -447,7 +481,9 @@ fn start_recording_blocking(
                     }
                 }
                 ASREngine::Parakeet => {
-                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&buffer, sample_rate) {
+                    let mut tail = buffer.clone();
+                    parakeet_prepare_buffer(&mut tail, sample_rate);
+                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&tail, sample_rate) {
                         if !transcript.is_empty() {
                             session_transcript.lock().unwrap().push_str(&transcript);
                             println!("[TRANSCRIPT] 🦜 (Final Partial) \"{}\"", transcript.trim());

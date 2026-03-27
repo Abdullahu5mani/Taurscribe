@@ -66,11 +66,17 @@ pub async fn switch_model(
         let granite_loaded   = granite_arc.lock().unwrap().get_status().loaded;
         let active           = *active_engine_arc.lock().unwrap();
 
-        // 4. Skip the load entirely if the same model is already active.
+        let whisper_on_cpu = {
+            let w = whisper_arc.lock().unwrap();
+            matches!(*w.get_backend(), whisper::GpuBackend::Cpu)
+        };
+
+        // 4. Skip only if same model, same engine, and CPU/GPU preference already matches (toggle must reload).
         if whisper_current.as_deref() == Some(mid.as_str())
             && active == ASREngine::Whisper
             && !parakeet_loaded
             && !granite_loaded
+            && whisper_on_cpu == force_cpu
         {
             println!("[INFO] Whisper model '{}' is already loaded — skipping reload", mid);
             return Ok("Already loaded".to_string());
@@ -141,13 +147,15 @@ pub async fn init_parakeet(
         let granite_loaded   = granite_arc.lock().unwrap().get_status().loaded;
         let active           = *active_engine_arc.lock().unwrap();
 
-        // 3. Skip if the same Parakeet model is already active.
+        // 3. Skip if the same Parakeet model is already active on the same CPU/GPU preference.
         let target_id = model_id.as_deref();
+        let parakeet_on_cpu = parakeet_status.backend == "CPU";
         let already_loaded = parakeet_status.loaded
             && active == ASREngine::Parakeet
             && !whisper_loaded
             && !granite_loaded
-            && (target_id.is_none() || parakeet_status.model_id.as_deref() == target_id);
+            && (target_id.is_none() || parakeet_status.model_id.as_deref() == target_id)
+            && parakeet_on_cpu == force_cpu;
         if already_loaded {
             println!("[INFO] Parakeet model is already loaded — skipping reload");
             return Ok::<String, String>("Already loaded".to_string());
@@ -161,6 +169,13 @@ pub async fn init_parakeet(
         if granite_loaded {
             println!("[INFO] Unloading Granite Speech before switching to Parakeet");
             granite_arc.lock().unwrap().unload();
+        }
+
+        // Free any existing Parakeet sessions before acquiring the lock for a fresh load
+        // (initialize() also unloads if needed; this covers edge cases and makes logs explicit).
+        if parakeet_status.loaded {
+            println!("[INFO] Unloading existing Parakeet model before re-initializing");
+            parakeet_arc.lock().unwrap().unload();
         }
 
         // 5. Load Parakeet.

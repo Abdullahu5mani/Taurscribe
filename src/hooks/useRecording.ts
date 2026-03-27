@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ModelInfo, ParakeetModelInfo, GraniteSpeechModelInfo } from "./useModels";
+import { GRANITE_FP16_MODEL_ID } from "../utils/engineUtils";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
@@ -12,6 +13,10 @@ interface UseRecordingParams {
     graniteModels: GraniteSpeechModelInfo[];
     currentModel: string | null;
     currentParakeetModel: string | null;
+    currentGraniteModel: string | null;
+    asrBackend: "gpu" | "cpu";
+    /** When lazy-loading FP16 Granite, sync toggle + store to GPU */
+    setAsrBackend?: (b: "gpu" | "cpu") => void;
     setCurrentModel: (id: string) => void;
     setLoadedEngine: (engine: ASREngine) => void;
     enableGrammarLMRef: React.RefObject<boolean>;
@@ -45,6 +50,9 @@ export function useRecording({
     graniteModels,
     currentModel,
     currentParakeetModel,
+    currentGraniteModel,
+    asrBackend,
+    setAsrBackend,
     setCurrentModel,
     setLoadedEngine,
     enableGrammarLMRef,
@@ -180,8 +188,15 @@ export function useRecording({
                 const gStatus = await invoke("get_granite_speech_status") as { loaded: boolean };
                 if (!gStatus.loaded) {
                     setHeaderStatus("Loading Granite Speech...", 60_000);
-                    await invoke("init_granite_speech", {});
+                    const gid = currentGraniteModel || graniteModels[0]?.id;
+                    await invoke("init_granite_speech", {
+                        modelId: gid,
+                        forceCpu: asrBackend === "cpu" && gid !== GRANITE_FP16_MODEL_ID,
+                    });
                     setLoadedEngine("granite_speech");
+                    if (gid === GRANITE_FP16_MODEL_ID) {
+                        setAsrBackend?.("gpu");
+                    }
                     setHeaderStatus("Granite Speech loaded");
                 }
             } catch (e) {

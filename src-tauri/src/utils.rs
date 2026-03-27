@@ -1,4 +1,6 @@
-
+use regex::Regex;
+use std::collections::HashSet;
+use std::sync::OnceLock;
 
 /// Normalize audio samples to a target RMS level (-20 dBFS = RMS 0.1).
 ///
@@ -23,6 +25,9 @@ pub fn clean_transcript(text: &str) -> String {
 
     // Remove Whisper hallucination repetitions before anything else
     cleaned = remove_repetitions(&cleaned);
+
+    // Strip known subtitle-style sound/caption tags ([music], (laughter), …) from Whisper / Granite
+    cleaned = strip_whitelisted_sound_captions(&cleaned);
 
     // Fix floating punctuation
     cleaned = cleaned.replace(" ,", ",");
@@ -50,6 +55,210 @@ pub fn clean_transcript(text: &str) -> String {
     }
 
     cleaned
+}
+
+/// Remove `[…]` / `(…)` segments only when the inner text matches a known ASR sound/caption label.
+/// Used for live streaming chunks so the UI matches `clean_transcript` output. Whisper / Granite only.
+pub(crate) fn strip_whitelisted_sound_captions(text: &str) -> String {
+    static RE_BRACKETS: OnceLock<Regex> = OnceLock::new();
+    static RE_PARENS: OnceLock<Regex> = OnceLock::new();
+    let re_b = RE_BRACKETS.get_or_init(|| Regex::new(r"\[[^\]\n\r]*\]").unwrap());
+    let re_p = RE_PARENS.get_or_init(|| Regex::new(r"\([^)\n\r]{1,200}\)").unwrap());
+
+    let mut s = strip_labeled_regions(text, re_b, '[', ']', is_whitelisted_sound_caption_inner);
+    s = strip_labeled_regions(&s, re_p, '(', ')', is_whitelisted_sound_caption_inner);
+    collapse_spaces_trim(&s)
+}
+
+fn strip_labeled_regions(
+    text: &str,
+    re: &Regex,
+    open: char,
+    close: char,
+    is_tag: fn(&str) -> bool,
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0usize;
+    for m in re.find_iter(text) {
+        out.push_str(&text[last..m.start()]);
+        let frag = m.as_str();
+        if frag.len() >= 2
+            && frag.starts_with(open)
+            && frag.ends_with(close)
+            && is_tag(&frag[1..frag.len() - 1])
+        {
+            // drop
+        } else {
+            out.push_str(frag);
+        }
+        last = m.end();
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+fn is_whitelisted_sound_caption_inner(inner: &str) -> bool {
+    let n = normalize_sound_tag_inner(inner);
+    if n.is_empty() {
+        return false;
+    }
+    let set = sound_caption_whitelist();
+    if set.contains(&n) {
+        return true;
+    }
+    // "[(laughter)]" → inner "(laughter)"
+    if n.len() >= 2 && n.starts_with('(') && n.ends_with(')') {
+        let inner2 = normalize_sound_tag_inner(&n[1..n.len() - 1]);
+        if !inner2.is_empty() && set.contains(&inner2) {
+            return true;
+        }
+    }
+    let stripped = n
+        .trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ':' | ';' | '…'));
+    stripped != n.as_str() && set.contains(stripped)
+}
+
+fn normalize_sound_tag_inner(s: &str) -> String {
+    s.trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn sound_caption_whitelist() -> &'static HashSet<String> {
+    static SET: OnceLock<HashSet<String>> = OnceLock::new();
+    SET.get_or_init(|| {
+        const RAW: &[&str] = &[
+            "applause",
+            "applause and laughter",
+            "audience",
+            "audience applauding",
+            "audience laughing",
+            "audience laughter",
+            "audio",
+            "awkward silence",
+            "background music",
+            "background noise",
+            "beat",
+            "beep",
+            "beeping",
+            "birds chirping",
+            "blank",
+            "blank audio",
+            "blank_audio",
+            "cheering",
+            "cheers",
+            "clapping",
+            "click",
+            "clicking",
+            "cough",
+            "coughing",
+            "crowd chattering",
+            "crowd cheering",
+            "crowd laughing",
+            "crowd noise",
+            "crosstalk",
+            "distorted speech",
+            "dog barking",
+            "door closes",
+            "door opening",
+            "doorbell",
+            "dramatic music",
+            "explosion",
+            "film music",
+            "footsteps",
+            "foreign language",
+            "foreign speech",
+            "gasps",
+            "giggling",
+            "gunshot",
+            "horn honking",
+            "hum",
+            "humming",
+            "inaudible",
+            "indistinct",
+            "instrumental",
+            "intro music",
+            "laughing",
+            "laughter",
+            "laughs",
+            "light applause",
+            "long silence",
+            "loud music",
+            "music",
+            "music fades",
+            "music fades out",
+            "music playing",
+            "muffled",
+            "mumbled",
+            "noise",
+            "no audio",
+            "no sound",
+            "outro music",
+            "overlapping dialogue",
+            "overlapping speech",
+            "overlapping voices",
+            "phone ringing",
+            "radio",
+            "rain",
+            "sfx",
+            "sigh",
+            "sighs",
+            "silence",
+            "singing",
+            "sneezing",
+            "soft music",
+            "sound",
+            "sound effect",
+            "sound effects",
+            "speaking another language",
+            "speaking foreign language",
+            "speaking in foreign language",
+            "speech",
+            "static",
+            "sustained applause",
+            "television",
+            "theme music",
+            "thunder",
+            "thunderous applause",
+            "tick",
+            "ticking",
+            "tv music",
+            "tv playing",
+            "typing",
+            "unintelligible",
+            "upbeat music",
+            "vocals",
+            "vocalizing",
+            "water running",
+            "white noise",
+            "wind",
+            "music stops",
+            "music starts",
+            "music swells",
+            "car engine",
+            "ambient noise",
+            "audience cheers",
+            "crowd applause",
+            "laughter and applause",
+            "music continues",
+            "no speech",
+            "silence.",
+            "applause.",
+            "laughter.",
+            "footsteps.",
+        ];
+        RAW.iter().map(|s| (*s).to_string()).collect()
+    })
+}
+
+fn collapse_spaces_trim(s: &str) -> String {
+    let mut t = s.trim().to_string();
+    while t.contains("  ") {
+        t = t.replace("  ", " ");
+    }
+    t
 }
 
 /// Collapse consecutive repeated tokens and sentences — Whisper's hallucination signature
