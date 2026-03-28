@@ -214,6 +214,7 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - [x] Audio Waveform Visualizer
  - [x] Extended Keyboard Shortcuts
 - [ ] Proper file transcription for drag-and-drop files with models like Granite and Whisper
+- [ ] **Speaker diarization** for file transcription: label *who spoke when* on imported audio (meetings, interviews). Requires a diarization backend (e.g. speaker-embedding + clustering ONNX, or a bundled pipeline)—the current file path merges all speech into one buffer before ASR, so speakers cannot be separated yet.
  - [x] Smart Punctuation & Formatting
 - [ ] Auto-Update Mechanism (Tauri updater plugin)
 - [ ] VAD Sensitivity Controller (Adjustable threshold slider + Auto-calibration mode like Discord's automatic voice detection)
@@ -239,3 +240,19 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - **Improvement Suggestions**: The team is actively working to make bracketed outputs less intrusive and to improve denoising quality. Feedback and pull requests are welcome!
 
 - **Parakeet Success Sound on Empty Input**: Occasionally, when using the Parakeet model, the app plays the "success" audio sound even if no speech was detected (i.e., the user said nothing). In these cases, nothing is pasted or saved to the transcription history, but the sound still plays. This is a known issue and is being investigated.
+
+- **Unload model / VRAM release**: Models may not **fully unload** from GPU or system memory in every path when you use **Unload** (UI or tray). Residual sessions or stale “loaded” state can still occur in edge cases (engine switches, CPU/GPU toggles, failed loads). This is under active investigation.
+
+- **Two Granite bundles installed**: If both INT4 and FP16 Granite packages are present, product behavior is not finalized (e.g. explicit picker vs. automatic choice, visibility when CUDA/DirectML is missing, macOS/Core ML story). UX and backend rules still need a clear spec.
+
+- **Tray icon vs. hotkey suppression**: There is no dedicated tray state when **Settings** is open and the global hotkey listener is **suppressed**—users may expect a distinct indicator (e.g. a different color such as red) so it’s obvious the app is not listening for the record shortcut.
+
+- **UI freezes during model switch**: The interface can feel **blocked** while switching or reloading models; loading should stay non-blocking with clear progress instead of locking the whole window.
+
+- **Nemotron trailing text**: With some **Nemotron** (Parakeet) models, words near the **end** of an utterance can be **cut off** (streaming/decoding or endpointing).
+
+- **First-time complexity**: The main UI can feel **overwhelming** for new users; simplification, progressive disclosure, or reorganized menus are open design work.
+
+- **Ticker**: The rotating **ticker** on the main screen may be **removed or reduced**—it reads as decorative/noisy to some users rather than essential.
+
+- **No speaker diarization on file import**: Drag-and-drop / file transcription does not yet attribute text to individual speakers. The pipeline concatenates VAD-selected speech into a single stream before Whisper/Parakeet/Granite run, so multi-speaker meetings are transcribed as one block of text. See Roadmap for planned work.

@@ -768,7 +768,9 @@ pub async fn factory_reset_app_data(
         .store(false, std::sync::atomic::Ordering::Relaxed);
 
     let _ = crate::system_audio::force_unmute();
+    state.model_loaded.store(false, std::sync::atomic::Ordering::Relaxed);
     let _ = crate::tray::update_tray_icon(&app, AppState::Ready);
+    crate::tray::update_tray_model_item(&app, false);
     crate::overlay::hide(&app);
 
     // Explicitly delete CoreML encoder directories (.mlmodelc) from the models

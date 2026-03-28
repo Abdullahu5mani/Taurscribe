@@ -1,3 +1,4 @@
+use crate::state::AudioState;
 use crate::types::AppState;
 use std::sync::atomic::Ordering;
 use tauri::tray::TrayIconBuilder;
@@ -69,13 +70,19 @@ pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> 
     // When ready but no model is loaded, surface that in the tooltip so the
     // user can tell at a glance without opening the app.
     let tooltip = match state {
-        AppState::Ready => {
-            use crate::state::AudioState;
-            let no_model = app.try_state::<AudioState>()
-                .map(|s| !s.model_loaded.load(Ordering::Relaxed))
-                .unwrap_or(false);
-            if no_model { "Taurscribe — No model loaded" } else { "Taurscribe - Ready" }
-        }
+        AppState::Ready => app
+            .try_state::<AudioState>()
+            .map(|s| {
+                let loaded = s.model_loaded.load(Ordering::Relaxed);
+                if loaded {
+                    "Taurscribe - Ready"
+                } else if s.active_engine_has_downloaded_model() {
+                    "Taurscribe — No model loaded"
+                } else {
+                    "Taurscribe — No model found"
+                }
+            })
+            .unwrap_or("Taurscribe - Ready"),
         AppState::Recording => "Taurscribe - Recording...",
         AppState::Processing => "Taurscribe - Processing...",
     };
@@ -96,25 +103,68 @@ pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> 
     Ok(())
 }
 
-/// Replaces the tray context menu so the "unload" item reads "Load Model" or
-/// "Unload Model" depending on whether a model is currently loaded.
+/// Replaces the tray context menu: "Unload Model" when loaded, "Load Model" when a model
+/// exists on disk for the active engine but is not loaded, or a disabled "No model found".
 pub fn update_tray_model_item(app: &AppHandle, loaded: bool) {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     let Some(tray) = app.tray_by_id("main-tray") else { return };
-    let unload_label = if loaded { "Unload Model" } else { "Load Model" };
+    let state = app.state::<AudioState>();
+    let has_downloaded = state.active_engine_has_downloaded_model();
+    let (model_action_label, model_action_enabled) = if loaded {
+        ("Unload Model", true)
+    } else if has_downloaded {
+        ("Load Model", true)
+    } else {
+        ("No model found", false)
+    };
     let Ok(show_item) = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>) else { return };
-    let Ok(unload_item) = MenuItem::with_id(app, "unload", unload_label, true, None::<&str>) else { return };
+    let Ok(unload_item) =
+        MenuItem::with_id(app, "unload", model_action_label, model_action_enabled, None::<&str>)
+    else {
+        return;
+    };
     let Ok(quit_item) = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>) else { return };
     let Ok(separator) = PredefinedMenuItem::separator(app) else { return };
     if let Ok(menu) = Menu::with_items(app, &[&show_item, &unload_item, &separator, &quit_item]) {
         let _ = tray.set_menu(Some(menu));
     }
-    let tooltip = if loaded { "Taurscribe - Ready" } else { "Taurscribe — No model loaded" };
+    let tooltip = if loaded {
+        "Taurscribe - Ready"
+    } else if has_downloaded {
+        "Taurscribe — No model loaded"
+    } else {
+        "Taurscribe — No model found"
+    };
     let _ = tray.set_tooltip(Some(tooltip));
 }
 
+/// After a failed load or switch, align `model_loaded` and tray with whichever engine
+/// actually holds a model (possibly none). Avoids a stuck "loaded" UI when unload
+/// succeeded but the new init failed.
+pub fn reconcile_model_loaded_tray(app: &AppHandle, state: &AudioState) {
+    let loaded = {
+        let w_ok = state
+            .whisper
+            .lock()
+            .map(|g| g.get_current_model().is_some())
+            .unwrap_or(false);
+        let p_ok = state
+            .parakeet
+            .lock()
+            .map(|g| g.get_status().loaded)
+            .unwrap_or(false);
+        let g_ok = state
+            .granite_speech
+            .lock()
+            .map(|g| g.get_status().loaded)
+            .unwrap_or(false);
+        w_ok || p_ok || g_ok
+    };
+    state.model_loaded.store(loaded, Ordering::Relaxed);
+    update_tray_model_item(app, loaded);
+}
+
 fn do_unload(app: &AppHandle) {
-    use crate::state::AudioState;
     use crate::types::ASREngine;
     use tauri::Emitter;
     let state = app.state::<AudioState>();

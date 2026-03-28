@@ -1,5 +1,6 @@
 use crate::parakeet;
 use crate::state::AudioState;
+use crate::tray;
 use crate::types::ASREngine;
 use crate::whisper;
 use std::sync::atomic::Ordering;
@@ -95,17 +96,30 @@ pub async fn switch_model(
         // 6. Load the requested Whisper model.
         let mut whisper = whisper_arc.lock().unwrap();
         let res = whisper.initialize(Some(&mid), force_cpu);
-        *active_engine_arc.lock().unwrap() = ASREngine::Whisper;
+        if res.is_ok() {
+            *active_engine_arc.lock().unwrap() = ASREngine::Whisper;
+        }
         res
     })
     .await
     .map_err(|e| format!("switch_model task failed: {}", e));
     state.engine_loading.store(false, Ordering::Relaxed);
 
-    let msg = result??;
-    state.model_loaded.store(true, Ordering::Relaxed);
-    crate::tray::update_tray_model_item(&app, true);
-    Ok(msg)
+    match result {
+        Ok(Ok(msg)) => {
+            state.model_loaded.store(true, Ordering::Relaxed);
+            tray::update_tray_model_item(&app, true);
+            Ok(msg)
+        }
+        Ok(Err(e)) => {
+            tray::reconcile_model_loaded_tray(&app, &state);
+            Err(e)
+        }
+        Err(join_err) => {
+            tray::reconcile_model_loaded_tray(&app, &state);
+            Err(join_err)
+        }
+    }
 }
 
 /// List Parakeet models
@@ -188,10 +202,21 @@ pub async fn init_parakeet(
     .map_err(|e| format!("init_parakeet task failed: {}", e));
     state.engine_loading.store(false, Ordering::Relaxed);
 
-    let msg = result??;
-    state.model_loaded.store(true, Ordering::Relaxed);
-    crate::tray::update_tray_model_item(&app, true);
-    Ok(msg)
+    match result {
+        Ok(Ok(msg)) => {
+            state.model_loaded.store(true, Ordering::Relaxed);
+            tray::update_tray_model_item(&app, true);
+            Ok(msg)
+        }
+        Ok(Err(e)) => {
+            tray::reconcile_model_loaded_tray(&app, &state);
+            Err(e)
+        }
+        Err(join_err) => {
+            tray::reconcile_model_loaded_tray(&app, &state);
+            Err(join_err)
+        }
+    }
 }
 
 /// Ask for Parakeet status (Model, Type, Backend)

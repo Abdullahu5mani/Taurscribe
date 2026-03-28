@@ -110,4 +110,30 @@ impl AudioState {
             engine_loading: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    /// True when at least one ASR bundle exists on disk for the currently selected engine.
+    /// Used by the tray menu to distinguish "Load Model" from "No model found".
+    pub fn active_engine_has_downloaded_model(&self) -> bool {
+        let engine = match self.active_engine.lock() {
+            Ok(g) => *g,
+            Err(_) => ASREngine::Whisper,
+        };
+        match engine {
+            ASREngine::Whisper => crate::whisper::WhisperManager::list_available_models()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
+            ASREngine::Parakeet => crate::parakeet::ParakeetManager::list_available_models()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
+            ASREngine::GraniteSpeech => {
+                let Ok(models_dir) = crate::utils::get_models_dir() else {
+                    return false;
+                };
+                crate::granite_speech::granite_int4_bundle_ready(&models_dir.join("granite-speech-1b"))
+                    || crate::granite_speech::granite_fp16_bundle_ready(
+                        &models_dir.join("granite-speech-1b-fp16"),
+                    )
+            }
+        }
+    }
 }

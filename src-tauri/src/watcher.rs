@@ -1,7 +1,8 @@
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Starts watching the models directory for changes
 /// Emits "models-changed" event to frontend when files are added/removed
@@ -55,6 +56,11 @@ pub fn start_models_watcher(app_handle: AppHandle) -> Result<(), String> {
                         // Emit event to frontend
                         if let Err(e) = app_handle.emit("models-changed", ()) {
                             eprintln!("[WATCHER] Failed to emit event: {}", e);
+                        }
+
+                        if let Some(st) = app_handle.try_state::<crate::state::AudioState>() {
+                            let loaded = st.model_loaded.load(Ordering::Relaxed);
+                            crate::tray::update_tray_model_item(&app_handle, loaded);
                         }
 
                         last_emit = std::time::Instant::now();
