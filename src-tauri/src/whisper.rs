@@ -349,6 +349,11 @@ impl WhisperManager {
             ));
         }
 
+        // Drop any existing context first so GPU/CPU reload does not briefly hold two models in VRAM.
+        if self.context.is_some() {
+            self.unload();
+        }
+
         println!(
             "[INFO] Loading Whisper model from disk: '{}'{}",
             absolute_path.display(),

@@ -223,6 +223,11 @@ impl GraniteSpeechManager {
             return Err(format!("Missing tokenizer.json (expected at {})", tokenizer_path.display()));
         }
 
+        // Release previous ORT sessions before allocating new ones (VRAM + EP state).
+        if self.encoder_session.is_some() {
+            self.unload();
+        }
+
         // ── Full FP16 bundle (separate download, ~4.6 GB) ─────────────────────
         let enc_fp16 = model_dir.join("audio_encoder_fp16.onnx");
         let emb_fp16 = model_dir.join("embed_tokens_fp16.onnx");
@@ -998,7 +1003,7 @@ impl GraniteSpeechManager {
     }
 }
 
-fn resolve_granite_model_dir(models_dir: &Path, model_id: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn resolve_granite_model_dir(models_dir: &Path, model_id: Option<&str>) -> Result<PathBuf, String> {
     let dir = match model_id {
         None => models_dir.join("granite-speech-1b"),
         Some(id) => {
@@ -1026,6 +1031,15 @@ fn resolve_granite_model_dir(models_dir: &Path, model_id: Option<&str>) -> Resul
         ));
     }
     Ok(dir)
+}
+
+/// Logical model id for a resolved on-disk Granite directory (INT4 / q4f16 vs FP16 bundle).
+pub(crate) fn granite_logical_model_id_for_dir(model_dir: &Path) -> String {
+    if granite_fp16_bundle_ready(model_dir) {
+        "granite-speech-1b-fp16".to_string()
+    } else {
+        "granite-speech-1b".to_string()
+    }
 }
 
 pub(crate) fn granite_int4_bundle_ready(dir: &Path) -> bool {

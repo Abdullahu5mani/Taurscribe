@@ -29,7 +29,11 @@ pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
 
 /// Change the active ASR engine
 #[tauri::command]
-pub fn set_active_engine(state: State<AudioState>, engine: String) -> Result<String, String> {
+pub fn set_active_engine(
+    app: AppHandle,
+    state: State<AudioState>,
+    engine: String,
+) -> Result<String, String> {
     let new_engine = match engine.to_lowercase().as_str() {
         "whisper" => ASREngine::Whisper,
         "parakeet" => ASREngine::Parakeet,
@@ -39,6 +43,8 @@ pub fn set_active_engine(state: State<AudioState>, engine: String) -> Result<Str
 
     *state.active_engine.lock().unwrap() = new_engine;
     println!("[ENGINE] Active engine switched to: {:?}", new_engine);
+    let loaded = state.model_loaded.load(Ordering::Relaxed);
+    tray::update_tray_model_item(&app, loaded);
     Ok(format!("Engine switched to {:?}", new_engine))
 }
 

@@ -155,10 +155,13 @@ pub fn run() {
 
             // Sync initial model state with tray menu item.
             // Whisper auto-loads at startup if a model is present; reflect that here.
+            use std::sync::atomic::Ordering;
             if whisper_loaded_at_startup {
-                use std::sync::atomic::Ordering;
                 app.state::<AudioState>().model_loaded.store(true, Ordering::Relaxed);
                 tray::update_tray_model_item(app.handle(), true);
+            } else {
+                app.state::<AudioState>().model_loaded.store(false, Ordering::Relaxed);
+                tray::update_tray_model_item(app.handle(), false);
             }
 
             // Start Hotkey Listener in Background Thread

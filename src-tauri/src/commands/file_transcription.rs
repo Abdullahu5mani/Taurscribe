@@ -1,3 +1,11 @@
+//! File drag-and-drop transcription (Whisper / Parakeet / Granite).
+//!
+//! **Speaker diarization (planned):** VAD segments are concatenated into one mono buffer
+//! before ASR, so speakers cannot be labeled yet. A future pipeline should keep
+//! time-aligned regions, run diarization (embeddings + clustering or a dedicated model),
+//! transcribe per speaker segment, and return labels (e.g. `Speaker 1:` / timestamps) in
+//! [`FileTranscriptionResult`].
+
 use crate::state::AudioState;
 use crate::types::ASREngine;
 use crate::utils::{clean_transcript, normalize_audio};

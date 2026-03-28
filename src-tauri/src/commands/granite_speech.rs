@@ -1,6 +1,8 @@
 // Tauri commands for the Granite Speech ONNX engine.
 
+use crate::granite_speech::{granite_logical_model_id_for_dir, resolve_granite_model_dir};
 use crate::state::AudioState;
+use crate::tray;
 use std::sync::atomic::Ordering;
 use tauri::State;
 
@@ -71,14 +73,20 @@ pub async fn init_granite_speech(
         let parakeet_loaded = parakeet_arc.lock().unwrap().get_status().loaded;
         let active          = *active_engine_arc.lock().unwrap();
 
-        // 3. Skip only if Granite is active and CPU/GPU preference matches (toggle must reload).
+        // 3. Skip only if the same on-disk bundle + CPU/GPU mode is already active (model id matters for INT4 vs FP16).
         let want_cpu = force_cpu.unwrap_or(false);
         let granite_on_cpu = granite_status.backend == "CPU";
+        let target_logical = crate::utils::get_models_dir()
+            .ok()
+            .and_then(|d| resolve_granite_model_dir(&d, model_id.as_deref()).ok())
+            .map(|dir| granite_logical_model_id_for_dir(&dir));
         if granite_status.loaded
             && active == ASREngine::GraniteSpeech
             && !whisper_loaded
             && !parakeet_loaded
             && granite_on_cpu == want_cpu
+            && target_logical.is_some()
+            && granite_status.model_id.as_deref() == target_logical.as_deref()
         {
             println!("[GRANITE] Model is already loaded — skipping reload");
             return Ok::<String, String>("Already loaded".to_string());
@@ -104,10 +112,21 @@ pub async fn init_granite_speech(
     .map_err(|e| format!("Task join error: {}", e));
     state.engine_loading.store(false, Ordering::Relaxed);
 
-    let msg = result??;
-    state.model_loaded.store(true, Ordering::Relaxed);
-    crate::tray::update_tray_model_item(&app, true);
-    Ok(msg)
+    match result {
+        Ok(Ok(msg)) => {
+            state.model_loaded.store(true, Ordering::Relaxed);
+            tray::update_tray_model_item(&app, true);
+            Ok(msg)
+        }
+        Ok(Err(e)) => {
+            tray::reconcile_model_loaded_tray(&app, &state);
+            Err(e)
+        }
+        Err(join_err) => {
+            tray::reconcile_model_loaded_tray(&app, &state);
+            Err(join_err)
+        }
+    }
 }
 
 /// Get the current status of the Granite Speech engine.
