@@ -2,23 +2,6 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-/// Normalize audio samples to a target RMS level (-20 dBFS = RMS 0.1).
-///
-/// Prevents Whisper from struggling with quiet recordings or clipping on loud ones.
-/// A max gain cap of 10× (20 dB) avoids over-amplifying silence-heavy clips.
-pub fn normalize_audio(samples: &mut [f32]) {
-    if samples.is_empty() {
-        return;
-    }
-    let rms = (samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
-    if rms > 1e-6 {
-        let gain = (0.1_f32 / rms).min(10.0); // target -20 dBFS, cap at +20 dB
-        for s in samples.iter_mut() {
-            *s = (*s * gain).clamp(-1.0, 1.0);
-        }
-    }
-}
-
 /// Post-process raw ASR output: fix punctuation artifacts and remove Whisper hallucinations.
 pub fn clean_transcript(text: &str) -> String {
     let mut cleaned = text.trim().to_string();

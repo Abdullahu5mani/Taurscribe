@@ -497,6 +497,12 @@ function App() {
       await invoke("unload_current_model");
       setLoadedEngine(null);
       setHeaderStatus("Model unloaded — VRAM freed");
+      try {
+        const backend = await invoke<string>("get_backend_info");
+        setBackendInfo(backend);
+      } catch {
+        /* keep previous hardware line */
+      }
       await setTrayState("ready");
     } catch (e) {
       setHeaderStatus(`Failed to unload: ${e}`, 4000);
@@ -579,23 +585,10 @@ function App() {
     }
   }, [isRecording]);
 
-  // --- Ticker ---
-  // macOS fix: Filter ticker phrases to remove "CUDA" from the scrolling
-  // ticker on macOS, since CUDA is not available on Apple Silicon.
-  const filteredTickerPhrases = useMemo(() => {
-    if (!isMac) return TICKER_PHRASES;
-    return TICKER_PHRASES.map(phrase => {
-      const flat = phrase.parts.map(p => p.text).join('');
-      if (flat === 'CUDA · CPU · Metal · flexible backends') {
-        return { parts: [{ text: 'Metal · CPU · flexible backends' }] };
-      }
-      return phrase;
-    });
-  }, [isMac]);
-
+  // --- Ticker (short list in constants/ticker.ts; styled muted in App.css) ---
   const tickerContent = useMemo(() => (
     <>
-      {filteredTickerPhrases.flatMap((phrase, i) => [
+      {TICKER_PHRASES.flatMap((phrase, i) => [
         i > 0 ? <span key={`sep-${i}`} className="ticker-sep"> — </span> : null,
         <span key={i} className="header-ticker-phrase">
           {phrase.parts.map((p, j) => {
@@ -606,7 +599,7 @@ function App() {
         </span>,
       ]).filter(Boolean)}
     </>
-  ), [filteredTickerPhrases]);
+  ), []);
 
   // --- Derived UI state ---
   const noWhisperModel = models.length === 0;
@@ -711,21 +704,23 @@ function App() {
                 </h1>
               </div>
               <div className="header-status">
-                {headerStatusMessage !== null ? (
+                {headerStatusMessage !== null && (
                   <span
                     className={`header-status-message ${headerStatusIsProcessing ? "header-status-message--processing" : ""}`}
                     key={headerStatusMessage}
                   >
                     {colorizedStatus}
                   </span>
-                ) : (
-                  <div className="header-ticker header-ticker-fade-in" aria-hidden="true">
-                    <div className="header-ticker-track">
-                      <span className="header-ticker-segment">{tickerContent}</span>
-                      <span className="header-ticker-segment" aria-hidden="true">{tickerContent}</span>
-                    </div>
-                  </div>
                 )}
+                <div
+                  className={`header-ticker header-ticker-fade-in${headerStatusMessage !== null ? " header-ticker--with-status" : ""}`}
+                  aria-hidden="true"
+                >
+                  <div className="header-ticker-track">
+                    <span className="header-ticker-segment">{tickerContent}</span>
+                    <span className="header-ticker-segment" aria-hidden="true">{tickerContent}</span>
+                  </div>
+                </div>
               </div>
               {/* Eject / Load button — hidden while loading or recording */}
               {!isLoading && !isRecording && !isProcessingTranscript && (
@@ -981,7 +976,6 @@ function App() {
             <div
               className={`status-card whisper ${activeEngine === "whisper" ? "active" : ""}${engineCardRouting("whisper")}`}
               onClick={handleSwitchToWhisper}
-              style={isLoading ? { pointerEvents: 'none' } : {}}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => e.key === "Enter" && handleSwitchToWhisper()}
@@ -1015,7 +1009,6 @@ function App() {
             <div
               className={`status-card parakeet ${activeEngine === "parakeet" ? "active" : ""}${engineCardRouting("parakeet")}`}
               onClick={() => { void handleSwitchToParakeet(); }}
-              style={isLoading ? { pointerEvents: 'none' } : {}}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => e.key === "Enter" && void handleSwitchToParakeet()}
@@ -1049,7 +1042,6 @@ function App() {
             <div
               className={`status-card granite ${activeEngine === "granite_speech" ? "active" : ""}${engineCardRouting("granite_speech")}`}
               onClick={() => { void handleSwitchToGranite(); }}
-              style={isLoading ? { pointerEvents: 'none' } : {}}
               role="button"
               tabIndex={0}
               onKeyDown={(e) => e.key === "Enter" && void handleSwitchToGranite()}

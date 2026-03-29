@@ -28,6 +28,7 @@ taurscribe-runtime/
 generated_logos/
 
 # AI/dev artifacts
+AGENTS.md
 CLAUDE.md
 SKILL.md
 CODE_REFERENCE.md
@@ -65,6 +66,12 @@ src-tauri/linux-libs/*.so.*
 
 # Agents folder
 .agents/
+
+# LibriSpeech / offline eval (local manifests & CSV output)
+manifest.jsonl
+eval_manifest.jsonl
+results.csv
+librispeech_results.csv
 
 # Local scratch / temp
 CODEBASE_GUIDE.pdf

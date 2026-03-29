@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, startTransition } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import type { ModelInfo, ParakeetModelInfo, GraniteSpeechModelInfo } from "./useModels";
@@ -74,10 +74,14 @@ export function useEngineSwitch({
         fn: () => Promise<void>
     ): Promise<void> => {
         isLoadingRef.current = true;
-        setIsLoading(true);
-        setLoadedEngine(null);
-        setLoadingTargetEngine(engine);
-        setLoadingMessage(message);
+        // Non-urgent UI: keep clicks/scroll responsive while the heavy invoke runs.
+        startTransition(() => {
+            setIsLoading(true);
+            setLoadingTargetEngine(engine);
+            setLoadingMessage(message);
+        });
+        // Do not clear loadedEngine here — avoids flashing every engine to "unloaded"
+        // during a switch; handlers update loadedEngine on success.
         setHeaderStatus(message, 60_000);
 
         try {
@@ -85,9 +89,11 @@ export function useEngineSwitch({
             await fn();
         } finally {
             isLoadingRef.current = false;
-            setIsLoading(false);
-            setLoadingMessage("");
-            setLoadingTargetEngine(null);
+            startTransition(() => {
+                setIsLoading(false);
+                setLoadingMessage("");
+                setLoadingTargetEngine(null);
+            });
             setTransferLineFadingOut(true);
             await setTrayState("ready");
         }
@@ -95,7 +101,15 @@ export function useEngineSwitch({
 
     // ── Whisper ───────────────────────────────────────────────────────────
     const handleModelChange = async (modelId: string) => {
-        if (modelId === currentModel && activeEngine === "whisper") return;
+        // Same UI selection can be "unloaded" in VRAM — only skip if Whisper already holds this id.
+        if (modelId === currentModel && activeEngine === "whisper") {
+            try {
+                const loadedId = (await invoke("get_current_model")) as string | null;
+                if (loadedId === modelId) return;
+            } catch {
+                /* proceed to load */
+            }
+        }
         if (isLoading || isLoadingRef.current) {
             console.log("[LOADING] Skipping handleModelChange — already loading");
             return;
@@ -131,7 +145,20 @@ export function useEngineSwitch({
     };
 
     const handleSwitchToWhisper = async () => {
-        if (activeEngine === "whisper") return;
+        if (isLoading || isLoadingRef.current) {
+            console.log("[LOADING] Skipping handleSwitchToWhisper — already loading");
+            return;
+        }
+        // After unload, active tab is still Whisper — must reload, not return (Parakeet/Granite already check `loaded`).
+        if (activeEngine === "whisper") {
+            try {
+                const loadedId = (await invoke("get_current_model")) as string | null;
+                if (loadedId != null && loadedId !== "") return;
+            } catch {
+                /* proceed with loading attempt */
+            }
+        }
+
         if (!currentModel && models.length > 0) {
             await handleModelChange(models[0].id);
         } else if (currentModel) {

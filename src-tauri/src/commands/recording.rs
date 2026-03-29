@@ -2,18 +2,17 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::bounded;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::{RecordingHandle, SendStream};
+use crate::audio_preprocess;
 use crate::context::get_active_context;
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
 use crate::types::{ASREngine, TranscriptionChunk};
-use crate::utils::{
-    clean_transcript, get_recordings_dir, normalize_audio, strip_whitelisted_sound_captions,
-};
+use crate::utils::{clean_transcript, get_recordings_dir, strip_whitelisted_sound_captions};
 
 /// Live Parakeet chunk length in seconds. Very short windows (~1s) hurt accuracy on
 /// streaming CTC; ~4s trades a bit of latency for much better context (see NeMo
@@ -25,14 +24,26 @@ fn parakeet_min_samples(sample_rate: u32) -> usize {
     (sample_rate as f32 * PARAKEET_LIVE_CHUNK_SECS) as usize
 }
 
-/// Normalize speech, then pad with trailing silence up to `PARAKEET_LIVE_CHUNK_SECS` so
-/// short clips get the same encoder context as full chunks.
-fn parakeet_prepare_buffer(buf: &mut Vec<f32>, sample_rate: u32) {
-    normalize_audio(buf);
-    let min_len = parakeet_min_samples(sample_rate);
-    if buf.len() < min_len {
-        buf.resize(min_len, 0.0);
+/// Universal preprocess → 16 kHz, then pad to `PARAKEET_LIVE_CHUNK_SECS` at 16 kHz.
+fn parakeet_preprocess_for_transcribe(
+    buf: &[f32],
+    sample_rate: u32,
+    user_denoise: bool,
+    denoiser_arc: &Arc<Mutex<Option<Denoiser>>>,
+) -> Vec<f32> {
+    let mut guard = denoiser_arc.lock().unwrap();
+    let mut pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
+        buf,
+        sample_rate,
+        user_denoise,
+        guard.as_mut(),
+    );
+    drop(guard);
+    let min_len = parakeet_min_samples(16000);
+    if pcm16.len() < min_len {
+        pcm16.resize(min_len, 0.0);
     }
+    pcm16
 }
 
 /// COMMAND: START RECORDING
@@ -223,6 +234,7 @@ fn start_recording_blocking(
     let session_transcript = state.session_transcript.clone();
     let denoiser_arc = state.denoiser.clone();
     let recording_handle_arc = state.recording_handle.clone();
+    let denoise_enabled_thread = denoise_enabled;
 
     /// VAD-gated transcription — shared logic for Whisper and Granite Speech.
     /// Both managers expose the same `transcribe_chunk(&[f32], u32) -> Result<String, _>` API,
@@ -241,33 +253,39 @@ fn start_recording_blocking(
         emoji: &str,
         app: &AppHandle,
         session_transcript: &std::sync::Arc<std::sync::Mutex<String>>,
+        user_denoise: bool,
+        denoiser_arc: &Arc<Mutex<Option<Denoiser>>>,
     ) -> bool {
-        use crate::utils::normalize_audio;
-        normalize_audio(chunk);
+        let mut denoise_guard = denoiser_arc.lock().unwrap();
+        let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
+            chunk.as_slice(),
+            sample_rate,
+            user_denoise,
+            denoise_guard.as_mut(),
+        );
+        drop(denoise_guard);
 
-        // VAD expects 16 kHz — downsample from device rate before checking
-        let vad_chunk: Vec<f32> = if sample_rate != 16000 {
-            let ratio = sample_rate as f64 / 16000.0;
-            let out_len = (chunk.len() as f64 / ratio) as usize;
-            (0..out_len)
-                .map(|i| chunk[(i as f64 * ratio) as usize])
-                .collect()
-        } else {
-            chunk.clone()
-        };
+        if pcm16.is_empty() {
+            return false;
+        }
 
-        let is_speech = vad.lock().unwrap().is_speech(&vad_chunk).unwrap_or(0.5);
+        // Scan the full chunk frame-by-frame and take the peak speech probability.
+        // Evaluating only the first 32 ms (one Silero frame) of a 6-second chunk is
+        // unreliable: the LSTM needs several warmup frames from a cold state, and speech
+        // can begin anywhere in the window. Threshold 0.25 matches assemble_speech_audio's
+        // second Silero pass (onset=0.28) — Silero returns 0.25–0.40 for clean speech.
+        let is_speech = vad.lock().unwrap().max_speech_prob(&pcm16, usize::MAX);
 
-        if is_speech > 0.35 {
+        if is_speech > 0.25 {
             println!(
                 "[PROCESSING] {} Speech ({:.0}%) - {} transcribing {:.2}s chunk...",
                 emoji,
                 is_speech * 100.0,
                 method,
-                chunk.len() as f32 / sample_rate as f32,
+                pcm16.len() as f32 / 16000.0,
             );
             let start = std::time::Instant::now();
-            match transcribe(chunk, sample_rate) {
+            match transcribe(&pcm16, 16000) {
                 Ok(text) if !text.trim().is_empty() => {
                     let text = if matches!(method, "Whisper" | "GraniteSpeech") {
                         strip_whitelisted_sound_captions(&text)
@@ -345,6 +363,7 @@ fn start_recording_blocking(
                                 &mut chunk, sample_rate, &vad,
                                 &mut transcribe, "Whisper", "🎙️",
                                 &app_clone, &session_transcript,
+                                denoise_enabled_thread, &denoiser_arc,
                             );
                         } else {
                             let mut gs = granite_speech.lock().unwrap();
@@ -354,6 +373,7 @@ fn start_recording_blocking(
                                 &mut chunk, sample_rate, &vad,
                                 &mut transcribe, "GraniteSpeech", "🪨",
                                 &app_clone, &session_transcript,
+                                denoise_enabled_thread, &denoiser_arc,
                             );
                         }
                     }
@@ -370,9 +390,14 @@ fn start_recording_blocking(
                         chunk.clear();
                         chunk.extend_from_slice(&buffer[..parakeet_chunk_size]);
                         buffer.drain(..parakeet_chunk_size);
-                        parakeet_prepare_buffer(&mut chunk, sample_rate);
+                        let buf16 = parakeet_preprocess_for_transcribe(
+                            &chunk,
+                            sample_rate,
+                            denoise_enabled_thread,
+                            &denoiser_arc,
+                        );
                         let start_time = std::time::Instant::now();
-                        match parakeet_manager.lock().unwrap().transcribe_chunk(&chunk, sample_rate) {
+                        match parakeet_manager.lock().unwrap().transcribe_chunk(&buf16, 16000) {
                             Ok(transcript) if !transcript.is_empty() => {
                                 let elapsed = start_time.elapsed().as_millis() as u32;
                                 println!("[TRANSCRIPT] 🦜 \"{}\" (took {}ms)", transcript.trim(), elapsed);
@@ -415,16 +440,21 @@ fn start_recording_blocking(
                 ASREngine::Whisper => {
                     let mut wm = whisper.lock().unwrap();
                     let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript);
+                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
                 }
                 ASREngine::GraniteSpeech => {
                     let mut gs = granite_speech.lock().unwrap();
                     let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript);
+                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
                 }
                 ASREngine::Parakeet => {
-                    parakeet_prepare_buffer(&mut chunk, sample_rate);
-                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&chunk, sample_rate) {
+                    let buf16 = parakeet_preprocess_for_transcribe(
+                        &chunk,
+                        sample_rate,
+                        denoise_enabled_thread,
+                        &denoiser_arc,
+                    );
+                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&buf16, 16000) {
                         if !transcript.is_empty() {
                             session_transcript.lock().unwrap().push_str(&transcript);
                             println!("[TRANSCRIPT] 🦜 (Final) \"{}\"", transcript.trim());
@@ -446,10 +476,18 @@ fn start_recording_blocking(
                     let mut wm = whisper.lock().unwrap();
                     if use_vad {
                         let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript);
+                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
                     } else {
                         println!("[PROCESSING] 🎙️ Short tail ({:.2}s) — bypassing VAD for Whisper", tail_secs);
-                        if let Ok(text) = wm.transcribe_chunk(&buffer, sample_rate) {
+                        let mut dg = denoiser_arc.lock().unwrap();
+                        let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
+                            &buffer,
+                            sample_rate,
+                            denoise_enabled_thread,
+                            dg.as_mut(),
+                        );
+                        drop(dg);
+                        if let Ok(text) = wm.transcribe_chunk(&pcm16, 16000) {
                             let text = strip_whitelisted_sound_captions(&text);
                             if !text.trim().is_empty() {
                                 println!("[TRANSCRIPT] 🎙️ (Tail) \"{}\"", text.trim());
@@ -465,10 +503,18 @@ fn start_recording_blocking(
                     let mut gs = granite_speech.lock().unwrap();
                     if use_vad {
                         let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript);
+                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
                     } else {
                         println!("[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for GraniteSpeech", tail_secs);
-                        if let Ok(text) = gs.transcribe_chunk(&buffer, sample_rate) {
+                        let mut dg = denoiser_arc.lock().unwrap();
+                        let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
+                            &buffer,
+                            sample_rate,
+                            denoise_enabled_thread,
+                            dg.as_mut(),
+                        );
+                        drop(dg);
+                        if let Ok(text) = gs.transcribe_chunk(&pcm16, 16000) {
                             let text = strip_whitelisted_sound_captions(&text);
                             if !text.trim().is_empty() {
                                 println!("[TRANSCRIPT] 🪨 (Tail) \"{}\"", text.trim());
@@ -481,9 +527,13 @@ fn start_recording_blocking(
                     }
                 }
                 ASREngine::Parakeet => {
-                    let mut tail = buffer.clone();
-                    parakeet_prepare_buffer(&mut tail, sample_rate);
-                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&tail, sample_rate) {
+                    let buf16 = parakeet_preprocess_for_transcribe(
+                        &buffer,
+                        sample_rate,
+                        denoise_enabled_thread,
+                        &denoiser_arc,
+                    );
+                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&buf16, 16000) {
                         if !transcript.is_empty() {
                             session_transcript.lock().unwrap().push_str(&transcript);
                             println!("[TRANSCRIPT] 🦜 (Final Partial) \"{}\"", transcript.trim());
@@ -534,16 +584,7 @@ fn start_recording_blocking(
                     data.to_vec()
                 };
 
-                // Denoise on the transcriber path only (file writer keeps original)
-                let transcriber_data = if let Ok(mut guard) = denoiser_arc.try_lock() {
-                    if let Some(ref mut denoiser) = *guard {
-                        denoiser.process(&mono_data)
-                    } else {
-                        mono_data
-                    }
-                } else {
-                    mono_data
-                };
+                // RNNoise + universal chain run in the transcriber thread (48 kHz → 16 kHz order).
 
                 // Store audio level in atomic for the emitter thread to pick up.
                 // Only compute every ~5 callbacks to avoid unnecessary work.
@@ -554,7 +595,7 @@ fn start_recording_blocking(
                     audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
                 }
 
-                whisper_tx_clone.try_send(transcriber_data).ok();
+                whisper_tx_clone.try_send(mono_data).ok();
             },
             move |err| {
                 eprintln!("[ERROR] Audio input stream error: {}", err);
@@ -1168,8 +1209,8 @@ fn stop_recording_blocking(
         // Pad 400ms of silence so trailing words aren't clipped by VAD or Whisper
         audio_data.extend(std::iter::repeat(0.0_f32).take(16000 * 400 / 1000));
 
-        // Normalize the full recording before VAD + final transcription
-        normalize_audio(&mut audio_data);
+        // Universal preprocess on the saved 16 kHz WAV (same chain as file speech assembly).
+        audio_preprocess::preprocess_assembled_speech_16k(&mut audio_data);
 
         println!("[PROCESSING] Applying VAD filtering for Whisper...");
         let mut vad = vad_arc.lock().unwrap();
@@ -1183,7 +1224,7 @@ fn stop_recording_blocking(
         } else {
             (500_usize, 0.35_f32)
         };
-        let timestamps = vad.get_speech_timestamps_with_threshold(&audio_data, vad_padding, vad_threshold)?;
+        let timestamps = vad.get_speech_timestamps_hysteresis(&audio_data, vad_padding, vad_threshold, vad_threshold * 0.5)?;
 
         let mut clean = Vec::with_capacity(audio_data.len());
         if timestamps.is_empty() {

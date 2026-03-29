@@ -356,11 +356,24 @@ body {
 .header-status {
   flex: 1;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
+  gap: 2px;
   min-width: 0;
   overflow: hidden;
   padding: 0 12px;
+}
+
+/* When a status line is shown (e.g. model switch), keep a dim ticker underneath */
+.header-ticker--with-status {
+  opacity: 0.4;
+  max-height: 1.15rem;
+}
+
+.header-ticker--with-status .header-ticker-segment {
+  font-size: 0.65rem;
+  color: rgba(100, 104, 120, 0.55);
 }
 
 /* Notification message: fade in when shown */
@@ -406,65 +419,63 @@ body {
   100% { opacity: 1; }
 }
 
-/* Ticker tape strip (idle): fades in when returning from message */
+/* Ticker tape strip (idle): muted, slow drift — not a focal element */
 .header-ticker {
-  width: 100%;  
+  width: 100%;
   overflow: hidden;
-  mask-image: linear-gradient(to right, transparent 0%, black 6%, black 94%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 6%, black 94%, transparent 100%);
+  opacity: 0.72;
+  mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
 }
 
 .header-ticker-fade-in {
-  animation: header-ticker-fade-in 0.5s ease-out;
+  animation: header-ticker-fade-in 0.65s ease-out;
 }
 
 .header-ticker-track {
   display: inline-flex;
   white-space: nowrap;
-  animation: header-ticker-scroll 100s linear infinite;
+  animation: header-ticker-scroll 220s linear infinite;
 }
 
 .header-ticker-segment {
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  padding: 0 1.5em;
-  font-size: var(--font-sm);
-  color: rgba(160, 160, 175, 0.75);
-  letter-spacing: 0.01em;
+  padding: 0 1.75em;
+  font-size: 0.72rem;
+  color: rgba(118, 122, 138, 0.58);
+  letter-spacing: 0.02em;
+  font-weight: 400;
 }
 
 .header-ticker-phrase {
   white-space: nowrap;
 }
 
-/* Accent words in ticker */
+/* Accent words — slightly lifted from body text, not LED-bright */
 .ticker-accent {
-  color: var(--accent-primary);
-  font-weight: 600;
+  color: color-mix(in srgb, var(--accent-primary) 42%, rgba(130, 132, 145, 0.9));
+  font-weight: 500;
 }
 
-/* Whisper (OpenAI) — blue */
 .ticker-whisper {
-  color: var(--whisper-color);
-  font-weight: 600;
+  color: color-mix(in srgb, var(--whisper-color) 38%, rgba(130, 132, 145, 0.9));
+  font-weight: 500;
 }
 
-/* Parakeet (NVIDIA) — green */
 .ticker-parakeet {
-  color: var(--parakeet-color);
-  font-weight: 600;
+  color: color-mix(in srgb, var(--parakeet-color) 38%, rgba(130, 132, 145, 0.9));
+  font-weight: 500;
 }
 
-/* Granite (IBM) — violet */
 .ticker-granite {
-  color: var(--granite-color);
-  font-weight: 600;
+  color: color-mix(in srgb, var(--granite-color) 38%, rgba(130, 132, 145, 0.9));
+  font-weight: 500;
 }
 
-/* Separator between phrases – subtle gray so it doesn’t compete with content */
 .ticker-sep {
-  color: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.09);
   font-weight: 300;
   user-select: none;
 }
@@ -1428,19 +1439,6 @@ body {
   justify-content: center;
   align-items: center;
   padding: 1rem 0;
-}
-
-/* Ticker Tape Signal Glitch */
-@keyframes ticker-glitch {
-  0% { transform: translateX(2px) scaleY(1.1); opacity: 0.5; }
-  25% { transform: translateX(-2px) scaleY(0.9); opacity: 0.8; }
-  50% { transform: translateX(1px) scaleY(1.05); opacity: 0.6; }
-  75% { transform: translateX(-1px) scaleY(0.95); opacity: 0.9; }
-  100% { transform: translateX(0) scaleY(1); opacity: 1; }
-}
-
-.header-ticker-fade-in {
-  animation: header-ticker-fade-in 0.5s ease-out, ticker-glitch 0.15s steps(4);
 }
 
 /* REC Button Deep Socket */

@@ -20,6 +20,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use crate::granite_features;
+use crate::utils::strip_whitelisted_sound_captions;
 
 /// FP16 (`granite-speech-1b-fp16`) has no CPU path — ORT CPU EP is unsupported for this bundle.
 fn err_granite_fp16_gpu_required(detail: &str) -> String {
@@ -344,19 +345,12 @@ impl GraniteSpeechManager {
         } else {
             #[cfg(target_os = "windows")]
             {
-                // Prefer DirectML (full GPU). If it fails (e.g. DML E_INVALIDARG on some ops), fall back to
-                // CUDA hybrid on x86_64, then CPU.
+                // On x86_64, try CUDA **before** DirectML for q4 / q4f16. DirectML session creation often succeeds
+                // but the Granite audio encoder then fails at inference (Reshape / dynamic seq len) on some
+                // drivers; CUDA hybrid encoder+embed is the reliable path when an NVIDIA GPU is present.
+                // DirectML remains first choice on ARM64 Windows (no CUDA in this build).
                 let mut picked: Option<(GpuBackend, Session, Session, Session)> = None;
 
-                if has_q4f16 {
-                    match self.try_create_sessions_directml(&enc_q4f16, &emb_q4f16, &dec_q4f16) {
-                        Ok((e, em, d)) => {
-                            println!("[GRANITE] Using q4f16 on DirectML");
-                            picked = Some((GpuBackend::DirectML, e, em, d));
-                        }
-                        Err(e) => println!("[GRANITE] q4f16 DirectML failed: {}", e),
-                    }
-                }
                 #[cfg(target_arch = "x86_64")]
                 if picked.is_none() && has_q4f16 {
                     match self.try_create_sessions_cuda(&enc_q4f16, &emb_q4f16, &dec_q4f16) {
@@ -367,13 +361,13 @@ impl GraniteSpeechManager {
                         Err(e) => println!("[GRANITE] q4f16 CUDA failed: {}", e),
                     }
                 }
-                if picked.is_none() && has_q4 {
-                    match self.try_create_sessions_directml(&encoder_path, &embed_path, &decoder_path) {
+                if picked.is_none() && has_q4f16 {
+                    match self.try_create_sessions_directml(&enc_q4f16, &emb_q4f16, &dec_q4f16) {
                         Ok((e, em, d)) => {
-                            println!("[GRANITE] Using INT4 on DirectML");
+                            println!("[GRANITE] Using q4f16 on DirectML");
                             picked = Some((GpuBackend::DirectML, e, em, d));
                         }
-                        Err(e) => println!("[GRANITE] INT4 DirectML failed: {}", e),
+                        Err(e) => println!("[GRANITE] q4f16 DirectML failed: {}", e),
                     }
                 }
                 #[cfg(target_arch = "x86_64")]
@@ -384,6 +378,15 @@ impl GraniteSpeechManager {
                             picked = Some((GpuBackend::Cuda, e, em, d));
                         }
                         Err(e) => println!("[GRANITE] INT4 CUDA failed: {}", e),
+                    }
+                }
+                if picked.is_none() && has_q4 {
+                    match self.try_create_sessions_directml(&encoder_path, &embed_path, &decoder_path) {
+                        Ok((e, em, d)) => {
+                            println!("[GRANITE] Using INT4 on DirectML");
+                            picked = Some((GpuBackend::DirectML, e, em, d));
+                        }
+                        Err(e) => println!("[GRANITE] INT4 DirectML failed: {}", e),
                     }
                 }
 
@@ -518,12 +521,13 @@ impl GraniteSpeechManager {
         let duration = start.elapsed();
         let audio_duration = audio.len() as f32 / 16000.0;
         let speedup = audio_duration / duration.as_secs_f32();
+        let out = strip_whitelisted_sound_captions(text.trim());
         println!(
             "[GRANITE] Transcribed {:.2}s audio in {:.0}ms | Speed: {:.1}x | \"{}\"",
-            audio_duration, duration.as_millis(), speedup, text.trim()
+            audio_duration, duration.as_millis(), speedup, out.trim()
         );
 
-        Ok(text.trim().to_string())
+        Ok(out)
     }
 
     // ─────────────────────── Session Creation ─────────────────────────────────
@@ -643,17 +647,61 @@ impl GraniteSpeechManager {
         let decoder = self.decoder_session.as_mut().ok_or("Decoder not loaded")?;
         let tokenizer = self.tokenizer.as_ref().ok_or("Tokenizer not loaded")?;
 
-        // Chat template from tokenizer_config.json (granite-4.0-1b-speech):
-        //   {% if role == 'user' %}USER: {{ content }}\n ASSISTANT:{% endif %}
-        // The <|audio|> placeholder is placed inside the user content, before the question.
-        let prompt = "USER: <|audio|>can you transcribe the speech into a written format?\n ASSISTANT:".to_string();
+        let audio_seq_len = audio_embeddings.shape()[1];
+        if audio_seq_len > MAX_GRANITE_DECODER_SEQ_LEN {
+            return Err(format!(
+                "Granite audio embedding seq {} exceeds cap {}",
+                audio_seq_len, MAX_GRANITE_DECODER_SEQ_LEN
+            ));
+        }
+
+        // Match HuggingFace `GraniteSpeechProcessor`: repeat `<|audio|>` once per encoder time step
+        // before tokenization, then scatter one encoder frame per audio token into `inputs_embeds`
+        // (`get_merged_audio_embeddings`). A single `<|audio|>` breaks BPE alignment and makes the
+        // decoder predict <|end_of_text|> immediately.
+        // Chat template: USER: {{ content }}\n ASSISTANT:
+        const AUDIO_MARKER: &str = "<|audio|>";
+        let audio_segment: String = std::iter::repeat(AUDIO_MARKER)
+            .take(audio_seq_len)
+            .collect();
+        let prompt = format!(
+            "USER: {audio_segment}can you transcribe the speech into a written format?\n ASSISTANT:"
+        );
         let encoding = tokenizer
             .encode(prompt, false)
             .map_err(|e| format!("Tokenize error: {}", e))?;
         let prompt_ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
-        println!("[GRANITE] Prompt tokens ({}): {:?}", prompt_ids.len(), &prompt_ids[..prompt_ids.len().min(10)]);
+        println!(
+            "[GRANITE] Prompt tokens: {} ({} × <|audio|> in text)",
+            prompt_ids.len(),
+            audio_seq_len
+        );
 
-        // Embed the prompt tokens
+        let audio_positions: Vec<usize> = prompt_ids
+            .iter()
+            .enumerate()
+            .filter(|(_, &id)| id == AUDIO_TOKEN_INDEX)
+            .map(|(i, _)| i)
+            .collect();
+        if audio_positions.len() != audio_seq_len {
+            return Err(format!(
+                "Granite prompt: expected {} <|audio|> token ids ({}), got {} — tokenizer/layout mismatch",
+                audio_seq_len,
+                AUDIO_MARKER,
+                audio_positions.len()
+            ));
+        }
+        let audio_start = audio_positions[0];
+        for (k, &p) in audio_positions.iter().enumerate() {
+            if p != audio_start + k {
+                return Err(format!(
+                    "Granite prompt: <|audio|> tokens not consecutive at index {}",
+                    k
+                ));
+            }
+        }
+
+        // Embed the full prompt (audio slots use the <|audio|> row from embed_tokens; we overwrite)
         let token_tensor = make_tensor_i64(vec![1, prompt_ids.len()], prompt_ids.clone())?;
 
         let embed_outputs = embed_session
@@ -674,45 +722,13 @@ impl GraniteSpeechManager {
             ));
         }
 
-        // Build text embeddings as Array3 for indexing
-        let text_emb = Array3::from_shape_vec((1, text_seq_len, text_hidden), text_data.to_vec())
-            .map_err(|e| format!("Text emb reshape: {}", e))?;
+        let mut combined_embeddings =
+            Array3::from_shape_vec((1, text_seq_len, text_hidden), text_data.to_vec())
+                .map_err(|e| format!("Text emb reshape: {}", e))?;
 
-        // Find the audio token position and replace with audio embeddings
-        let audio_token_pos = prompt_ids.iter().position(|&id| id == AUDIO_TOKEN_INDEX);
-        let audio_seq_len = audio_embeddings.shape()[1];
-        if audio_seq_len > MAX_GRANITE_DECODER_SEQ_LEN {
-            return Err(format!(
-                "Granite audio embedding seq {} exceeds cap {}",
-                audio_seq_len, MAX_GRANITE_DECODER_SEQ_LEN
-            ));
-        }
-
-        let combined_embeddings = if let Some(pos) = audio_token_pos {
-            let total_len = text_seq_len - 1 + audio_seq_len;
-            let mut combined = Array3::<f32>::zeros((1, total_len, HIDDEN_SIZE));
-
-            combined.slice_mut(s![0, ..pos, ..])
-                .assign(&text_emb.slice(s![0, ..pos, ..]));
-            combined.slice_mut(s![0, pos..pos + audio_seq_len, ..])
-                .assign(&audio_embeddings.slice(s![0, .., ..]));
-            let after_audio = pos + audio_seq_len;
-            let remaining = text_seq_len - pos - 1;
-            combined.slice_mut(s![0, after_audio..after_audio + remaining, ..])
-                .assign(&text_emb.slice(s![0, pos + 1.., ..]));
-
-            combined
-        } else {
-            let total_len = audio_seq_len + text_seq_len;
-            let mut combined = Array3::<f32>::zeros((1, total_len, HIDDEN_SIZE));
-
-            combined.slice_mut(s![0, ..audio_seq_len, ..])
-                .assign(&audio_embeddings.slice(s![0, .., ..]));
-            combined.slice_mut(s![0, audio_seq_len.., ..])
-                .assign(&text_emb.slice(s![0, .., ..]));
-
-            combined
-        };
+        combined_embeddings
+            .slice_mut(s![0, audio_start..audio_start + audio_seq_len, ..])
+            .assign(&audio_embeddings.slice(s![0, .., ..]));
 
         let seq_len = combined_embeddings.shape()[1];
         if seq_len > MAX_GRANITE_DECODER_SEQ_LEN {
