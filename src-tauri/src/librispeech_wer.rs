@@ -1,6 +1,43 @@
 //! Text normalization and word-error rate for LibriSpeech offline eval.
 //! Same normalization is applied to reference and hypothesis before token alignment.
 
+use std::path::{Path, PathBuf};
+
+/// `reader-chapter-utt` → `reader/chapter/reader-chapter-utt.flac` (LibriSpeech layout).
+pub fn librispeech_flac_relative_path(utt_id: &str) -> Option<PathBuf> {
+    let parts: Vec<&str> = utt_id.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    Some(
+        PathBuf::from(parts[0])
+            .join(parts[1])
+            .join(format!("{utt_id}.flac")),
+    )
+}
+
+/// Prefer the manifest `flac_path` when it still exists; otherwise look under `audio_root`
+/// using the standard LibriSpeech directory layout (portable across machines).
+pub fn resolve_librispeech_flac(
+    flac_path: &str,
+    utt_id: &str,
+    audio_root: Option<&Path>,
+) -> PathBuf {
+    let p = Path::new(flac_path);
+    if p.is_file() {
+        return p.to_path_buf();
+    }
+    if let Some(root) = audio_root {
+        if let Some(rel) = librispeech_flac_relative_path(utt_id) {
+            let c = root.join(rel);
+            if c.is_file() {
+                return c;
+            }
+        }
+    }
+    p.to_path_buf()
+}
+
 /// Lowercase, map non-alphanumeric (except apostrophe) to spaces, collapse whitespace.
 pub fn normalize_for_wer(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
@@ -57,6 +94,7 @@ fn levenshtein_tokens(a: &[String], b: &[String]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn wer_perfect() {
@@ -70,5 +108,11 @@ mod tests {
         let r = normalize_for_wer("a b c");
         let h = normalize_for_wer("a x c");
         assert!((word_error_rate(&r, &h) - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn librispeech_relative_path() {
+        let rel = librispeech_flac_relative_path("908-157963-0005").unwrap();
+        assert_eq!(rel, PathBuf::from("908/157963/908-157963-0005.flac"));
     }
 }

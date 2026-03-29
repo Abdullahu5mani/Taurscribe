@@ -4,7 +4,7 @@
 //! as `commands/file_transcription.rs: transcribe_file_blocking`:
 //!
 //!   decode → mono mix → resample 16kHz → trim edges
-//!     → assemble_speech_audio (Silero VAD) → preprocess_assembled_speech_16k
+//!     → assemble_speech_audio (energy VAD) → preprocess_assembled_speech_16k
 //!     → chunked engine call → clean_transcript → WER
 //!
 //! Usage:
@@ -12,11 +12,13 @@
 //!     cargo test file_drop_accuracy -- --ignored --nocapture
 //!
 //! Skip (CI / no models): TAURSCRIBE_ASR_SMOKE_SKIP=1
+//!
+//! Stale manifest paths: set `TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT` to LibriSpeech `test-clean`.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use taurscribe_lib::audio_decode;
 use taurscribe_lib::audio_preprocess;
@@ -24,7 +26,7 @@ use taurscribe_lib::granite_speech::GraniteSpeechManager;
 use taurscribe_lib::librispeech_wer;
 use taurscribe_lib::parakeet::ParakeetManager;
 use taurscribe_lib::utils::clean_transcript;
-use taurscribe_lib::vad::{assemble_speech_audio, VADManager};
+use taurscribe_lib::vad::assemble_speech_audio;
 use taurscribe_lib::whisper::WhisperManager;
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
@@ -71,12 +73,8 @@ fn prepare_file_audio(path: &Path) -> Result<Vec<f32>, String> {
         return Err("buffer empty after edge trim".into());
     }
 
-    // VAD assembly — fresh instance per utterance, no cancel
-    let vad = Arc::new(Mutex::new(
-        VADManager::new().map_err(|e| format!("VADManager::new: {e}"))?,
-    ));
     let cancel = Arc::new(AtomicBool::new(false));
-    let mut speech = assemble_speech_audio(&mono, &vad, Some(&cancel))?;
+    let mut speech = assemble_speech_audio(&mono, Some(&cancel))?;
 
     if speech.is_empty() {
         return Err("VAD found no speech".into());
@@ -171,6 +169,10 @@ fn file_drop_accuracy() {
     let rows = load_manifest(&manifest_path);
     assert!(!rows.is_empty(), "manifest is empty");
 
+    let audio_root: Option<std::path::PathBuf> = std::env::var("TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT")
+        .ok()
+        .map(Into::into);
+
     let mut results: HashMap<&str, Vec<f64>> = HashMap::new();
 
     // ── Whisper ───────────────────────────────────────────────────────────────
@@ -181,7 +183,12 @@ fn file_drop_accuracy() {
                 Ok(_) => {
                     let wers = results.entry("whisper").or_default();
                     for row in &rows {
-                        let pcm = match prepare_file_audio(Path::new(&row.flac_path)) {
+                        let flac = librispeech_wer::resolve_librispeech_flac(
+                            &row.flac_path,
+                            &row.utt_id,
+                            audio_root.as_deref(),
+                        );
+                        let pcm = match prepare_file_audio(&flac) {
                             Ok(p) => p,
                             Err(e) => { eprintln!("[whisper] {} audio error: {e}", row.utt_id); continue; }
                         };
@@ -211,7 +218,12 @@ fn file_drop_accuracy() {
                 Ok(_) => {
                     let wers = results.entry("parakeet").or_default();
                     for row in &rows {
-                        let pcm = match prepare_file_audio(Path::new(&row.flac_path)) {
+                        let flac = librispeech_wer::resolve_librispeech_flac(
+                            &row.flac_path,
+                            &row.utt_id,
+                            audio_root.as_deref(),
+                        );
+                        let pcm = match prepare_file_audio(&flac) {
                             Ok(p) => p,
                             Err(e) => { eprintln!("[parakeet] {} audio error: {e}", row.utt_id); continue; }
                         };
@@ -239,7 +251,12 @@ fn file_drop_accuracy() {
         Ok(_) => {
             let wers = results.entry("granite").or_default();
             for row in &rows {
-                let pcm = match prepare_file_audio(Path::new(&row.flac_path)) {
+                let flac = librispeech_wer::resolve_librispeech_flac(
+                    &row.flac_path,
+                    &row.utt_id,
+                    audio_root.as_deref(),
+                );
+                let pcm = match prepare_file_audio(&flac) {
                     Ok(p) => p,
                     Err(e) => { eprintln!("[granite] {} audio error: {e}", row.utt_id); continue; }
                 };

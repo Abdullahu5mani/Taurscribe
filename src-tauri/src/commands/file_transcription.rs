@@ -78,7 +78,6 @@ pub async fn transcribe_file(
     let whisper = state.whisper.clone();
     let parakeet = state.parakeet.clone();
     let granite = state.granite_speech.clone();
-    let vad = state.vad.clone();
     let active_engine = state.active_engine.lock().unwrap().clone();
     let path_for_task = path.clone();
 
@@ -90,7 +89,6 @@ pub async fn transcribe_file(
             whisper,
             parakeet,
             granite,
-            vad,
             cancel,
         )
     })
@@ -141,7 +139,6 @@ fn transcribe_file_blocking(
     whisper: Arc<Mutex<crate::whisper::WhisperManager>>,
     parakeet: Arc<Mutex<crate::parakeet::ParakeetManager>>,
     granite: Arc<Mutex<crate::granite_speech::GraniteSpeechManager>>,
-    vad: Arc<Mutex<crate::vad::VADManager>>,
     cancel: Arc<AtomicBool>,
 ) -> Result<FileTranscriptionResult, String> {
     let transcribe_start = std::time::Instant::now();
@@ -187,7 +184,7 @@ fn transcribe_file_blocking(
         mono = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
     }
 
-    // Trim long edge silence before VAD (keeps Silero on natural levels).
+    // Trim long edge silence before energy VAD.
     audio_preprocess::trim_file_buffer_edges_16k(&mut mono);
 
     // Capture audio duration after resampling (always 16kHz at this point).
@@ -197,11 +194,9 @@ fn transcribe_file_blocking(
 
     emit_progress(app, path, 30, "transcribing", None);
 
-    // ── VAD: only feed speech to Whisper / Granite (file drop) ────────────────
-    // Silero + hysteresis detect where human speech starts/stops; silent regions
-    // are never passed to the ASR — only concatenated speech segments from the
-    // original mono buffer. No "send whole file" fallback.
-    let mut speech_audio = crate::vad::assemble_speech_audio(&mono, &vad, Some(&cancel)).map_err(|e| {
+    // ── Energy VAD: only feed detected speech to ASR (file drop) ───────────────
+    // Adaptive RMS thresholding finds speech regions; silent gaps are dropped.
+    let mut speech_audio = crate::vad::assemble_speech_audio(&mono, Some(&cancel)).map_err(|e| {
         if e == "Transcription cancelled" {
             emit_progress(
                 app,

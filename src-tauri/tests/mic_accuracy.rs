@@ -17,6 +17,9 @@
 //!     cargo test mic_accuracy -- --ignored --nocapture
 //!
 //! Skip (CI / no models): TAURSCRIBE_ASR_SMOKE_SKIP=1
+//!
+//! If manifest FLAC paths are stale, set `TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT` to your
+//! LibriSpeech `test-clean` directory (same as `librispeech_eval --audio-root`).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -189,6 +192,10 @@ fn mic_accuracy() {
     let rows = load_manifest(&manifest_path);
     assert!(!rows.is_empty(), "manifest is empty");
 
+    let audio_root: Option<std::path::PathBuf> = std::env::var("TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT")
+        .ok()
+        .map(Into::into);
+
     // One VAD per engine run; reset_state() called before each utterance
     let vad = Arc::new(Mutex::new(
         VADManager::new().expect("VADManager::new failed"),
@@ -204,7 +211,12 @@ fn mic_accuracy() {
                 Ok(_) => {
                     let wers = results.entry("whisper").or_default();
                     for row in &rows {
-                        let (samples, rate) = match load_native_mono(Path::new(&row.flac_path)) {
+                        let flac = librispeech_wer::resolve_librispeech_flac(
+                            &row.flac_path,
+                            &row.utt_id,
+                            audio_root.as_deref(),
+                        );
+                        let (samples, rate) = match load_native_mono(&flac) {
                             Ok(v) => v,
                             Err(e) => { eprintln!("[whisper] {} audio error: {e}", row.utt_id); continue; }
                         };
@@ -237,7 +249,12 @@ fn mic_accuracy() {
                 Ok(_) => {
                     let wers = results.entry("parakeet").or_default();
                     for row in &rows {
-                        let (samples, rate) = match load_native_mono(Path::new(&row.flac_path)) {
+                        let flac = librispeech_wer::resolve_librispeech_flac(
+                            &row.flac_path,
+                            &row.utt_id,
+                            audio_root.as_deref(),
+                        );
+                        let (samples, rate) = match load_native_mono(&flac) {
                             Ok(v) => v,
                             Err(e) => { eprintln!("[parakeet] {} audio error: {e}", row.utt_id); continue; }
                         };
@@ -262,7 +279,12 @@ fn mic_accuracy() {
         Ok(_) => {
             let wers = results.entry("granite").or_default();
             for row in &rows {
-                let (samples, rate) = match load_native_mono(Path::new(&row.flac_path)) {
+                let flac = librispeech_wer::resolve_librispeech_flac(
+                    &row.flac_path,
+                    &row.utt_id,
+                    audio_root.as_deref(),
+                );
+                let (samples, rate) = match load_native_mono(&flac) {
                     Ok(v) => v,
                     Err(e) => { eprintln!("[granite] {} audio error: {e}", row.utt_id); continue; }
                 };
