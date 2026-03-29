@@ -918,8 +918,9 @@ pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), Stri
         .map_err(|e| format!("Failed to open folder: {}", e))
 }
 
-/// Unloads whichever ASR engine is currently active, freeing VRAM/RAM without
-/// requiring the user to quit the app. Returns the name of the engine that was unloaded.
+/// Frees VRAM by unloading every ASR engine that still holds weights (Whisper / Parakeet /
+/// Granite). Does not depend on `active_engine`, which can disagree with actual load state.
+/// Returns a comma-separated list of unloaded engines, or `"none"` if nothing was loaded.
 #[tauri::command]
 pub async fn unload_current_model(
     state: tauri::State<'_, AudioState>,
@@ -932,25 +933,14 @@ pub async fn unload_current_model(
         return Err("A model is currently loading — please wait for it to finish".to_string());
     }
 
-    let active = state.active_engine.lock().map_err(|e| e.to_string())?;
-    let engine_name = match *active {
-        ASREngine::Whisper => {
-            let mut w = state.whisper.lock().map_err(|e| e.to_string())?;
-            w.unload();
-            "whisper"
-        }
-        ASREngine::Parakeet => {
-            let mut p = state.parakeet.lock().map_err(|e| e.to_string())?;
-            p.unload();
-            "parakeet"
-        }
-        ASREngine::GraniteSpeech => {
-            let mut g = state.granite_speech.lock().map_err(|e| e.to_string())?;
-            g.unload();
-            "granite_speech"
-        }
-    };
-    state.model_loaded.store(false, Ordering::Relaxed);
-    crate::tray::update_tray_model_item(&app, false);
-    Ok(engine_name.to_string())
+    let unloaded = state.unload_all_loaded_asr()?;
+    crate::tray::reconcile_model_loaded_tray(&app, &state);
+    let _ = app.emit("model-unloaded", ());
+    let _ = crate::tray::update_tray_icon(&app, AppState::Ready);
+
+    if unloaded.is_empty() {
+        Ok("none".to_string())
+    } else {
+        Ok(unloaded.join(","))
+    }
 }

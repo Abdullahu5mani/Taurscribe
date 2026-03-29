@@ -3,6 +3,7 @@ use rubato::{
 }; // Import tools for resampling audio (changing sample rate)
 use std::ffi::c_void; // Import raw pointer types for interacting with C code
 use std::os::raw::c_char; // Import C-style character types
+use crate::utils::strip_whitelisted_sound_captions;
 use whisper_rs::{
     print_system_info, set_log_callback, FullParams, SamplingStrategy, WhisperContext,
     WhisperContextParameters,
@@ -558,6 +559,9 @@ impl WhisperManager {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        // OpenAI Whisper: suppress_non_speech_tokens — masks tokenizer “event” tokens
+        // (music, applause, …) during decoding. See whisper/tokenizer.py in upstream Whisper.
+        params.set_suppress_nst(true);
 
         // ── Speed optimizations for live chunked transcription ──────────────
         // Dynamic audio context: whisper's encoder attention is O(n²) in frame
@@ -601,7 +605,9 @@ impl WhisperManager {
             }
         }
 
-        let final_text = transcript.trim().to_string();
+        // Strip caption tags before context prompt — raw "(music)" in initial_prompt
+        // strongly biases the next chunk toward the same hallucination.
+        let final_text = strip_whitelisted_sound_captions(transcript.trim());
 
         // Update our "memory" so next chunk uses this text as context
         // NOTE: We accumulate text throughout the whole recording session
@@ -671,6 +677,7 @@ impl WhisperManager {
         params.set_token_timestamps(false);
         params.set_no_timestamps(true);  // timestamps never displayed; skip their generation
         params.set_max_tokens(256);      // reasonable cap for a full recording pass
+        params.set_suppress_nst(true);
 
         // Inject active-app context as initial prompt so Whisper favours
         // domain-relevant vocabulary (e.g. code identifiers, document titles).
@@ -706,7 +713,7 @@ impl WhisperManager {
             speedup
         );
 
-        Ok(transcript.trim().to_string())
+        Ok(strip_whitelisted_sound_captions(transcript.trim()))
     }
 
     /// Helper: Load and prepare a WAV file for VAD/Whisper

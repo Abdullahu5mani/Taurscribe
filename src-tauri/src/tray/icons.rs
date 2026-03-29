@@ -165,7 +165,6 @@ pub fn reconcile_model_loaded_tray(app: &AppHandle, state: &AudioState) {
 }
 
 fn do_unload(app: &AppHandle) {
-    use crate::types::ASREngine;
     use tauri::Emitter;
     let state = app.state::<AudioState>();
 
@@ -175,17 +174,13 @@ fn do_unload(app: &AppHandle) {
         return;
     }
 
-    if let Ok(active) = state.active_engine.lock() {
-        match *active {
-            ASREngine::Whisper => { if let Ok(mut w) = state.whisper.lock() { w.unload(); } }
-            ASREngine::Parakeet => { if let Ok(mut p) = state.parakeet.lock() { p.unload(); } }
-            ASREngine::GraniteSpeech => { if let Ok(mut g) = state.granite_speech.lock() { g.unload(); } }
-        }
+    if let Err(e) = state.unload_all_loaded_asr() {
+        eprintln!("[TRAY] Unload failed: {e}");
+        return;
     }
-    state.model_loaded.store(false, Ordering::Relaxed);
+    reconcile_model_loaded_tray(app, &state);
     let _ = app.emit("model-unloaded", ());
     let _ = crate::tray::update_tray_icon(app, AppState::Ready);
-    update_tray_model_item(app, false);
 }
 
 /// Setup the system tray icon and menu (called from `setup()` closure)

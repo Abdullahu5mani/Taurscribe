@@ -136,4 +136,34 @@ impl AudioState {
             }
         }
     }
+
+    /// Drops weights for every ASR engine that still has a model in memory.
+    /// Used by unload UI / tray so we never rely on `active_engine` alone (it can desync).
+    pub fn unload_all_loaded_asr(&self) -> Result<Vec<&'static str>, String> {
+        let mut unloaded = Vec::new();
+
+        {
+            let mut w = self.whisper.lock().map_err(|e| e.to_string())?;
+            if w.get_current_model().is_some() {
+                w.unload();
+                unloaded.push("whisper");
+            }
+        }
+        {
+            let mut p = self.parakeet.lock().map_err(|e| e.to_string())?;
+            if p.get_status().loaded {
+                p.unload();
+                unloaded.push("parakeet");
+            }
+        }
+        {
+            let mut g = self.granite_speech.lock().map_err(|e| e.to_string())?;
+            if g.get_status().loaded {
+                g.unload();
+                unloaded.push("granite_speech");
+            }
+        }
+
+        Ok(unloaded)
+    }
 }

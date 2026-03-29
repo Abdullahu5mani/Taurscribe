@@ -1,23 +1,26 @@
 // Module declarations
 mod audio;
+pub mod audio_decode;
+pub mod audio_preprocess;
 mod commands;
 mod context;
 mod denoise;
 mod granite_features;
-mod granite_speech;
+pub mod granite_speech;
 mod hotkeys;
 mod llm;
 mod overlay;
-mod parakeet;
+pub mod parakeet;
 mod parakeet_loaders;
 mod state;
 mod system_audio;
 mod tray;
 mod types;
-mod utils;
-mod vad;
+pub mod utils;
+pub mod vad;
 mod watcher;
-mod whisper;
+pub mod whisper;
+pub mod librispeech_wer;
 
 // Imports
 use granite_speech::GraniteSpeechManager;
@@ -294,3 +297,4 @@ pub fn run() {
             }
         });
 }
+

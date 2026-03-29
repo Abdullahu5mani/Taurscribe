@@ -327,6 +327,9 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
         }),
 
         // ── Granite Speech ─────────────────────────────────────────────────────
+        // Source: Hugging Face `onnx-community/granite-4.0-1b-speech-ONNX` (community ONNX export of
+        // IBM `ibm-granite/granite-4.0-1b-speech`). Weights under `onnx/`; tokenizer + HF metadata at repo root.
+        // On disk: `%LOCALAPPDATA%\\Taurscribe\\models\\granite-speech-1b` (INT4) or `...\\granite-speech-1b-fp16`.
         // q4: FP32 I/O, runs on any hardware (~1.8 GB)
         "granite-speech-1b-cpu" => Some(ModelConfig {
             repo: "onnx-community/granite-4.0-1b-speech-ONNX",
@@ -334,11 +337,15 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             files: vec![
                 ModelFile { filename: "audio_encoder_q4.onnx",             remote_path: "onnx/audio_encoder_q4.onnx",             sha1: "" },
                 ModelFile { filename: "audio_encoder_q4.onnx_data",        remote_path: "onnx/audio_encoder_q4.onnx_data",        sha1: "" },
-                ModelFile { filename: "embed_tokens_q4.onnx",              remote_path: "onnx/embed_tokens_q4.onnx",              sha1: "" },
-                ModelFile { filename: "embed_tokens_q4.onnx_data",         remote_path: "onnx/embed_tokens_q4.onnx_data",         sha1: "" },
+                ModelFile { filename: "embed_tokens_q4.onnx",              remote_path: "onnx/embed_tokens_q4.onnx",             sha1: "" },
+                ModelFile { filename: "embed_tokens_q4.onnx_data",         remote_path: "onnx/embed_tokens_q4.onnx_data",        sha1: "" },
                 ModelFile { filename: "decoder_model_merged_q4.onnx",      remote_path: "onnx/decoder_model_merged_q4.onnx",      sha1: "" },
                 ModelFile { filename: "decoder_model_merged_q4.onnx_data", remote_path: "onnx/decoder_model_merged_q4.onnx_data", sha1: "" },
                 ModelFile { filename: "tokenizer.json",                    remote_path: "tokenizer.json",                         sha1: "" },
+                ModelFile { filename: "tokenizer_config.json",             remote_path: "tokenizer_config.json",                  sha1: "" },
+                ModelFile { filename: "preprocessor_config.json",          remote_path: "preprocessor_config.json",               sha1: "" },
+                ModelFile { filename: "generation_config.json",            remote_path: "generation_config.json",                 sha1: "" },
+                ModelFile { filename: "chat_template.jinja",               remote_path: "chat_template.jinja",                    sha1: "" },
             ],
             subdirectory: Some("granite-speech-1b"),
         }),
@@ -356,6 +363,10 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
                 ModelFile { filename: "decoder_model_merged_fp16.onnx_data", remote_path: "onnx/decoder_model_merged_fp16.onnx_data", sha1: "" },
                 ModelFile { filename: "decoder_model_merged_fp16.onnx_data_1", remote_path: "onnx/decoder_model_merged_fp16.onnx_data_1", sha1: "" },
                 ModelFile { filename: "tokenizer.json", remote_path: "tokenizer.json", sha1: "" },
+                ModelFile { filename: "tokenizer_config.json", remote_path: "tokenizer_config.json", sha1: "" },
+                ModelFile { filename: "preprocessor_config.json", remote_path: "preprocessor_config.json", sha1: "" },
+                ModelFile { filename: "generation_config.json", remote_path: "generation_config.json", sha1: "" },
+                ModelFile { filename: "chat_template.jinja", remote_path: "chat_template.jinja", sha1: "" },
             ],
             subdirectory: Some("granite-speech-1b-fp16"),
         }),
