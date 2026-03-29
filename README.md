@@ -182,6 +182,48 @@ The application follows a modular architecture separating the high-performance b
     npm run tauri dev
     ```
 
+## Testing
+
+Optional Rust integration tests live under `src-tauri/tests/`. They expect real Whisper / Parakeet / Granite bundles in your local models directory (e.g. `%LOCALAPPDATA%\Taurscribe\models` on Windows). Tests are marked `#[ignore]` so normal `cargo test` stays fast—pass **`--ignored`** to run them. Use **`--nocapture`** to print per-utterance WER lines and the final summary.
+
+**Smoke test** (fast: engines load and produce output from `jfk.wav`):
+
+```bash
+cd src-tauri && cargo test --test jfk_asr_smoke -- --ignored --nocapture
+```
+
+Place `jfk.wav` under `src-tauri/tests/fixtures/`, set `JFK_WAV` to a path, or keep `jfk.wav` next to the `src-tauri` folder—see `tests/jfk_asr_smoke.rs`.
+
+**Mic accuracy** (simulates the live recording path):
+
+```bash
+cd src-tauri && TAURSCRIBE_EVAL_MANIFEST=manifest.jsonl cargo test mic_accuracy -- --ignored --nocapture
+```
+
+**File drop accuracy** (simulates drag-and-drop file transcription):
+
+```bash
+cd src-tauri && TAURSCRIBE_EVAL_MANIFEST=manifest.jsonl cargo test file_drop_accuracy -- --ignored --nocapture
+```
+
+**Run all ignored tests** (smoke + accuracy):
+
+```bash
+cd src-tauri && TAURSCRIBE_EVAL_MANIFEST=manifest.jsonl cargo test -- --ignored --nocapture
+```
+
+**Build a LibriSpeech manifest** if you do not have `manifest.jsonl` yet:
+
+```bash
+cd src-tauri && cargo run --release --bin librispeech_manifest -- --root "C:\path\to\LibriSpeech\test-clean" --out manifest.jsonl
+```
+
+On **Windows PowerShell**, set the manifest env var like this before `cargo test`:
+
+```powershell
+$env:TAURSCRIBE_EVAL_MANIFEST = "manifest.jsonl"
+```
+
 ## 🧪 Hardware Acceleration Setup
 
 Taurscribe automatically detects available hardware. To ensure GPU support:
