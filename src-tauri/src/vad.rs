@@ -3,7 +3,7 @@
 /// Pure energy-based VAD: RMS threshold per 50ms frame, with hysteresis-based
 /// segment detection for file transcription and a simple gate for live recording.
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Frame size for energy VAD (50ms at 16kHz).
 const CHUNK_SIZE: usize = 800;
@@ -15,7 +15,7 @@ impl VADManager {
         Ok(Self)
     }
 
-    /// No-op — kept for call-site compatibility (was used to reset Silero LSTM state).
+    /// No-op — kept for call-site compatibility with the live recording path.
     pub fn reset_state(&mut self) {}
 
     /// Return a speech probability for `audio` (0.0 = silence, 1.0 = speech).
@@ -154,11 +154,10 @@ impl VADManager {
     }
 }
 
-/// Run VAD on the full audio, collect speech-only segments, and concatenate
+/// Run **energy-based** VAD on the full audio, collect speech-only segments, and concatenate
 /// them into a single buffer for the ASR. Silent sections are omitted.
 pub fn assemble_speech_audio(
     mono: &[f32],
-    vad: &Arc<Mutex<VADManager>>,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<Vec<f32>, String> {
     const SAMPLE_RATE: f32 = 16000.0;
@@ -240,9 +239,6 @@ pub fn assemble_speech_audio(
     }
 
     println!("[FILE_TRANSCRIBE] Energy VAD: {} segment(s)", segments.len());
-
-    // vad parameter kept for API compatibility — not needed for pure energy VAD
-    let _ = vad;
 
     let mut assembled = Vec::new();
     let nseg = segments.len();

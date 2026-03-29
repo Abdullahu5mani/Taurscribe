@@ -5,14 +5,18 @@
 //! Models: `%LOCALAPPDATA%\\Taurscribe\\models` (or platform equivalent). Optional env:
 //! `TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_PARAKEET_MODEL_ID`, `TAURSCRIBE_GRANITE_MODEL_ID`.
 //!
+//! If manifest `flac_path` entries point at another machine (or a moved corpus), set
+//! `--audio-root` or `TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT` to the **`test-clean` directory**
+//! (the folder that contains per-reader subdirs like `908/`). Paths are then rebuilt from `utt_id`.
+//!
 //! Usage:
 //!   cargo run --release --bin librispeech_eval -- --manifest eval_manifest.jsonl --out results.csv
-//!   cargo run --release --bin librispeech_eval -- --manifest m.jsonl --engines whisper,granite --limit 50 --force-cpu
+//!   cargo run --release --bin librispeech_eval -- --manifest m.jsonl --audio-root ../taurscribe-runtime/librispeech/LibriSpeech/test-clean --engines whisper,granite --limit 50 --force-cpu
 
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use taurscribe_lib::audio_decode;
 use taurscribe_lib::audio_preprocess;
@@ -52,12 +56,14 @@ struct Args {
     engines: Vec<Engine>,
     limit: Option<usize>,
     force_cpu: bool,
+    audio_root: Option<PathBuf>,
 }
 
 fn usage() -> ! {
     eprintln!(
-        "librispeech_eval --manifest <path.jsonl> [--out results.csv] [--engines whisper,parakeet,granite] [--limit N] [--force-cpu]"
+        "librispeech_eval --manifest <path.jsonl> [--out results.csv] [--engines whisper,parakeet,granite] [--limit N] [--audio-root <test-clean-dir>] [--force-cpu]"
     );
+    eprintln!("Env: TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT (same as --audio-root if flag omitted)");
     std::process::exit(2);
 }
 
@@ -67,6 +73,7 @@ fn parse_args() -> Args {
     let mut engines_str: Option<String> = None;
     let mut limit: Option<usize> = None;
     let mut force_cpu = false;
+    let mut audio_root: Option<PathBuf> = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -80,6 +87,9 @@ fn parse_args() -> Args {
                         .parse()
                         .unwrap_or_else(|_| usage()),
                 );
+            }
+            "--audio-root" => {
+                audio_root = Some(PathBuf::from(it.next().unwrap_or_else(|| usage())));
             }
             "--force-cpu" => force_cpu = true,
             "-h" | "--help" => usage(),
@@ -114,6 +124,7 @@ fn parse_args() -> Args {
         engines,
         limit,
         force_cpu,
+        audio_root,
     }
 }
 
@@ -201,6 +212,14 @@ fn median(mut xs: Vec<f64>) -> f64 {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
+    let audio_root = args
+        .audio_root
+        .clone()
+        .or_else(|| {
+            std::env::var("TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT")
+                .ok()
+                .map(PathBuf::from)
+        });
     let manifest_path = Path::new(&args.manifest);
     let text = std::fs::read_to_string(manifest_path)?;
     let mut rows: Vec<ManifestRow> = Vec::new();
@@ -247,7 +266,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut w = WhisperManager::new();
                 w.initialize(Some(id), force)?;
                 for row in &rows {
-                    let pcm = match pcm_for_eval(Path::new(&row.flac_path)) {
+                    let flac = librispeech_wer::resolve_librispeech_flac(
+                        &row.flac_path,
+                        &row.utt_id,
+                        audio_root.as_deref(),
+                    );
+                    let pcm = match pcm_for_eval(&flac) {
                         Ok(p) => p,
                         Err(e) => {
                             eprintln!("[eval] {} decode/preprocess: {}", row.utt_id, e);
@@ -293,7 +317,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut p = ParakeetManager::new();
                 p.initialize(id, force)?;
                 for row in &rows {
-                    let pcm = match pcm_for_eval(Path::new(&row.flac_path)) {
+                    let flac = librispeech_wer::resolve_librispeech_flac(
+                        &row.flac_path,
+                        &row.utt_id,
+                        audio_root.as_deref(),
+                    );
+                    let pcm = match pcm_for_eval(&flac) {
                         Ok(p) => p,
                         Err(e) => {
                             eprintln!("[eval] {} decode/preprocess: {}", row.utt_id, e);
@@ -333,7 +362,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut g = GraniteSpeechManager::new();
                 g.initialize(id, force)?;
                 for row in &rows {
-                    let pcm = match pcm_for_eval(Path::new(&row.flac_path)) {
+                    let flac = librispeech_wer::resolve_librispeech_flac(
+                        &row.flac_path,
+                        &row.utt_id,
+                        audio_root.as_deref(),
+                    );
+                    let pcm = match pcm_for_eval(&flac) {
                         Ok(p) => p,
                         Err(e) => {
                             eprintln!("[eval] {} decode/preprocess: {}", row.utt_id, e);
