@@ -24,12 +24,14 @@ const DEFAULT_DECODER_START_TOKEN_ID: i64 = 13764;
 const DEFAULT_PAD_TOKEN_ID: i64 = 2;
 const DEFAULT_MAX_NEW_TOKENS: usize = 256;
 // Modern ORT supports 0-sized dynamic dimensions; no dummy-position workaround needed.
+const MAX_SAFE_PROMPT_TOKENS: usize = 1024;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum GpuBackend {
     Cuda,
     DirectML,
     Cpu,
+    Hybrid,
 }
 
 impl std::fmt::Display for GpuBackend {
@@ -38,6 +40,7 @@ impl std::fmt::Display for GpuBackend {
             GpuBackend::Cuda => write!(f, "CUDA"),
             GpuBackend::DirectML => write!(f, "DirectML"),
             GpuBackend::Cpu => write!(f, "CPU"),
+            GpuBackend::Hybrid => write!(f, "Hybrid"),
         }
     }
 }
@@ -80,6 +83,11 @@ pub struct CohereManager {
     resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>,
 }
 
+#[inline]
+fn should_trace(debug_decode: bool) -> bool {
+    debug_decode || cfg!(target_os = "windows")
+}
+
 impl CohereManager {
     pub fn new() -> Self {
         Self {
@@ -99,11 +107,12 @@ impl CohereManager {
     }
 
     pub fn get_status(&self) -> CohereStatus {
+        let hybrid = matches!(self.backend, GpuBackend::Hybrid);
         CohereStatus {
             loaded: self.encoder_session.is_some() && self.decoder_session.is_some(),
             model_id: self.model_name.clone(),
             backend: self.backend.to_string(),
-            gpu_only: false,
+            gpu_only: hybrid,
         }
     }
 
@@ -128,81 +137,55 @@ impl CohereManager {
                 model_dir.display()
             ));
         }
+        if force_cpu {
+            println!("[COHERE] force_cpu requested but ignored: Cohere runs in fixed Hybrid mode.");
+        }
 
         let tokenizer_path = model_dir.join("tokenizer.json");
-        let encoder_path = model_dir.join("encoder_model_q4f16.onnx");
-        let decoder_path = model_dir.join("decoder_model_merged_q4f16.onnx");
+        let encoder_fp16 = model_dir.join("encoder_model_fp16.onnx");
+        let decoder_fp16 = model_dir.join("decoder_model_merged_fp16.onnx");
+        let encoder_q4f16 = model_dir.join("encoder_model_q4f16.onnx");
+        let decoder_q4f16 = model_dir.join("decoder_model_merged_q4f16.onnx");
+        let (encoder_path, decoder_path) = if encoder_fp16.exists() && decoder_fp16.exists() {
+            (encoder_fp16, decoder_fp16)
+        } else {
+            (encoder_q4f16, decoder_q4f16)
+        };
         let generation_config_path = model_dir.join("generation_config.json");
         let model_config_path = model_dir.join("config.json");
+        println!(
+            "[COHERE] initialize: model_dir={} encoder={} decoder={}",
+            model_dir.display(),
+            encoder_path.display(),
+            decoder_path.display()
+        );
 
         if self.encoder_session.is_some() || self.decoder_session.is_some() {
             self.unload();
         }
 
-        let (backend, enc, dec) = if force_cpu {
-            (
-                GpuBackend::Cpu,
-                self.create_session_cpu(&encoder_path)?,
-                self.create_session_cpu(&decoder_path)?,
-            )
-        } else {
-            #[cfg(target_os = "windows")]
+        let (backend, enc, dec) = {
+            #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             {
-                match self.try_create_sessions_directml(&encoder_path, &decoder_path) {
-                    Ok((enc, dec)) => (GpuBackend::DirectML, enc, dec),
-                    Err(dml_e) => {
-                        #[cfg(target_arch = "x86_64")]
-                        {
-                            match self.try_create_sessions_cuda(&encoder_path, &decoder_path) {
-                                Ok((enc, dec)) => (GpuBackend::Cuda, enc, dec),
-                                Err(cuda_e) => {
-                                    println!(
-                                        "[COHERE] DirectML failed ({dml_e}), CUDA failed ({cuda_e}), falling back to CPU..."
-                                    );
-                                    (
-                                        GpuBackend::Cpu,
-                                        self.create_session_cpu(&encoder_path)?,
-                                        self.create_session_cpu(&decoder_path)?,
-                                    )
-                                }
-                            }
-                        }
-                        #[cfg(not(target_arch = "x86_64"))]
-                        {
-                            println!("[COHERE] DirectML failed ({dml_e}), falling back to CPU...");
-                            (
-                                GpuBackend::Cpu,
-                                self.create_session_cpu(&encoder_path)?,
-                                self.create_session_cpu(&decoder_path)?,
-                            )
-                        }
-                    }
-                }
+                // Windows workaround: ORT CUDA GQA currently conflicts with this decoder export.
+                // Run encoder on CUDA and decoder on CPU (hybrid) for stable inference.
+                let enc = self
+                    .create_session_cuda(&encoder_path)
+                    .map_err(|e| format!("Cohere hybrid init (encoder CUDA) failed: {}", e))?;
+                let dec = self
+                    .create_session_cpu(&decoder_path)
+                    .map_err(|e| format!("Cohere hybrid init (decoder CPU) failed: {}", e))?;
+                (GpuBackend::Hybrid, enc, dec)
             }
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(any(not(target_os = "windows"), all(target_os = "windows", not(target_arch = "x86_64"))))]
             {
-                #[cfg(target_os = "macos")]
-                {
-                    (
-                        GpuBackend::Cpu,
-                        self.create_session_cpu(&encoder_path)?,
-                        self.create_session_cpu(&decoder_path)?,
-                    )
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    match self.try_create_sessions_cuda(&encoder_path, &decoder_path) {
-                        Ok((enc, dec)) => (GpuBackend::Cuda, enc, dec),
-                        Err(e) => {
-                            println!("[COHERE] CUDA failed ({}), falling back to CPU...", e);
-                            (
-                                GpuBackend::Cpu,
-                                self.create_session_cpu(&encoder_path)?,
-                                self.create_session_cpu(&decoder_path)?,
-                            )
-                        }
-                    }
-                }
+                let enc = self
+                    .create_session_cuda(&encoder_path)
+                    .map_err(|e| format!("Cohere CUDA initialization failed (encoder): {}", e))?;
+                let dec = self
+                    .create_session_cuda(&decoder_path)
+                    .map_err(|e| format!("Cohere CUDA initialization failed (decoder): {}", e))?;
+                (GpuBackend::Cuda, enc, dec)
             }
         };
 
@@ -218,9 +201,24 @@ impl CohereManager {
         self.eos_token_id = runtime_cfg.eos_token_id;
         self.pad_token_id = runtime_cfg.pad_token_id;
         self.max_new_tokens = runtime_cfg.max_new_tokens;
-        self.debug_decode = std::env::var("TAURSCRIBE_COHERE_DEBUG").as_deref() == Ok("1");
+        self.debug_decode = match std::env::var("TAURSCRIBE_COHERE_DEBUG").ok().as_deref() {
+            Some("1") => true,
+            Some("0") => false,
+            _ => cfg!(target_os = "windows"),
+        };
         self.backend = backend.clone();
         self.model_name = Some(MODEL_ID_UNIVERSAL.to_string());
+        if should_trace(self.debug_decode) {
+            println!(
+                "[COHERE][TRACE] runtime cfg: prompt_tokens={} decoder_start={} eos={} pad={} max_new_tokens={} backend={}",
+                self.prompt_token_ids.len(),
+                self.decoder_start_token_id,
+                self.eos_token_id,
+                self.pad_token_id,
+                self.max_new_tokens,
+                self.backend
+            );
+        }
 
         let msg = format!("[COHERE] Model loaded ({})", backend);
         println!("{}", msg);
@@ -239,6 +237,15 @@ impl CohereManager {
         let n_frames = features.nrows();
         if n_frames == 0 {
             return Ok(String::new());
+        }
+        if should_trace(self.debug_decode) {
+            println!(
+                "[COHERE][TRACE] audio in: sample_rate={} samples={} feature_frames={} feature_dims={}",
+                sample_rate,
+                audio.len(),
+                n_frames,
+                features.ncols()
+            );
         }
         let feature_data: Vec<f32> = features.iter().cloned().collect();
         let encoder_input = make_tensor_f32(vec![1, n_frames, 128], feature_data)?;
@@ -260,6 +267,17 @@ impl CohereManager {
             .get(1)
             .copied()
             .ok_or("Bad encoder output shape")?;
+        if should_trace(self.debug_decode) {
+            println!(
+                "[COHERE][TRACE] encoder out shape={:?} seq_len={} data_len={}",
+                encoder_shape,
+                encoder_seq_len,
+                encoder_data.len()
+            );
+        }
+
+        // Build encoder_hidden_states once for prefill; decode steps won't resend it.
+        let encoder_hidden_states = make_tensor_f32(encoder_shape.clone(), encoder_data.clone())?;
 
         // Prompt: decoder_start + language token.
         let mut prompt = if self.prompt_token_ids.is_empty() {
@@ -267,16 +285,19 @@ impl CohereManager {
         } else {
             self.prompt_token_ids.clone()
         };
-        if self.debug_decode {
-            println!("[COHERE][DEBUG] prompt_ids={:?}", prompt);
+        if should_trace(self.debug_decode) {
+            println!(
+                "[COHERE][TRACE] prefill prompt len={} ids_head={:?}",
+                prompt.len(),
+                &prompt[..prompt.len().min(32)]
+            );
         }
 
         // Prefill: compute encoder cross-attention KV (fresh from encoder_hidden_states,
         // since past_encoder_sequence_length=0) and the first output token.
         let (mut next_token, prefill_cache) = run_decoder_prefill(
             decoder,
-            &encoder_shape,
-            &encoder_data,
+            &encoder_hidden_states,
             encoder_seq_len,
             &prompt,
             self.pad_token_id,
@@ -366,21 +387,41 @@ impl CohereManager {
 
 fn run_decoder_prefill(
         decoder: &mut Session,
-        encoder_shape: &[usize],
-        encoder_data: &[f32],
+        encoder_hidden_states: &ort::value::DynValue,
         encoder_seq_len: i64,
         input_ids: &[i64],
         _pad_token_id: i64,
         debug_decode: bool,
     ) -> Result<(i64, Vec<LayerKv>), String> {
         let seq_len = input_ids.len();
+        if seq_len == 0 {
+            return Err("Decoder prefill: empty input_ids".to_string());
+        }
+        if seq_len > MAX_SAFE_PROMPT_TOKENS {
+            return Err(format!(
+                "Decoder prefill prompt too long: {} > {}",
+                seq_len, MAX_SAFE_PROMPT_TOKENS
+            ));
+        }
+        if should_trace(debug_decode) {
+            let est_self_attn = (seq_len as u128) * (seq_len as u128);
+            let est_cross_attn = (seq_len as u128) * (encoder_seq_len.max(0) as u128);
+            println!(
+                "[COHERE][TRACE] prefill inputs: seq_len={} encoder_seq_len={} est_self_attn={} est_cross_attn={} prompt_head={:?}",
+                seq_len,
+                encoder_seq_len,
+                est_self_attn,
+                est_cross_attn,
+                &input_ids[..input_ids.len().min(16)]
+            );
+        }
         let mut inputs: Vec<(String, ort::value::DynValue)> = Vec::new();
         inputs.push(("input_ids".into(), make_tensor_i64(vec![1, seq_len], input_ids.to_vec())?));
-        // Attention mask for prefill: all 1s over the input prompt only (no past).
         inputs.push((
             "attention_mask".into(),
             make_tensor_i64(vec![1, seq_len], vec![1_i64; seq_len])?,
         ));
+        // position_ids is required by decoder/pos_emb/Gather_Quant in this export.
         inputs.push((
             "position_ids".into(),
             make_tensor_i64(
@@ -389,9 +430,14 @@ fn run_decoder_prefill(
             )?,
         ));
         inputs.push(("num_logits_to_keep".into(), make_tensor_i64(vec![], vec![1])?));
+        // NOTE: ort DynValue isn't Clone; prefill is only called once per chunk, so re-create it here.
+        // We keep the heavy optimization for decode steps (where it matters most).
+        let (shape, data) = encoder_hidden_states
+            .try_extract_tensor::<f32>()
+            .map_err(|e| format!("Extract encoder_hidden_states for prefill rebuild: {}", e))?;
         inputs.push((
             "encoder_hidden_states".into(),
-            make_tensor_f32(encoder_shape.to_vec(), encoder_data.to_vec())?,
+            make_tensor_f32(shape.iter().map(|&d| d as usize).collect(), data.to_vec())?,
         ));
 
         // Initial past KV: empty (past_seq_len=0). Must use Tensor::new (allocator path)
@@ -426,7 +472,15 @@ fn run_decoder_prefill(
                     .map(|(k, v)| (Cow::<str>::from(k), v))
                     .collect::<Vec<_>>(),
             ))
-            .map_err(|e| format!("Decoder prefill run: {}", e))?;
+            .map_err(|e| {
+                format!(
+                    "Decoder prefill run: {} | seq_len={} encoder_seq_len={} prompt_head={:?}",
+                    e,
+                    seq_len,
+                    encoder_seq_len,
+                    &input_ids[..input_ids.len().min(16)]
+                )
+            })?;
         if debug_decode {
             println!("[COHERE][DEBUG] prefill seq_len={} encoder_seq={}", seq_len, encoder_seq_len);
         }
@@ -453,8 +507,18 @@ fn run_decoder_step(
             .and_then(|(dk, _)| dk.shape.get(2).copied())
             .unwrap_or(0);
         let total_seq = past_decoder_len + seq_len;
+        if total_seq == 0 {
+            return Err("Decoder step: computed total_seq=0".to_string());
+        }
+        if should_trace(debug_decode) {
+            let est_self_attn = (total_seq as u128) * (total_seq as u128);
+            println!(
+                "[COHERE][TRACE] step inputs: seq_len={} past_decoder_len={} total_seq={} est_self_attn={}",
+                seq_len, past_decoder_len, total_seq, est_self_attn
+            );
+        }
 
-        if debug_decode {
+        if should_trace(debug_decode) {
             println!(
                 "[COHERE][DEBUG] step: past_dec_len={} seq_len={} total_seq={} enc_kv_shape={:?}",
                 past_decoder_len, seq_len, total_seq,
@@ -468,6 +532,7 @@ fn run_decoder_step(
             "attention_mask".into(),
             make_tensor_i64(vec![1, total_seq], vec![1_i64; total_seq])?,
         ));
+        // position_ids is required by decoder/pos_emb/Gather_Quant in this export.
         inputs.push((
             "position_ids".into(),
             make_tensor_i64(
@@ -519,7 +584,16 @@ fn run_decoder_step(
                     .map(|(k, v)| (Cow::<str>::from(k), v))
                     .collect::<Vec<_>>(),
             ))
-            .map_err(|e| format!("Decoder step run: {}", e))?;
+            .map_err(|e| {
+                format!(
+                    "Decoder step run: {} | seq_len={} past_decoder_len={} total_seq={} token_head={:?}",
+                    e,
+                    seq_len,
+                    past_decoder_len,
+                    total_seq,
+                    &input_ids[..input_ids.len().min(8)]
+                )
+            })?;
 
         // Extract next token and updated decoder KV; discard present.*.encoder.* output
         // (it's 0-sized after step 1 — the model signals "I've already cached this").
@@ -569,42 +643,19 @@ impl CohereManager {
         not(target_os = "windows"),
         all(target_os = "windows", target_arch = "x86_64")
     ))]
-    fn try_create_sessions_cuda(&self, enc: &Path, dec: &Path) -> Result<(Session, Session), String> {
-        let build_cuda = |p: &Path| -> Result<Session, String> {
-            Session::builder()
-                .map_err(|e| format!("ORT builder: {}", e))?
-                .with_execution_providers([
-                    ort::execution_providers::CUDAExecutionProvider::default()
-                        .build()
-                        .error_on_failure(),
-                ])
-                .map_err(|e| format!("CUDA EP: {}", e))?
-                .commit_from_file(p)
-                .map_err(|e| format!("CUDA load {}: {}", p.display(), e))
-        };
-        Ok((build_cuda(enc)?, build_cuda(dec)?))
+    fn create_session_cuda(&self, path: &Path) -> Result<Session, String> {
+        Session::builder()
+            .map_err(|e| format!("ORT builder: {}", e))?
+            .with_execution_providers([
+                ort::execution_providers::CUDAExecutionProvider::default()
+                    .build()
+                    .error_on_failure(),
+            ])
+            .map_err(|e| format!("CUDA EP: {}", e))?
+            .commit_from_file(path)
+            .map_err(|e| format!("CUDA load {}: {}", path.display(), e))
     }
 
-    #[cfg(target_os = "windows")]
-    fn try_create_sessions_directml(
-        &self,
-        enc: &Path,
-        dec: &Path,
-    ) -> Result<(Session, Session), String> {
-        let build_dml = |p: &Path| -> Result<Session, String> {
-            Session::builder()
-                .map_err(|e| format!("ORT builder: {}", e))?
-                .with_execution_providers([
-                    ort::execution_providers::DirectMLExecutionProvider::default()
-                        .build()
-                        .error_on_failure(),
-                ])
-                .map_err(|e| format!("DirectML EP: {}", e))?
-                .commit_from_file(p)
-                .map_err(|e| format!("DirectML load {}: {}", p.display(), e))
-        };
-        Ok((build_dml(enc)?, build_dml(dec)?))
-    }
 }
 
 /// Creates a zero-element f16 KV tensor of shape [1, NUM_HEADS, 0, HEAD_DIM].
@@ -655,7 +706,8 @@ fn extract_token_from_logits(
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(idx, _)| idx as i64)
         .ok_or("Empty logits")?;
-    if debug_decode {
+    if should_trace(debug_decode) {
+        println!("[COHERE][TRACE] logits shape={:?}", logits_shape);
         let mut top = logits_data[start..start + VOCAB_SIZE]
             .iter()
             .enumerate()
@@ -681,7 +733,7 @@ fn extract_decoder_outputs(
         let dv = get_present(outputs, &format!("present.{}.decoder.value", layer))?;
         let ek = get_present(outputs, &format!("present.{}.encoder.key", layer))?;
         let ev = get_present(outputs, &format!("present.{}.encoder.value", layer))?;
-        if debug_decode && layer == 0 {
+        if should_trace(debug_decode) && layer == 0 {
             println!(
                 "[COHERE][DEBUG] prefill output: dec_k={:?} enc_k={:?}",
                 dk.shape, ek.shape
@@ -710,7 +762,7 @@ fn extract_step_outputs(
     for layer in 0..NUM_LAYERS {
         let dk = get_present(outputs, &format!("present.{}.decoder.key", layer))?;
         let dv = get_present(outputs, &format!("present.{}.decoder.value", layer))?;
-        if debug_decode && layer == 0 {
+        if should_trace(debug_decode) && layer == 0 {
             println!("[COHERE][DEBUG] step output: dec_k={:?}", dk.shape);
         }
         dec_layers.push((dk, dv));
@@ -743,31 +795,6 @@ fn normalize_kv_for_input(kv: &KvTensor) -> (Vec<usize>, Vec<f16>) {
     let mut data = kv.data.clone();
     data.resize(expected, f16::from_f32(0.0));
     (shape, data)
-}
-
-fn build_default_prompt_tokens(tokenizer: &tokenizers::Tokenizer) -> Vec<i64> {
-    let lang = std::env::var("TAURSCRIBE_COHERE_LANG")
-        .unwrap_or_else(|_| "en".to_string())
-        .to_lowercase();
-    let source_lang = format!("<|{}|>", lang);
-    let target_lang = source_lang.clone();
-    // Align to model `prompt_defaults` intent from HF config.
-    let pieces = [
-        source_lang.as_str(),
-        target_lang.as_str(),
-        "<|pnc|>",
-        "<|noitn|>",
-        "<|notimestamp|>",
-        "<|nodiarize|>",
-        "<|emo:undefined|>",
-    ];
-    let mut out = vec![DEFAULT_DECODER_START_TOKEN_ID];
-    for p in pieces {
-        if let Some(id) = tokenizer.token_to_id(p) {
-            out.push(id as i64);
-        }
-    }
-    out
 }
 
 #[derive(Debug, Deserialize)]
@@ -903,15 +930,16 @@ pub(crate) fn granite_logical_model_id_for_dir(_model_dir: &Path) -> String {
 }
 
 pub(crate) fn granite_int4_bundle_ready(dir: &Path) -> bool {
-    dir.is_dir()
-        && dir.join("encoder_model_q4f16.onnx").exists()
+    let has_fp16 = dir.join("encoder_model_fp16.onnx").exists()
+        && dir.join("encoder_model_fp16.onnx_data").exists()
+        && dir.join("decoder_model_merged_fp16.onnx").exists()
+        && dir.join("decoder_model_merged_fp16.onnx_data").exists();
+    let has_q4f16 = dir.join("encoder_model_q4f16.onnx").exists()
         && dir.join("encoder_model_q4f16.onnx_data").exists()
         && dir.join("decoder_model_merged_q4f16.onnx").exists()
-        && dir.join("decoder_model_merged_q4f16.onnx_data").exists()
+        && dir.join("decoder_model_merged_q4f16.onnx_data").exists();
+    dir.is_dir()
+        && (has_fp16 || has_q4f16)
         && dir.join("tokenizer.json").exists()
         && dir.join("preprocessor_config.json").exists()
-}
-
-pub(crate) fn granite_fp16_bundle_ready(_dir: &Path) -> bool {
-    false
 }
