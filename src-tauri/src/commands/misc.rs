@@ -107,12 +107,6 @@ pub async fn get_active_input_device(state: tauri::State<'_, crate::state::Audio
     .map_err(|e| format!("{}", e))?
 }
 
-// Simple test command to see if Rust is working
-#[tauri::command]
-pub fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 #[tauri::command]
 pub fn get_platform() -> &'static str {
     #[cfg(target_os = "macos")]

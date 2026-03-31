@@ -82,12 +82,6 @@ pub fn set_hotkey_suppressed(state: State<AudioState>, suppressed: bool) {
     state.hotkey_suppressed.store(suppressed, Ordering::SeqCst);
 }
 
-/// Return the currently preferred input device name (None = system default).
-#[tauri::command]
-pub fn get_input_device(state: State<AudioState>) -> Option<String> {
-    state.selected_input_device.lock().unwrap().clone()
-}
-
 /// Set the preferred input device. Pass None to revert to the system default.
 #[tauri::command]
 pub fn set_input_device(state: State<AudioState>, name: Option<String>) {
