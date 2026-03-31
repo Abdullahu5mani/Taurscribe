@@ -215,7 +215,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::show_main_window,
-            commands::greet,
             commands::get_system_info,
             commands::start_recording,
             commands::stop_recording,
@@ -249,7 +248,6 @@ pub fn run() {
             commands::set_hotkey,
             commands::set_hotkey_suppressed,
             commands::list_input_devices,
-            commands::get_input_device,
             commands::get_active_input_device,
             commands::set_input_device,
             commands::show_overlay,
@@ -297,4 +295,3 @@ pub fn run() {
             }
         });
 }
-
