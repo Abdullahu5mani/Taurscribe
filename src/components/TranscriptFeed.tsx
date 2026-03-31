@@ -246,7 +246,7 @@ export function TranscriptFeed({
                                         </span>
                                     ) : null}
                                     <span className={`feed-badge feed-badge-engine--${item.engine}`}>
-                                        {item.engine === "parakeet" ? "Parakeet" : item.engine === "granite_speech" ? "Granite" : "Whisper"}
+                                        {item.engine === "parakeet" ? "Parakeet" : item.engine === "cohere" ? "Cohere" : "Whisper"}
                                     </span>
                                     {item.grammar_llm_used && (
                                         <span className="feed-badge feed-badge-llm">LLM</span>

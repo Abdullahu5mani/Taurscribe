@@ -184,7 +184,7 @@ The application follows a modular architecture separating the high-performance b
 
 ## Testing
 
-Optional Rust integration tests live under `src-tauri/tests/`. They expect real Whisper / Parakeet / Granite bundles in your local models directory (e.g. `%LOCALAPPDATA%\Taurscribe\models` on Windows). Tests are marked `#[ignore]` so normal `cargo test` stays fast—pass **`--ignored`** to run them. Use **`--nocapture`** to print per-utterance WER lines and the final summary.
+Optional Rust integration tests live under `src-tauri/tests/`. They expect real Whisper / Parakeet bundles plus the Cohere engine bundle in your local models directory (e.g. `%LOCALAPPDATA%\Taurscribe\models` on Windows). Tests are marked `#[ignore]` so normal `cargo test` stays fast—pass **`--ignored`** to run them. Use **`--nocapture`** to print per-utterance WER lines and the final summary.
 
 **Smoke test** (fast: engines load and produce output from `jfk.wav`):
 
@@ -255,7 +255,7 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 - [ ] Export Options (`.txt`, `.srt`, `.md`)
 - [x] Audio Waveform Visualizer
  - [x] Extended Keyboard Shortcuts
-- [ ] Proper file transcription for drag-and-drop files with models like Granite and Whisper
+- [ ] Proper file transcription for drag-and-drop files with models like Cohere and Whisper
 - [ ] **Speaker diarization** for file transcription: label *who spoke when* on imported audio (meetings, interviews). Requires a diarization backend (e.g. speaker-embedding + clustering ONNX, or a bundled pipeline)—the current file path merges all speech into one buffer before ASR, so speakers cannot be separated yet.
  - [x] Smart Punctuation & Formatting
 - [ ] Auto-Update Mechanism (Tauri updater plugin)
@@ -275,7 +275,7 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 
 ## 🐞 Known Issues
 
-- **Bracketed Output Artifacts**: Granite and Whisper modes may sometimes output bracketed cues like `(music)` or `[music]` in transcriptions. These are typically non-speech event markers (e.g., background music, noise, or silence) inserted by the models. They are not always accurate and may appear unexpectedly, especially in noisy environments.
+- **Bracketed Output Artifacts**: Cohere and Whisper modes may sometimes output bracketed cues like `(music)` or `[music]` in transcriptions. These are typically non-speech event markers (e.g., background music, noise, or silence) inserted by the models. They are not always accurate and may appear unexpectedly, especially in noisy environments.
 
 - **RNNoise Denoiser**: The app uses RNNoise as its basic denoiser in the audio pipeline. RNNoise is a lightweight, neural network-based noise suppression library designed for real-time applications. While effective for general background noise, it may not fully suppress complex or non-stationary noise. For significantly improved results, consider integrating a more advanced denoiser like DeepFilterNet3 (see Roadmap).
 
@@ -285,7 +285,7 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 
 - **Unload model / VRAM release**: Models may not **fully unload** from GPU or system memory in every path when you use **Unload** (UI or tray). Residual sessions or stale “loaded” state can still occur in edge cases (engine switches, CPU/GPU toggles, failed loads). This is under active investigation.
 
-- **Two Granite bundles installed**: If both INT4 and FP16 Granite packages are present, product behavior is not finalized (e.g. explicit picker vs. automatic choice, visibility when CUDA/DirectML is missing, macOS/Core ML story). UX and backend rules still need a clear spec.
+- **Cohere model quality tuning**: The Cohere engine now uses one universal ONNX bundle across CPU/GPU paths. Accuracy/performance tuning across CUDA, DirectML, and CPU is still iterative.
 
 - **Tray icon vs. hotkey suppression**: There is no dedicated tray state when **Settings** is open and the global hotkey listener is **suppressed**—users may expect a distinct indicator (e.g. a different color such as red) so it’s obvious the app is not listening for the record shortcut.
 
@@ -297,4 +297,4 @@ Taurscribe automatically detects available hardware. To ensure GPU support:
 
 - **Ticker**: The rotating **ticker** on the main screen may be **removed or reduced**—it reads as decorative/noisy to some users rather than essential.
 
-- **No speaker diarization on file import**: Drag-and-drop / file transcription does not yet attribute text to individual speakers. The pipeline concatenates VAD-selected speech into a single stream before Whisper/Parakeet/Granite run, so multi-speaker meetings are transcribed as one block of text. See Roadmap for planned work.
+- **No speaker diarization on file import**: Drag-and-drop / file transcription does not yet attribute text to individual speakers. The pipeline concatenates VAD-selected speech into a single stream before Whisper/Parakeet/Cohere run, so multi-speaker meetings are transcribed as one block of text. See Roadmap for planned work.

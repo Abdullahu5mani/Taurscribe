@@ -785,7 +785,7 @@
 
 .model-group-sub--whisper  { color: var(--whisper-color);  }
 .model-group-sub--parakeet { color: var(--parakeet-color); }
-.model-group-sub--granite  { color: var(--granite-color);  }
+.model-group-sub--cohere  { color: var(--cohere-color);  }
 
 .model-group-badge {
   font-size: var(--font-xs);
@@ -1839,9 +1839,9 @@
   color: var(--whisper-color);
 }
 
-.model-tag--granite {
+.model-tag--cohere {
   background: rgba(15, 98, 254, 0.12);
-  color: var(--granite-color);
+  color: var(--cohere-color);
 }
 
 .model-tag--default {

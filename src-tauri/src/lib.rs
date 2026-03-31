@@ -3,10 +3,10 @@ mod audio;
 pub mod audio_decode;
 pub mod audio_preprocess;
 mod commands;
+mod cohere_features;
 mod context;
 mod denoise;
-mod granite_features;
-pub mod granite_speech;
+pub mod cohere;
 mod hotkeys;
 mod llm;
 mod overlay;
@@ -23,7 +23,7 @@ pub mod whisper;
 pub mod librispeech_wer;
 
 // Imports
-use granite_speech::GraniteSpeechManager;
+use cohere::CohereManager;
 use parakeet::ParakeetManager;
 use state::AudioState;
 use tauri::Manager;
@@ -52,8 +52,8 @@ fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
         if let Ok(mut parakeet) = state.parakeet.lock() {
             parakeet.unload();
         }
-        if let Ok(mut granite) = state.granite_speech.lock() {
-            granite.unload();
+        if let Ok(mut cohere) = state.cohere.lock() {
+            cohere.unload();
         }
         if let Ok(mut llm) = state.llm.lock() {
             *llm = None;
@@ -120,9 +120,9 @@ pub fn run() {
     // NOTE: Parakeet is NOT lazy-loaded at startup anymore to save VRAM.
     // It will be loaded on demand when the user switches to it.
 
-    // 3b. Initialize Granite Speech (lazy-loaded on demand)
-    println!("[INFO] Initializing Granite Speech ASR manager...");
-    let granite_speech = GraniteSpeechManager::new();
+    // 3b. Initialize Cohere Transcribe (lazy-loaded on demand)
+    println!("[INFO] Initializing Cohere Transcribe ASR manager...");
+    let cohere = CohereManager::new();
 
     // 4. Build the Tauri App
     tauri::Builder::default()
@@ -136,7 +136,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .manage(AudioState::new(whisper, parakeet, vad, granite_speech))
+        .manage(AudioState::new(whisper, parakeet, vad, cohere))
         .setup(move |app| {
             // Clean up any partial model files left over from a previous download
             // that was interrupted by a crash or force-quit.
@@ -273,9 +273,9 @@ pub fn run() {
             commands::factory_reset_app_data,
             commands::get_close_behavior,
             commands::set_close_behavior,
-            commands::init_granite_speech,
-            commands::get_granite_speech_status,
-            commands::list_granite_models,
+            commands::init_cohere,
+            commands::get_cohere_status,
+            commands::list_cohere_models,
             commands::pause_recording,
             commands::resume_recording,
             commands::cancel_recording,

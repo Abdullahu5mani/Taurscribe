@@ -332,7 +332,7 @@ fn try_cpu_tdt(path: &str) -> Result<ParakeetTDT, String> {
 }
 
 /// One-line summary after load. parakeet-rs registers GPU EP first then CPU without `error_on_failure`
-/// on CUDA, so a bad cuDNN path can still “load” but run on CPU — Granite uses stricter ORT options.
+/// on CUDA, so a bad cuDNN path can still “load” but run on CPU — Cohere uses stricter ORT options.
 pub fn log_parakeet_backend_resolution(model_type: &str, backend: &GpuBackend, force_cpu: bool) {
     if force_cpu {
         println!("[PARAKEET] {} — CPU-only (forced).", model_type);

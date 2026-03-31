@@ -153,12 +153,12 @@ pub fn reconcile_model_loaded_tray(app: &AppHandle, state: &AudioState) {
             .lock()
             .map(|g| g.get_status().loaded)
             .unwrap_or(false);
-        let g_ok = state
-            .granite_speech
+        let c_ok = state
+            .cohere
             .lock()
             .map(|g| g.get_status().loaded)
             .unwrap_or(false);
-        w_ok || p_ok || g_ok
+        w_ok || p_ok || c_ok
     };
     state.model_loaded.store(loaded, Ordering::Relaxed);
     update_tray_model_item(app, loaded);

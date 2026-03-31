@@ -9,7 +9,7 @@ pub fn clean_transcript(text: &str) -> String {
     // Remove Whisper hallucination repetitions before anything else
     cleaned = remove_repetitions(&cleaned);
 
-    // Strip known subtitle-style sound/caption tags ([music], (laughter), …) from Whisper / Granite
+    // Strip known subtitle-style sound/caption tags ([music], (laughter), …) from Whisper / Cohere
     cleaned = strip_whitelisted_sound_captions(&cleaned);
 
     // Fix floating punctuation
@@ -41,7 +41,7 @@ pub fn clean_transcript(text: &str) -> String {
 }
 
 /// Remove `[…]` / `(…)` segments only when the inner text matches a known ASR sound/caption label.
-/// Used for live streaming chunks so the UI matches `clean_transcript` output. Whisper / Granite only.
+/// Used for live streaming chunks so the UI matches `clean_transcript` output. Whisper / Cohere only.
 pub(crate) fn strip_whitelisted_sound_captions(text: &str) -> String {
     static RE_BRACKETS: OnceLock<Regex> = OnceLock::new();
     static RE_PARENS: OnceLock<Regex> = OnceLock::new();

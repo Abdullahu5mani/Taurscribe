@@ -571,8 +571,8 @@
   color: var(--parakeet-color, #3ecfa5);
 }
 
-.setup-recommendation-engine--granite_speech {
-  color: var(--granite-color, #5ca3ff);
+.setup-recommendation-engine--cohere {
+  color: var(--cohere-color, #5ca3ff);
 }
 
 .setup-recommendation-model {

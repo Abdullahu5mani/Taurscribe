@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ModelInfo, ParakeetModelInfo, GraniteSpeechModelInfo } from "./useModels";
-import { GRANITE_FP16_MODEL_ID } from "../utils/engineUtils";
+import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "./useModels";
+import { COHERE_FP16_MODEL_ID } from "../utils/engineUtils";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
@@ -10,12 +10,12 @@ interface UseRecordingParams {
     activeEngineRef: React.RefObject<ASREngine>;
     models: ModelInfo[];
     parakeetModels: ParakeetModelInfo[];
-    graniteModels: GraniteSpeechModelInfo[];
+    cohereModels: CohereModelInfo[];
     currentModel: string | null;
     currentParakeetModel: string | null;
-    currentGraniteModel: string | null;
+    currentCohereModel: string | null;
     asrBackend: "gpu" | "cpu";
-    /** When lazy-loading FP16 Granite, sync toggle + store to GPU */
+    /** When lazy-loading FP16 Cohere, sync toggle + store to GPU */
     setAsrBackend?: (b: "gpu" | "cpu") => void;
     setCurrentModel: (id: string) => void;
     setLoadedEngine: (engine: ASREngine) => void;
@@ -47,10 +47,10 @@ export function useRecording({
     activeEngineRef,
     models,
     parakeetModels,
-    graniteModels,
+    cohereModels,
     currentModel,
     currentParakeetModel,
-    currentGraniteModel,
+    currentCohereModel,
     asrBackend,
     setAsrBackend,
     setCurrentModel,
@@ -178,29 +178,29 @@ export function useRecording({
             }
         }
 
-        if (currentEngine === "granite_speech") {
-            if (graniteModels.length === 0) {
-                setHeaderStatus("No Granite Speech model installed! Download it from Settings.", 5000);
+        if (currentEngine === "cohere") {
+            if (cohereModels.length === 0) {
+                setHeaderStatus("No Cohere Speech model installed! Download it from Settings.", 5000);
                 setIsSettingsOpen(true);
                 return;
             }
             try {
-                const gStatus = await invoke("get_granite_speech_status") as { loaded: boolean };
+                const gStatus = await invoke("get_cohere_status") as { loaded: boolean };
                 if (!gStatus.loaded) {
-                    setHeaderStatus("Loading Granite Speech...", 60_000);
-                    const gid = currentGraniteModel || graniteModels[0]?.id;
-                    await invoke("init_granite_speech", {
+                    setHeaderStatus("Loading Cohere Speech...", 60_000);
+                    const gid = currentCohereModel || cohereModels[0]?.id;
+                    await invoke("init_cohere", {
                         modelId: gid,
-                        forceCpu: asrBackend === "cpu" && gid !== GRANITE_FP16_MODEL_ID,
+                        forceCpu: asrBackend === "cpu" && gid !== COHERE_FP16_MODEL_ID,
                     });
-                    setLoadedEngine("granite_speech");
-                    if (gid === GRANITE_FP16_MODEL_ID) {
+                    setLoadedEngine("cohere");
+                    if (gid === COHERE_FP16_MODEL_ID) {
                         setAsrBackend?.("gpu");
                     }
-                    setHeaderStatus("Granite Speech loaded");
+                    setHeaderStatus("Cohere Speech loaded");
                 }
             } catch (e) {
-                setHeaderStatus("Failed to initialize Granite Speech: " + e, 5000);
+                setHeaderStatus("Failed to initialize Cohere Speech: " + e, 5000);
                 return;
             }
         }

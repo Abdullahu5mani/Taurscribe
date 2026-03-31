@@ -147,7 +147,7 @@ fn start_recording_blocking(
     match active_engine {
         ASREngine::Whisper => state.whisper.lock().unwrap().clear_context(),
         ASREngine::Parakeet => state.parakeet.lock().unwrap().clear_context(),
-        ASREngine::GraniteSpeech => { /* Granite Speech is stateless per chunk */ }
+        ASREngine::Cohere => { /* Cohere is stateless per chunk */ }
     }
     // Reset Silero VAD LSTM state so prior session context doesn't bleed in
     state.vad.lock().unwrap().reset_state();
@@ -228,7 +228,7 @@ fn start_recording_blocking(
     // Pull shared references out of state for the transcriber thread
     let whisper = state.whisper.clone();
     let parakeet_manager = state.parakeet.clone();
-    let granite_speech = state.granite_speech.clone();
+    let cohere = state.cohere.clone();
     let vad = state.vad.clone();
     let active_engine = *state.active_engine.lock().unwrap();
     let session_transcript = state.session_transcript.clone();
@@ -236,7 +236,7 @@ fn start_recording_blocking(
     let recording_handle_arc = state.recording_handle.clone();
     let denoise_enabled_thread = denoise_enabled;
 
-    /// VAD-gated transcription — shared logic for Whisper and Granite Speech.
+    /// VAD-gated transcription — shared logic for Whisper and Cohere.
     /// Both managers expose the same `transcribe_chunk(&[f32], u32) -> Result<String, _>` API,
     /// so the entire accumulate → normalize → VAD-check → transcribe → emit pipeline
     /// lives here once instead of being copy-pasted per engine.
@@ -287,7 +287,7 @@ fn start_recording_blocking(
             let start = std::time::Instant::now();
             match transcribe(&pcm16, 16000) {
                 Ok(text) if !text.trim().is_empty() => {
-                    let text = if matches!(method, "Whisper" | "GraniteSpeech") {
+                    let text = if matches!(method, "Whisper" | "Cohere") {
                         strip_whitelisted_sound_captions(&text)
                     } else {
                         text
@@ -328,7 +328,10 @@ fn start_recording_blocking(
     let app_clone = app_handle.clone();
     let transcriber_thread = std::thread::spawn(move || {
         let mut buffer = Vec::new();
-        let chunk_size = (sample_rate * 6) as usize;
+        let chunk_size = match active_engine {
+            ASREngine::Cohere => (sample_rate * 15) as usize,
+            _ => (sample_rate * 6) as usize,
+        };
         let max_buffer_size = chunk_size * 2;
         // Pre-allocated scratch buffer reused each iteration to avoid per-chunk Vec allocation
         let mut chunk = Vec::with_capacity(chunk_size);
@@ -345,7 +348,7 @@ fn start_recording_blocking(
             };
 
             match active_engine {
-                ASREngine::Whisper | ASREngine::GraniteSpeech => {
+                ASREngine::Whisper | ASREngine::Cohere => {
                     buffer.extend(samples);
                     while buffer.len() >= chunk_size {
                         if buffer.len() > max_buffer_size {
@@ -366,12 +369,12 @@ fn start_recording_blocking(
                                 denoise_enabled_thread, &denoiser_arc,
                             );
                         } else {
-                            let mut gs = granite_speech.lock().unwrap();
+                            let mut gs = cohere.lock().unwrap();
                             let mut transcribe =
                                 |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
                             vad_gated_transcribe(
                                 &mut chunk, sample_rate, &vad,
-                                &mut transcribe, "GraniteSpeech", "🪨",
+                                &mut transcribe, "Cohere", "🪨",
                                 &app_clone, &session_transcript,
                                 denoise_enabled_thread, &denoiser_arc,
                             );
@@ -442,10 +445,10 @@ fn start_recording_blocking(
                     let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
                     vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
                 }
-                ASREngine::GraniteSpeech => {
-                    let mut gs = granite_speech.lock().unwrap();
+                ASREngine::Cohere => {
+                    let mut gs = cohere.lock().unwrap();
                     let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
+                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "Cohere", "🪨", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
                 }
                 ASREngine::Parakeet => {
                     let buf16 = parakeet_preprocess_for_transcribe(
@@ -499,13 +502,13 @@ fn start_recording_blocking(
                         }
                     }
                 }
-                ASREngine::GraniteSpeech => {
-                    let mut gs = granite_speech.lock().unwrap();
+                ASREngine::Cohere => {
+                    let mut gs = cohere.lock().unwrap();
                     if use_vad {
                         let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "GraniteSpeech", "🪨", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
+                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "Cohere", "🪨", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
                     } else {
-                        println!("[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for GraniteSpeech", tail_secs);
+                        println!("[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for Cohere", tail_secs);
                         let mut dg = denoiser_arc.lock().unwrap();
                         let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
                             &buffer,
@@ -519,7 +522,7 @@ fn start_recording_blocking(
                             if !text.trim().is_empty() {
                                 println!("[TRANSCRIPT] 🪨 (Tail) \"{}\"", text.trim());
                                 let _ = app_clone.emit("transcription-chunk", crate::types::TranscriptionChunk {
-                                    text: text.clone(), processing_time_ms: 0, method: "GraniteSpeech".to_string(),
+                                    text: text.clone(), processing_time_ms: 0, method: "Cohere".to_string(),
                                 });
                                 session_transcript.lock().unwrap().push_str(&text);
                             }
@@ -1175,8 +1178,8 @@ fn stop_recording_blocking(
     // transcriber thread handles the actual word-boundary safety margin.
     teardown_recording(recording, 80);
 
-    if active_engine == ASREngine::Parakeet || active_engine == ASREngine::GraniteSpeech {
-        let engine_name = if active_engine == ASREngine::Parakeet { "Parakeet" } else { "Granite Speech" };
+    if active_engine == ASREngine::Parakeet || active_engine == ASREngine::Cohere {
+        let engine_name = if active_engine == ASREngine::Parakeet { "Parakeet" } else { "Cohere" };
         println!("[PROCESSING] Skipping final pass ({} streaming is sufficient)", engine_name);
         let transcript = session_transcript.lock().unwrap().clone();
         let final_text = if transcript.trim().is_empty() {

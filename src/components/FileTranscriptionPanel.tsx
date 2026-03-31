@@ -36,12 +36,12 @@ interface FileTranscriptionPanelProps {
     activeEngine: string;
     currentModel?: string | null;
     currentParakeetModel?: string | null;
-    currentGraniteModel?: string | null;
+    currentCohereModel?: string | null;
     isModelLoading?: boolean;
     onFileProcessingChange?: (processing: boolean) => void;
 }
 
-export function FileTranscriptionPanel({ activeEngine, currentModel, currentParakeetModel, currentGraniteModel, isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
+export function FileTranscriptionPanel({ activeEngine, currentModel, currentParakeetModel, currentCohereModel, isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
     const isParakeet = activeEngine === "parakeet";
     const isParakeetRef = useRef(isParakeet);
     const isModelLoadingRef = useRef(isModelLoading);
@@ -53,7 +53,7 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
     const currentActiveModelId =
         activeEngine === "whisper" ? (currentModel ?? null) :
         activeEngine === "parakeet" ? (currentParakeetModel ?? null) :
-        (currentGraniteModel ?? null);
+        (currentCohereModel ?? null);
     useEffect(() => { activeModelIdRef.current = currentActiveModelId; }, [currentActiveModelId]);
 
     const [files, setFiles] = useState<FileItem[]>([]);
@@ -246,11 +246,11 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
     const activeModelId =
         activeEngine === "whisper" ? (currentModel ?? null) :
         activeEngine === "parakeet" ? (currentParakeetModel ?? null) :
-        activeEngine === "granite_speech" ? (currentGraniteModel ?? null) : null;
+        activeEngine === "cohere" ? (currentCohereModel ?? null) : null;
 
     const engineLabel = () => {
         const base = activeEngine === "parakeet" ? "Parakeet"
-            : activeEngine === "granite_speech" ? "Granite"
+            : activeEngine === "cohere" ? "Cohere"
             : "Whisper";
         const variant = formatModelDisplay(activeModelId);
         return variant ? `${base} · ${variant}` : base;
@@ -335,7 +335,7 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
                             </svg>
                         </div>
                         <p className="file-drop-title" style={{ opacity: 0.35 }}>File transcription unavailable</p>
-                        <p className="file-drop-hint">Parakeet is a streaming engine · switch to Whisper or Granite for file transcription</p>
+                        <p className="file-drop-hint">Parakeet is a streaming engine · switch to Whisper or Cohere for file transcription</p>
                     </>
                 ) : isModelLoading ? (
                     <>

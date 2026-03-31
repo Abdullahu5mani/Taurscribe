@@ -1,7 +1,7 @@
 import type { ASREngine } from "../hooks/useEngineSwitch";
 
-/** Full FP16 ONNX bundle (`granite-speech-1b-fp16`) — backend has no CPU path. */
-export const GRANITE_FP16_MODEL_ID = "granite-speech-1b-fp16";
+/** Legacy Cohere FP16 id kept for backward-compatible settings migration. */
+export const COHERE_FP16_MODEL_ID = "granite-speech-1b-fp16";
 
 /**
  * Maps a model ID to the engine that owns it, by prefix convention.
@@ -10,7 +10,7 @@ export const GRANITE_FP16_MODEL_ID = "granite-speech-1b-fp16";
  */
 export function getEngineForModelId(id: string): ASREngine | null {
     if (id.startsWith("parakeet")) return "parakeet";
-    if (id.startsWith("granite")) return "granite_speech";
+    if (id.startsWith("granite")) return "cohere";
     if (id.startsWith("whisper")) return "whisper";
     return null;
 }

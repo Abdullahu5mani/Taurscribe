@@ -31,7 +31,7 @@ All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. 
 
 | File | Type | Purpose |
 | --- | --- | --- |
-| `src-tauri/src/bin/librispeech_eval.rs` | CLI | Batch WER for Whisper / Parakeet / Granite from a JSONL manifest |
+| `src-tauri/src/bin/librispeech_eval.rs` | CLI | Batch WER for Whisper / Parakeet / Cohere from a JSONL manifest |
 | `src-tauri/src/bin/librispeech_manifest.rs` | CLI | Builds JSONL manifest (`utt_id`, `flac_path`, `ref_text`) from LibriSpeech `test-clean` |
 | `src-tauri/src/librispeech_wer.rs` | Library | Text normalization, token-level Levenshtein WER, LibriSpeech FLAC path resolution helpers |
 | `src-tauri/src/audio_decode.rs` | Library | Format-agnostic decode (FLAC, WAV, MP3, M4A, …) via Symphonia |
@@ -150,7 +150,7 @@ If you do not use the scripts:
 
 | Test / tool | App path it mirrors | VAD | Chunking |
 | --- | --- | --- | --- |
-| `librispeech_eval` | *(standalone; no UI)* | No — utterances are short clips | Whisper: 3 min; Parakeet / Granite: 15 s |
+| `librispeech_eval` | *(standalone; no UI)* | No — utterances are short clips | Whisper: 3 min; Parakeet / Cohere: 15 s |
 | `jfk_asr_smoke` | Sanity check only | No | Full clip |
 | `file_drop_accuracy` | `commands/file_transcription.rs` | Yes — **adaptive energy (RMS)** segment assembly | Same as eval binary for engines |
 | `mic_accuracy` | `commands/recording.rs` | Yes — energy gate on 6 s windows | Parakeet: 4 s chunks, no gate, padded to ≥64k samples |
@@ -170,7 +170,7 @@ decode → mono → resample 16 kHz → trim edge silence
 
 ```
 cpal capture → preprocess_live_transcribe_chunk → 6 s rolling chunks
-  → energy VAD gate (~0.25) → Whisper / Granite
+  → energy VAD gate (~0.25) → Whisper / Cohere
 
 Parakeet: 4 s chunks, no VAD gate, padded to ≥64k samples
 ```
@@ -249,19 +249,19 @@ cargo run --release --manifest-path src-tauri/Cargo.toml --bin librispeech_eval 
 
 `--audio-root` is optional if every `flac_path` in the manifest still exists on disk.
 
-Other flags: `--engines whisper,parakeet,granite`, `--limit 50`, `--force-cpu`.
+Other flags: `--engines whisper,parakeet,cohere`, `--limit 50`, `--force-cpu`.
 
 Model IDs (optional env): `TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_PARAKEET_MODEL_ID`, `TAURSCRIBE_GRANITE_MODEL_ID`.
 
 CSV columns: `utt_id, engine, wer, ref_word_count, hyp_snippet`. Mean / median WER print to stderr at the end.
 
-**Note:** The CSV **`engine`** column is only `whisper`, `parakeet`, or `granite` — it does **not** record which Whisper size, Parakeet bundle, or Granite folder you used. For a multi-model sweep, use a **different `--out` path per model** (or add a column yourself when merging).
+**Note:** The CSV **`engine`** column is only `whisper`, `parakeet`, or `cohere` — it does **not** record which Whisper size, Parakeet bundle, or Cohere folder you used. For a multi-model sweep, use a **different `--out` path per model** (or add a column yourself when merging).
 
 ### 3b. WER on every installed model
 
 `librispeech_eval` loads **one** checkpoint per engine **per process**: either the first one the app discovers, or the one you select with env vars (`TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_PARAKEET_MODEL_ID`, `TAURSCRIBE_GRANITE_MODEL_ID`). There is no single flag that loops over all local models automatically.
 
-**Approach:** run the binary multiple times — change the env var(s), keep the same manifest, and write to a new CSV each time (or use `--engines whisper` only while sweeping Whisper so Parakeet/Granite are not repeated unnecessarily).
+**Approach:** run the binary multiple times — change the env var(s), keep the same manifest, and write to a new CSV each time (or use `--engines whisper` only while sweeping Whisper so Parakeet/Cohere are not repeated unnecessarily).
 
 **Whisper IDs** match the `ggml-*.bin` stem after `ggml-` and before `.bin` (e.g. `tiny.en`, `base`, `small`). Example sweep on macOS (repo root):
 
@@ -287,9 +287,9 @@ done
 
 **Parakeet IDs** look like `nemotron:folder_name` (directory under the models folder that contains Nemotron ONNX files). Get exact strings from the app’s model list or from folder names under `models/`. Loop the same way with `TAURSCRIBE_PARAKEET_MODEL_ID` and `--engines parakeet`.
 
-**Granite:** you usually have at most a few directories (e.g. `granite-speech-1b` for INT4/q4, `granite-speech-1b-fp16` for the FP16 bundle on Windows with GPU). Set `TAURSCRIBE_GRANITE_MODEL_ID` to that folder name and run with `--engines granite`. On macOS, FP16 Granite is not loaded, so you may only have one usable bundle.
+**Cohere engine:** this uses a single q4f16 universal bundle under `granite-speech-1b`. Set `TAURSCRIBE_GRANITE_MODEL_ID=granite-speech-1b` (or `granite-speech-1b-cpu`) and run with `--engines cohere`.
 
-**All engines × all Whisper variants:** run one full `--engines whisper,parakeet,granite` job per Whisper ID (Parakeet/Granite stay the same unless you also change those env vars). That quickly multiplies runtime and VRAM use — use `--limit` while iterating.
+**All engines × all Whisper variants:** run one full `--engines whisper,parakeet,cohere` job per Whisper ID (Parakeet/Cohere stay the same unless you also change those env vars). That quickly multiplies runtime and VRAM use — use `--limit` while iterating.
 
 ### 4. Integration tests (`cd src-tauri`)
 

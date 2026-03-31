@@ -163,7 +163,7 @@ export function TranscriptHistory({ refreshKey }: TranscriptHistoryProps) {
                                                 <span className="history-badge history-badge-source">🎤 mic</span>
                                             )}
                                             <span className={`history-badge history-badge-engine history-badge-engine--${item.engine}`}>
-                                                {item.engine === "parakeet" ? "Parakeet" : item.engine === "granite_speech" ? "Granite" : "Whisper"}
+                                                {item.engine === "parakeet" ? "Parakeet" : item.engine === "cohere" ? "Cohere" : "Whisper"}
                                             </span>
                                             {shortModelId(item.model_id) && (
                                                 <span className="history-badge history-badge-model" title={item.model_id ?? undefined}>

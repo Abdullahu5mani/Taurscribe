@@ -494,7 +494,7 @@ mod mac {
         let engine_label = match engine.unwrap_or_default() {
             "whisper" => "Whisper",
             "parakeet" => "Parakeet",
-            "granite_speech" => "Granite",
+            "cohere" | "granite_speech" => "Cohere",
             _ => "Taurscribe",
         };
         match phase {

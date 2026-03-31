@@ -26,7 +26,7 @@ export function useModelsWatcher({
         let unlisten: (() => void) | undefined;
 
         const handleModelsChanged = async () => {
-            // Refresh backend model lists (Whisper + Parakeet + Granite)
+            // Refresh backend model lists (Whisper + Parakeet + Cohere)
             refreshModels(false);
 
             // Refresh AppMall status (downloaded / verified flags) so the UI
