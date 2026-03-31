@@ -331,15 +331,16 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
         // We keep existing granite-* model IDs for backward compatibility while
         // switching the underlying files to Cohere's ONNX export.
         // On disk: `%LOCALAPPDATA%\\Taurscribe\\models\\granite-speech-1b`.
-        // Variant: q4f16 (single bundle intended to run on CPU and GPU EPs).
+        // Variant: FP16 pair (best candidate for CUDA compatibility testing).
         "granite-speech-1b-cpu" => Some(ModelConfig {
             repo: "onnx-community/cohere-transcribe-03-2026-ONNX",
             branch: "main",
             files: vec![
-                ModelFile { filename: "encoder_model_q4f16.onnx",           remote_path: "onnx/encoder_model_q4f16.onnx",           sha1: "" },
-                ModelFile { filename: "encoder_model_q4f16.onnx_data",      remote_path: "onnx/encoder_model_q4f16.onnx_data",      sha1: "" },
-                ModelFile { filename: "decoder_model_merged_q4f16.onnx",    remote_path: "onnx/decoder_model_merged_q4f16.onnx",    sha1: "" },
-                ModelFile { filename: "decoder_model_merged_q4f16.onnx_data", remote_path: "onnx/decoder_model_merged_q4f16.onnx_data", sha1: "" },
+                ModelFile { filename: "encoder_model_fp16.onnx",            remote_path: "onnx/encoder_model_fp16.onnx",            sha1: "" },
+                ModelFile { filename: "encoder_model_fp16.onnx_data",       remote_path: "onnx/encoder_model_fp16.onnx_data",       sha1: "" },
+                ModelFile { filename: "encoder_model_fp16.onnx_data_1",     remote_path: "onnx/encoder_model_fp16.onnx_data_1",     sha1: "" },
+                ModelFile { filename: "decoder_model_merged_fp16.onnx",     remote_path: "onnx/decoder_model_merged_fp16.onnx",     sha1: "" },
+                ModelFile { filename: "decoder_model_merged_fp16.onnx_data",remote_path: "onnx/decoder_model_merged_fp16.onnx_data",sha1: "" },
                 ModelFile { filename: "tokenizer.json",                    remote_path: "tokenizer.json",                         sha1: "" },
                 ModelFile { filename: "tokenizer_config.json",             remote_path: "tokenizer_config.json",                  sha1: "" },
                 ModelFile { filename: "preprocessor_config.json",          remote_path: "preprocessor_config.json",               sha1: "" },
@@ -355,10 +356,11 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             repo: "onnx-community/cohere-transcribe-03-2026-ONNX",
             branch: "main",
             files: vec![
-                ModelFile { filename: "encoder_model_q4f16.onnx",           remote_path: "onnx/encoder_model_q4f16.onnx",           sha1: "" },
-                ModelFile { filename: "encoder_model_q4f16.onnx_data",      remote_path: "onnx/encoder_model_q4f16.onnx_data",      sha1: "" },
-                ModelFile { filename: "decoder_model_merged_q4f16.onnx",    remote_path: "onnx/decoder_model_merged_q4f16.onnx",    sha1: "" },
-                ModelFile { filename: "decoder_model_merged_q4f16.onnx_data", remote_path: "onnx/decoder_model_merged_q4f16.onnx_data", sha1: "" },
+                ModelFile { filename: "encoder_model_fp16.onnx",            remote_path: "onnx/encoder_model_fp16.onnx",            sha1: "" },
+                ModelFile { filename: "encoder_model_fp16.onnx_data",       remote_path: "onnx/encoder_model_fp16.onnx_data",       sha1: "" },
+                ModelFile { filename: "encoder_model_fp16.onnx_data_1",     remote_path: "onnx/encoder_model_fp16.onnx_data_1",     sha1: "" },
+                ModelFile { filename: "decoder_model_merged_fp16.onnx",     remote_path: "onnx/decoder_model_merged_fp16.onnx",     sha1: "" },
+                ModelFile { filename: "decoder_model_merged_fp16.onnx_data",remote_path: "onnx/decoder_model_merged_fp16.onnx_data",sha1: "" },
                 ModelFile { filename: "tokenizer.json",                    remote_path: "tokenizer.json",                         sha1: "" },
                 ModelFile { filename: "tokenizer_config.json",             remote_path: "tokenizer_config.json",                  sha1: "" },
                 ModelFile { filename: "preprocessor_config.json",          remote_path: "preprocessor_config.json",               sha1: "" },

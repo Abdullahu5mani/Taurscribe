@@ -11,7 +11,7 @@ pub struct CohereModelInfo {
     pub id: String,
     pub display_name: String,
     pub size_mb: f32,
-    /// Kept for UI compatibility; the current Cohere universal bundle does not require GPU.
+    /// Cohere is CUDA-only in the current implementation.
     pub requires_gpu: bool,
 }
 
@@ -29,7 +29,7 @@ pub fn list_cohere_models() -> Vec<CohereModelInfo> {
             id: "granite-speech-1b-cpu".to_string(),
             display_name: "Cohere Transcribe 03-2026 (q4f16)".to_string(),
             size_mb: 1600.0,
-            requires_gpu: false,
+            requires_gpu: true,
         });
     }
     out
@@ -44,6 +44,9 @@ pub async fn init_cohere(
     force_cpu: Option<bool>,
 ) -> Result<String, String> {
     use crate::types::ASREngine;
+    if force_cpu.unwrap_or(false) {
+        return Err("Cohere is CUDA-only in this build. Disable CPU mode and retry.".to_string());
+    }
 
     // 1. Atomically claim the loading slot — bail if another load is already in flight.
     if state.engine_loading.compare_exchange(

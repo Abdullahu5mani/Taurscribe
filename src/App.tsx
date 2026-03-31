@@ -303,7 +303,7 @@ function App() {
     asrBackend, setAsrBackend,
   } = usePostProcessing(setHeaderStatus, () => setIsSettingsOpen(true), storeRef);
 
-  /** FP16 Cohere loaded — no CPU path; lock header ASR toggle to GPU. */
+  /** Cohere loaded in fixed Hybrid backend — lock header ASR toggle. */
   const [cohereGpuOnlyLoaded, setCohereGpuOnlyLoaded] = useState(false);
 
   const { volume, muted, setVolume, setMuted, playStart, playPaste, playError } = useSounds();
@@ -361,9 +361,12 @@ function App() {
       setCohereGpuOnlyLoaded(false);
       return () => { cancelled = true; };
     }
-    invoke<{ loaded?: boolean; gpu_only?: boolean }>("get_cohere_status")
+    invoke<{ loaded?: boolean; gpu_only?: boolean; backend?: string }>("get_cohere_status")
       .then((s) => {
-        if (!cancelled) setCohereGpuOnlyLoaded(!!s.loaded && !!s.gpu_only);
+        if (!cancelled) {
+          const locked = (!!s.loaded && !!s.gpu_only) || s.backend === "Hybrid";
+          setCohereGpuOnlyLoaded(locked);
+        }
       })
       .catch(() => {
         if (!cancelled) setCohereGpuOnlyLoaded(false);
@@ -768,31 +771,40 @@ function App() {
               {!isMac && (
                 <div className="hardware-bar-aside">
                   <div className={`backend-toggle-inline${cohereGpuOnlyLoaded ? " backend-toggle-inline--locked" : ""}`}>
-                    {/* M5 fix: aria-pressed communicates toggle state to screen readers */}
-                    <button
-                      className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
-                      onClick={() => handleToggleAsrBackend('gpu')}
-                      disabled={isLoading || cohereGpuOnlyLoaded}
-                      aria-pressed={asrBackend === 'gpu'}
-                    ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
-                    <button
-                      className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
-                      onClick={() => handleToggleAsrBackend('cpu')}
-                      disabled={isLoading || cohereGpuOnlyLoaded}
-                      aria-pressed={asrBackend === 'cpu'}
-                    ><IconCpu size={11} /> CPU</button>
-                    <InfoTooltip
-                      size={11}
-                      text={
-                        cohereGpuOnlyLoaded
-                          ? "Cohere FP16 is GPU-only. Download the INT4 “Cohere 4.0 1B Speech” model in Settings → Models for CPU."
-                          : "GPU for max speed; CPU if no GPU or to save VRAM."
-                      }
-                    />
+                    {activeEngine === "cohere" ? (
+                      <>
+                        <button
+                          className="backend-toggle-inline-btn active"
+                          disabled
+                          aria-pressed={true}
+                          title="Cohere uses Hybrid backend (CUDA encoder + CPU decoder)"
+                        >
+                          <IconBolt size={11} style={{ color: '#facc15' }} /> Hybrid
+                        </button>
+                        <InfoTooltip size={11} text="Cohere runs in Hybrid mode on Windows: CUDA encoder + CPU decoder." />
+                      </>
+                    ) : (
+                      <>
+                        {/* M5 fix: aria-pressed communicates toggle state to screen readers */}
+                        <button
+                          className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
+                          onClick={() => handleToggleAsrBackend('gpu')}
+                          disabled={isLoading || cohereGpuOnlyLoaded}
+                          aria-pressed={asrBackend === 'gpu'}
+                        ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
+                        <button
+                          className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
+                          onClick={() => handleToggleAsrBackend('cpu')}
+                          disabled={isLoading || cohereGpuOnlyLoaded}
+                          aria-pressed={asrBackend === 'cpu'}
+                        ><IconCpu size={11} /> CPU</button>
+                        <InfoTooltip size={11} text="GPU for max speed; CPU if no GPU or to save VRAM." />
+                      </>
+                    )}
                   </div>
-                  {cohereGpuOnlyLoaded && (
+                  {cohereGpuOnlyLoaded && activeEngine === "cohere" && (
                     <div className="cohere-fp16-hardware-hint" role="status">
-                      Cohere FP16 requires a GPU. For CPU-only PCs, download <strong>Cohere Transcribe 03-2026 (q4f16)</strong> from Settings → Models.
+                      Cohere backend is fixed to <strong>Hybrid</strong> (CUDA encoder + CPU decoder) on Windows.
                     </div>
                   )}
                 </div>
