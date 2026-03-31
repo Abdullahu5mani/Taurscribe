@@ -9,7 +9,7 @@ export interface SystemInfo {
 }
 
 export type WhisperTier = "Tiny" | "Base" | "Small" | "Medium" | "Large";
-export type RecommendationEngine = "whisper" | "parakeet" | "granite_speech";
+export type RecommendationEngine = "whisper" | "parakeet" | "cohere";
 export type OnboardingUseCase = "quick_notes" | "coding" | "meetings" | "multilingual";
 
 export interface UseCaseOption {
@@ -72,7 +72,7 @@ export const ONBOARDING_USE_CASES: UseCaseOption[] = [
 const ENGINE_LABELS: Record<RecommendationEngine, string> = {
   whisper: "Whisper",
   parakeet: "Parakeet",
-  granite_speech: "Granite Speech",
+  cohere: "Cohere Speech",
 };
 
 function hasDiscreteGpu(sysInfo: SystemInfo | null): boolean {

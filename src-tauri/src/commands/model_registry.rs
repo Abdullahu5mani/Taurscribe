@@ -326,49 +326,47 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             subdirectory: Some("qwen_finetuned_gguf"),
         }),
 
-        // ── Granite Speech ─────────────────────────────────────────────────────
-        // Source: Hugging Face `onnx-community/granite-4.0-1b-speech-ONNX` (community ONNX export of
-        // IBM `ibm-granite/granite-4.0-1b-speech`). Weights under `onnx/`; tokenizer + HF metadata at repo root.
-        // On disk: `%LOCALAPPDATA%\\Taurscribe\\models\\granite-speech-1b` (INT4) or `...\\granite-speech-1b-fp16`.
-        // q4: FP32 I/O, runs on any hardware (~1.8 GB)
+        // ── Cohere slot (single universal ONNX bundle) ───────────────────────
+        // Source: Hugging Face `onnx-community/cohere-transcribe-03-2026-ONNX`.
+        // We keep existing granite-* model IDs for backward compatibility while
+        // switching the underlying files to Cohere's ONNX export.
+        // On disk: `%LOCALAPPDATA%\\Taurscribe\\models\\granite-speech-1b`.
+        // Variant: q4f16 (single bundle intended to run on CPU and GPU EPs).
         "granite-speech-1b-cpu" => Some(ModelConfig {
-            repo: "onnx-community/granite-4.0-1b-speech-ONNX",
+            repo: "onnx-community/cohere-transcribe-03-2026-ONNX",
             branch: "main",
             files: vec![
-                ModelFile { filename: "audio_encoder_q4.onnx",             remote_path: "onnx/audio_encoder_q4.onnx",             sha1: "" },
-                ModelFile { filename: "audio_encoder_q4.onnx_data",        remote_path: "onnx/audio_encoder_q4.onnx_data",        sha1: "" },
-                ModelFile { filename: "embed_tokens_q4.onnx",              remote_path: "onnx/embed_tokens_q4.onnx",             sha1: "" },
-                ModelFile { filename: "embed_tokens_q4.onnx_data",         remote_path: "onnx/embed_tokens_q4.onnx_data",        sha1: "" },
-                ModelFile { filename: "decoder_model_merged_q4.onnx",      remote_path: "onnx/decoder_model_merged_q4.onnx",      sha1: "" },
-                ModelFile { filename: "decoder_model_merged_q4.onnx_data", remote_path: "onnx/decoder_model_merged_q4.onnx_data", sha1: "" },
+                ModelFile { filename: "encoder_model_q4f16.onnx",           remote_path: "onnx/encoder_model_q4f16.onnx",           sha1: "" },
+                ModelFile { filename: "encoder_model_q4f16.onnx_data",      remote_path: "onnx/encoder_model_q4f16.onnx_data",      sha1: "" },
+                ModelFile { filename: "decoder_model_merged_q4f16.onnx",    remote_path: "onnx/decoder_model_merged_q4f16.onnx",    sha1: "" },
+                ModelFile { filename: "decoder_model_merged_q4f16.onnx_data", remote_path: "onnx/decoder_model_merged_q4f16.onnx_data", sha1: "" },
                 ModelFile { filename: "tokenizer.json",                    remote_path: "tokenizer.json",                         sha1: "" },
                 ModelFile { filename: "tokenizer_config.json",             remote_path: "tokenizer_config.json",                  sha1: "" },
                 ModelFile { filename: "preprocessor_config.json",          remote_path: "preprocessor_config.json",               sha1: "" },
+                ModelFile { filename: "processor_config.json",             remote_path: "processor_config.json",                  sha1: "" },
                 ModelFile { filename: "generation_config.json",            remote_path: "generation_config.json",                 sha1: "" },
-                ModelFile { filename: "chat_template.jinja",               remote_path: "chat_template.jinja",                    sha1: "" },
+                ModelFile { filename: "config.json",                       remote_path: "config.json",                            sha1: "" },
             ],
             subdirectory: Some("granite-speech-1b"),
         }),
 
-        // Full FP16 ONNX (~4.6 GB) — Windows + NVIDIA CUDA oriented; same APIs as INT4 bundle.
+        // Backward-compatible alias: same universal bundle, legacy model ID.
         "granite-speech-1b-fp16-cuda" => Some(ModelConfig {
-            repo: "onnx-community/granite-4.0-1b-speech-ONNX",
+            repo: "onnx-community/cohere-transcribe-03-2026-ONNX",
             branch: "main",
             files: vec![
-                ModelFile { filename: "audio_encoder_fp16.onnx", remote_path: "onnx/audio_encoder_fp16.onnx", sha1: "" },
-                ModelFile { filename: "audio_encoder_fp16.onnx_data", remote_path: "onnx/audio_encoder_fp16.onnx_data", sha1: "" },
-                ModelFile { filename: "embed_tokens_fp16.onnx", remote_path: "onnx/embed_tokens_fp16.onnx", sha1: "" },
-                ModelFile { filename: "embed_tokens_fp16.onnx_data", remote_path: "onnx/embed_tokens_fp16.onnx_data", sha1: "" },
-                ModelFile { filename: "decoder_model_merged_fp16.onnx", remote_path: "onnx/decoder_model_merged_fp16.onnx", sha1: "" },
-                ModelFile { filename: "decoder_model_merged_fp16.onnx_data", remote_path: "onnx/decoder_model_merged_fp16.onnx_data", sha1: "" },
-                ModelFile { filename: "decoder_model_merged_fp16.onnx_data_1", remote_path: "onnx/decoder_model_merged_fp16.onnx_data_1", sha1: "" },
-                ModelFile { filename: "tokenizer.json", remote_path: "tokenizer.json", sha1: "" },
-                ModelFile { filename: "tokenizer_config.json", remote_path: "tokenizer_config.json", sha1: "" },
-                ModelFile { filename: "preprocessor_config.json", remote_path: "preprocessor_config.json", sha1: "" },
-                ModelFile { filename: "generation_config.json", remote_path: "generation_config.json", sha1: "" },
-                ModelFile { filename: "chat_template.jinja", remote_path: "chat_template.jinja", sha1: "" },
+                ModelFile { filename: "encoder_model_q4f16.onnx",           remote_path: "onnx/encoder_model_q4f16.onnx",           sha1: "" },
+                ModelFile { filename: "encoder_model_q4f16.onnx_data",      remote_path: "onnx/encoder_model_q4f16.onnx_data",      sha1: "" },
+                ModelFile { filename: "decoder_model_merged_q4f16.onnx",    remote_path: "onnx/decoder_model_merged_q4f16.onnx",    sha1: "" },
+                ModelFile { filename: "decoder_model_merged_q4f16.onnx_data", remote_path: "onnx/decoder_model_merged_q4f16.onnx_data", sha1: "" },
+                ModelFile { filename: "tokenizer.json",                    remote_path: "tokenizer.json",                         sha1: "" },
+                ModelFile { filename: "tokenizer_config.json",             remote_path: "tokenizer_config.json",                  sha1: "" },
+                ModelFile { filename: "preprocessor_config.json",          remote_path: "preprocessor_config.json",               sha1: "" },
+                ModelFile { filename: "processor_config.json",             remote_path: "processor_config.json",                  sha1: "" },
+                ModelFile { filename: "generation_config.json",            remote_path: "generation_config.json",                 sha1: "" },
+                ModelFile { filename: "config.json",                       remote_path: "config.json",                            sha1: "" },
             ],
-            subdirectory: Some("granite-speech-1b-fp16"),
+            subdirectory: Some("granite-speech-1b"),
         }),
         _ => None,
     }

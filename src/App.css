@@ -101,8 +101,8 @@
   --whisper-glow:  rgba(104, 149, 210, 0.25);
   --parakeet-color: #3ecfa5;          /* NVIDIA teal */
   --parakeet-glow:  rgba(62, 207, 165, 0.25);
-  --granite-color:  #0f62fe;          /* IBM Carbon blue */
-  --granite-glow:   rgba(15, 98, 254, 0.25);
+  --cohere-color:  #0f62fe;          /* Cohere blue */
+  --cohere-glow:   rgba(15, 98, 254, 0.25);
 
   /* 10% — Recording / processing indicators */
   --recording:      #dc2626;
@@ -212,7 +212,7 @@
   --tile-accent: #3ecfa5;
   --tile-accent-glow: rgba(62, 207, 165, 0.35);
 }
-.theme-granite_speech {
+.theme-cohere {
   --accent-primary: #0f62fe;
   --accent-primary-rgb: 15, 98, 254;
   --accent-primary-dark: #0043ce;
@@ -469,8 +469,8 @@ body {
   font-weight: 500;
 }
 
-.ticker-granite {
-  color: color-mix(in srgb, var(--granite-color) 38%, rgba(130, 132, 145, 0.9));
+.ticker-cohere {
+  color: color-mix(in srgb, var(--cohere-color) 38%, rgba(130, 132, 145, 0.9));
   font-weight: 500;
 }
 
@@ -667,7 +667,7 @@ body {
   cursor: not-allowed;
 }
 
-.granite-fp16-hardware-hint {
+.cohere-fp16-hardware-hint {
   font-size: var(--font-xs);
   color: var(--accent-primary);
   opacity: 0.85;
@@ -981,8 +981,8 @@ body {
   border-color: rgba(62, 207, 165, 0.5);
 }
 
-.status-card.granite.active {
-  box-shadow: 0 0 20px var(--granite-glow);
+.status-card.cohere.active {
+  box-shadow: 0 0 20px var(--cohere-glow);
   border-color: rgba(15, 98, 254, 0.5);
 }
 
@@ -1009,8 +1009,8 @@ body {
   color: var(--parakeet-color);
 }
 
-.status-card.granite .engine-badge {
-  color: var(--granite-color);
+.status-card.cohere .engine-badge {
+  color: var(--cohere-color);
 }
 
 .status-card-header-right {
@@ -2569,8 +2569,8 @@ body {
   border-color: rgba(62, 207, 165, 0.4);
 }
 
-.feed-badge-engine--granite_speech {
-  color: var(--granite-color);
+.feed-badge-engine--cohere {
+  color: var(--cohere-color);
   border-color: rgba(15, 98, 254, 0.4);
 }
 
@@ -2878,8 +2878,8 @@ body {
   border-color: rgba(62, 207, 165, 0.4);
 }
 
-.history-badge-engine--granite_speech {
-  color: var(--granite-color);
+.history-badge-engine--cohere {
+  color: var(--cohere-color);
   border-color: rgba(15, 98, 254, 0.4);
 }
 
@@ -3392,7 +3392,7 @@ body {
 
   .status-card.whisper.active::before,
   .status-card.parakeet.active::before,
-  .status-card.granite.active::before {
+  .status-card.cohere.active::before {
     height: 3px;
   }
 

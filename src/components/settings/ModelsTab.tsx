@@ -75,7 +75,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const [pulseModelIds, setPulseModelIds] = useState<Set<string>>(new Set());
     const whisperGroupRef = useRef<HTMLDivElement>(null);
     const parakeetGroupRef = useRef<HTMLDivElement>(null);
-    const graniteGroupRef = useRef<HTMLDivElement>(null);
+    const cohereGroupRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         invoke<string>('get_platform').then(setPlatform).catch(() => { });
@@ -100,8 +100,8 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     );
 
     const parakeetModels = models.filter(m => m.type === 'Parakeet');
-    const graniteModels = models.filter(
-        m => m.type === 'GraniteSpeech'
+    const cohereModels = models.filter(
+        m => m.type === 'Cohere'
             && (!m.macosOnly || isMac)
             && (!m.windowsOnly || isWindows),
     );
@@ -142,9 +142,9 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
         } else if (scrollTarget === 'parakeet') {
             groupRef = parakeetGroupRef;
             targetModelId = models.find(m => m.type === 'Parakeet' && !m.downloaded)?.id;
-        } else if (scrollTarget === 'granite_speech') {
-            groupRef = graniteGroupRef;
-            targetModelId = models.find(m => m.type === 'GraniteSpeech' && !m.downloaded)?.id;
+        } else if (scrollTarget === 'cohere') {
+            groupRef = cohereGroupRef;
+            targetModelId = models.find(m => m.type === 'Cohere' && !m.downloaded)?.id;
         } else {
             return;
         }
@@ -284,14 +284,14 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                 </div>
             </div>
 
-            {/* ── Granite Speech ───────────────────────────────────── */}
-            <div className="model-group" ref={graniteGroupRef}>
+            {/* ── Cohere ──────────────────────────────────────────── */}
+            <div className="model-group" ref={cohereGroupRef}>
                 <div className="model-group-header">
-                    <h3 className="settings-section-title">Granite Speech</h3>
-                    <span className="model-group-sub model-group-sub--granite">by IBM · English · ONNX</span>
+                    <h3 className="settings-section-title">Cohere</h3>
+                    <span className="model-group-sub model-group-sub--cohere">by Cohere · English · ONNX</span>
                 </div>
                 <div className="model-list">
-                    {graniteModels.map(m => (
+                    {cohereModels.map(m => (
                         <div
                             key={m.id}
                             className={`model-item-wrapper${pulseModelIds.has(m.id) ? ' model-item-wrapper--pulse' : ''}`}

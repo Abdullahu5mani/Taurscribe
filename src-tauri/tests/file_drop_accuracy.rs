@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use taurscribe_lib::audio_decode;
 use taurscribe_lib::audio_preprocess;
-use taurscribe_lib::granite_speech::GraniteSpeechManager;
+use taurscribe_lib::cohere::CohereManager;
 use taurscribe_lib::librispeech_wer;
 use taurscribe_lib::parakeet::ParakeetManager;
 use taurscribe_lib::utils::clean_transcript;
@@ -120,7 +120,7 @@ fn transcribe_parakeet(p: &mut ParakeetManager, pcm: &[f32]) -> Result<String, S
     Ok(clean_transcript(&parts.join(" ")))
 }
 
-fn transcribe_granite(g: &mut GraniteSpeechManager, pcm: &[f32]) -> Result<String, String> {
+fn transcribe_cohere(g: &mut CohereManager, pcm: &[f32]) -> Result<String, String> {
     let parts: Vec<String> = pcm
         .chunks(STREAM_CHUNK_SAMPLES)
         .filter_map(|chunk| {
@@ -245,8 +245,8 @@ fn file_drop_accuracy() {
         Err(e) => eprintln!("[SKIP] Parakeet list_models: {e}"),
     }
 
-    // ── Granite Speech ────────────────────────────────────────────────────────
-    let mut g = GraniteSpeechManager::new();
+    // ── Cohere ───────────────────────────────────────────────────────────────
+    let mut g = CohereManager::new();
     match g.initialize(None, true) {
         Ok(_) => {
             let wers = results.entry("granite").or_default();
@@ -260,7 +260,7 @@ fn file_drop_accuracy() {
                     Ok(p) => p,
                     Err(e) => { eprintln!("[granite] {} audio error: {e}", row.utt_id); continue; }
                 };
-                let hyp = match transcribe_granite(&mut g, &pcm) {
+                let hyp = match transcribe_cohere(&mut g, &pcm) {
                     Ok(t) => t,
                     Err(e) => { eprintln!("[granite] {} transcribe error: {e}", row.utt_id); continue; }
                 };
@@ -270,7 +270,7 @@ fn file_drop_accuracy() {
                 wers.push(w_val);
             }
         }
-        Err(e) => eprintln!("[SKIP] Granite init: {e} (need INT4 bundle; FP16 is GPU-only on Windows)"),
+        Err(e) => eprintln!("[SKIP] Cohere init: {e} (need q4f16 bundle in granite-speech-1b)"),
     }
     g.unload();
 

@@ -16,7 +16,7 @@ export interface ParakeetModelInfo {
     size_mb: number;
 }
 
-export interface GraniteSpeechModelInfo {
+export interface CohereModelInfo {
     id: string;
     display_name: string;
     size_mb: number;
@@ -39,8 +39,8 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
     const [currentModel, setCurrentModel] = useState<string | null>(null);
     const [parakeetModels, setParakeetModels] = useState<ParakeetModelInfo[]>([]);
     const [currentParakeetModel, setCurrentParakeetModel] = useState<string | null>(null);
-    const [graniteModels, setGraniteModels] = useState<GraniteSpeechModelInfo[]>([]);
-    const [currentGraniteModel, setCurrentGraniteModel] = useState<string | null>(null);
+    const [cohereModels, setCohereModels] = useState<CohereModelInfo[]>([]);
+    const [currentCohereModel, setCurrentCohereModel] = useState<string | null>(null);
 
     const refreshModels = async (showToast = true) => {
         try {
@@ -51,8 +51,8 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
             const pModels = await invoke("list_parakeet_models") as ParakeetModelInfo[];
             setParakeetModels(pModels);
 
-            const gModels = await invoke("list_granite_models") as GraniteSpeechModelInfo[];
-            setGraniteModels(gModels);
+            const gModels = await invoke("list_cohere_models") as CohereModelInfo[];
+            setCohereModels(gModels);
 
             if (modelList.length > 0) {
                 setCurrentModel(prev => prev ?? modelList[0].id);
@@ -61,7 +61,7 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
                 setCurrentParakeetModel(prev => prev ?? pModels[0].id);
             }
             if (gModels.length > 0) {
-                setCurrentGraniteModel(prev => prev ?? gModels[0].id);
+                setCurrentCohereModel(prev => prev ?? gModels[0].id);
             }
 
             if (showToast) {
@@ -81,10 +81,10 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
         setParakeetModels,
         currentParakeetModel,
         setCurrentParakeetModel,
-        graniteModels,
-        setGraniteModels,
-        currentGraniteModel,
-        setCurrentGraniteModel,
+        cohereModels,
+        setCohereModels,
+        currentCohereModel,
+        setCurrentCohereModel,
         refreshModels,
     };
 }

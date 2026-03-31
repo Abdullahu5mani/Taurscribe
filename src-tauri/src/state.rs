@@ -1,6 +1,6 @@
 use crate::audio::RecordingHandle;
 use crate::denoise::Denoiser;
-use crate::granite_speech::GraniteSpeechManager;
+use crate::cohere::CohereManager;
 use crate::parakeet::ParakeetManager;
 use crate::types::{ASREngine, AppState, HotkeyBinding};
 use crate::vad::VADManager;
@@ -63,8 +63,8 @@ pub struct AudioState {
     // "quit"  → exit the process
     pub close_behavior: Arc<Mutex<String>>,
 
-    // The Granite Speech ONNX engine (alternative to Whisper/Parakeet)
-    pub granite_speech: Arc<Mutex<GraniteSpeechManager>>,
+    // The Cohere Transcribe ONNX engine (alternative to Whisper/Parakeet)
+    pub cohere: Arc<Mutex<CohereManager>>,
 
     // When true the global hotkey listener ignores all key events.
     // Used to prevent accidental recording while the user is re-binding
@@ -87,7 +87,7 @@ impl AudioState {
         whisper: WhisperManager,
         parakeet: ParakeetManager,
         vad: VADManager,
-        granite_speech: GraniteSpeechManager,
+        cohere: CohereManager,
     ) -> Self {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
@@ -103,7 +103,7 @@ impl AudioState {
             selected_input_device: Arc::new(Mutex::new(None)),
             denoiser: Arc::new(Mutex::new(None)),
             close_behavior: Arc::new(Mutex::new("tray".to_string())),
-            granite_speech: Arc::new(Mutex::new(granite_speech)),
+            cohere: Arc::new(Mutex::new(cohere)),
             hotkey_suppressed: Arc::new(AtomicBool::new(false)),
             recording_paused: Arc::new(AtomicBool::new(false)),
             model_loaded: Arc::new(AtomicBool::new(false)),
@@ -125,14 +125,11 @@ impl AudioState {
             ASREngine::Parakeet => crate::parakeet::ParakeetManager::list_available_models()
                 .map(|v| !v.is_empty())
                 .unwrap_or(false),
-            ASREngine::GraniteSpeech => {
+            ASREngine::Cohere => {
                 let Ok(models_dir) = crate::utils::get_models_dir() else {
                     return false;
                 };
-                crate::granite_speech::granite_int4_bundle_ready(&models_dir.join("granite-speech-1b"))
-                    || crate::granite_speech::granite_fp16_bundle_ready(
-                        &models_dir.join("granite-speech-1b-fp16"),
-                    )
+                crate::cohere::granite_int4_bundle_ready(&models_dir.join("granite-speech-1b"))
             }
         }
     }
@@ -157,10 +154,10 @@ impl AudioState {
             }
         }
         {
-            let mut g = self.granite_speech.lock().map_err(|e| e.to_string())?;
+            let mut g = self.cohere.lock().map_err(|e| e.to_string())?;
             if g.get_status().loaded {
                 g.unload();
-                unloaded.push("granite_speech");
+                unloaded.push("cohere");
             }
         }
 

@@ -146,7 +146,7 @@ function StepWelcome({ onNext }: { onNext: () => void }) {
         </li>
         <li className="welcome-feature">
           <span className="welcome-feature-dot" />
-          Three local engines: Whisper, Parakeet, and Granite Speech
+          Three local engines: Whisper, Parakeet, and Cohere Speech
         </li>
         <li className="welcome-feature">
           <span className="welcome-feature-dot" />

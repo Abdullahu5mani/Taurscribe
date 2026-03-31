@@ -55,7 +55,7 @@ pub async fn switch_model(
     );
 
     let parakeet_arc   = state.parakeet.clone();
-    let granite_arc    = state.granite_speech.clone();
+    let cohere_arc     = state.cohere.clone();
     let whisper_arc    = state.whisper.clone();
     let active_engine_arc = state.active_engine.clone();
     let mid = model_id.clone();
@@ -64,7 +64,7 @@ pub async fn switch_model(
         // 3. Check what is currently loaded.
         let whisper_current  = whisper_arc.lock().unwrap().get_current_model().cloned();
         let parakeet_loaded  = parakeet_arc.lock().unwrap().get_status().loaded;
-        let granite_loaded   = granite_arc.lock().unwrap().get_status().loaded;
+        let cohere_loaded    = cohere_arc.lock().unwrap().get_status().loaded;
         let active           = *active_engine_arc.lock().unwrap();
 
         let whisper_on_cpu = {
@@ -76,7 +76,7 @@ pub async fn switch_model(
         if whisper_current.as_deref() == Some(mid.as_str())
             && active == ASREngine::Whisper
             && !parakeet_loaded
-            && !granite_loaded
+            && !cohere_loaded
             && whisper_on_cpu == force_cpu
         {
             println!("[INFO] Whisper model '{}' is already loaded — skipping reload", mid);
@@ -88,9 +88,9 @@ pub async fn switch_model(
             println!("[INFO] Unloading Parakeet before switching to Whisper");
             parakeet_arc.lock().unwrap().unload();
         }
-        if granite_loaded {
-            println!("[INFO] Unloading Granite Speech before switching to Whisper");
-            granite_arc.lock().unwrap().unload();
+        if cohere_loaded {
+            println!("[INFO] Unloading Cohere before switching to Whisper");
+            cohere_arc.lock().unwrap().unload();
         }
 
         // 6. Load the requested Whisper model.
@@ -151,14 +151,14 @@ pub async fn init_parakeet(
 
     let whisper_arc       = state.whisper.clone();
     let parakeet_arc      = state.parakeet.clone();
-    let granite_arc       = state.granite_speech.clone();
+    let cohere_arc        = state.cohere.clone();
     let active_engine_arc = state.active_engine.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         // 2. Check what is currently loaded.
         let parakeet_status  = parakeet_arc.lock().unwrap().get_status();
         let whisper_loaded   = whisper_arc.lock().unwrap().get_current_model().is_some();
-        let granite_loaded   = granite_arc.lock().unwrap().get_status().loaded;
+        let cohere_loaded    = cohere_arc.lock().unwrap().get_status().loaded;
         let active           = *active_engine_arc.lock().unwrap();
 
         // 3. Skip if the same Parakeet model is already active on the same CPU/GPU preference.
@@ -167,7 +167,7 @@ pub async fn init_parakeet(
         let already_loaded = parakeet_status.loaded
             && active == ASREngine::Parakeet
             && !whisper_loaded
-            && !granite_loaded
+            && !cohere_loaded
             && (target_id.is_none() || parakeet_status.model_id.as_deref() == target_id)
             && parakeet_on_cpu == force_cpu;
         if already_loaded {
@@ -180,9 +180,9 @@ pub async fn init_parakeet(
             println!("[INFO] Unloading Whisper before switching to Parakeet");
             whisper_arc.lock().unwrap().unload();
         }
-        if granite_loaded {
-            println!("[INFO] Unloading Granite Speech before switching to Parakeet");
-            granite_arc.lock().unwrap().unload();
+        if cohere_loaded {
+            println!("[INFO] Unloading Cohere before switching to Parakeet");
+            cohere_arc.lock().unwrap().unload();
         }
 
         // Free any existing Parakeet sessions before acquiring the lock for a fresh load

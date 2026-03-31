@@ -142,7 +142,7 @@ function App() {
   const [loadingMessage, setLoadingMessage] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<string | undefined>(undefined);
-  const [settingsScrollTarget, setSettingsScrollTarget] = useState<'whisper' | 'parakeet' | 'granite_speech' | null>(null);
+  const [settingsScrollTarget, setSettingsScrollTarget] = useState<'whisper' | 'parakeet' | 'cohere' | null>(null);
   /** null = not yet loaded from store; true = show wizard (first run); false = show main app */
   const [showSetupWizard, setShowSetupWizard] = useState<boolean | null>(null);
   /** Incremented after each successful save_transcript_history; tells TranscriptFeed to reload. */
@@ -230,7 +230,7 @@ function App() {
   const {
     models, setModels, currentModel, setCurrentModel,
     parakeetModels, setParakeetModels, currentParakeetModel, setCurrentParakeetModel,
-    graniteModels, setGraniteModels, currentGraniteModel, setCurrentGraniteModel,
+    cohereModels, setCohereModels, currentCohereModel, setCurrentCohereModel,
     refreshModels,
   } = useModels(setHeaderStatus);
 
@@ -303,8 +303,8 @@ function App() {
     asrBackend, setAsrBackend,
   } = usePostProcessing(setHeaderStatus, () => setIsSettingsOpen(true), storeRef);
 
-  /** FP16 Granite loaded — no CPU path; lock header ASR toggle to GPU. */
-  const [graniteGpuOnlyLoaded, setGraniteGpuOnlyLoaded] = useState(false);
+  /** FP16 Cohere loaded — no CPU path; lock header ASR toggle to GPU. */
+  const [cohereGpuOnlyLoaded, setCohereGpuOnlyLoaded] = useState(false);
 
   const { volume, muted, setVolume, setMuted, playStart, playPaste, playError } = useSounds();
 
@@ -327,7 +327,7 @@ function App() {
     handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk,
   } = useRecording({
     activeEngineRef: activeEngineForwarded,
-    models, parakeetModels, graniteModels, currentModel, currentParakeetModel, currentGraniteModel,
+    models, parakeetModels, cohereModels, currentModel, currentParakeetModel, currentCohereModel,
     asrBackend,
     setAsrBackend,
     setCurrentModel, setLoadedEngine: (e) => setLoadedEngineForwarded.current(e), enableGrammarLMRef,
@@ -342,31 +342,31 @@ function App() {
     loadedEngine, setLoadedEngine,
     isLoading, setIsLoading, isLoadingRef,
     loadingTargetEngine, transferLineFadingOut, setTransferLineFadingOut,
-    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToGranite,
+    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToCohere,
     handleToggleAsrBackend,
   } = useEngineSwitch({
-    models, parakeetModels, graniteModels,
-    currentModel, currentParakeetModel, currentGraniteModel,
-    setCurrentModel, setCurrentParakeetModel, setCurrentGraniteModel,
+    models, parakeetModels, cohereModels,
+    currentModel, currentParakeetModel, currentCohereModel,
+    setCurrentModel, setCurrentParakeetModel, setCurrentCohereModel,
     setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
     setAsrBackend,
-    graniteGpuOnlyLocked: graniteGpuOnlyLoaded,
+    cohereGpuOnlyLocked: cohereGpuOnlyLoaded,
     isRecordingRef,
     downloadProgressRef,
   });
 
   useEffect(() => {
     let cancelled = false;
-    if (loadedEngine !== "granite_speech") {
-      setGraniteGpuOnlyLoaded(false);
+    if (loadedEngine !== "cohere") {
+      setCohereGpuOnlyLoaded(false);
       return () => { cancelled = true; };
     }
-    invoke<{ loaded?: boolean; gpu_only?: boolean }>("get_granite_speech_status")
+    invoke<{ loaded?: boolean; gpu_only?: boolean }>("get_cohere_status")
       .then((s) => {
-        if (!cancelled) setGraniteGpuOnlyLoaded(!!s.loaded && !!s.gpu_only);
+        if (!cancelled) setCohereGpuOnlyLoaded(!!s.loaded && !!s.gpu_only);
       })
       .catch(() => {
-        if (!cancelled) setGraniteGpuOnlyLoaded(false);
+        if (!cancelled) setCohereGpuOnlyLoaded(false);
       });
     return () => { cancelled = true; };
   }, [loadedEngine]);
@@ -377,19 +377,19 @@ function App() {
 
   // handleDeleteModel moved here so setLoadedEngine is in scope
   const handleDeleteModel = async (id: string, _name: string) => {
-    const isActiveModel = id === currentModel || id === currentParakeetModel || id === currentGraniteModel;
+    const isActiveModel = id === currentModel || id === currentParakeetModel || id === currentCohereModel;
     if (isFileTranscribing && isActiveModel) {
       throw new Error("Cannot delete the active model while a file is being transcribed.");
     }
     try {
       await invoke("delete_model", { modelId: id });
       setSettingsModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false, verified: false } : m));
-      if (currentModel === id || currentParakeetModel === id || currentGraniteModel === id) {
+      if (currentModel === id || currentParakeetModel === id || currentCohereModel === id) {
         setLoadedEngine(null);
       }
       if (currentModel === id) setCurrentModel(null);
       if (currentParakeetModel === id) setCurrentParakeetModel(null);
-      if (currentGraniteModel === id) setCurrentGraniteModel(null);
+      if (currentCohereModel === id) setCurrentCohereModel(null);
       await refreshModels(false);
     } catch (e) {
       console.error("Failed to delete model", e);
@@ -456,7 +456,7 @@ function App() {
   useInitialLoad({
     setModels, setCurrentModel,
     setParakeetModels, setCurrentParakeetModel,
-    setGraniteModels, setCurrentGraniteModel,
+    setCohereModels, setCurrentCohereModel,
     setSettingsModels,
     setLoadedEngine, setActiveEngine, activeEngineRef,
     isLoadingRef, setIsLoading, setLoadingMessage,
@@ -512,7 +512,7 @@ function App() {
   const handleLoadCurrentEngine = () => {
     if (activeEngine === "whisper") handleSwitchToWhisper();
     else if (activeEngine === "parakeet") handleSwitchToParakeet();
-    else handleSwitchToGranite();
+    else handleSwitchToCohere();
   };
 
   // Track the engine that was loaded before a switch (for power-routing-out visual)
@@ -558,16 +558,16 @@ function App() {
         if (isExplicitSelection) {
           if (engineForModel === 'whisper') await handleModelChange(id);
           else if (engineForModel === 'parakeet') await handleSwitchToParakeet(id);
-          else await handleSwitchToGranite(id);
+          else await handleSwitchToCohere(id);
           return;
         }
         if (loadedEngine) return;
         if (engineForModel === 'whisper') handleModelChange(id);
         else if (engineForModel === 'parakeet') handleSwitchToParakeet(id);
-        else handleSwitchToGranite(id);
+        else handleSwitchToCohere(id);
       }
     };
-  }, [getEngineForModelId, handleModelChange, handleSwitchToGranite, handleSwitchToParakeet, loadedEngine, refreshModels]);
+  }, [getEngineForModelId, handleModelChange, handleSwitchToCohere, handleSwitchToParakeet, loadedEngine, refreshModels]);
 
 
 
@@ -593,7 +593,7 @@ function App() {
         <span key={i} className="header-ticker-phrase">
           {phrase.parts.map((p, j) => {
             if (!p.highlight) return p.text;
-            const cls = p.highlight === "whisper" ? "ticker-whisper" : p.highlight === "parakeet" ? "ticker-parakeet" : p.highlight === "granite" ? "ticker-granite" : "ticker-accent";
+            const cls = p.highlight === "whisper" ? "ticker-whisper" : p.highlight === "parakeet" ? "ticker-parakeet" : p.highlight === "cohere" ? "ticker-cohere" : "ticker-accent";
             return <span key={j} className={cls}>{p.text}</span>;
           })}
         </span>,
@@ -604,12 +604,12 @@ function App() {
   // --- Derived UI state ---
   const noWhisperModel = models.length === 0;
   const noParakeetModel = parakeetModels.length === 0;
-  const noGraniteModel = graniteModels.length === 0;
-  const noAnyAsrModel = noWhisperModel && noParakeetModel && noGraniteModel;
+  const noCohereModel = cohereModels.length === 0;
+  const noAnyAsrModel = noWhisperModel && noParakeetModel && noCohereModel;
   const activeEngineHasNoModel =
     (activeEngine === "whisper" && noWhisperModel) ||
     (activeEngine === "parakeet" && noParakeetModel) ||
-    (activeEngine === "granite_speech" && noGraniteModel);
+    (activeEngine === "cohere" && noCohereModel);
   const noModel = activeEngineHasNoModel;
   const noLlm = llmStatus === "Not Downloaded";
 
@@ -635,11 +635,11 @@ function App() {
 
   const colorizedStatus = useMemo(() => {
     const msg = headerStatusMessage ?? "";
-    const parts = msg.split(/(Granite Speech|Whisper|Parakeet|Granite|OpenAI|NVIDIA|IBM)/g);
+    const parts = msg.split(/(Cohere Speech|Whisper|Parakeet|Cohere|OpenAI|NVIDIA)/g);
     return parts.map((part, i) => {
       if (part === "Whisper" || part === "OpenAI") return <span key={i} style={{ color: 'var(--whisper-color)' }}>{part}</span>;
       if (part === "Parakeet" || part === "NVIDIA") return <span key={i} style={{ color: 'var(--parakeet-color)' }}>{part}</span>;
-      if (part === "Granite Speech" || part === "Granite" || part === "IBM") return <span key={i} style={{ color: 'var(--granite-color)' }}>{part}</span>;
+      if (part === "Cohere Speech" || part === "Cohere") return <span key={i} style={{ color: 'var(--cohere-color)' }}>{part}</span>;
       return part;
     });
   }, [headerStatusMessage]);
@@ -737,7 +737,7 @@ function App() {
                 ) : (
                   (activeEngine === "whisper" ? models.length > 0 :
                    activeEngine === "parakeet" ? parakeetModels.length > 0 :
-                   graniteModels.length > 0) && (
+                   cohereModels.length > 0) && (
                     <button
                       type="button"
                       className="eject-btn eject-btn--load"
@@ -767,32 +767,32 @@ function App() {
                   Metal automatically and there is no discrete GPU to switch. */}
               {!isMac && (
                 <div className="hardware-bar-aside">
-                  <div className={`backend-toggle-inline${graniteGpuOnlyLoaded ? " backend-toggle-inline--locked" : ""}`}>
+                  <div className={`backend-toggle-inline${cohereGpuOnlyLoaded ? " backend-toggle-inline--locked" : ""}`}>
                     {/* M5 fix: aria-pressed communicates toggle state to screen readers */}
                     <button
                       className={`backend-toggle-inline-btn ${asrBackend === 'gpu' ? 'active' : ''}`}
                       onClick={() => handleToggleAsrBackend('gpu')}
-                      disabled={isLoading || graniteGpuOnlyLoaded}
+                      disabled={isLoading || cohereGpuOnlyLoaded}
                       aria-pressed={asrBackend === 'gpu'}
                     ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
                     <button
                       className={`backend-toggle-inline-btn ${asrBackend === 'cpu' ? 'active' : ''}`}
                       onClick={() => handleToggleAsrBackend('cpu')}
-                      disabled={isLoading || graniteGpuOnlyLoaded}
+                      disabled={isLoading || cohereGpuOnlyLoaded}
                       aria-pressed={asrBackend === 'cpu'}
                     ><IconCpu size={11} /> CPU</button>
                     <InfoTooltip
                       size={11}
                       text={
-                        graniteGpuOnlyLoaded
-                          ? "Granite FP16 is GPU-only. Download the INT4 “Granite 4.0 1B Speech” model in Settings → Models for CPU."
+                        cohereGpuOnlyLoaded
+                          ? "Cohere FP16 is GPU-only. Download the INT4 “Cohere 4.0 1B Speech” model in Settings → Models for CPU."
                           : "GPU for max speed; CPU if no GPU or to save VRAM."
                       }
                     />
                   </div>
-                  {graniteGpuOnlyLoaded && (
-                    <div className="granite-fp16-hardware-hint" role="status">
-                      Granite FP16 requires a GPU. For CPU-only PCs, download <strong>Granite 4.0 1B Speech</strong> (INT4) from Settings → Models.
+                  {cohereGpuOnlyLoaded && (
+                    <div className="cohere-fp16-hardware-hint" role="status">
+                      Cohere FP16 requires a GPU. For CPU-only PCs, download <strong>Cohere Transcribe 03-2026 (q4f16)</strong> from Settings → Models.
                     </div>
                   )}
                 </div>
@@ -1040,16 +1040,16 @@ function App() {
             </div>
 
             <div
-              className={`status-card granite ${activeEngine === "granite_speech" ? "active" : ""}${engineCardRouting("granite_speech")}`}
-              onClick={() => { void handleSwitchToGranite(); }}
+              className={`status-card cohere ${activeEngine === "cohere" ? "active" : ""}${engineCardRouting("cohere")}`}
+              onClick={() => { void handleSwitchToCohere(); }}
               role="button"
               tabIndex={0}
-              onKeyDown={(e) => e.key === "Enter" && void handleSwitchToGranite()}
+              onKeyDown={(e) => e.key === "Enter" && void handleSwitchToCohere()}
             >
               <div className="status-card-header">
-                <span className="engine-badge">Granite</span>
+                <span className="engine-badge">Cohere</span>
                 <div className="status-card-header-right">
-                  <span className="info-icon" data-tooltip="IBM Granite 4.0 · English encoder-decoder · ONNX 1B model">
+                  <span className="info-icon" data-tooltip="Cohere Transcribe · English ONNX ASR model">
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="10" />
                       <line x1="12" y1="16" x2="12" y2="12" />
@@ -1057,17 +1057,17 @@ function App() {
                     </svg>
                   </span>
                   <span
-                    className={`led-dot ${loadingTargetEngine === "granite_speech" ? "loading" :
-                      loadedEngine === "granite_speech" ? "loaded" : "unloaded"
+                    className={`led-dot ${loadingTargetEngine === "cohere" ? "loading" :
+                      loadedEngine === "cohere" ? "loaded" : "unloaded"
                       }`}
-                    aria-label={loadingTargetEngine === "granite_speech" ? "Loading" : loadedEngine === "granite_speech" ? "Loaded" : "Unloaded"}
+                    aria-label={loadingTargetEngine === "cohere" ? "Loading" : loadedEngine === "cohere" ? "Loaded" : "Unloaded"}
                   />
                 </div>
               </div>
               <div className="status-item">
                 <span className="status-label">Model</span>
-                <span className={`status-value ${graniteModels.length === 0 && !Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "error" : Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "processing" : ""}`}>
-                  {Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "Downloading…" : graniteModels.length === 0 ? "Download required" : (graniteModels.find(m => m.id === currentGraniteModel) ?? graniteModels[0]).display_name}
+                <span className={`status-value ${cohereModels.length === 0 && !Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "error" : Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "processing" : ""}`}>
+                  {Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "Downloading…" : cohereModels.length === 0 ? "Download required" : (cohereModels.find(m => m.id === currentCohereModel) ?? cohereModels[0]).display_name}
                 </span>
               </div>
             </div>
@@ -1138,14 +1138,14 @@ function App() {
                         alignItems: 'center',
                         justifyContent: 'center',
                         cursor: 'default',
-                        background: graniteModels.length === 0 ? 'rgba(220, 38, 38, 0.08)' : 'var(--bg-tertiary)',
-                        color: graniteModels.length === 0 ? 'var(--error)' : 'inherit'
+                        background: cohereModels.length === 0 ? 'rgba(220, 38, 38, 0.08)' : 'var(--bg-tertiary)',
+                        color: cohereModels.length === 0 ? 'var(--error)' : 'inherit'
                       }}
                     >
                       {isInitialLoading ? "Loading..." : (
-                        graniteModels.length === 0
-                          ? "Download Granite Speech from Settings"
-                          : `${graniteModels[0]?.display_name} (${formatSize(graniteModels[0]?.size_mb || 0)})`
+                        cohereModels.length === 0
+                          ? "Download Cohere from Settings"
+                          : `${cohereModels[0]?.display_name} (${formatSize(cohereModels[0]?.size_mb || 0)})`
                       )}
                     </div>
                   </>
@@ -1270,7 +1270,7 @@ function App() {
                 activeEngine={activeEngine}
                 currentModel={currentModel}
                 currentParakeetModel={currentParakeetModel}
-                currentGraniteModel={currentGraniteModel}
+                currentCohereModel={currentCohereModel}
                 isModelLoading={isLoading}
                 onFileProcessingChange={setIsFileTranscribing}
               />
@@ -1287,17 +1287,17 @@ function App() {
                       ? "No Whisper model downloaded"
                       : activeEngine === "parakeet"
                         ? "Parakeet not downloaded"
-                        : "Granite Speech not downloaded"}
+                        : "Cohere not downloaded"}
                 </h2>
                 <p className="empty-state-body">
                   {noAnyAsrModel ? (
-                    <>Download a <strong>Whisper</strong>, <strong>Parakeet</strong>, or <strong>Granite Speech</strong> model to start transcribing. Whisper Base is a good starting point — it's fast and accurate.</>
+                    <>Download a <strong>Whisper</strong>, <strong>Parakeet</strong>, or <strong>Cohere</strong> model to start transcribing. Whisper Base is a good starting point — it's fast and accurate.</>
                   ) : activeEngine === "whisper" ? (
                     <>You're on the <strong>Whisper</strong> engine but haven't downloaded a model yet. Try <strong>Whisper Base</strong> — it's small and accurate. Or switch to Parakeet if you already have it.</>
                   ) : activeEngine === "parakeet" ? (
                     <>You're on the <strong>Parakeet</strong> engine but the Nemotron model isn't downloaded yet. Switch to Whisper if you already have a model, or download Parakeet from Settings.</>
                   ) : (
-                    <>You're on the <strong>Granite Speech</strong> engine but the model isn't downloaded yet. Switch to Whisper or Parakeet if you already have a model, or download Granite Speech from Settings.</>
+                    <>You're on the <strong>Cohere</strong> engine but the model isn't downloaded yet. Switch to Whisper or Parakeet if you already have a model, or download Cohere from Settings.</>
                   )}
                 </p>
                 {!noAnyAsrModel && (
@@ -1306,7 +1306,7 @@ function App() {
                       ? <><IconLightbulb size={14} /> You already have a Parakeet model — click the Parakeet card above to switch.</>
                       : activeEngine === "parakeet" && !noWhisperModel
                         ? <><IconLightbulb size={14} /> You already have a Whisper model — click the Whisper card above to switch.</>
-                        : activeEngine === "granite_speech" && !noWhisperModel
+                        : activeEngine === "cohere" && !noWhisperModel
                           ? <><IconLightbulb size={14} /> You already have a Whisper model — click the Whisper card above to switch.</>
                           : null}
                   </p>
@@ -1317,7 +1317,7 @@ function App() {
                   onClick={() => {
                     setNoModelCtaAttention(false);
                     setSettingsInitialTab('models');
-                    setSettingsScrollTarget(activeEngine as 'whisper' | 'parakeet' | 'granite_speech');
+                    setSettingsScrollTarget(activeEngine as 'whisper' | 'parakeet' | 'cohere');
                     setIsSettingsOpen(true);
                   }}
                 >

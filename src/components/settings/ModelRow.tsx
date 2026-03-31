@@ -58,7 +58,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
     const tagClass = model.type === 'LLM' ? 'model-tag--llm'
         : model.type === 'Parakeet' ? 'model-tag--parakeet'
         : model.type === 'Whisper' || model.type === 'CoreML' ? 'model-tag--whisper'
-        : model.type === 'GraniteSpeech' ? 'model-tag--granite'
+        : model.type === 'Cohere' ? 'model-tag--cohere'
         : 'model-tag--default';
 
     return (

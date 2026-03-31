@@ -730,8 +730,8 @@ pub async fn factory_reset_app_data(
     if let Ok(mut parakeet) = state.parakeet.lock() {
         parakeet.unload();
     }
-    if let Ok(mut granite) = state.granite_speech.lock() {
-        granite.unload();
+    if let Ok(mut cohere) = state.cohere.lock() {
+        cohere.unload();
     }
     if let Ok(mut llm) = state.llm.lock() {
         *llm = None;
@@ -919,7 +919,7 @@ pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), Stri
 }
 
 /// Frees VRAM by unloading every ASR engine that still holds weights (Whisper / Parakeet /
-/// Granite). Does not depend on `active_engine`, which can disagree with actual load state.
+/// Cohere). Does not depend on `active_engine`, which can disagree with actual load state.
 /// Returns a comma-separated list of unloaded engines, or `"none"` if nothing was loaded.
 #[tauri::command]
 pub async fn unload_current_model(

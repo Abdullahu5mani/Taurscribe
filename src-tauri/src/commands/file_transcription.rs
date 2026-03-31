@@ -1,4 +1,4 @@
-//! File drag-and-drop transcription (Whisper / Parakeet / Granite).
+//! File drag-and-drop transcription (Whisper / Parakeet / Cohere).
 //!
 //! **Speaker diarization (planned):** VAD segments are concatenated into one mono buffer
 //! before ASR, so speakers cannot be labeled yet. A future pipeline should keep
@@ -66,7 +66,7 @@ pub async fn cancel_file_transcription(path: String) -> Result<(), String> {
 
 /// Transcribe an audio file using the currently active ASR engine.
 ///
-/// macOS: wrapped in spawn_blocking because Whisper/Parakeet/Granite inference
+/// macOS: wrapped in spawn_blocking because Whisper/Parakeet/Cohere inference
 /// is synchronous and would block the AppKit main thread in Tauri 2.
 #[tauri::command]
 pub async fn transcribe_file(
@@ -77,7 +77,7 @@ pub async fn transcribe_file(
     let cancel = register_cancel_flag(&path);
     let whisper = state.whisper.clone();
     let parakeet = state.parakeet.clone();
-    let granite = state.granite_speech.clone();
+    let cohere = state.cohere.clone();
     let active_engine = state.active_engine.lock().unwrap().clone();
     let path_for_task = path.clone();
 
@@ -88,7 +88,7 @@ pub async fn transcribe_file(
             active_engine,
             whisper,
             parakeet,
-            granite,
+            cohere,
             cancel,
         )
     })
@@ -138,7 +138,7 @@ fn transcribe_file_blocking(
     active_engine: ASREngine,
     whisper: Arc<Mutex<crate::whisper::WhisperManager>>,
     parakeet: Arc<Mutex<crate::parakeet::ParakeetManager>>,
-    granite: Arc<Mutex<crate::granite_speech::GraniteSpeechManager>>,
+    cohere: Arc<Mutex<crate::cohere::CohereManager>>,
     cancel: Arc<AtomicBool>,
 ) -> Result<FileTranscriptionResult, String> {
     let transcribe_start = std::time::Instant::now();
@@ -265,13 +265,19 @@ fn transcribe_file_blocking(
             parts.join(" ")
         }
 
-        // Parakeet and Granite are streaming/chunk-based engines - feed in windows.
-        ASREngine::Parakeet | ASREngine::GraniteSpeech => {
-            const CHUNK_SAMPLES: usize = 16000 * 15;
-            let total_chunks = (speech_audio.len() + CHUNK_SAMPLES - 1).max(1) / CHUNK_SAMPLES;
+        // Parakeet and Cohere are chunk-based engines - feed in engine-sized windows.
+        ASREngine::Parakeet | ASREngine::Cohere => {
+            const PARAKEET_CHUNK_SAMPLES: usize = 16000 * 15;
+            const COHERE_CHUNK_SAMPLES: usize = 16000 * 35;
+            let chunk_samples = if matches!(active_engine, ASREngine::Cohere) {
+                COHERE_CHUNK_SAMPLES
+            } else {
+                PARAKEET_CHUNK_SAMPLES
+            };
+            let total_chunks = (speech_audio.len() + chunk_samples - 1).max(1) / chunk_samples;
             let mut parts: Vec<String> = Vec::new();
 
-            for (i, raw_chunk) in speech_audio.chunks(CHUNK_SAMPLES).enumerate() {
+            for (i, raw_chunk) in speech_audio.chunks(chunk_samples).enumerate() {
                 ensure_not_cancelled(app, path, &cancel)?;
 
                 let percent = 50 + ((i as f32 / total_chunks as f32) * 45.0) as u8;
@@ -286,10 +292,10 @@ fn transcribe_file_blocking(
                             .map_err(|_| "Parakeet lock poisoned".to_string())?;
                         p.transcribe_chunk(&chunk, 16000)?
                     }
-                    ASREngine::GraniteSpeech => {
-                        let mut g = granite
+                    ASREngine::Cohere => {
+                        let mut g = cohere
                             .lock()
-                            .map_err(|_| "Granite lock poisoned".to_string())?;
+                            .map_err(|_| "Cohere lock poisoned".to_string())?;
                         g.transcribe_chunk(&chunk, 16000)?
                     }
                     _ => unreachable!(),

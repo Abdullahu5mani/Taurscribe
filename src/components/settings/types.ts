@@ -3,7 +3,7 @@
 export interface DownloadableModel {
     id: string;
     name: string;
-    type: 'Whisper' | 'Parakeet' | 'LLM' | 'CoreML' | 'GraniteSpeech';
+    type: 'Whisper' | 'Parakeet' | 'LLM' | 'CoreML' | 'Cohere';
     size: string;
     description: string;
     downloaded: boolean;
@@ -56,9 +56,8 @@ export const MODELS: DownloadableModel[] = [
     // --- Parakeet ---
     { id: 'parakeet-nemotron', name: 'Nemotron Streaming', type: 'Parakeet', size: '1.2 GB', description: 'Ultra-low latency streaming. English only.', downloaded: true },
 
-    // --- Granite Speech ---
-    { id: 'granite-speech-1b-cpu', name: 'Granite 4.0 1B Speech', type: 'GraniteSpeech', size: '~1.8 GB', description: 'IBM Granite 4.0 1B · INT4 ONNX · English · runs on any hardware.', downloaded: false },
-    { id: 'granite-speech-1b-fp16-cuda', name: 'Granite 4.0 1B Speech (FP16 · CUDA)', type: 'GraniteSpeech', size: '~4.6 GB', description: 'Full FP16 ONNX weights from onnx-community · higher accuracy on NVIDIA GPUs · Windows + CUDA only (large download).', downloaded: false, windowsOnly: true },
+    // --- Cohere engine slot (Cohere Transcribe ONNX) ---
+    { id: 'granite-speech-1b-cpu', name: 'Cohere Transcribe 03-2026 (q4f16)', type: 'Cohere', size: '~1.6 GB', description: 'Single universal ONNX bundle used by the Cohere engine slot; runs on CPU and supported GPU backends.', downloaded: false },
 
     // --- LLM ---
     { id: 'flowscribe-qwen2.5-0.5b', name: 'FlowScribe Qwen 2.5 0.5B', type: 'LLM', size: '398 MB', description: 'Fine-tuned Q4_K_M GGUF for speech-to-text grammar correction.', downloaded: false },

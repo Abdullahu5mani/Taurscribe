@@ -4,7 +4,7 @@
 //! Each audio file is decoded at its native sample rate and fed through the exact same
 //! chunk-accumulation and preprocessing loop the app uses during a live recording:
 //!
-//! Whisper / Granite (6s chunks + VAD gate):
+//! Whisper / Cohere (6s chunks + VAD gate):
 //!   native-rate mono → 6s chunks → preprocess_live_transcribe_chunk
 //!     → vad.is_speech() > 0.35 gate → transcribe_chunk
 //!
@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 
 use taurscribe_lib::audio_decode;
 use taurscribe_lib::audio_preprocess;
-use taurscribe_lib::granite_speech::GraniteSpeechManager;
+use taurscribe_lib::cohere::CohereManager;
 use taurscribe_lib::librispeech_wer;
 use taurscribe_lib::parakeet::ParakeetManager;
 use taurscribe_lib::vad::VADManager;
@@ -71,7 +71,7 @@ fn load_native_mono(path: &Path) -> Result<(Vec<f32>, u32), String> {
 
 // ── Mic simulation helpers ────────────────────────────────────────────────────
 
-/// Whisper / Granite live path: 6s chunks, VAD-gated, no clean_transcript.
+/// Whisper / Cohere live path: 6s chunks, VAD-gated, no clean_transcript.
 /// Mirrors `vad_gated_transcribe` inside `start_recording_blocking`.
 fn mic_sim_whisper_granite<F>(
     samples: &[f32],
@@ -273,8 +273,8 @@ fn mic_accuracy() {
         Err(e) => eprintln!("[SKIP] Parakeet list_models: {e}"),
     }
 
-    // ── Granite Speech ────────────────────────────────────────────────────────
-    let mut g = GraniteSpeechManager::new();
+    // ── Cohere ───────────────────────────────────────────────────────────────
+    let mut g = CohereManager::new();
     match g.initialize(None, true) {
         Ok(_) => {
             let wers = results.entry("granite").or_default();
@@ -300,7 +300,7 @@ fn mic_accuracy() {
                 wers.push(w_val);
             }
         }
-        Err(e) => eprintln!("[SKIP] Granite init: {e} (need INT4 bundle; FP16 is GPU-only on Windows)"),
+        Err(e) => eprintln!("[SKIP] Cohere init: {e} (need q4f16 bundle in granite-speech-1b)"),
     }
     g.unload();
 
