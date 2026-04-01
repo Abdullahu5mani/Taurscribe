@@ -142,10 +142,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     w.flush()?;
 
-    eprintln!(
-        "Wrote {} utterances to {}",
-        rows.len(),
-        out_path.display()
-    );
+    eprintln!("Wrote {} utterances to {}", rows.len(), out_path.display());
     Ok(())
 }

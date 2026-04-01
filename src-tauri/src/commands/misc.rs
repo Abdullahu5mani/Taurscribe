@@ -1,5 +1,5 @@
 use crate::state::AudioState;
-use crate::types::{ASREngine, AppState, HotkeyBinding};
+use crate::types::{ASREngine, AppState, CommandResult, HotkeyBinding};
 use cpal::traits::{DeviceTrait, HostTrait};
 use dirs::data_local_dir;
 use serde::Serialize;
@@ -85,7 +85,9 @@ pub async fn list_input_devices() -> Vec<String> {
 /// Returns the name of the microphone that will actually be used for the next recording.
 /// If the user has selected a specific device, returns that; otherwise returns the system default.
 #[tauri::command]
-pub async fn get_active_input_device(state: tauri::State<'_, crate::state::AudioState>) -> Result<String, String> {
+pub async fn get_active_input_device(
+    state: tauri::State<'_, crate::state::AudioState>,
+) -> Result<String, String> {
     let preferred = state.selected_input_device.lock().unwrap().clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         use cpal::traits::{DeviceTrait, HostTrait};
@@ -93,7 +95,10 @@ pub async fn get_active_input_device(state: tauri::State<'_, crate::state::Audio
         if let Some(name) = preferred {
             // Verify the preferred device still exists
             if let Ok(devices) = host.input_devices() {
-                if devices.into_iter().any(|d| d.name().ok().as_deref() == Some(name.as_str())) {
+                if devices
+                    .into_iter()
+                    .any(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                {
                     return Ok(name);
                 }
             }
@@ -110,22 +115,34 @@ pub async fn get_active_input_device(state: tauri::State<'_, crate::state::Audio
 #[tauri::command]
 pub fn get_platform() -> &'static str {
     #[cfg(target_os = "macos")]
-    { "macos" }
+    {
+        "macos"
+    }
     #[cfg(target_os = "windows")]
-    { "windows" }
+    {
+        "windows"
+    }
     #[cfg(target_os = "linux")]
-    { "linux" }
+    {
+        "linux"
+    }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    { "unknown" }
+    {
+        "unknown"
+    }
 }
 
 /// Returns true when running on macOS with an Apple Silicon chip (M-series, aarch64).
 #[tauri::command]
 pub fn is_apple_silicon() -> bool {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { true }
+    {
+        true
+    }
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-    { false }
+    {
+        false
+    }
 }
 
 #[derive(Serialize)]
@@ -150,6 +167,11 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
         .map_err(|e| format!("get_system_info task failed: {}", e))
 }
 
+#[tauri::command]
+pub fn get_process_memory_stats() -> crate::memory::ProcessMemoryStats {
+    crate::memory::process_memory_stats()
+}
+
 fn get_system_info_blocking() -> SystemInfo {
     let mut sys = System::new_all();
     sys.refresh_all();
@@ -170,14 +192,20 @@ fn get_system_info_blocking() -> SystemInfo {
         "CUDA".to_string()
     } else {
         #[cfg(target_os = "macos")]
-        { "Metal".to_string() }
+        {
+            "Metal".to_string()
+        }
         #[cfg(not(target_os = "macos"))]
         {
             if gpu_name != "Unknown" {
                 #[cfg(target_os = "windows")]
-                { "DirectML / Vulkan".to_string() }
+                {
+                    "DirectML / Vulkan".to_string()
+                }
                 #[cfg(not(target_os = "windows"))]
-                { "Vulkan".to_string() }
+                {
+                    "Vulkan".to_string()
+                }
             } else {
                 "CPU".to_string()
             }
@@ -240,9 +268,7 @@ fn check_microphone_permission_blocking() -> String {
     }
 
     unsafe {
-        let cls = objc_getClass(
-            CStr::from_bytes_with_nul_unchecked(b"AVCaptureDevice\0").as_ptr(),
-        );
+        let cls = objc_getClass(CStr::from_bytes_with_nul_unchecked(b"AVCaptureDevice\0").as_ptr());
         if cls.is_null() {
             return "undetermined".to_string();
         }
@@ -251,21 +277,36 @@ fn check_microphone_permission_blocking() -> String {
         );
 
         // AVMediaTypeAudio = @"soun" — create an NSString via stringWithUTF8String:
-        let nsstring_cls = objc_getClass(
-            CStr::from_bytes_with_nul_unchecked(b"NSString\0").as_ptr(),
-        );
+        let nsstring_cls =
+            objc_getClass(CStr::from_bytes_with_nul_unchecked(b"NSString\0").as_ptr());
         let string_sel = sel_registerName(
             CStr::from_bytes_with_nul_unchecked(b"stringWithUTF8String:\0").as_ptr(),
         );
-        let media_audio: *mut std::ffi::c_void = std::mem::transmute(
-            (std::mem::transmute::<_, extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *const std::ffi::c_char) -> *mut std::ffi::c_void>(
-                objc_msgSend as *const () as *mut std::ffi::c_void
-            ))(nsstring_cls, string_sel, b"soun\0".as_ptr() as *const std::ffi::c_char)
-        );
+        let media_audio: *mut std::ffi::c_void = std::mem::transmute((std::mem::transmute::<
+            _,
+            extern "C" fn(
+                *mut std::ffi::c_void,
+                *mut std::ffi::c_void,
+                *const std::ffi::c_char,
+            ) -> *mut std::ffi::c_void,
+        >(
+            objc_msgSend as *const () as *mut std::ffi::c_void,
+        ))(
+            nsstring_cls,
+            string_sel,
+            b"soun\0".as_ptr() as *const std::ffi::c_char,
+        ));
 
-        let status = (std::mem::transmute::<_, extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void, *mut std::ffi::c_void) -> i64>(
-            objc_msgSend as *const () as *mut std::ffi::c_void
-        ))(cls, sel, media_audio);
+        let status = (std::mem::transmute::<
+            _,
+            extern "C" fn(
+                *mut std::ffi::c_void,
+                *mut std::ffi::c_void,
+                *mut std::ffi::c_void,
+            ) -> i64,
+        >(objc_msgSend as *const () as *mut std::ffi::c_void))(
+            cls, sel, media_audio
+        );
 
         match status {
             3 => "granted".to_string(),
@@ -380,7 +421,10 @@ fn detect_gpu() -> (String, bool, Option<f32>) {
 
 fn try_nvidia_smi() -> Option<(String, f32)> {
     let mut cmd = std::process::Command::new("nvidia-smi");
-    cmd.args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]);
+    cmd.args([
+        "--query-gpu=name,memory.total",
+        "--format=csv,noheader,nounits",
+    ]);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -447,7 +491,10 @@ fn try_lspci_gpu() -> Option<String> {
     // "01:00.0 VGA compatible controller: NVIDIA Corporation GeForce ..."
     // We want everything after the second ':'
     let after_addr = line.splitn(2, ' ').nth(1)?;
-    after_addr.splitn(2, ':').nth(1).map(|s| s.trim().to_string())
+    after_addr
+        .splitn(2, ':')
+        .nth(1)
+        .map(|s| s.trim().to_string())
 }
 
 // ── Accessibility / Input Monitoring permission ───────────────────────────────
@@ -544,7 +591,8 @@ pub fn relaunch_app(app: tauri::AppHandle) {
 }
 
 fn factory_reset_marker_path() -> Result<std::path::PathBuf, String> {
-    let app_data = data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
+    let app_data =
+        data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
     Ok(app_data.join("taurscribe-factory-reset-pending"))
 }
 
@@ -616,8 +664,13 @@ fn clear_app_data_root_runtime_safe(base: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let entries = fs::read_dir(base)
-        .map_err(|e| format!("Failed to read app data directory {}: {}", base.display(), e))?;
+    let entries = fs::read_dir(base).map_err(|e| {
+        format!(
+            "Failed to read app data directory {}: {}",
+            base.display(),
+            e
+        )
+    })?;
 
     for entry in entries {
         let entry = entry.map_err(|e| {
@@ -669,7 +722,8 @@ pub fn perform_pending_factory_reset_on_startup() -> Result<(), String> {
         return Ok(());
     }
 
-    let app_data = data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
+    let app_data =
+        data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
     println!("[RESET] Pending factory reset detected. Clearing app data before startup...");
 
     // Delete CoreML encoder directories first — .mlmodelc bundles can contain
@@ -762,7 +816,9 @@ pub async fn factory_reset_app_data(
         .store(false, std::sync::atomic::Ordering::Relaxed);
 
     let _ = crate::system_audio::force_unmute();
-    state.model_loaded.store(false, std::sync::atomic::Ordering::Relaxed);
+    state
+        .model_loaded
+        .store(false, std::sync::atomic::Ordering::Relaxed);
     let _ = crate::tray::update_tray_icon(&app, AppState::Ready);
     crate::tray::update_tray_model_item(&app, false);
     crate::overlay::hide(&app);
@@ -784,7 +840,8 @@ pub async fn factory_reset_app_data(
     }
 
     if cfg!(debug_assertions) {
-        let app_data = data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
+        let app_data =
+            data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
         for name in ["Taurscribe", "taurscribe"] {
             clear_app_data_root_runtime_safe(&app_data.join(name))?;
         }
@@ -792,8 +849,13 @@ pub async fn factory_reset_app_data(
     }
 
     let marker_path = factory_reset_marker_path()?;
-    fs::write(&marker_path, b"pending")
-        .map_err(|e| format!("Failed to create factory reset marker at {}: {}", marker_path.display(), e))?;
+    fs::write(&marker_path, b"pending").map_err(|e| {
+        format!(
+            "Failed to create factory reset marker at {}: {}",
+            marker_path.display(),
+            e
+        )
+    })?;
 
     // On Windows, app.restart() spawns the new process before exiting, so the new
     // instance starts while tauri-plugin-single-instance's mutex is still held by
@@ -816,9 +878,19 @@ pub async fn factory_reset_app_data(
         );
         // Resolve powershell.exe via %SYSTEMROOT% — never rely on PATH in packaged apps.
         let sysroot = std::env::var("SYSTEMROOT").unwrap_or_else(|_| r"C:\Windows".to_string());
-        let powershell = format!(r"{}\System32\WindowsPowerShell\v1.0\powershell.exe", sysroot);
+        let powershell = format!(
+            r"{}\System32\WindowsPowerShell\v1.0\powershell.exe",
+            sysroot
+        );
         std::process::Command::new(&powershell)
-            .args(["-WindowStyle", "Hidden", "-NoProfile", "-NonInteractive", "-Command", &script])
+            .args([
+                "-WindowStyle",
+                "Hidden",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &script,
+            ])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| format!("Failed to spawn restart helper: {}", e))?;
@@ -837,9 +909,7 @@ fn macos_accessibility_trusted(prompt: bool) -> bool {
     use core_foundation::string::CFString;
 
     extern "C" {
-        fn AXIsProcessTrustedWithOptions(
-            options: core_foundation::base::CFTypeRef,
-        ) -> bool;
+        fn AXIsProcessTrustedWithOptions(options: core_foundation::base::CFTypeRef) -> bool;
     }
 
     let key = CFString::new("AXTrustedCheckOptionPrompt");
@@ -919,22 +989,28 @@ pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), Stri
 pub async fn unload_current_model(
     state: tauri::State<'_, AudioState>,
     app: tauri::AppHandle,
-) -> Result<String, String> {
+) -> Result<CommandResult<String>, String> {
     use std::sync::atomic::Ordering;
 
     // Refuse to unload while a model is actively loading to avoid corrupting engine state.
     if state.engine_loading.load(Ordering::Relaxed) {
-        return Err("A model is currently loading — please wait for it to finish".to_string());
+        return Ok(CommandResult::err(
+            "engine_loading",
+            "A model is currently loading — please wait for it to finish",
+        ));
     }
 
+    crate::memory::log_process_memory("unload_current_model start");
     let unloaded = state.unload_all_loaded_asr()?;
+    crate::memory::trim_process_memory();
+    crate::memory::log_process_memory("unload_current_model after trim");
     crate::tray::reconcile_model_loaded_tray(&app, &state);
     let _ = app.emit("model-unloaded", ());
     let _ = crate::tray::update_tray_icon(&app, AppState::Ready);
 
     if unloaded.is_empty() {
-        Ok("none".to_string())
+        Ok(CommandResult::ok("none".to_string()))
     } else {
-        Ok(unloaded.join(","))
+        Ok(CommandResult::ok(unloaded.join(",")))
     }
 }

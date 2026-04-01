@@ -1,14 +1,11 @@
 use crate::audio::RecordingHandle;
-use crate::denoise::Denoiser;
 use crate::cohere::CohereManager;
+use crate::denoise::Denoiser;
 use crate::parakeet::ParakeetManager;
 use crate::types::{ASREngine, AppState, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
-use std::sync::{
-    atomic::AtomicBool,
-    Arc, Mutex, RwLock,
-};
+use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
 
 /// The Global "Brain" of the application.
 /// This struct holds all the data that needs to live as long as the app runs.

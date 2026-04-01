@@ -310,10 +310,7 @@ pub fn preprocess_live_transcribe_chunk(
     }
 
     let mut working = chunk.to_vec();
-    if user_wants_denoise
-        && sample_rate == 48000
-        && should_apply_denoise(chunk, sample_rate)
-    {
+    if user_wants_denoise && sample_rate == 48000 && should_apply_denoise(chunk, sample_rate) {
         if let Some(d) = denoiser {
             working = d.process(chunk);
         }
@@ -356,12 +353,12 @@ mod tests {
     #[test]
     fn universal_preprocess_synthetic_sine_1s() {
         let mut v: Vec<f32> = (0..16000)
-            .map(|i| {
-                (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin() * 0.02
-            })
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin() * 0.02)
             .collect();
         preprocess_assembled_speech_16k(&mut v);
         assert_eq!(v.len(), 16000);
-        assert!(v.iter().all(|&x| x.is_finite() && (-1.0..=1.0).contains(&x)));
+        assert!(v
+            .iter()
+            .all(|&x| x.is_finite() && (-1.0..=1.0).contains(&x)));
     }
 }

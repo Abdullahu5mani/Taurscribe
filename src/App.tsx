@@ -11,12 +11,14 @@ import { useModels } from "./hooks/useModels";
 import { usePostProcessing } from "./hooks/usePostProcessing";
 import { useEngineSwitch } from "./hooks/useEngineSwitch";
 import type { ASREngine } from "./hooks/useEngineSwitch";
+import { useSessionState } from "./hooks/useSessionState";
 import { useRecording } from "./hooks/useRecording";
 import { useSounds } from "./hooks/useSounds";
 import { usePersonalization } from "./hooks/usePersonalization";
 import { TranscriptFeed } from "./components/TranscriptFeed";
 import { FileTranscriptionPanel } from "./components/FileTranscriptionPanel";
 import { QuickSettings } from "./components/QuickSettings";
+import { SessionNoticeCard } from "./components/SessionNoticeCard";
 import { useDownloads } from "./hooks/useDownloads";
 import { useInitialLoad } from "./hooks/useInitialLoad";
 import { useHotkeyListeners } from "./hooks/useHotkeyListeners";
@@ -31,6 +33,7 @@ import "./App.css";
 import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, IconSettings, IconEject, InfoTooltip } from "./components/Icons";
 import { TICKER_PHRASES } from "./constants/ticker";
 import { getEngineForModelId } from "./utils/engineUtils";
+import type { CommandResult, EngineSelectionState } from "./types/session";
 
 const ANIMATED_LOGOS = [
   "animated_logo_assemble.svg",
@@ -228,6 +231,28 @@ function App() {
   // --- Custom Hooks ---
   const { headerStatusMessage, headerStatusIsProcessing, setHeaderStatus } = useHeaderStatus();
   const {
+    sessionState,
+    setSessionPhase,
+    setSessionNotice,
+    setLastTranscript,
+    setLatestLatency: setSessionLatency,
+  } = useSessionState();
+  useEffect(() => {
+    if (micPermission !== "denied") return;
+    setSessionNotice({
+      level: "error",
+      code: "mic_permission_denied",
+      title: "Microphone permission is blocked",
+      message: "Taurscribe cannot start recording until microphone access is granted in system settings.",
+      sticky: true,
+      actions: isMac ? [{
+        id: "open-mic-settings",
+        label: "Open Microphone Settings",
+        onClick: () => { void invoke("open_microphone_settings"); },
+      }] : undefined,
+    });
+  }, [micPermission, isMac, setSessionNotice]);
+  const {
     models, setModels, currentModel, setCurrentModel,
     parakeetModels, setParakeetModels, currentParakeetModel, setCurrentParakeetModel,
     cohereModels, setCohereModels, currentCohereModel, setCurrentCohereModel,
@@ -335,6 +360,10 @@ function App() {
     playStart, playPaste, playError,
     dictionaryRef, snippetsRef,
     onHistorySaved: () => setHistoryRefreshKey(k => k + 1),
+    setSessionPhase,
+    setSessionNotice,
+    setSessionTranscript: setLastTranscript,
+    setSessionLatency,
   });
 
   const {
@@ -353,6 +382,8 @@ function App() {
     cohereGpuOnlyLocked: cohereGpuOnlyLoaded,
     isRecordingRef,
     downloadProgressRef,
+    setSessionPhase,
+    setSessionNotice,
   });
 
   useEffect(() => {
@@ -378,6 +409,24 @@ function App() {
   activeEngineForwarded.current = activeEngineRef.current;
   setLoadedEngineForwarded.current = setLoadedEngine;
 
+  useEffect(() => {
+    if (isLoading) {
+      setSessionPhase("loading_model");
+      return;
+    }
+    if (isProcessingTranscript) {
+      setSessionPhase("processing");
+      return;
+    }
+    if (isRecording) {
+      setSessionPhase(isPaused ? "paused" : "recording");
+      return;
+    }
+    if (["loading_model", "recording", "paused", "processing"].includes(sessionState.phase)) {
+      setSessionPhase("idle");
+    }
+  }, [isLoading, isProcessingTranscript, isRecording, isPaused, sessionState.phase, setSessionPhase]);
+
   // handleDeleteModel moved here so setLoadedEngine is in scope
   const handleDeleteModel = async (id: string, _name: string) => {
     const isActiveModel = id === currentModel || id === currentParakeetModel || id === currentCohereModel;
@@ -385,10 +434,20 @@ function App() {
       throw new Error("Cannot delete the active model while a file is being transcribed.");
     }
     try {
-      await invoke("delete_model", { modelId: id });
+      const result = await invoke<CommandResult<string>>("delete_model", { modelId: id });
+      if (!result.ok) {
+        throw new Error(result.error?.message ?? "Failed to delete model");
+      }
       setSettingsModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false, verified: false } : m));
       if (currentModel === id || currentParakeetModel === id || currentCohereModel === id) {
         setLoadedEngine(null);
+        setSessionNotice({
+          level: "warning",
+          code: "model_missing",
+          title: "Active model removed",
+          message: "The active model was deleted. Choose another installed model or switch engines before recording again.",
+          sticky: true,
+        });
       }
       if (currentModel === id) setCurrentModel(null);
       if (currentParakeetModel === id) setCurrentParakeetModel(null);
@@ -508,9 +567,19 @@ function App() {
     if (isLoading || isLoadingRef.current || isRecording) return;
     try {
       setHeaderStatus("Unloading model…", 10_000);
-      await invoke("unload_current_model");
+      const result = await invoke<CommandResult<string>>("unload_current_model");
+      if (!result.ok) {
+        throw new Error(result.error?.message ?? "Failed to unload model");
+      }
       setLoadedEngine(null);
       setHeaderStatus("Model unloaded — VRAM freed");
+      setSessionNotice({
+        level: "warning",
+        code: "model_missing",
+        title: "Model unloaded",
+        message: "VRAM was freed. The next dictation will reload the selected model before recording.",
+        sticky: true,
+      });
       try {
         const backend = await invoke<string>("get_backend_info");
         setBackendInfo(backend);
@@ -615,6 +684,30 @@ function App() {
     </>
   ), []);
 
+  const engineSelectionState = useMemo<EngineSelectionState>(() => ({
+    active_engine: activeEngine,
+    selected_model_id:
+      activeEngine === "whisper" ? currentModel :
+      activeEngine === "parakeet" ? currentParakeetModel :
+      currentCohereModel,
+    loaded_engine: loadedEngine,
+    loaded_model_id:
+      loadedEngine === "whisper" ? currentModel :
+      loadedEngine === "parakeet" ? currentParakeetModel :
+      loadedEngine === "cohere" ? currentCohereModel :
+      null,
+    backend: backendInfo,
+    engine_loading: isLoading,
+  }), [
+    activeEngine,
+    currentModel,
+    currentParakeetModel,
+    currentCohereModel,
+    loadedEngine,
+    backendInfo,
+    isLoading,
+  ]);
+
   // --- Derived UI state ---
   const noWhisperModel = models.length === 0;
   const noParakeetModel = parakeetModels.length === 0;
@@ -646,6 +739,60 @@ function App() {
     if (isRecording) handleStopRecording();
     else handleStartRecording();
   };
+
+  const switchFallbackEngine = useCallback(() => {
+    if (!noWhisperModel && activeEngine !== "whisper") {
+      void handleSwitchToWhisper();
+      return;
+    }
+    if (!noParakeetModel && activeEngine !== "parakeet") {
+      void handleSwitchToParakeet();
+      return;
+    }
+    if (!noCohereModel && activeEngine !== "cohere") {
+      void handleSwitchToCohere();
+    }
+  }, [activeEngine, noWhisperModel, noParakeetModel, noCohereModel, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToCohere]);
+
+  useEffect(() => {
+    if (!activeEngineHasNoModel) return;
+    const fallbackAvailable =
+      (activeEngine !== "whisper" && !noWhisperModel) ||
+      (activeEngine !== "parakeet" && !noParakeetModel) ||
+      (activeEngine !== "cohere" && !noCohereModel);
+
+    setSessionNotice({
+      level: "warning",
+      code: "model_missing",
+      title: `${engineSelectionState.active_engine[0].toUpperCase()}${engineSelectionState.active_engine.slice(1)} needs a model`,
+      message: fallbackAvailable
+        ? "The active engine has no installed model. Download one from Settings or switch to another engine that is already ready."
+        : "The active engine has no installed model yet. Download one from Settings to start transcribing.",
+      sticky: true,
+      actions: [
+        {
+          id: "open-settings",
+          label: "Open Settings",
+          onClick: () => {
+            setSettingsInitialTab("models");
+            setSettingsScrollTarget(activeEngine as "whisper" | "parakeet" | "cohere");
+            setIsSettingsOpen(true);
+          },
+        },
+        ...(fallbackAvailable ? [{
+          id: "switch-engine",
+          label: "Switch Engine",
+          onClick: switchFallbackEngine,
+        }] : []),
+      ],
+    });
+  }, [activeEngineHasNoModel, activeEngine, engineSelectionState.active_engine, noWhisperModel, noParakeetModel, noCohereModel, switchFallbackEngine, setSessionNotice]);
+
+  useEffect(() => {
+    if (!activeEngineHasNoModel && sessionState.notice?.code === "model_missing") {
+      setSessionNotice(null);
+    }
+  }, [activeEngineHasNoModel, sessionState.notice?.code, setSessionNotice]);
 
   const colorizedStatus = useMemo(() => {
     const msg = headerStatusMessage ?? "";
@@ -1262,6 +1409,10 @@ function App() {
             </div>
           </div>
 
+          {sessionState.notice && (
+            <SessionNoticeCard notice={sessionState.notice} />
+          )}
+
           {isInitialLoading && (
             <div className="loading-overlay-backdrop" aria-busy="true" aria-live="polite">
               <div className="loading-overlay">
@@ -1362,7 +1513,7 @@ function App() {
                 isRecording={isRecording}
                 isPaused={isPaused}
                 isProcessingTranscript={isProcessingTranscript}
-                latestLatency={latestLatency}
+                latestLatency={sessionState.latestLatency ?? latestLatency}
               />
             ))}
           </div>

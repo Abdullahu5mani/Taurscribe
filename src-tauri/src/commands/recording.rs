@@ -11,7 +11,7 @@ use crate::audio_preprocess;
 use crate::context::get_active_context;
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
-use crate::types::{ASREngine, TranscriptionChunk};
+use crate::types::{ASREngine, CommandResult, TranscriptionChunk};
 use crate::utils::{clean_transcript, get_recordings_dir, strip_whitelisted_sound_captions};
 
 /// Live Parakeet chunk length in seconds. Very short windows (~1s) hurt accuracy on
@@ -58,17 +58,37 @@ pub async fn start_recording(
     app_handle: AppHandle,
     state: State<'_, AudioState>,
     denoise: Option<bool>,
-) -> Result<String, String> {
+) -> Result<CommandResult<String>, String> {
     // Guard: reject if already recording (e.g. spam hotkey)
     if state.recording_handle.lock().unwrap().is_some() {
-        return Err("Already recording".to_string());
+        return Ok(CommandResult::err("already_recording", "Already recording"));
     }
 
     // Clone the whole state — every field is Arc<…> so this is just ref-count bumps.
     let state = (*state).clone();
-    tauri::async_runtime::spawn_blocking(move || start_recording_blocking(app_handle, state, denoise))
-        .await
-        .map_err(|e| format!("start_recording task failed: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || {
+        start_recording_blocking(app_handle, state, denoise)
+    })
+    .await
+    .map(|result| match result {
+        Ok(message) => CommandResult::ok(message),
+        Err(message) => {
+            let lower = message.to_lowercase();
+            let code = if lower.contains("microphone permission denied") {
+                "mic_permission_denied"
+            } else if lower.contains("no input device found")
+                || lower.contains("no microphone found")
+            {
+                "no_input_device"
+            } else if lower.contains("already recording") {
+                "already_recording"
+            } else {
+                "recording_start_failed"
+            };
+            CommandResult::err(code, message)
+        }
+    })
+    .map_err(|e| format!("start_recording task failed: {}", e))
 }
 
 /// The blocking core of start_recording, run inside spawn_blocking.
@@ -85,30 +105,37 @@ fn start_recording_blocking(
     // 1. Setup Microphone
     let host = cpal::default_host();
     let preferred = state.selected_input_device.lock().unwrap().clone();
-    
+
     let mut device_opt = None;
     let mut fallback_triggered = false;
-    
+
     if let Some(ref name) = preferred {
-        device_opt = host.input_devices()
+        device_opt = host
+            .input_devices()
             .ok()
             .and_then(|mut iter| iter.find(|d| d.name().ok().as_deref() == Some(name.as_str())));
-            
+
         if device_opt.is_none() {
-            println!("[WARNING] Preferred input device '{}' not found, falling back to default", name);
+            println!(
+                "[WARNING] Preferred input device '{}' not found, falling back to default",
+                name
+            );
             fallback_triggered = true;
         }
     }
-    
+
     if device_opt.is_none() {
         device_opt = host.default_input_device();
     }
-    
-    let device = device_opt.ok_or("No input device found. Check that a microphone is connected.")?;
-    let device_name = device.name().unwrap_or_else(|_| "Unknown Device".to_string());
-    
+
+    let device =
+        device_opt.ok_or("No input device found. Check that a microphone is connected.")?;
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "Unknown Device".to_string());
+
     println!("[INFO] Using input device: {}", device_name);
-    
+
     if fallback_triggered {
         let _ = app_handle.emit("audio-fallback", device_name);
     }
@@ -296,7 +323,12 @@ fn start_recording_blocking(
                         return false;
                     }
                     let elapsed = start.elapsed().as_millis() as u32;
-                    println!("[TRANSCRIPT] {} \"{}\" (took {}ms)", emoji, text.trim(), elapsed);
+                    println!(
+                        "[TRANSCRIPT] {} \"{}\" (took {}ms)",
+                        emoji,
+                        text.trim(),
+                        elapsed
+                    );
                     let _ = app.emit(
                         "transcription-chunk",
                         crate::types::TranscriptionChunk {
@@ -359,24 +391,60 @@ fn start_recording_blocking(
                         chunk.extend_from_slice(&buffer[..chunk_size]);
                         buffer.drain(..chunk_size);
                         if active_engine == ASREngine::Whisper {
+                            crate::memory::maybe_log_process_memory_with_sizes(
+                                "recording whisper live chunk start",
+                                &[
+                                    ("buffer_len_samples", buffer.len()),
+                                    ("chunk_samples", chunk.len()),
+                                    (
+                                        "chunk_audio_bytes",
+                                        chunk.len() * std::mem::size_of::<f32>(),
+                                    ),
+                                ],
+                            );
                             let mut wm = whisper.lock().unwrap();
-                            let mut transcribe =
-                                |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                            let mut transcribe = |c: &[f32], sr| {
+                                wm.transcribe_chunk(c, sr).map_err(|e| e.to_string())
+                            };
                             vad_gated_transcribe(
-                                &mut chunk, sample_rate, &vad,
-                                &mut transcribe, "Whisper", "🎙️",
-                                &app_clone, &session_transcript,
-                                denoise_enabled_thread, &denoiser_arc,
+                                &mut chunk,
+                                sample_rate,
+                                &vad,
+                                &mut transcribe,
+                                "Whisper",
+                                "🎙️",
+                                &app_clone,
+                                &session_transcript,
+                                denoise_enabled_thread,
+                                &denoiser_arc,
                             );
                         } else {
+                            crate::memory::maybe_log_process_memory_with_sizes(
+                                "recording cohere live chunk start",
+                                &[
+                                    ("buffer_len_samples", buffer.len()),
+                                    ("chunk_samples", chunk.len()),
+                                    (
+                                        "chunk_audio_bytes",
+                                        chunk.len() * std::mem::size_of::<f32>(),
+                                    ),
+                                ],
+                            );
                             let mut gs = cohere.lock().unwrap();
-                            let mut transcribe =
-                                |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                            let mut transcribe = |c: &[f32], sr| {
+                                gs.transcribe_chunk(c, sr).map_err(|e| e.to_string())
+                            };
                             vad_gated_transcribe(
-                                &mut chunk, sample_rate, &vad,
-                                &mut transcribe, "Cohere", "🪨",
-                                &app_clone, &session_transcript,
-                                denoise_enabled_thread, &denoiser_arc,
+                                &mut chunk,
+                                sample_rate,
+                                &vad,
+                                &mut transcribe,
+                                "Cohere",
+                                "🪨",
+                                &app_clone,
+                                &session_transcript,
+                                denoise_enabled_thread,
+                                &denoiser_arc,
                             );
                         }
                     }
@@ -393,17 +461,47 @@ fn start_recording_blocking(
                         chunk.clear();
                         chunk.extend_from_slice(&buffer[..parakeet_chunk_size]);
                         buffer.drain(..parakeet_chunk_size);
+                        crate::memory::maybe_log_process_memory_with_sizes(
+                            "recording parakeet live chunk before preprocess",
+                            &[
+                                ("buffer_len_samples", buffer.len()),
+                                ("chunk_samples", chunk.len()),
+                                (
+                                    "chunk_audio_bytes",
+                                    chunk.len() * std::mem::size_of::<f32>(),
+                                ),
+                            ],
+                        );
                         let buf16 = parakeet_preprocess_for_transcribe(
                             &chunk,
                             sample_rate,
                             denoise_enabled_thread,
                             &denoiser_arc,
                         );
+                        crate::memory::maybe_log_process_memory_with_sizes(
+                            "recording parakeet live chunk after preprocess",
+                            &[
+                                ("chunk_samples", chunk.len()),
+                                ("buf16_samples", buf16.len()),
+                                (
+                                    "buf16_audio_bytes",
+                                    buf16.len() * std::mem::size_of::<f32>(),
+                                ),
+                            ],
+                        );
                         let start_time = std::time::Instant::now();
-                        match parakeet_manager.lock().unwrap().transcribe_chunk(&buf16, 16000) {
+                        match parakeet_manager
+                            .lock()
+                            .unwrap()
+                            .transcribe_chunk(&buf16, 16000)
+                        {
                             Ok(transcript) if !transcript.is_empty() => {
                                 let elapsed = start_time.elapsed().as_millis() as u32;
-                                println!("[TRANSCRIPT] 🦜 \"{}\" (took {}ms)", transcript.trim(), elapsed);
+                                println!(
+                                    "[TRANSCRIPT] 🦜 \"{}\" (took {}ms)",
+                                    transcript.trim(),
+                                    elapsed
+                                );
                                 let _ = app_clone.emit(
                                     "transcription-chunk",
                                     TranscriptionChunk {
@@ -441,23 +539,82 @@ fn start_recording_blocking(
             buffer.drain(..chunk_size);
             match active_engine {
                 ASREngine::Whisper => {
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "recording whisper final flush chunk",
+                        &[
+                            ("remaining_buffer_samples", buffer.len()),
+                            ("chunk_samples", chunk.len()),
+                        ],
+                    );
                     let mut wm = whisper.lock().unwrap();
-                    let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
+                    let mut t =
+                        |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                    vad_gated_transcribe(
+                        &mut chunk,
+                        sample_rate,
+                        &vad,
+                        &mut t,
+                        "Whisper",
+                        "🎙️",
+                        &app_clone,
+                        &session_transcript,
+                        denoise_enabled_thread,
+                        &denoiser_arc,
+                    );
                 }
                 ASREngine::Cohere => {
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "recording cohere final flush chunk",
+                        &[
+                            ("remaining_buffer_samples", buffer.len()),
+                            ("chunk_samples", chunk.len()),
+                        ],
+                    );
                     let mut gs = cohere.lock().unwrap();
-                    let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(&mut chunk, sample_rate, &vad, &mut t, "Cohere", "🪨", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
+                    let mut t =
+                        |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                    vad_gated_transcribe(
+                        &mut chunk,
+                        sample_rate,
+                        &vad,
+                        &mut t,
+                        "Cohere",
+                        "🪨",
+                        &app_clone,
+                        &session_transcript,
+                        denoise_enabled_thread,
+                        &denoiser_arc,
+                    );
                 }
                 ASREngine::Parakeet => {
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "recording parakeet final flush chunk before preprocess",
+                        &[
+                            ("remaining_buffer_samples", buffer.len()),
+                            ("chunk_samples", chunk.len()),
+                        ],
+                    );
                     let buf16 = parakeet_preprocess_for_transcribe(
                         &chunk,
                         sample_rate,
                         denoise_enabled_thread,
                         &denoiser_arc,
                     );
-                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&buf16, 16000) {
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "recording parakeet final flush chunk after preprocess",
+                        &[
+                            ("buf16_samples", buf16.len()),
+                            (
+                                "buf16_audio_bytes",
+                                buf16.len() * std::mem::size_of::<f32>(),
+                            ),
+                        ],
+                    );
+                    if let Ok(transcript) = parakeet_manager
+                        .lock()
+                        .unwrap()
+                        .transcribe_chunk(&buf16, 16000)
+                    {
                         if !transcript.is_empty() {
                             session_transcript.lock().unwrap().push_str(&transcript);
                             println!("[TRANSCRIPT] 🦜 (Final) \"{}\"", transcript.trim());
@@ -478,10 +635,25 @@ fn start_recording_blocking(
                 ASREngine::Whisper => {
                     let mut wm = whisper.lock().unwrap();
                     if use_vad {
-                        let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "Whisper", "🎙️", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
+                        let mut t =
+                            |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                        vad_gated_transcribe(
+                            &mut buffer,
+                            sample_rate,
+                            &vad,
+                            &mut t,
+                            "Whisper",
+                            "🎙️",
+                            &app_clone,
+                            &session_transcript,
+                            denoise_enabled_thread,
+                            &denoiser_arc,
+                        );
                     } else {
-                        println!("[PROCESSING] 🎙️ Short tail ({:.2}s) — bypassing VAD for Whisper", tail_secs);
+                        println!(
+                            "[PROCESSING] 🎙️ Short tail ({:.2}s) — bypassing VAD for Whisper",
+                            tail_secs
+                        );
                         let mut dg = denoiser_arc.lock().unwrap();
                         let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
                             &buffer,
@@ -494,9 +666,14 @@ fn start_recording_blocking(
                             let text = strip_whitelisted_sound_captions(&text);
                             if !text.trim().is_empty() {
                                 println!("[TRANSCRIPT] 🎙️ (Tail) \"{}\"", text.trim());
-                                let _ = app_clone.emit("transcription-chunk", crate::types::TranscriptionChunk {
-                                    text: text.clone(), processing_time_ms: 0, method: "Whisper".to_string(),
-                                });
+                                let _ = app_clone.emit(
+                                    "transcription-chunk",
+                                    crate::types::TranscriptionChunk {
+                                        text: text.clone(),
+                                        processing_time_ms: 0,
+                                        method: "Whisper".to_string(),
+                                    },
+                                );
                                 session_transcript.lock().unwrap().push_str(&text);
                             }
                         }
@@ -505,10 +682,25 @@ fn start_recording_blocking(
                 ASREngine::Cohere => {
                     let mut gs = cohere.lock().unwrap();
                     if use_vad {
-                        let mut t = |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                        vad_gated_transcribe(&mut buffer, sample_rate, &vad, &mut t, "Cohere", "🪨", &app_clone, &session_transcript, denoise_enabled_thread, &denoiser_arc);
+                        let mut t =
+                            |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                        vad_gated_transcribe(
+                            &mut buffer,
+                            sample_rate,
+                            &vad,
+                            &mut t,
+                            "Cohere",
+                            "🪨",
+                            &app_clone,
+                            &session_transcript,
+                            denoise_enabled_thread,
+                            &denoiser_arc,
+                        );
                     } else {
-                        println!("[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for Cohere", tail_secs);
+                        println!(
+                            "[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for Cohere",
+                            tail_secs
+                        );
                         let mut dg = denoiser_arc.lock().unwrap();
                         let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
                             &buffer,
@@ -521,22 +713,46 @@ fn start_recording_blocking(
                             let text = strip_whitelisted_sound_captions(&text);
                             if !text.trim().is_empty() {
                                 println!("[TRANSCRIPT] 🪨 (Tail) \"{}\"", text.trim());
-                                let _ = app_clone.emit("transcription-chunk", crate::types::TranscriptionChunk {
-                                    text: text.clone(), processing_time_ms: 0, method: "Cohere".to_string(),
-                                });
+                                let _ = app_clone.emit(
+                                    "transcription-chunk",
+                                    crate::types::TranscriptionChunk {
+                                        text: text.clone(),
+                                        processing_time_ms: 0,
+                                        method: "Cohere".to_string(),
+                                    },
+                                );
                                 session_transcript.lock().unwrap().push_str(&text);
                             }
                         }
                     }
                 }
                 ASREngine::Parakeet => {
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "recording parakeet tail before preprocess",
+                        &[("tail_buffer_samples", buffer.len())],
+                    );
                     let buf16 = parakeet_preprocess_for_transcribe(
                         &buffer,
                         sample_rate,
                         denoise_enabled_thread,
                         &denoiser_arc,
                     );
-                    if let Ok(transcript) = parakeet_manager.lock().unwrap().transcribe_chunk(&buf16, 16000) {
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "recording parakeet tail after preprocess",
+                        &[
+                            ("tail_buffer_samples", buffer.len()),
+                            ("buf16_samples", buf16.len()),
+                            (
+                                "buf16_audio_bytes",
+                                buf16.len() * std::mem::size_of::<f32>(),
+                            ),
+                        ],
+                    );
+                    if let Ok(transcript) = parakeet_manager
+                        .lock()
+                        .unwrap()
+                        .transcribe_chunk(&buf16, 16000)
+                    {
                         if !transcript.is_empty() {
                             session_transcript.lock().unwrap().push_str(&transcript);
                             println!("[TRANSCRIPT] 🦜 (Final Partial) \"{}\"", transcript.trim());
@@ -602,7 +818,13 @@ fn start_recording_blocking(
             },
             move |err| {
                 eprintln!("[ERROR] Audio input stream error: {}", err);
-                let _ = app_for_error.emit("audio-disconnected", err.to_string());
+                let _ = app_for_error.emit(
+                    "audio-disconnected",
+                    serde_json::json!({
+                        "code": "audio_device_disconnected",
+                        "message": err.to_string(),
+                    }),
+                );
             },
             None,
         )
@@ -677,9 +899,11 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) {
 }
 
 #[tauri::command]
-pub fn pause_recording(state: State<'_, AudioState>) -> Result<String, String> {
+pub fn pause_recording(state: State<'_, AudioState>) -> Result<CommandResult<String>, String> {
     let guard = state.recording_handle.lock().unwrap();
-    let handle = guard.as_ref().ok_or_else(|| "Not recording".to_string())?;
+    let Some(handle) = guard.as_ref() else {
+        return Ok(CommandResult::err("not_recording", "Not recording"));
+    };
 
     handle
         .stream
@@ -687,13 +911,15 @@ pub fn pause_recording(state: State<'_, AudioState>) -> Result<String, String> {
         .pause()
         .map_err(|e| format!("Failed to pause recording: {}", e))?;
     state.recording_paused.store(true, Ordering::Relaxed);
-    Ok("Recording paused".to_string())
+    Ok(CommandResult::ok("Recording paused".to_string()))
 }
 
 #[tauri::command]
-pub fn resume_recording(state: State<'_, AudioState>) -> Result<String, String> {
+pub fn resume_recording(state: State<'_, AudioState>) -> Result<CommandResult<String>, String> {
     let guard = state.recording_handle.lock().unwrap();
-    let handle = guard.as_ref().ok_or_else(|| "Not recording".to_string())?;
+    let Some(handle) = guard.as_ref() else {
+        return Ok(CommandResult::err("not_recording", "Not recording"));
+    };
 
     handle
         .stream
@@ -701,20 +927,17 @@ pub fn resume_recording(state: State<'_, AudioState>) -> Result<String, String> 
         .play()
         .map_err(|e| format!("Failed to resume recording: {}", e))?;
     state.recording_paused.store(false, Ordering::Relaxed);
-    Ok("Recording resumed".to_string())
+    Ok(CommandResult::ok("Recording resumed".to_string()))
 }
 
 #[tauri::command]
-pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<(), String> {
+pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandResult<()>, String> {
     *state.denoiser.lock().unwrap() = None;
     state.recording_paused.store(false, Ordering::Relaxed);
 
-    let recording = state
-        .recording_handle
-        .lock()
-        .unwrap()
-        .take()
-        .ok_or_else(|| "Not recording".to_string())?;
+    let Some(recording) = state.recording_handle.lock().unwrap().take() else {
+        return Ok(CommandResult::err("not_recording", "Not recording"));
+    };
     let last_recording_path = state.last_recording_path.lock().unwrap().clone();
     let session_transcript = state.session_transcript.clone();
 
@@ -724,7 +947,7 @@ pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<(), String
         if let Some(path) = last_recording_path {
             let _ = std::fs::remove_file(path);
         }
-        Ok::<(), String>(())
+        Ok::<CommandResult<()>, String>(CommandResult::ok(()))
     })
     .await
     .map_err(|e| format!("cancel_recording task failed: {}", e))?
@@ -737,14 +960,25 @@ pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<(), String
 /// Returns Err with a short error code on failure so the frontend can show
 /// a "couldn't paste" indicator without silently dropping the transcript.
 #[tauri::command]
-pub async fn type_text(text: String) -> Result<(), String> {
+pub async fn type_text(text: String) -> Result<CommandResult<()>, String> {
     if text.trim().is_empty() || text.trim() == "[silence]" {
-        return Ok(());
+        return Ok(CommandResult::ok(()));
     }
     let text_to_type = text.trim().to_string();
     tauri::async_runtime::spawn_blocking(move || insert_text(&text_to_type))
         .await
-        .map_err(|e| format!("thread_panic:{e:?}"))?
+        .map(|result| match result {
+            Ok(()) => CommandResult::ok(()),
+            Err(message) => {
+                let code = match message.as_str() {
+                    "secure_input" => "paste_blocked_secure_input",
+                    "console" => "paste_blocked_console",
+                    _ => "paste_failed",
+                };
+                CommandResult::err(code, message)
+            }
+        })
+        .map_err(|e| format!("thread_panic:{e:?}"))
 }
 
 fn insert_text(text: &str) -> Result<(), String> {
@@ -801,30 +1035,52 @@ fn should_prefer_clipboard_paste() -> bool {
     // with the different signature in misc.rs.
     unsafe {
         let msg_send: MsgSendFn = {
-            extern "C" { fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void; }
+            extern "C" {
+                fn dlsym(handle: *mut c_void, symbol: *const std::ffi::c_char) -> *mut c_void;
+            }
             const RTLD_DEFAULT: *mut c_void = std::ptr::null_mut::<c_void>().wrapping_sub(2);
-            let sym = dlsym(RTLD_DEFAULT, CStr::from_bytes_with_nul_unchecked(b"objc_msgSend\0").as_ptr());
-            if sym.is_null() { return false; }
+            let sym = dlsym(
+                RTLD_DEFAULT,
+                CStr::from_bytes_with_nul_unchecked(b"objc_msgSend\0").as_ptr(),
+            );
+            if sym.is_null() {
+                return false;
+            }
             std::mem::transmute(sym)
         };
 
         let ws_cls = objc_getClass(CStr::from_bytes_with_nul_unchecked(b"NSWorkspace\0").as_ptr());
-        if ws_cls.is_null() { return false; }
-        let shared_sel = sel_registerName(CStr::from_bytes_with_nul_unchecked(b"sharedWorkspace\0").as_ptr());
+        if ws_cls.is_null() {
+            return false;
+        }
+        let shared_sel =
+            sel_registerName(CStr::from_bytes_with_nul_unchecked(b"sharedWorkspace\0").as_ptr());
         let ws = msg_send(ws_cls, shared_sel);
-        if ws.is_null() { return false; }
+        if ws.is_null() {
+            return false;
+        }
 
-        let front_sel = sel_registerName(CStr::from_bytes_with_nul_unchecked(b"frontmostApplication\0").as_ptr());
+        let front_sel = sel_registerName(
+            CStr::from_bytes_with_nul_unchecked(b"frontmostApplication\0").as_ptr(),
+        );
         let app = msg_send(ws, front_sel);
-        if app.is_null() { return false; }
+        if app.is_null() {
+            return false;
+        }
 
-        let bundle_sel = sel_registerName(CStr::from_bytes_with_nul_unchecked(b"bundleIdentifier\0").as_ptr());
+        let bundle_sel =
+            sel_registerName(CStr::from_bytes_with_nul_unchecked(b"bundleIdentifier\0").as_ptr());
         let bundle_id = msg_send(app, bundle_sel);
-        if bundle_id.is_null() { return false; }
+        if bundle_id.is_null() {
+            return false;
+        }
 
-        let utf8_sel = sel_registerName(CStr::from_bytes_with_nul_unchecked(b"UTF8String\0").as_ptr());
+        let utf8_sel =
+            sel_registerName(CStr::from_bytes_with_nul_unchecked(b"UTF8String\0").as_ptr());
         let cstr_ptr = msg_send(bundle_id, utf8_sel) as *const std::ffi::c_char;
-        if cstr_ptr.is_null() { return false; }
+        if cstr_ptr.is_null() {
+            return false;
+        }
 
         let bid = CStr::from_ptr(cstr_ptr).to_string_lossy();
         let bid_lower = bid.to_lowercase();
@@ -835,15 +1091,15 @@ fn should_prefer_clipboard_paste() -> bool {
             "com.google.chrome",
             "org.mozilla.firefox",
             "com.apple.safari",
-            "company.thebrowser.browser",       // Arc
+            "company.thebrowser.browser", // Arc
             "com.brave.browser",
             "com.operasoftware.opera",
             "com.vivaldi.vivaldi",
-            "com.microsoft.edgemac",            // Edge
+            "com.microsoft.edgemac", // Edge
             "org.chromium.chromium",
-            "app.zen-browser",                  // Zen
-            "com.kagi.kagimacOS",               // Orion
-            "com.naver.whale",                  // Whale
+            "app.zen-browser",    // Zen
+            "com.kagi.kagimacOS", // Orion
+            "com.naver.whale",    // Whale
             // Google Meet has no standalone macOS app — covered by browsers above
             // ── Terminals (AXSelectedText write is unsupported) ──────────────
             "com.apple.terminal",
@@ -852,41 +1108,43 @@ fn should_prefer_clipboard_paste() -> bool {
             "org.alacritty",
             "net.kovidgoyal.kitty",
             // ── Electron / web-rendered apps ─────────────────────────────────
-            "com.microsoft.vscode",             // VS Code
-            "com.tinyspeck.slackmacgap",        // Slack
-            "com.hnc.discord",                  // Discord
-            "notion.id",                        // Notion
-            "md.obsidian",                      // Obsidian
-            "net.whatsapp.whatsapp",            // WhatsApp
-            "com.evernote.evernote",            // Evernote
-            "abnerworks.typora",                // Typora
-            "com.todesktop",                    // Cursor + other ToDesktop Electron apps
-            "com.github.atom",                  // Atom
-            "org.zotero.zotero",                // Zotero
-            "com.superhuman",                   // Superhuman
-            "com.goodnotesapp",                 // GoodNotes
+            "com.microsoft.vscode",      // VS Code
+            "com.tinyspeck.slackmacgap", // Slack
+            "com.hnc.discord",           // Discord
+            "notion.id",                 // Notion
+            "md.obsidian",               // Obsidian
+            "net.whatsapp.whatsapp",     // WhatsApp
+            "com.evernote.evernote",     // Evernote
+            "abnerworks.typora",         // Typora
+            "com.todesktop",             // Cursor + other ToDesktop Electron apps
+            "com.github.atom",           // Atom
+            "org.zotero.zotero",         // Zotero
+            "com.superhuman",            // Superhuman
+            "com.goodnotesapp",          // GoodNotes
             // ── Custom rendering engines ──────────────────────────────────────
-            "com.sublimetext",                  // Sublime Text (Skia renderer, no AX text)
+            "com.sublimetext", // Sublime Text (Skia renderer, no AX text)
             // ── Communication & productivity ──────────────────────────────────
-            "com.apple.mail",                   // Apple Mail
-            "com.apple.mobilesms",              // Apple Messages
-            "us.zoom.xos",                      // Zoom
-            "com.raycast.macos",                // Raycast
+            "com.apple.mail",      // Apple Mail
+            "com.apple.mobilesms", // Apple Messages
+            "us.zoom.xos",         // Zoom
+            "com.raycast.macos",   // Raycast
             // ── Writing & note-taking apps ────────────────────────────────────
-            "net.shinyfrog.bear",               // Bear
-            "com.ulyssesapp.mac",               // Ulysses
-            "com.apple.notes",                  // Apple Notes
-            "com.apple.iwork.pages",            // Apple Pages
+            "net.shinyfrog.bear",    // Bear
+            "com.ulyssesapp.mac",    // Ulysses
+            "com.apple.notes",       // Apple Notes
+            "com.apple.iwork.pages", // Apple Pages
             // ── Microsoft Office ──────────────────────────────────────────────
-            "com.microsoft.word",               // Word
-            "com.microsoft.excel",              // Excel
-            "com.microsoft.outlook",            // Outlook
+            "com.microsoft.word",    // Word
+            "com.microsoft.excel",   // Excel
+            "com.microsoft.outlook", // Outlook
             // ── Other productivity ────────────────────────────────────────────
-            "com.ideasoncanvas",                // MindNode
-            "com.adobe.indesign",               // Adobe InDesign
+            "com.ideasoncanvas",  // MindNode
+            "com.adobe.indesign", // Adobe InDesign
         ];
 
-        PREFER_CLIPBOARD_BUNDLES.iter().any(|b| bid_lower.starts_with(b))
+        PREFER_CLIPBOARD_BUNDLES
+            .iter()
+            .any(|b| bid_lower.starts_with(b))
     }
 }
 
@@ -974,8 +1232,12 @@ fn clipboard_paste(text: &str) -> Result<(), String> {
     // paste asynchronously through their own undo/format pipeline.
     std::thread::sleep(std::time::Duration::from_millis(300));
     match previous {
-        SavedClipboard::Text(t) => { let _ = clipboard.set_text(t); }
-        SavedClipboard::Image(img) => { let _ = clipboard.set_image(img); }
+        SavedClipboard::Text(t) => {
+            let _ = clipboard.set_text(t);
+        }
+        SavedClipboard::Image(img) => {
+            let _ = clipboard.set_image(img);
+        }
         SavedClipboard::Nothing => {}
     }
     Ok(())
@@ -1102,9 +1364,8 @@ fn is_secure_input_active() -> bool {
     }
 
     unsafe {
-        let matching = IOServiceMatching(
-            CStr::from_bytes_with_nul_unchecked(b"IOHIDSystem\0").as_ptr(),
-        );
+        let matching =
+            IOServiceMatching(CStr::from_bytes_with_nul_unchecked(b"IOHIDSystem\0").as_ptr());
         if matching.is_null() {
             return false;
         }
@@ -1179,8 +1440,15 @@ fn stop_recording_blocking(
     teardown_recording(recording, 80);
 
     if active_engine == ASREngine::Parakeet || active_engine == ASREngine::Cohere {
-        let engine_name = if active_engine == ASREngine::Parakeet { "Parakeet" } else { "Cohere" };
-        println!("[PROCESSING] Skipping final pass ({} streaming is sufficient)", engine_name);
+        let engine_name = if active_engine == ASREngine::Parakeet {
+            "Parakeet"
+        } else {
+            "Cohere"
+        };
+        println!(
+            "[PROCESSING] Skipping final pass ({} streaming is sufficient)",
+            engine_name
+        );
         let transcript = session_transcript.lock().unwrap().clone();
         let final_text = if transcript.trim().is_empty() {
             String::new()
@@ -1222,27 +1490,31 @@ fn stop_recording_blocking(
         // aren't accidentally filtered out.
         let audio_duration_s = audio_data.len() as f32 / 16000.0;
         let (vad_padding, vad_threshold) = if audio_duration_s < 4.0 {
-            println!("[VAD] Short recording ({:.1}s) — using permissive threshold", audio_duration_s);
+            println!(
+                "[VAD] Short recording ({:.1}s) — using permissive threshold",
+                audio_duration_s
+            );
             (800_usize, 0.2_f32)
         } else {
             (500_usize, 0.35_f32)
         };
-        let timestamps = vad.get_speech_timestamps_hysteresis(&audio_data, vad_padding, vad_threshold, vad_threshold * 0.5)?;
+        let timestamps = vad.get_speech_timestamps_hysteresis(
+            &audio_data,
+            vad_padding,
+            vad_threshold,
+            vad_threshold * 0.5,
+        )?;
 
         let mut clean = Vec::with_capacity(audio_data.len());
         if timestamps.is_empty() {
             // VAD found nothing — let Whisper decide rather than hard-failing
-            println!(
-                "[VAD] No speech segments found, passing full audio to Whisper as fallback"
-            );
+            println!("[VAD] No speech segments found, passing full audio to Whisper as fallback");
             clean.extend_from_slice(&audio_data);
         }
         for (start, end) in timestamps {
             let s = (start * 16000.0) as usize;
             let e = (end * 16000.0) as usize;
-            clean.extend_from_slice(
-                &audio_data[s.min(audio_data.len())..e.min(audio_data.len())],
-            );
+            clean.extend_from_slice(&audio_data[s.min(audio_data.len())..e.min(audio_data.len())]);
         }
 
         // Release locks before transcription to avoid deadlock
@@ -1282,13 +1554,14 @@ fn stop_recording_blocking(
 /// On Windows/Linux synchronous commands already run on a thread pool so the
 /// original blocking behaviour is fine, but async is harmless there too.
 #[tauri::command]
-pub async fn stop_recording(state: State<'_, AudioState>) -> Result<String, String> {
+pub async fn stop_recording(state: State<'_, AudioState>) -> Result<CommandResult<String>, String> {
     // --- Quick state access (non-blocking, just mutex snapshots) ---
     *state.denoiser.lock().unwrap() = None;
     state.recording_paused.store(false, Ordering::Relaxed);
 
-    let recording = state.recording_handle.lock().unwrap().take()
-        .ok_or_else(|| "Not recording".to_string())?;
+    let Some(recording) = state.recording_handle.lock().unwrap().take() else {
+        return Ok(CommandResult::err("not_recording", "Not recording"));
+    };
 
     let active_engine = *state.active_engine.lock().unwrap();
     let session_transcript = state.session_transcript.clone();
@@ -1309,5 +1582,9 @@ pub async fn stop_recording(state: State<'_, AudioState>) -> Result<String, Stri
         )
     })
     .await
-    .map_err(|e| format!("stop_recording task failed: {}", e))?
+    .map(|result| match result {
+        Ok(transcript) => CommandResult::ok(transcript),
+        Err(message) => CommandResult::err("recording_stop_failed", message),
+    })
+    .map_err(|e| format!("stop_recording task failed: {}", e))
 }

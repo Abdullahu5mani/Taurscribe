@@ -12,6 +12,23 @@ use std::path::PathBuf;
 
 use crate::parakeet::GpuBackend;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ParakeetLoadPath {
+    StrictGpu,
+    FallbackGpu,
+    Cpu,
+}
+
+impl std::fmt::Display for ParakeetLoadPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParakeetLoadPath::StrictGpu => write!(f, "strict_gpu"),
+            ParakeetLoadPath::FallbackGpu => write!(f, "fallback_gpu"),
+            ParakeetLoadPath::Cpu => write!(f, "cpu"),
+        }
+    }
+}
+
 // ─── Session config helpers ───────────────────────────────────────────────────
 
 /// Number of intra-op threads: half the physical cores, clamped to [2, 6].
@@ -38,17 +55,35 @@ fn cpu_config() -> parakeet_rs::ExecutionConfig {
     ExecutionConfig::new()
         .with_intra_threads(intra_thread_count())
         .with_inter_threads(1)
+        .with_gpu_fallback_to_cpu(false)
 }
 
 /// Build an `ExecutionConfig` for CUDA inference.
 /// Same session options as `cpu_config` plus the CUDA execution provider.
-#[cfg(any(target_os = "linux", all(target_os = "windows", target_arch = "x86_64")))]
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", target_arch = "x86_64")
+))]
 fn cuda_config() -> parakeet_rs::ExecutionConfig {
     use parakeet_rs::{ExecutionConfig, ExecutionProvider};
     ExecutionConfig::new()
         .with_execution_provider(ExecutionProvider::Cuda)
         .with_intra_threads(intra_thread_count())
         .with_inter_threads(1)
+        .with_gpu_fallback_to_cpu(true)
+}
+
+#[cfg(any(
+    target_os = "linux",
+    all(target_os = "windows", target_arch = "x86_64")
+))]
+fn cuda_strict_config() -> parakeet_rs::ExecutionConfig {
+    use parakeet_rs::{ExecutionConfig, ExecutionProvider};
+    ExecutionConfig::new()
+        .with_execution_provider(ExecutionProvider::Cuda)
+        .with_intra_threads(intra_thread_count())
+        .with_inter_threads(1)
+        .with_gpu_fallback_to_cpu(false)
 }
 
 /// Build an `ExecutionConfig` for DirectML inference (Windows GPU/NPU).
@@ -59,11 +94,26 @@ fn directml_config() -> parakeet_rs::ExecutionConfig {
         .with_execution_provider(ExecutionProvider::DirectML)
         .with_intra_threads(intra_thread_count())
         .with_inter_threads(1)
+        .with_gpu_fallback_to_cpu(true)
+}
+
+#[cfg(target_os = "windows")]
+fn directml_strict_config() -> parakeet_rs::ExecutionConfig {
+    use parakeet_rs::{ExecutionConfig, ExecutionProvider};
+    ExecutionConfig::new()
+        .with_execution_provider(ExecutionProvider::DirectML)
+        .with_intra_threads(intra_thread_count())
+        .with_inter_threads(1)
+        .with_gpu_fallback_to_cpu(false)
 }
 
 // ─── Nemotron ────────────────────────────────────────────────────────────────
 
-pub fn init_nemotron(path: &PathBuf, force_cpu: bool) -> Result<(Nemotron, GpuBackend), String> {
+pub fn init_nemotron(
+    path: &PathBuf,
+    force_cpu: bool,
+    load_path: ParakeetLoadPath,
+) -> Result<(Nemotron, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
         println!("[PARAKEET] macOS detected - explicitly forcing CPU for Nemotron");
@@ -73,18 +123,33 @@ pub fn init_nemotron(path: &PathBuf, force_cpu: bool) -> Result<(Nemotron, GpuBa
 
     #[cfg(not(target_os = "macos"))]
     {
-        if force_cpu {
+        if force_cpu || load_path == ParakeetLoadPath::Cpu {
             println!("[PARAKEET] CPU-only mode selected for Nemotron");
             let m = try_cpu_nemotron(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        match try_gpu_nemotron(path.to_str().unwrap()) {
+        let gpu_try = match load_path {
+            ParakeetLoadPath::StrictGpu => try_gpu_nemotron_strict(path.to_str().unwrap()),
+            ParakeetLoadPath::FallbackGpu => try_gpu_nemotron(path.to_str().unwrap()),
+            ParakeetLoadPath::Cpu => unreachable!(),
+        };
+        match gpu_try {
             Ok(m) => return Ok((m, GpuBackend::Cuda)),
             Err(e) => eprintln!("[PARAKEET] CUDA failed for Nemotron: {e}"),
         }
-        match try_directml_nemotron(path.to_str().unwrap()) {
+        let dml_try = match load_path {
+            ParakeetLoadPath::StrictGpu => try_directml_nemotron_strict(path.to_str().unwrap()),
+            ParakeetLoadPath::FallbackGpu => try_directml_nemotron(path.to_str().unwrap()),
+            ParakeetLoadPath::Cpu => unreachable!(),
+        };
+        match dml_try {
             Ok(m) => return Ok((m, GpuBackend::DirectML)),
             Err(e) => eprintln!("[PARAKEET] DirectML failed for Nemotron: {e}"),
+        }
+        if load_path == ParakeetLoadPath::StrictGpu {
+            return Err(
+                "Strict GPU Parakeet load failed (no CUDA/DirectML path succeeded)".to_string(),
+            );
         }
         println!("[PARAKEET] Fallback to CPU for Nemotron");
         let m = try_cpu_nemotron(path.to_str().unwrap())?;
@@ -109,10 +174,37 @@ fn try_gpu_nemotron(_path: &str) -> Result<Nemotron, String> {
 }
 
 #[allow(dead_code)]
+fn try_gpu_nemotron_strict(_path: &str) -> Result<Nemotron, String> {
+    #[cfg(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
+    {
+        Nemotron::from_pretrained(_path, Some(cuda_strict_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
+    Err("CUDA feature not enabled".to_string())
+}
+
+#[allow(dead_code)]
 fn try_directml_nemotron(_path: &str) -> Result<Nemotron, String> {
     #[cfg(target_os = "windows")]
     {
         Nemotron::from_pretrained(_path, Some(directml_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(not(target_os = "windows"))]
+    Err("DirectML feature not enabled".to_string())
+}
+
+#[allow(dead_code)]
+fn try_directml_nemotron_strict(_path: &str) -> Result<Nemotron, String> {
+    #[cfg(target_os = "windows")]
+    {
+        Nemotron::from_pretrained(_path, Some(directml_strict_config()))
+            .map_err(|e| format!("{}", e))
     }
     #[cfg(not(target_os = "windows"))]
     Err("DirectML feature not enabled".to_string())
@@ -131,7 +223,11 @@ fn try_cpu_nemotron(path: &str) -> Result<Nemotron, String> {
 
 // ─── CTC ─────────────────────────────────────────────────────────────────────
 
-pub fn init_ctc(path: &PathBuf, force_cpu: bool) -> Result<(Parakeet, GpuBackend), String> {
+pub fn init_ctc(
+    path: &PathBuf,
+    force_cpu: bool,
+    load_path: ParakeetLoadPath,
+) -> Result<(Parakeet, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
         println!("[PARAKEET] macOS detected - explicitly forcing CPU for CTC");
@@ -141,18 +237,33 @@ pub fn init_ctc(path: &PathBuf, force_cpu: bool) -> Result<(Parakeet, GpuBackend
 
     #[cfg(not(target_os = "macos"))]
     {
-        if force_cpu {
+        if force_cpu || load_path == ParakeetLoadPath::Cpu {
             println!("[PARAKEET] CPU-only mode selected for CTC");
             let m = try_cpu_ctc(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        match try_gpu_ctc(path.to_str().unwrap()) {
+        let gpu_try = match load_path {
+            ParakeetLoadPath::StrictGpu => try_gpu_ctc_strict(path.to_str().unwrap()),
+            ParakeetLoadPath::FallbackGpu => try_gpu_ctc(path.to_str().unwrap()),
+            ParakeetLoadPath::Cpu => unreachable!(),
+        };
+        match gpu_try {
             Ok(m) => return Ok((m, GpuBackend::Cuda)),
             Err(e) => eprintln!("[PARAKEET] CUDA failed for CTC: {e}"),
         }
-        match try_directml_ctc(path.to_str().unwrap()) {
+        let dml_try = match load_path {
+            ParakeetLoadPath::StrictGpu => try_directml_ctc_strict(path.to_str().unwrap()),
+            ParakeetLoadPath::FallbackGpu => try_directml_ctc(path.to_str().unwrap()),
+            ParakeetLoadPath::Cpu => unreachable!(),
+        };
+        match dml_try {
             Ok(m) => return Ok((m, GpuBackend::DirectML)),
             Err(e) => eprintln!("[PARAKEET] DirectML failed for CTC: {e}"),
+        }
+        if load_path == ParakeetLoadPath::StrictGpu {
+            return Err(
+                "Strict GPU Parakeet load failed (no CUDA/DirectML path succeeded)".to_string(),
+            );
         }
         println!("[PARAKEET] Fallback to CPU for CTC");
         let m = try_cpu_ctc(path.to_str().unwrap())?;
@@ -177,10 +288,37 @@ fn try_gpu_ctc(_path: &str) -> Result<Parakeet, String> {
 }
 
 #[allow(dead_code)]
+fn try_gpu_ctc_strict(_path: &str) -> Result<Parakeet, String> {
+    #[cfg(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
+    {
+        Parakeet::from_pretrained(_path, Some(cuda_strict_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
+    Err("CUDA feature not enabled".to_string())
+}
+
+#[allow(dead_code)]
 fn try_directml_ctc(_path: &str) -> Result<Parakeet, String> {
     #[cfg(target_os = "windows")]
     {
         Parakeet::from_pretrained(_path, Some(directml_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(not(target_os = "windows"))]
+    Err("DirectML feature not enabled".to_string())
+}
+
+#[allow(dead_code)]
+fn try_directml_ctc_strict(_path: &str) -> Result<Parakeet, String> {
+    #[cfg(target_os = "windows")]
+    {
+        Parakeet::from_pretrained(_path, Some(directml_strict_config()))
+            .map_err(|e| format!("{}", e))
     }
     #[cfg(not(target_os = "windows"))]
     Err("DirectML feature not enabled".to_string())
@@ -199,7 +337,11 @@ fn try_cpu_ctc(path: &str) -> Result<Parakeet, String> {
 
 // ─── EOU ─────────────────────────────────────────────────────────────────────
 
-pub fn init_eou(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetEOU, GpuBackend), String> {
+pub fn init_eou(
+    path: &PathBuf,
+    force_cpu: bool,
+    load_path: ParakeetLoadPath,
+) -> Result<(ParakeetEOU, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
         let m = try_cpu_eou(path.to_str().unwrap())?;
@@ -208,18 +350,33 @@ pub fn init_eou(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetEOU, GpuBack
 
     #[cfg(not(target_os = "macos"))]
     {
-        if force_cpu {
+        if force_cpu || load_path == ParakeetLoadPath::Cpu {
             println!("[PARAKEET] CPU-only mode selected for EOU");
             let m = try_cpu_eou(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        match try_gpu_eou(path.to_str().unwrap()) {
+        let gpu_try = match load_path {
+            ParakeetLoadPath::StrictGpu => try_gpu_eou_strict(path.to_str().unwrap()),
+            ParakeetLoadPath::FallbackGpu => try_gpu_eou(path.to_str().unwrap()),
+            ParakeetLoadPath::Cpu => unreachable!(),
+        };
+        match gpu_try {
             Ok(m) => return Ok((m, GpuBackend::Cuda)),
             Err(e) => eprintln!("[PARAKEET] CUDA failed for EOU: {e}"),
         }
-        match try_directml_eou(path.to_str().unwrap()) {
+        let dml_try = match load_path {
+            ParakeetLoadPath::StrictGpu => try_directml_eou_strict(path.to_str().unwrap()),
+            ParakeetLoadPath::FallbackGpu => try_directml_eou(path.to_str().unwrap()),
+            ParakeetLoadPath::Cpu => unreachable!(),
+        };
+        match dml_try {
             Ok(m) => return Ok((m, GpuBackend::DirectML)),
             Err(e) => eprintln!("[PARAKEET] DirectML failed for EOU: {e}"),
+        }
+        if load_path == ParakeetLoadPath::StrictGpu {
+            return Err(
+                "Strict GPU Parakeet load failed (no CUDA/DirectML path succeeded)".to_string(),
+            );
         }
         println!("[PARAKEET] Fallback to CPU for EOU");
         let m = try_cpu_eou(path.to_str().unwrap())?;
@@ -244,10 +401,38 @@ fn try_gpu_eou(_path: &str) -> Result<ParakeetEOU, String> {
 }
 
 #[allow(dead_code)]
+fn try_gpu_eou_strict(_path: &str) -> Result<ParakeetEOU, String> {
+    #[cfg(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
+    {
+        ParakeetEOU::from_pretrained(_path, Some(cuda_strict_config()))
+            .map_err(|e| format!("{}", e))
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
+    Err("CUDA feature not enabled".to_string())
+}
+
+#[allow(dead_code)]
 fn try_directml_eou(_path: &str) -> Result<ParakeetEOU, String> {
     #[cfg(target_os = "windows")]
     {
         ParakeetEOU::from_pretrained(_path, Some(directml_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(not(target_os = "windows"))]
+    Err("DirectML feature not enabled".to_string())
+}
+
+#[allow(dead_code)]
+fn try_directml_eou_strict(_path: &str) -> Result<ParakeetEOU, String> {
+    #[cfg(target_os = "windows")]
+    {
+        ParakeetEOU::from_pretrained(_path, Some(directml_strict_config()))
+            .map_err(|e| format!("{}", e))
     }
     #[cfg(not(target_os = "windows"))]
     Err("DirectML feature not enabled".to_string())
@@ -266,7 +451,11 @@ fn try_cpu_eou(path: &str) -> Result<ParakeetEOU, String> {
 
 // ─── TDT ─────────────────────────────────────────────────────────────────────
 
-pub fn init_tdt(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetTDT, GpuBackend), String> {
+pub fn init_tdt(
+    path: &PathBuf,
+    force_cpu: bool,
+    load_path: ParakeetLoadPath,
+) -> Result<(ParakeetTDT, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
         let m = try_cpu_tdt(path.to_str().unwrap())?;
@@ -275,18 +464,33 @@ pub fn init_tdt(path: &PathBuf, force_cpu: bool) -> Result<(ParakeetTDT, GpuBack
 
     #[cfg(not(target_os = "macos"))]
     {
-        if force_cpu {
+        if force_cpu || load_path == ParakeetLoadPath::Cpu {
             println!("[PARAKEET] CPU-only mode selected for TDT");
             let m = try_cpu_tdt(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        match try_gpu_tdt(path.to_str().unwrap()) {
+        let gpu_try = match load_path {
+            ParakeetLoadPath::StrictGpu => try_gpu_tdt_strict(path.to_str().unwrap()),
+            ParakeetLoadPath::FallbackGpu => try_gpu_tdt(path.to_str().unwrap()),
+            ParakeetLoadPath::Cpu => unreachable!(),
+        };
+        match gpu_try {
             Ok(m) => return Ok((m, GpuBackend::Cuda)),
             Err(e) => eprintln!("[PARAKEET] CUDA failed for TDT: {e}"),
         }
-        match try_directml_tdt(path.to_str().unwrap()) {
+        let dml_try = match load_path {
+            ParakeetLoadPath::StrictGpu => try_directml_tdt_strict(path.to_str().unwrap()),
+            ParakeetLoadPath::FallbackGpu => try_directml_tdt(path.to_str().unwrap()),
+            ParakeetLoadPath::Cpu => unreachable!(),
+        };
+        match dml_try {
             Ok(m) => return Ok((m, GpuBackend::DirectML)),
             Err(e) => eprintln!("[PARAKEET] DirectML failed for TDT: {e}"),
+        }
+        if load_path == ParakeetLoadPath::StrictGpu {
+            return Err(
+                "Strict GPU Parakeet load failed (no CUDA/DirectML path succeeded)".to_string(),
+            );
         }
         println!("[PARAKEET] Fallback to CPU for TDT");
         let m = try_cpu_tdt(path.to_str().unwrap())?;
@@ -311,10 +515,38 @@ fn try_gpu_tdt(_path: &str) -> Result<ParakeetTDT, String> {
 }
 
 #[allow(dead_code)]
+fn try_gpu_tdt_strict(_path: &str) -> Result<ParakeetTDT, String> {
+    #[cfg(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    ))]
+    {
+        ParakeetTDT::from_pretrained(_path, Some(cuda_strict_config()))
+            .map_err(|e| format!("{}", e))
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        all(target_os = "windows", target_arch = "x86_64")
+    )))]
+    Err("CUDA feature not enabled".to_string())
+}
+
+#[allow(dead_code)]
 fn try_directml_tdt(_path: &str) -> Result<ParakeetTDT, String> {
     #[cfg(target_os = "windows")]
     {
         ParakeetTDT::from_pretrained(_path, Some(directml_config())).map_err(|e| format!("{}", e))
+    }
+    #[cfg(not(target_os = "windows"))]
+    Err("DirectML feature not enabled".to_string())
+}
+
+#[allow(dead_code)]
+fn try_directml_tdt_strict(_path: &str) -> Result<ParakeetTDT, String> {
+    #[cfg(target_os = "windows")]
+    {
+        ParakeetTDT::from_pretrained(_path, Some(directml_strict_config()))
+            .map_err(|e| format!("{}", e))
     }
     #[cfg(not(target_os = "windows"))]
     Err("DirectML feature not enabled".to_string())
@@ -333,19 +565,36 @@ fn try_cpu_tdt(path: &str) -> Result<ParakeetTDT, String> {
 
 /// One-line summary after load. parakeet-rs registers GPU EP first then CPU without `error_on_failure`
 /// on CUDA, so a bad cuDNN path can still “load” but run on CPU — Cohere uses stricter ORT options.
-pub fn log_parakeet_backend_resolution(model_type: &str, backend: &GpuBackend, force_cpu: bool) {
-    if force_cpu {
+pub fn log_parakeet_backend_resolution(
+    model_type: &str,
+    backend: &GpuBackend,
+    force_cpu: bool,
+    load_path: ParakeetLoadPath,
+) {
+    if force_cpu || load_path == ParakeetLoadPath::Cpu {
         println!("[PARAKEET] {} — CPU-only (forced).", model_type);
         return;
     }
     match backend {
         GpuBackend::Cuda => println!(
-            "[PARAKEET] {} — CUDA EP loaded (CPU EP also registered as ORT fallback; use Task Manager or nvidia-smi during transcribing to confirm GPU if unsure).",
-            model_type
+            "[PARAKEET] {} — CUDA EP loaded (load_path={}; {}CPU EP fallback).",
+            model_type,
+            load_path,
+            if load_path == ParakeetLoadPath::FallbackGpu {
+                "with "
+            } else {
+                "without "
+            }
         ),
         GpuBackend::DirectML => println!(
-            "[PARAKEET] {} — DirectML EP loaded (CPU EP registered as ORT fallback).",
-            model_type
+            "[PARAKEET] {} — DirectML EP loaded (load_path={}; {}CPU EP fallback).",
+            model_type,
+            load_path,
+            if load_path == ParakeetLoadPath::FallbackGpu {
+                "with "
+            } else {
+                "without "
+            }
         ),
         GpuBackend::Cpu => println!(
             "[PARAKEET] {} — CPU EP only (GPU paths failed).",

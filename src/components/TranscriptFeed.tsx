@@ -223,6 +223,7 @@ export function TranscriptFeed({
             {items.map((item, index) => {
                 const isNew = animatingId === item.id;
                 const isLatest = index === 0;
+                const displayLatency = item.processing_time_ms ?? (isLatest ? latestLatency : null);
                 return (
                     // Outer wrapper: animates grid-template-rows 0fr→1fr (height: 0→auto)
                     // so the item EXPANDS smoothly instead of jumping into place.
@@ -234,15 +235,9 @@ export function TranscriptFeed({
                             <div className="feed-item-header">
                                 <span className="feed-timestamp">{formatTimestamp(item.created_at)}</span>
                                 <div className="feed-badges">
-                                    {isLatest && latestLatency !== null ? (
+                                    {displayLatency !== null ? (
                                         <span className="latency-badge">
-                                            {isNew ? <LatencyOdometer target={latestLatency} /> : <>{latestLatency} ms</>}
-                                        </span>
-                                    ) : !isLatest && item.processing_time_ms ? (
-                                        <span className="latency-badge latency-badge--muted">
-                                            {item.processing_time_ms >= 1000
-                                                ? `${(item.processing_time_ms / 1000).toFixed(1)}s`
-                                                : `${item.processing_time_ms} ms`}
+                                            {isNew ? <LatencyOdometer target={displayLatency} /> : <>{displayLatency} ms</>}
                                         </span>
                                     ) : null}
                                     <span className={`feed-badge feed-badge-engine--${item.engine}`}>
