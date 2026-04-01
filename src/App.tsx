@@ -407,7 +407,17 @@ function App() {
   const handleResumeRecordingRef = useSyncedRef(handleResumeRecording);
   const handleCancelRecordingRef = useSyncedRef(handleCancelRecording);
   const handleTranscriptionChunkRef = useSyncedRef(handleTranscriptionChunk);
-  const loadedEngineRef = useSyncedRef(loadedEngine);
+  const asrModelCountsRef = useRef({
+    whisper: 0,
+    parakeet: 0,
+    cohere: 0,
+  });
+  asrModelCountsRef.current = {
+    whisper: models.length,
+    parakeet: parakeetModels.length,
+    cohere: cohereModels.length,
+  };
+  const isFileTranscribingRef = useSyncedRef(isFileTranscribing);
   const playErrorRef = useSyncedRef(playError);
   const setHeaderStatusRef = useSyncedRef(setHeaderStatus);
   const startNoModelCtaAttention = useCallback(() => {
@@ -474,7 +484,8 @@ function App() {
     isRecordingRef,
     isLoadingRef,
     activeEngineRef,
-    loadedEngineRef,
+    isFileTranscribingRef,
+    asrModelCountsRef,
     handleStartRecordingRef,
     handleStopRecordingRef,
     handlePauseRecordingRef,
@@ -853,9 +864,13 @@ function App() {
                   <line x1="12" y1="17" x2="12.01" y2="17" />
                 </svg>
                 <span>
-                  Hotkeys disabled
-                  {inputMonitoringMissing ? <> — grant <strong>Input Monitoring</strong> so Taurscribe can hear the shortcut.</> : null}
-                  {accessibilityMissing ? <> Grant <strong>Accessibility</strong> so it can type text back into other apps.</> : null}
+                  {inputMonitoringMissing && accessibilityMissing ? (
+                    <>Use the buttons below: <strong>Input Monitoring</strong> for the global shortcut, then <strong>Accessibility</strong> to paste into other apps.</>
+                  ) : inputMonitoringMissing ? (
+                    <>Use <strong>Input Monitoring</strong> below — the shortcut will not work until this is enabled for Taurscribe.</>
+                  ) : (
+                    <>Use <strong>Accessibility</strong> below — otherwise text cannot be inserted into other apps.</>
+                  )}
                 </span>
                 <div className="accessibility-banner-actions">
                   {inputMonitoringMissing && (
@@ -1251,7 +1266,7 @@ function App() {
             <div className="loading-overlay-backdrop" aria-busy="true" aria-live="polite">
               <div className="loading-overlay">
                 <div className="loading-spinner" />
-                <span className="loading-text">{loadingMessage || "Loading..."}</span>
+                <span className="loading-text">{loadingMessage || "Loading model…"}</span>
               </div>
             </div>
           )}

@@ -14,7 +14,8 @@ type Phase =
     | "paste_failed"
     | "cancelled"
     | "no_model"
-    | "model_loading";
+    | "model_loading"
+    | "nothing_heard";
 
 interface Payload {
     phase: Phase | "hidden";
@@ -62,7 +63,9 @@ function getStatusLabel(phase: Phase) {
         case "no_model":
             return "No model";
         case "model_loading":
-            return "Loading";
+            return "Loading model";
+        case "nothing_heard":
+            return "Nothing heard";
     }
 }
 
@@ -204,7 +207,12 @@ export function OverlayApp() {
     const isLive = phase === "recording" || phase === "paused";
     const isDone = phase === "done";
     const isProcessing = phase === "transcribing" || phase === "correcting" || phase === "model_loading";
-    const isError = phase === "no_model" || phase === "too_short" || phase === "paste_failed" || phase === "cancelled";
+    const isError =
+        phase === "no_model" ||
+        phase === "too_short" ||
+        phase === "nothing_heard" ||
+        phase === "paste_failed" ||
+        phase === "cancelled";
 
     return (
         <div className={`overlay-pill overlay-pill--${phase}`}>

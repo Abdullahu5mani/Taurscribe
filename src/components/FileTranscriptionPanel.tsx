@@ -346,7 +346,7 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
                                 <line x1="12" y1="3" x2="12" y2="15" />
                             </svg>
                         </div>
-                        <p className="file-drop-title file-drop-title--loading">Model loading…</p>
+                        <p className="file-drop-title file-drop-title--loading">Loading model…</p>
                         <p className="file-drop-hint">Drop zone will be ready once the model finishes loading</p>
                     </>
                 ) : isEmpty ? (

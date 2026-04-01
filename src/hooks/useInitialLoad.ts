@@ -44,7 +44,7 @@ interface UseInitialLoadParams {
  *   1. Fetches backend info and all model lists
  *   2. Pre-fetches download status for all known models
  *   3. Loads and restores settings.json (engine, hotkey, device, close-behavior, overlay)
- *   4. Auto-loads Parakeet or Cohere Speech if they were active on last run
+ *   4. Auto-loads Whisper, Parakeet, or Cohere Speech if that engine was active on last run
  */
 export function useInitialLoad({
     setModels,
@@ -167,8 +167,48 @@ export function useInitialLoad({
                     if (granitePick) setCurrentCohereModel(granitePick);
 
                     const savedAsrBackend = await loadedStore.get<"gpu" | "cpu">("asr_backend");
+                    const useGpuPref = savedAsrBackend !== "cpu";
 
-                    if (savedEngine === "parakeet" && pModels.length > 0) {
+                    if (savedEngine === "whisper" && modelList.length > 0) {
+                        const savedWhisper = await loadedStore.get<string>("whisper_model");
+                        const targetWhisper =
+                            savedWhisper && modelList.some((m) => m.id === savedWhisper)
+                                ? savedWhisper
+                                : current && modelList.some((m) => m.id === current)
+                                  ? current
+                                  : modelList[0].id;
+                        const alreadyOk = !!current && current === targetWhisper;
+                        if (!alreadyOk) {
+                            isLoadingRef.current = true;
+                            setIsLoading(true);
+                            setLoadingMessage(`Loading Whisper (${targetWhisper})...`);
+                            try {
+                                if (cancelled) return;
+                                await invoke("switch_model", {
+                                    modelId: targetWhisper,
+                                    useGpu: useGpuPref,
+                                });
+                                if (cancelled) return;
+                                setCurrentModel(targetWhisper);
+                                setLoadedEngine("whisper");
+                                setHeaderStatus("Whisper model loaded");
+                                const info = await invoke("get_backend_info");
+                                if (!cancelled) setBackendInfo(info as string);
+                            } catch (e) {
+                                if (cancelled) return;
+                                setHeaderStatus(`Failed to auto-load Whisper: ${e}`, 5000);
+                            } finally {
+                                if (!cancelled) {
+                                    isLoadingRef.current = false;
+                                    setIsLoading(false);
+                                    setLoadingMessage("");
+                                }
+                            }
+                        } else {
+                            setCurrentModel(targetWhisper);
+                            setLoadedEngine("whisper");
+                        }
+                    } else if (savedEngine === "parakeet" && pModels.length > 0) {
                         const targetModel =
                             savedParakeet && pModels.find((m) => m.id === savedParakeet)
                                 ? savedParakeet
@@ -179,7 +219,10 @@ export function useInitialLoad({
                         setLoadingMessage(`Loading Parakeet (${targetModel})...`);
                         try {
                             if (cancelled) return;
-                            await invoke("init_parakeet", { modelId: targetModel });
+                            await invoke("init_parakeet", {
+                                modelId: targetModel,
+                                useGpu: useGpuPref,
+                            });
                             if (cancelled) return;
                             setCurrentParakeetModel(targetModel);
                             setLoadedEngine("parakeet");
