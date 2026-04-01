@@ -107,7 +107,9 @@ pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> 
 /// exists on disk for the active engine but is not loaded, or a disabled "No model found".
 pub fn update_tray_model_item(app: &AppHandle, loaded: bool) {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-    let Some(tray) = app.tray_by_id("main-tray") else { return };
+    let Some(tray) = app.tray_by_id("main-tray") else {
+        return;
+    };
     let state = app.state::<AudioState>();
     let has_downloaded = state.active_engine_has_downloaded_model();
     let (model_action_label, model_action_enabled) = if loaded {
@@ -117,14 +119,25 @@ pub fn update_tray_model_item(app: &AppHandle, loaded: bool) {
     } else {
         ("No model found", false)
     };
-    let Ok(show_item) = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>) else { return };
-    let Ok(unload_item) =
-        MenuItem::with_id(app, "unload", model_action_label, model_action_enabled, None::<&str>)
+    let Ok(show_item) = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>)
     else {
         return;
     };
-    let Ok(quit_item) = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>) else { return };
-    let Ok(separator) = PredefinedMenuItem::separator(app) else { return };
+    let Ok(unload_item) = MenuItem::with_id(
+        app,
+        "unload",
+        model_action_label,
+        model_action_enabled,
+        None::<&str>,
+    ) else {
+        return;
+    };
+    let Ok(quit_item) = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>) else {
+        return;
+    };
+    let Ok(separator) = PredefinedMenuItem::separator(app) else {
+        return;
+    };
     if let Ok(menu) = Menu::with_items(app, &[&show_item, &unload_item, &separator, &quit_item]) {
         let _ = tray.set_menu(Some(menu));
     }
@@ -217,7 +230,10 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 use crate::state::AudioState;
                 // If model is loaded → unload it; otherwise open the window so
                 // the user can click the Load Model button in the UI.
-                let loaded = app.state::<AudioState>().model_loaded.load(Ordering::Relaxed);
+                let loaded = app
+                    .state::<AudioState>()
+                    .model_loaded
+                    .load(Ordering::Relaxed);
                 if loaded {
                     do_unload(app);
                 } else if let Some(window) = app.get_webview_window("main") {
@@ -235,7 +251,12 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             // the context menu (.show_menu_on_left_click(false) already gates
             // menu display, but we must not intercept right-click here or
             // Windows never shows the menu).
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
                 if let Some(window) = tray.app_handle().get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -248,4 +269,3 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     println!("[INFO] System tray icon created");
     Ok(())
 }
-

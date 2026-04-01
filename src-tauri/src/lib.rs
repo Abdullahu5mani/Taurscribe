@@ -2,16 +2,20 @@
 mod audio;
 pub mod audio_decode;
 pub mod audio_preprocess;
-mod commands;
+pub mod cohere;
 mod cohere_features;
+mod commands;
 mod context;
 mod denoise;
-pub mod cohere;
 mod hotkeys;
+pub mod librispeech_wer;
 mod llm;
+pub mod memory;
+mod ort_session;
 mod overlay;
 pub mod parakeet;
-mod parakeet_loaders;
+pub mod parakeet_loaders;
+mod parakeet_runtime;
 mod state;
 mod system_audio;
 mod tray;
@@ -20,7 +24,6 @@ pub mod utils;
 pub mod vad;
 mod watcher;
 pub mod whisper;
-pub mod librispeech_wer;
 
 // Imports
 use cohere::CohereManager;
@@ -72,38 +75,17 @@ pub fn run() {
         eprintln!("[RESET] Failed to complete pending factory reset: {}", e);
     }
 
-    // 1. Initialize Whisper AI
-    println!("[INFO] Initializing Whisper transcription engine...");
-    let whisper = WhisperManager::new();
-
-    let (whisper, init_result) = std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024) // 8 MiB Stack
-        .spawn(move || {
-            let mut whisper = whisper;
-            let res = whisper.initialize(None, false);
-            (whisper, res)
-        })
-        .expect("Failed to spawn whisper init thread")
-        .join()
-        .unwrap_or_else(|_| {
-            eprintln!("[ERROR] Whisper init thread panicked unexpectedly");
-            (
-                WhisperManager::new(),
-                Err("Initialization thread panicked".to_string()),
-            )
-        });
-
-    let whisper_loaded_at_startup = init_result.is_ok();
-    match init_result {
-        Ok(backend_msg) => {
-            println!("[SUCCESS] {}", backend_msg);
-        }
-        Err(e) => {
-            eprintln!("[ERROR] Failed to initialize Whisper: {}", e);
-            eprintln!("   ⚠️  No models found. Please download the Base model from Settings > Download Manager.");
-            eprintln!("   Transcription will be disabled until a model is downloaded.");
-        }
+    match ort_session::initialize_low_ram_ort_environment() {
+        Ok(true) => println!("[INFO] ONNX Runtime low-RAM environment configured"),
+        Ok(false) => println!("[INFO] ONNX Runtime environment already configured"),
+        Err(e) => eprintln!("[WARN] Failed to configure ONNX Runtime environment: {}", e),
     }
+
+    // 1. Create Whisper manager only. The model itself loads lazily on first use.
+    println!("[INFO] Initializing Whisper transcription engine manager...");
+    let whisper = WhisperManager::new();
+    let whisper_loaded_at_startup = false;
+    println!("[INFO] Whisper startup load disabled; model will load on demand");
 
     // 2. Initialize VAD
     println!("[INFO] Initializing Voice Activity Detection...");
@@ -157,13 +139,16 @@ pub fn run() {
             tray::setup_tray(app)?;
 
             // Sync initial model state with tray menu item.
-            // Whisper auto-loads at startup if a model is present; reflect that here.
             use std::sync::atomic::Ordering;
             if whisper_loaded_at_startup {
-                app.state::<AudioState>().model_loaded.store(true, Ordering::Relaxed);
+                app.state::<AudioState>()
+                    .model_loaded
+                    .store(true, Ordering::Relaxed);
                 tray::update_tray_model_item(app.handle(), true);
             } else {
-                app.state::<AudioState>().model_loaded.store(false, Ordering::Relaxed);
+                app.state::<AudioState>()
+                    .model_loaded
+                    .store(false, Ordering::Relaxed);
                 tray::update_tray_model_item(app.handle(), false);
             }
 
@@ -216,9 +201,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::show_main_window,
             commands::get_system_info,
+            commands::get_process_memory_stats,
             commands::start_recording,
             commands::stop_recording,
             commands::get_backend_info,
+            commands::get_engine_selection_state,
             commands::list_models,
             commands::get_current_model,
             commands::switch_model,

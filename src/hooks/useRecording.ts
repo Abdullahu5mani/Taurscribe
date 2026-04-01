@@ -5,6 +5,7 @@ import { COHERE_FP16_MODEL_ID } from "../utils/engineUtils";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
+import type { CommandResult, SessionNotice } from "../types/session";
 
 interface UseRecordingParams {
     activeEngineRef: React.RefObject<ASREngine>;
@@ -34,6 +35,10 @@ interface UseRecordingParams {
     snippetsRef: React.RefObject<SnippetEntry[]>;
     /** Called after each successful save_transcript_history — lets the parent refresh the history UI. */
     onHistorySaved?: () => void;
+    setSessionPhase?: (phase: "idle" | "loading_model" | "recording" | "paused" | "processing" | "success" | "warning" | "error") => void;
+    setSessionNotice?: (notice: SessionNotice | null) => void;
+    setSessionTranscript?: (transcript: string) => void;
+    setSessionLatency?: (latency: number | null) => void;
 }
 
 /** Minimum live mic time before stop; enforced in this hook only (not Rust). Keep in sync with AGENTS.md / CLAUDE.md. */
@@ -80,6 +85,10 @@ export function useRecording({
     dictionaryRef,
     snippetsRef,
     onHistorySaved,
+    setSessionPhase,
+    setSessionNotice,
+    setSessionTranscript,
+    setSessionLatency,
 }: UseRecordingParams) {
     const [isRecording, setIsRecording] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
@@ -137,11 +146,25 @@ export function useRecording({
         liveTranscriptRef.current = "";
         setLiveTranscript("");
         setLatestLatency(null);
+        setSessionTranscript?.("");
+        setSessionLatency?.(null);
         setIsPaused(false);
         isPausedRef.current = false;
         pausedAtRef.current = null;
         totalPausedMsRef.current = 0;
     };
+
+    const showNotice = (notice: SessionNotice | null) => {
+        setSessionNotice?.(notice);
+    };
+
+    const commandErrorToNotice = (error: { code?: string; message?: string }, fallbackTitle: string): SessionNotice => ({
+        level: "error",
+        code: error.code ?? "unknown",
+        title: fallbackTitle,
+        message: error.message ?? fallbackTitle,
+        sticky: true,
+    });
 
     const handleStartRecording = async (fromHotkey = false) => {
         hotkeySessionRef.current = fromHotkey; // tracks hotkey session independent of overlay toggle
@@ -150,6 +173,13 @@ export function useRecording({
         if (currentEngine === "whisper") {
             if (models.length === 0) {
                 setHeaderStatus("No Whisper models installed! Please download one.", 5000);
+                showNotice({
+                    level: "warning",
+                    code: "model_missing",
+                    title: "No Whisper model installed",
+                    message: "Download a Whisper model or switch to another installed engine before recording.",
+                    sticky: true,
+                });
                 setIsSettingsOpen(true);
                 return;
             }
@@ -157,14 +187,20 @@ export function useRecording({
             let targetWhisperId = (currentModel ?? "").trim();
             if (!targetWhisperId) {
                 setHeaderStatus("Auto-selecting model...", 60_000);
+                setSessionPhase?.("loading_model");
                 targetWhisperId = models[0].id;
                 setCurrentModel(targetWhisperId);
                 try {
-                    await invoke("switch_model", { modelId: targetWhisperId, useGpu });
+                    const result = await invoke<CommandResult<string>>("switch_model", { modelId: targetWhisperId, useGpu });
+                    if (!result.ok) throw result.error ?? new Error("Failed to auto-select model");
                     setLoadedEngine("whisper");
                     setHeaderStatus("Model selected: " + targetWhisperId);
+                    showNotice(null);
                 } catch (e) {
-                    setHeaderStatus("Failed to auto-select model: " + e, 5000);
+                    const error = e as { code?: string; message?: string };
+                    setHeaderStatus("Failed to auto-select model: " + error.message, 5000);
+                    setSessionPhase?.("error");
+                    showNotice(commandErrorToNotice(error, "Whisper model failed to load"));
                     return;
                 }
             } else {
@@ -173,12 +209,18 @@ export function useRecording({
                     const normalizedLoaded = (loadedId ?? "").trim();
                     if (!normalizedLoaded || normalizedLoaded !== targetWhisperId) {
                         setHeaderStatus("Loading Whisper model...", 60_000);
-                        await invoke("switch_model", { modelId: targetWhisperId, useGpu });
+                        setSessionPhase?.("loading_model");
+                        const result = await invoke<CommandResult<string>>("switch_model", { modelId: targetWhisperId, useGpu });
+                        if (!result.ok) throw result.error ?? new Error("Failed to load Whisper model");
                         setLoadedEngine("whisper");
                         setHeaderStatus("Whisper model loaded");
+                        showNotice(null);
                     }
                 } catch (e) {
-                    setHeaderStatus("Failed to load Whisper model: " + e, 5000);
+                    const error = e as { code?: string; message?: string };
+                    setHeaderStatus("Failed to load Whisper model: " + error.message, 5000);
+                    setSessionPhase?.("error");
+                    showNotice(commandErrorToNotice(error, "Whisper model failed to load"));
                     return;
                 }
             }
@@ -187,6 +229,13 @@ export function useRecording({
         if (currentEngine === "parakeet") {
             if (parakeetModels.length === 0) {
                 setHeaderStatus("No Parakeet models installed!", 5000);
+                showNotice({
+                    level: "warning",
+                    code: "model_missing",
+                    title: "Parakeet is not installed",
+                    message: "Download Parakeet from Settings or switch to Whisper/Cohere before recording.",
+                    sticky: true,
+                });
                 setIsSettingsOpen(true);
                 return;
             }
@@ -194,13 +243,19 @@ export function useRecording({
                 const pStatus = await invoke("get_parakeet_status") as { loaded: boolean };
                 if (!pStatus.loaded) {
                     setHeaderStatus("Loading Parakeet...", 60_000);
+                    setSessionPhase?.("loading_model");
                     const targetModel = currentParakeetModel || parakeetModels[0].id;
-                    await invoke("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
+                    const result = await invoke<CommandResult<string>>("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
+                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Parakeet");
                     setLoadedEngine("parakeet");
                     setHeaderStatus("Parakeet model loaded");
+                    showNotice(null);
                 }
             } catch (e) {
-                setHeaderStatus("Failed to initialize Parakeet: " + e, 5000);
+                const error = e as { code?: string; message?: string };
+                setHeaderStatus("Failed to initialize Parakeet: " + error.message, 5000);
+                setSessionPhase?.("error");
+                showNotice(commandErrorToNotice(error, "Parakeet failed to load"));
                 return;
             }
         }
@@ -208,6 +263,13 @@ export function useRecording({
         if (currentEngine === "cohere") {
             if (cohereModels.length === 0) {
                 setHeaderStatus("No Cohere Speech model installed! Download it from Settings.", 5000);
+                showNotice({
+                    level: "warning",
+                    code: "model_missing",
+                    title: "Cohere Speech is not installed",
+                    message: "Download the Cohere Speech bundle from Settings or switch to another engine.",
+                    sticky: true,
+                });
                 setIsSettingsOpen(true);
                 return;
             }
@@ -215,19 +277,25 @@ export function useRecording({
                 const gStatus = await invoke("get_cohere_status") as { loaded: boolean };
                 if (!gStatus.loaded) {
                     setHeaderStatus("Loading Cohere Speech...", 60_000);
+                    setSessionPhase?.("loading_model");
                     const gid = currentCohereModel || cohereModels[0]?.id;
-                    await invoke("init_cohere", {
+                    const result = await invoke<CommandResult<string>>("init_cohere", {
                         modelId: gid,
                         forceCpu: asrBackend === "cpu" && gid !== COHERE_FP16_MODEL_ID,
                     });
+                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Cohere Speech");
                     setLoadedEngine("cohere");
                     if (gid === COHERE_FP16_MODEL_ID) {
                         setAsrBackend?.("gpu");
                     }
                     setHeaderStatus("Cohere Speech loaded");
+                    showNotice(null);
                 }
             } catch (e) {
-                setHeaderStatus("Failed to initialize Cohere Speech: " + e, 5000);
+                const error = e as { code?: string; message?: string };
+                setHeaderStatus("Failed to initialize Cohere Speech: " + error.message, 5000);
+                setSessionPhase?.("error");
+                showNotice(commandErrorToNotice(error, "Cohere Speech failed to load"));
                 return;
             }
         }
@@ -240,11 +308,14 @@ export function useRecording({
             if (muteBackgroundAudioRef.current) {
                 await invoke("mute_system_audio").catch(e => console.warn("mute_system_audio failed:", e));
             }
-            const res = await invoke("start_recording", { denoise: enableDenoiseRef.current });
-            setHeaderStatus(res as string);
+            const result = await invoke<CommandResult<string>>("start_recording", { denoise: enableDenoiseRef.current });
+            if (!result.ok) throw result.error ?? new Error("Failed to start recording");
+            setHeaderStatus(result.data ?? "Recording started");
             recordingStartTimeRef.current = Date.now();
             setIsRecording(true);
             isRecordingRef.current = true;
+            setSessionPhase?.("recording");
+            showNotice(null);
             if (fromHotkey) {
                 clearPendingOverlayHide();
                 if (enableOverlayRef.current) {
@@ -261,13 +332,14 @@ export function useRecording({
                 }
             }
         } catch (e) {
-            const errStr = String(e);
-            if (errStr.includes("Already recording")) {
+            const error = e as { code?: string; message?: string };
+            const errStr = String(error.message ?? e);
+            if ((error.code ?? "").includes("already_recording") || errStr.includes("Already recording")) {
                 setHeaderStatus("Recording already in progress", 2000);
                 return;
             }
             console.error("Start recording failed:", e);
-            setHeaderStatus("Error: " + e, 5000);
+            setHeaderStatus("Error: " + errStr, 5000);
             if (muteBackgroundAudioRef.current) {
                 await invoke("unmute_system_audio").catch(() => {});
             }
@@ -275,6 +347,8 @@ export function useRecording({
             await setTrayState("ready");
             setIsRecording(false);
             isRecordingRef.current = false;
+            setSessionPhase?.("error");
+            showNotice(commandErrorToNotice(error, "Recording failed to start"));
             if (fromHotkey) hideOverlay();
         }
     };
@@ -287,6 +361,7 @@ export function useRecording({
             isPausedRef.current = true;
             pausedAtRef.current = Date.now();
             setHeaderStatus("Recording paused", 1500);
+            setSessionPhase?.("paused");
             await emitOverlayState("paused", liveTranscriptRef.current);
         } catch (e) {
             setHeaderStatus("Couldn't pause recording: " + e, 4000);
@@ -301,6 +376,7 @@ export function useRecording({
             setIsPaused(false);
             isPausedRef.current = false;
             setHeaderStatus("Recording resumed", 1500);
+            setSessionPhase?.("recording");
             await emitOverlayState("recording", liveTranscriptRef.current);
         } catch (e) {
             setHeaderStatus("Couldn't resume recording: " + e, 4000);
@@ -319,6 +395,7 @@ export function useRecording({
         setIsPaused(false);
         isPausedRef.current = false;
         setIsProcessingTranscript(true);
+        setSessionPhase?.("processing");
         if (showOverlay) {
             emitOverlayState("transcribing", liveTranscriptRef.current).catch(() => { });
         }
@@ -327,7 +404,11 @@ export function useRecording({
             await setTrayState("processing");
             if (currentEngine === "whisper") setHeaderStatus("Processing transcription...", 15_000, true);
 
-            let finalTrans = await invoke("stop_recording") as string;
+            const stopResult = await invoke<CommandResult<string>>("stop_recording");
+            if (!stopResult.ok) {
+                throw stopResult.error ?? new Error("Failed to stop recording");
+            }
+            let finalTrans = stopResult.data ?? "";
 
             // Apply custom dictionary substitutions (before grammar LLM)
             finalTrans = applyDictionary(finalTrans, dictionaryRef.current ?? []);
@@ -342,6 +423,14 @@ export function useRecording({
                 resetRecordingSession();
                 setIsProcessingTranscript(false);
                 await setTrayState("ready");
+                setSessionPhase?.("warning");
+                showNotice({
+                    level: "warning",
+                    code: "recording_too_short",
+                    title: "Recording too short",
+                    message: "Hold the hotkey a little longer so the app has enough speech to process.",
+                    sticky: true,
+                });
                 if (showOverlay) {
                     await emitOverlayState("too_short");
                     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -361,6 +450,14 @@ export function useRecording({
                 resetRecordingSession();
                 setIsProcessingTranscript(false);
                 await setTrayState("ready");
+                setSessionPhase?.("warning");
+                showNotice({
+                    level: "warning",
+                    code: "nothing_heard",
+                    title: "Nothing was heard",
+                    message: "Check the selected microphone, input level, or background noise and try again.",
+                    sticky: true,
+                });
                 if (showOverlay) {
                     await emitOverlayState("nothing_heard");
                     await new Promise(resolve => setTimeout(resolve, 1100));
@@ -382,6 +479,13 @@ export function useRecording({
                     setHeaderStatus("Transcribed & Corrected!");
                 } catch (e) {
                     setHeaderStatus("Transcript ready — grammar step failed: " + e, 5000);
+                    showNotice({
+                        level: "warning",
+                        code: "unknown",
+                        title: "Grammar correction failed",
+                        message: "The transcript is ready, but the grammar correction step failed.",
+                        sticky: true,
+                    });
                 }
             }
 
@@ -392,13 +496,18 @@ export function useRecording({
             setLatestLatency(totalMs);
             setLiveTranscript(finalTrans);
             liveTranscriptRef.current = finalTrans;
+            setSessionTranscript?.(finalTrans);
+            setSessionLatency?.(totalMs);
 
             // Capture paste result without blocking history/unmute — a failed
             // paste means the transcript is still shown in the UI, just not
             // inserted into the target app.
             let pasteError: string | null = null;
             try {
-                await invoke("type_text", { text: finalTrans });
+                const typeResult = await invoke<CommandResult<null>>("type_text", { text: finalTrans });
+                if (!typeResult.ok) {
+                    pasteError = typeResult.error?.code ?? typeResult.error?.message ?? "paste_failed";
+                }
             } catch (e) {
                 pasteError = String(e);
                 console.warn("[INSERT] type_text failed:", pasteError);
@@ -440,6 +549,14 @@ export function useRecording({
                 }
                 setHeaderStatus(headerMsg, 5000);
                 playError?.();
+                setSessionPhase?.("warning");
+                showNotice({
+                    level: "warning",
+                    code: pasteError.includes("secure_input") ? "paste_blocked_secure_input" : pasteError.includes("console") ? "paste_blocked_console" : "paste_failed",
+                    title: "Transcript ready but paste was blocked",
+                    message: headerMsg,
+                    sticky: true,
+                });
                 if (showOverlay) {
                     await emitOverlayState("paste_failed", finalTrans);
                 }
@@ -457,6 +574,8 @@ export function useRecording({
                     setHeaderStatus("Done!", 900);
                 }
                 playPaste?.();
+                setSessionPhase?.("success");
+                showNotice(null);
                 if (showOverlay) {
                     const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
                     await emitOverlayState("done", preview, totalMs);
@@ -474,13 +593,16 @@ export function useRecording({
             await setTrayState("ready");
         } catch (e) {
             console.error("Stop recording failed:", e);
-            const errStr = String(e);
+            const error = e as { code?: string; message?: string };
+            const errStr = String(error.message ?? e);
             if (!errStr.includes("Not recording")) {
-                setHeaderStatus("Error: " + e, 5000);
+                setHeaderStatus("Error: " + errStr, 5000);
                 if (muteBackgroundAudioRef.current) {
                     await invoke("unmute_system_audio").catch(() => {});
                 }
                 playError?.();
+                setSessionPhase?.("error");
+                showNotice(commandErrorToNotice(error, "Recording failed to stop cleanly"));
             }
             isRecordingRef.current = false;
             setIsProcessingTranscript(false);
@@ -514,6 +636,14 @@ export function useRecording({
             resetRecordingSession();
             setHeaderStatus("Recording discarded", 1800);
             playError?.();
+            setSessionPhase?.("warning");
+            showNotice({
+                level: "warning",
+                code: "unknown",
+                title: "Recording discarded",
+                message: "The current recording was cancelled before transcription finished.",
+                sticky: false,
+            });
 
             if (showOverlay) {
                 await emitOverlayState("cancelled");
@@ -537,6 +667,7 @@ export function useRecording({
         const nextTranscript = `${liveTranscriptRef.current} ${cleanChunk}`.replace(/\s+/g, " ").trim();
         liveTranscriptRef.current = nextTranscript;
         setLiveTranscript(nextTranscript);
+        setSessionTranscript?.(nextTranscript);
 
         if (hotkeySessionRef.current && enableOverlayRef.current) {
             emitOverlayState("recording", nextTranscript).catch(() => { });

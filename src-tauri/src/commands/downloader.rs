@@ -1,12 +1,13 @@
+use crate::types::CommandResult;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::time::Duration;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;
 
@@ -422,17 +423,18 @@ async fn download_model_inner(
             url
         );
 
-        let emit_error = |app: &AppHandle, model_id: &str, i: usize, files_count: usize, msg: &str| {
-            emit_download_error_and_cleanup(
-                app,
-                model_id,
-                &config,
-                &base_dir,
-                (i + 1) as u32,
-                files_count as u32,
-                msg,
-            )
-        };
+        let emit_error =
+            |app: &AppHandle, model_id: &str, i: usize, files_count: usize, msg: &str| {
+                emit_download_error_and_cleanup(
+                    app,
+                    model_id,
+                    &config,
+                    &base_dir,
+                    (i + 1) as u32,
+                    files_count as u32,
+                    msg,
+                )
+            };
 
         let res = client.get(&url).send().await.map_err(|e| {
             let reason = if e.is_connect() || e.is_timeout() {
@@ -445,7 +447,10 @@ async fn download_model_inner(
 
         if !res.status().is_success() {
             return Err(emit_error(
-                app, model_id, i, files_count,
+                app,
+                model_id,
+                i,
+                files_count,
                 &format!("Download server returned HTTP {}", res.status()),
             ));
         }
@@ -467,7 +472,10 @@ async fn download_model_inner(
                     let _ = std::fs::remove_file(&download_path);
                     let reason = if e.is_timeout() {
                         "Connection lost — no data received for 30 seconds. Check your internet and try again."
-                    } else if e.is_connect() || e.to_string().contains("reset") || e.to_string().contains("connection") {
+                    } else if e.is_connect()
+                        || e.to_string().contains("reset")
+                        || e.to_string().contains("connection")
+                    {
                         "Connection lost during download. Check your internet and try again."
                     } else {
                         "Download interrupted — a network error occurred."
@@ -565,16 +573,13 @@ async fn download_model_inner(
                     })?;
                 } else {
                     if let Some(parent) = outpath.parent() {
-                        std::fs::create_dir_all(parent).map_err(|e| {
-                            zip_fail(format!("Failed to create parent dir: {}", e))
-                        })?;
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| zip_fail(format!("Failed to create parent dir: {}", e)))?;
                     }
-                    let mut out_file = File::create(&outpath).map_err(|e| {
-                        zip_fail(format!("Failed to create extracted file: {}", e))
-                    })?;
-                    std::io::copy(&mut entry, &mut out_file).map_err(|e| {
-                        zip_fail(format!("Failed to write extracted file: {}", e))
-                    })?;
+                    let mut out_file = File::create(&outpath)
+                        .map_err(|e| zip_fail(format!("Failed to create extracted file: {}", e)))?;
+                    std::io::copy(&mut entry, &mut out_file)
+                        .map_err(|e| zip_fail(format!("Failed to write extracted file: {}", e)))?;
                 }
                 // Progress: bytes = entries done, total = total entries
                 let _ = app.emit(
@@ -656,7 +661,9 @@ async fn download_model_inner(
         // For HuggingFace repos, fetch the current expected hash from the LFS pointer.
         // Fall back to the registry sha1 if the fetch fails (e.g. brief network blip).
         let expected_hash: String = if is_hf_repo {
-            match fetch_hf_lfs_sha256(&client, config.repo, config.branch, file_spec.remote_path).await {
+            match fetch_hf_lfs_sha256(&client, config.repo, config.branch, file_spec.remote_path)
+                .await
+            {
                 Some(h) => h,
                 None => file_spec.sha1.to_string(),
             }
@@ -706,7 +713,10 @@ async fn download_model_inner(
                 &base_dir,
                 (i + 1) as u32,
                 files_count as u32,
-                &format!("Download failed — could not read file for verification ({})", e),
+                &format!(
+                    "Download failed — could not read file for verification ({})",
+                    e
+                ),
             )
         })?;
         use sha2::{Digest, Sha256};
@@ -819,9 +829,19 @@ async fn download_model_inner(
 }
 
 #[tauri::command]
-pub async fn delete_model(app: AppHandle, model_id: String) -> Result<String, String> {
-    let config =
-        get_model_config(&model_id).ok_or_else(|| format!("Unknown model ID: {}", model_id))?;
+pub async fn delete_model(
+    app: AppHandle,
+    model_id: String,
+) -> Result<CommandResult<String>, String> {
+    let config = match get_model_config(&model_id) {
+        Some(config) => config,
+        None => {
+            return Ok(CommandResult::err(
+                "model_missing",
+                format!("Unknown model ID: {}", model_id),
+            ))
+        }
+    };
     let models_dir =
         crate::utils::get_models_dir().map_err(|e| format!("Failed to get models dir: {}", e))?;
 
@@ -882,7 +902,11 @@ pub async fn delete_model(app: AppHandle, model_id: String) -> Result<String, St
     for file_spec in &config.files {
         if file_spec.filename.ends_with(".bin") {
             let stem = file_spec.filename.trim_end_matches(".bin");
-            let base = if let Some(pos) = stem.find("-q") { &stem[..pos] } else { stem };
+            let base = if let Some(pos) = stem.find("-q") {
+                &stem[..pos]
+            } else {
+                stem
+            };
             let encoder_dir = models_dir.join(format!("{}-encoder.mlmodelc", base));
             if encoder_dir.is_dir() {
                 let _ = std::fs::remove_dir_all(&encoder_dir);
@@ -914,5 +938,5 @@ pub async fn delete_model(app: AppHandle, model_id: String) -> Result<String, St
         },
     );
 
-    Ok(format!("Deleted model {}", model_id))
+    Ok(CommandResult::ok(format!("Deleted model {}", model_id)))
 }

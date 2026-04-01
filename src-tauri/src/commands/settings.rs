@@ -1,8 +1,8 @@
-use std::sync::atomic::Ordering;
-use tauri::{AppHandle, State};
 use crate::state::AudioState;
 use crate::tray;
-use crate::types::{AppState, ASREngine, HotkeyBinding};
+use crate::types::{ASREngine, AppState, EngineSelectionState, HotkeyBinding};
+use std::sync::atomic::Ordering;
+use tauri::{AppHandle, State};
 
 /// Ask the backend what hardware is running the AI (CPU vs GPU)
 /// Returns the backend of whichever engine is currently active
@@ -25,6 +25,74 @@ pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
             Ok(status.backend)
         }
     }
+}
+
+#[tauri::command]
+pub fn get_engine_selection_state(
+    state: State<AudioState>,
+) -> Result<EngineSelectionState, String> {
+    let active = *state.active_engine.lock().unwrap();
+    let active_engine = match active {
+        ASREngine::Whisper => "whisper",
+        ASREngine::Parakeet => "parakeet",
+        ASREngine::Cohere => "cohere",
+    }
+    .to_string();
+
+    let whisper_model = state.whisper.lock().unwrap().get_current_model().cloned();
+    let parakeet_status = state.parakeet.lock().unwrap().get_status();
+    let cohere_status = state.cohere.lock().unwrap().get_status();
+
+    let (selected_model_id, loaded_engine, loaded_model_id, backend) = match active {
+        ASREngine::Whisper => {
+            let loaded = whisper_model.clone();
+            let backend = {
+                let whisper = state.whisper.lock().unwrap();
+                format!("{}", whisper.get_backend())
+            };
+            (
+                whisper_model.clone(),
+                loaded.as_ref().map(|_| "whisper".to_string()),
+                loaded,
+                backend,
+            )
+        }
+        ASREngine::Parakeet => {
+            let loaded = if parakeet_status.loaded {
+                parakeet_status.model_id.clone()
+            } else {
+                None
+            };
+            (
+                parakeet_status.model_id.clone(),
+                loaded.as_ref().map(|_| "parakeet".to_string()),
+                loaded,
+                parakeet_status.backend,
+            )
+        }
+        ASREngine::Cohere => {
+            let loaded = if cohere_status.loaded {
+                cohere_status.model_id.clone()
+            } else {
+                None
+            };
+            (
+                cohere_status.model_id.clone(),
+                loaded.as_ref().map(|_| "cohere".to_string()),
+                loaded,
+                cohere_status.backend,
+            )
+        }
+    };
+
+    Ok(EngineSelectionState {
+        active_engine,
+        selected_model_id,
+        loaded_engine,
+        loaded_model_id,
+        backend,
+        engine_loading: state.engine_loading.load(Ordering::Relaxed),
+    })
 }
 
 /// Change the active ASR engine

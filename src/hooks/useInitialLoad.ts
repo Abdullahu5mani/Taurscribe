@@ -5,6 +5,7 @@ import { MODELS } from "../components/settings/types";
 import type { DownloadableModel } from "../components/settings/types";
 import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
+import type { CommandResult, EngineSelectionState } from "../types/session";
 import { COHERE_FP16_MODEL_ID } from "../utils/engineUtils";
 
 interface UseInitialLoadParams {
@@ -12,9 +13,9 @@ interface UseInitialLoadParams {
     setModels: (models: ModelInfo[]) => void;
     setCurrentModel: (id: string | null) => void;
     setParakeetModels: (models: ParakeetModelInfo[]) => void;
-    setCurrentParakeetModel: (id: string) => void;
+    setCurrentParakeetModel: (id: string | null) => void;
     setCohereModels: (models: CohereModelInfo[]) => void;
-    setCurrentCohereModel: (id: string) => void;
+    setCurrentCohereModel: (id: string | null) => void;
     setSettingsModels: React.Dispatch<React.SetStateAction<DownloadableModel[]>>;
 
     // Engine/loading state setters
@@ -44,7 +45,7 @@ interface UseInitialLoadParams {
  *   1. Fetches backend info and all model lists
  *   2. Pre-fetches download status for all known models
  *   3. Loads and restores settings.json (engine, hotkey, device, close-behavior, overlay)
- *   4. Auto-loads Whisper, Parakeet, or Cohere Speech if that engine was active on last run
+ *   4. Restores the active engine and lazy-loads heavyweight backends as needed
  */
 export function useInitialLoad({
     setModels,
@@ -98,25 +99,33 @@ export function useInitialLoad({
                 if (cancelled) return;
                 setModels(modelList);
 
-                const current = (await invoke("get_current_model")) as string | null;
-                if (cancelled) return;
-                setCurrentModel(current ?? "");
-                if (current) setLoadedEngine("whisper");
-
                 const pModels = (await invoke("list_parakeet_models")) as ParakeetModelInfo[];
                 if (cancelled) return;
                 setParakeetModels(pModels);
 
-                const pStatus = (await invoke("get_parakeet_status")) as {
-                    loaded: boolean;
-                    model_id: string | null;
-                };
-                if (cancelled) return;
-                setCurrentParakeetModel(pStatus.model_id ?? "");
-
                 const gModels = (await invoke("list_cohere_models")) as CohereModelInfo[];
                 if (cancelled) return;
                 setCohereModels(gModels);
+
+                const engineState = await invoke<EngineSelectionState>("get_engine_selection_state");
+                if (cancelled) return;
+
+                const validWhisperModel = engineState.active_engine === "whisper" && engineState.selected_model_id && modelList.some((m) => m.id === engineState.selected_model_id)
+                    ? engineState.selected_model_id
+                    : modelList[0]?.id ?? null;
+                const validParakeetModel = engineState.active_engine === "parakeet" && engineState.selected_model_id && pModels.some((m) => m.id === engineState.selected_model_id)
+                    ? engineState.selected_model_id
+                    : pModels[0]?.id ?? null;
+                const validCohereModel = engineState.active_engine === "cohere" && engineState.selected_model_id && gModels.some((m) => m.id === engineState.selected_model_id)
+                    ? engineState.selected_model_id
+                    : gModels[0]?.id ?? null;
+
+                setCurrentModel(validWhisperModel);
+                setCurrentParakeetModel(validParakeetModel);
+                setCurrentCohereModel(validCohereModel);
+                if (engineState.loaded_engine) {
+                    setLoadedEngine(engineState.loaded_engine);
+                }
 
                 let savedEngine: ASREngine | null = null;
                 let savedCohereModel: string | null = null;
@@ -174,38 +183,12 @@ export function useInitialLoad({
                         const targetWhisper =
                             savedWhisper && modelList.some((m) => m.id === savedWhisper)
                                 ? savedWhisper
-                                : current && modelList.some((m) => m.id === current)
-                                  ? current
+                                : validWhisperModel && modelList.some((m) => m.id === validWhisperModel)
+                                  ? validWhisperModel
                                   : modelList[0].id;
-                        const alreadyOk = !!current && current === targetWhisper;
-                        if (!alreadyOk) {
-                            isLoadingRef.current = true;
-                            setIsLoading(true);
-                            setLoadingMessage(`Loading Whisper (${targetWhisper})...`);
-                            try {
-                                if (cancelled) return;
-                                await invoke("switch_model", {
-                                    modelId: targetWhisper,
-                                    useGpu: useGpuPref,
-                                });
-                                if (cancelled) return;
-                                setCurrentModel(targetWhisper);
-                                setLoadedEngine("whisper");
-                                setHeaderStatus("Whisper model loaded");
-                                const info = await invoke("get_backend_info");
-                                if (!cancelled) setBackendInfo(info as string);
-                            } catch (e) {
-                                if (cancelled) return;
-                                setHeaderStatus(`Failed to auto-load Whisper: ${e}`, 5000);
-                            } finally {
-                                if (!cancelled) {
-                                    isLoadingRef.current = false;
-                                    setIsLoading(false);
-                                    setLoadingMessage("");
-                                }
-                            }
-                        } else {
-                            setCurrentModel(targetWhisper);
+                        const alreadyOk = engineState.loaded_engine === "whisper" && engineState.loaded_model_id === targetWhisper;
+                        setCurrentModel(targetWhisper);
+                        if (alreadyOk) {
                             setLoadedEngine("whisper");
                         }
                     } else if (savedEngine === "parakeet" && pModels.length > 0) {
@@ -219,10 +202,13 @@ export function useInitialLoad({
                         setLoadingMessage(`Loading Parakeet (${targetModel})...`);
                         try {
                             if (cancelled) return;
-                            await invoke("init_parakeet", {
+                            const result = await invoke<CommandResult<string>>("init_parakeet", {
                                 modelId: targetModel,
                                 useGpu: useGpuPref,
                             });
+                            if (!result.ok) {
+                                throw new Error(result.error?.message ?? "Failed to load Parakeet");
+                            }
                             if (cancelled) return;
                             setCurrentParakeetModel(targetModel);
                             setLoadedEngine("parakeet");
@@ -243,12 +229,15 @@ export function useInitialLoad({
                         setLoadingMessage("Loading Cohere Speech...");
                         try {
                             if (cancelled) return;
-                            await invoke("init_cohere", {
+                            const result = await invoke<CommandResult<string>>("init_cohere", {
                                 modelId: granitePick,
                                 forceCpu:
                                     savedAsrBackend === "cpu" &&
                                     granitePick !== COHERE_FP16_MODEL_ID,
                             });
+                            if (!result.ok) {
+                                throw new Error(result.error?.message ?? "Failed to load Cohere Speech");
+                            }
                             if (cancelled) return;
                             setLoadedEngine("cohere");
                             if (granitePick === COHERE_FP16_MODEL_ID) {
@@ -273,9 +262,9 @@ export function useInitialLoad({
                     if (!cancelled) setShowSetupWizard(true);
                 }
 
-                if (!cancelled && pStatus.loaded && !current && !savedEngine) {
-                    setActiveEngine("parakeet");
-                    activeEngineRef.current = "parakeet";
+                if (!cancelled && engineState.loaded_engine && !savedEngine) {
+                    setActiveEngine(engineState.loaded_engine);
+                    activeEngineRef.current = engineState.loaded_engine;
                 }
             } catch (e) {
                 if (cancelled) return;

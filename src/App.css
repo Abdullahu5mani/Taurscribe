@@ -3974,6 +3974,82 @@ body {
   margin: 0;
 }
 
+.session-notice-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-left-width: 3px;
+  border-radius: 14px;
+  background: rgba(12, 14, 18, 0.88);
+}
+
+.session-notice-card--warning {
+  border-left-color: #e09f3e;
+}
+
+.session-notice-card--error {
+  border-left-color: #f87171;
+}
+
+.session-notice-card--success {
+  border-left-color: #3ecfa5;
+}
+
+.session-notice-card__body {
+  min-width: 0;
+}
+
+.session-notice-card__title {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.session-notice-card__message {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.session-notice-card__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.session-notice-card__action,
+.file-queue-context-warning {
+  font-family: inherit;
+}
+
+.session-notice-card__action {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.session-notice-card__action:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.file-queue-context-warning {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(224, 159, 62, 0.24);
+  background: rgba(224, 159, 62, 0.08);
+  color: #f7d49a;
+  font-size: 0.76rem;
+}
+
 /* ── H4 fix: prefers-reduced-motion — main app ─────────────────────────────
  * The overlay already has its own reduced-motion block; this covers the main
  * app surfaces. Disables all infinite background animations and stagger

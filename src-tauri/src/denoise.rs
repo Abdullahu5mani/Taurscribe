@@ -65,5 +65,4 @@ impl Denoiser {
 
         output
     }
-
 }

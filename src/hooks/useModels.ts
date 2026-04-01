@@ -54,15 +54,21 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
             const gModels = await invoke("list_cohere_models") as CohereModelInfo[];
             setCohereModels(gModels);
 
-            if (modelList.length > 0) {
-                setCurrentModel(prev => prev ?? modelList[0].id);
-            }
-            if (pModels.length > 0) {
-                setCurrentParakeetModel(prev => prev ?? pModels[0].id);
-            }
-            if (gModels.length > 0) {
-                setCurrentCohereModel(prev => prev ?? gModels[0].id);
-            }
+            setCurrentModel(prev => {
+                if (modelList.length === 0) return null;
+                if (prev && modelList.some(model => model.id === prev)) return prev;
+                return modelList[0].id;
+            });
+            setCurrentParakeetModel(prev => {
+                if (pModels.length === 0) return null;
+                if (prev && pModels.some(model => model.id === prev)) return prev;
+                return pModels[0].id;
+            });
+            setCurrentCohereModel(prev => {
+                if (gModels.length === 0) return null;
+                if (prev && gModels.some(model => model.id === prev)) return prev;
+                return gModels[0].id;
+            });
 
             if (showToast) {
                 setHeaderStatus("Model list refreshed!");
