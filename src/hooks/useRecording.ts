@@ -36,8 +36,19 @@ interface UseRecordingParams {
     onHistorySaved?: () => void;
 }
 
+/** Minimum live mic time before stop; enforced in this hook only (not Rust). Keep in sync with AGENTS.md / CLAUDE.md. */
 const MIN_RECORDING_MS = 600;
-type OverlayPhase = "recording" | "paused" | "transcribing" | "correcting" | "done" | "too_short" | "paste_failed" | "cancelled" | "hidden";
+type OverlayPhase =
+    | "recording"
+    | "paused"
+    | "transcribing"
+    | "correcting"
+    | "done"
+    | "too_short"
+    | "nothing_heard"
+    | "paste_failed"
+    | "cancelled"
+    | "hidden";
 
 /**
  * Manages recording state and the start/stop recording handlers,
@@ -142,16 +153,32 @@ export function useRecording({
                 setIsSettingsOpen(true);
                 return;
             }
-            if (!currentModel) {
+            const useGpu = asrBackend === "gpu";
+            let targetWhisperId = (currentModel ?? "").trim();
+            if (!targetWhisperId) {
                 setHeaderStatus("Auto-selecting model...", 60_000);
-                const first = models[0].id;
-                setCurrentModel(first);
+                targetWhisperId = models[0].id;
+                setCurrentModel(targetWhisperId);
                 try {
-                    await invoke("switch_model", { modelId: first });
+                    await invoke("switch_model", { modelId: targetWhisperId, useGpu });
                     setLoadedEngine("whisper");
-                    setHeaderStatus("Model selected: " + first);
+                    setHeaderStatus("Model selected: " + targetWhisperId);
                 } catch (e) {
                     setHeaderStatus("Failed to auto-select model: " + e, 5000);
+                    return;
+                }
+            } else {
+                try {
+                    const loadedId = ((await invoke("get_current_model")) ?? null) as string | null;
+                    const normalizedLoaded = (loadedId ?? "").trim();
+                    if (!normalizedLoaded || normalizedLoaded !== targetWhisperId) {
+                        setHeaderStatus("Loading Whisper model...", 60_000);
+                        await invoke("switch_model", { modelId: targetWhisperId, useGpu });
+                        setLoadedEngine("whisper");
+                        setHeaderStatus("Whisper model loaded");
+                    }
+                } catch (e) {
+                    setHeaderStatus("Failed to load Whisper model: " + e, 5000);
                     return;
                 }
             }
@@ -168,7 +195,7 @@ export function useRecording({
                 if (!pStatus.loaded) {
                     setHeaderStatus("Loading Parakeet...", 60_000);
                     const targetModel = currentParakeetModel || parakeetModels[0].id;
-                    await invoke("init_parakeet", { modelId: targetModel });
+                    await invoke("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
                     setLoadedEngine("parakeet");
                     setHeaderStatus("Parakeet model loaded");
                 }
@@ -325,6 +352,24 @@ export function useRecording({
                 return;
             }
 
+            if (!finalTrans.trim()) {
+                setHeaderStatus("Nothing was heard — check your mic input or try again", 5500);
+                if (muteBackgroundAudioRef.current) {
+                    await invoke("unmute_system_audio").catch(() => {});
+                }
+                playError?.();
+                resetRecordingSession();
+                setIsProcessingTranscript(false);
+                await setTrayState("ready");
+                if (showOverlay) {
+                    await emitOverlayState("nothing_heard");
+                    await new Promise(resolve => setTimeout(resolve, 1100));
+                }
+                if (isOverlay) {
+                    hideOverlay();
+                }
+                return;
+            }
 
             if (enableGrammarLMRef.current) {
                 if (showOverlay) {
@@ -336,7 +381,7 @@ export function useRecording({
                     finalTrans = await invoke("correct_text", { text: finalTrans, style: activeStyle });
                     setHeaderStatus("Transcribed & Corrected!");
                 } catch (e) {
-                    setHeaderStatus("Grammar correction failed: " + e, 5000);
+                    setHeaderStatus("Transcript ready — grammar step failed: " + e, 5000);
                 }
             }
 
@@ -368,7 +413,8 @@ export function useRecording({
             try {
                 const activeModelId =
                     currentEngine === "whisper" ? currentModel :
-                    currentEngine === "parakeet" ? currentParakeetModel : null;
+                    currentEngine === "parakeet" ? currentParakeetModel :
+                    currentEngine === "cohere" ? currentCohereModel : null;
                 await invoke("save_transcript_history", {
                     transcript: finalTrans,
                     engine: currentEngine,

@@ -511,7 +511,8 @@ mod mac {
             "too_short" => "⚠  Too short".to_string(),
             "paste_failed" => "⚠  Couldn't paste".to_string(),
             "no_model" => "⊗  No model loaded".to_string(),
-            "model_loading" => "⟳  Model loading...".to_string(),
+            "model_loading" => "⟳  Loading model...".to_string(),
+            "nothing_heard" => "⚠  Nothing heard".to_string(),
             _ => String::new(),
         }
     }

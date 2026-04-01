@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import type { ASREngine } from "./useEngineSwitch";
@@ -8,7 +8,13 @@ interface UseHotkeyListenersParams {
     isRecordingRef: React.RefObject<boolean>;
     isLoadingRef: React.RefObject<boolean>;
     activeEngineRef: React.RefObject<ASREngine>;
-    loadedEngineRef: React.RefObject<ASREngine | null>;
+    /** True while FileTranscriptionPanel is transcribing — mirrors Record button BUSY. */
+    isFileTranscribingRef: React.RefObject<boolean>;
+    asrModelCountsRef: MutableRefObject<{
+        whisper: number;
+        parakeet: number;
+        cohere: number;
+    }>;
 
     // Stable handler refs (always point to latest closure)
     handleStartRecordingRef: React.RefObject<(fromHotkey?: boolean) => Promise<void>>;
@@ -28,7 +34,8 @@ interface UseHotkeyListenersParams {
     refreshMacPermissions: () => Promise<void>;
 }
 
-const HOTKEY_DEBOUNCE_MS = 700;
+// Single window for start/stop: tight enough for quick dictation, loose enough to drop key chatter.
+const HOTKEY_DEBOUNCE_MS = 350;
 
 /**
  * Registers and manages all Tauri event listeners related to hotkeys and
@@ -39,7 +46,8 @@ export function useHotkeyListeners({
     isRecordingRef,
     isLoadingRef,
     activeEngineRef,
-    loadedEngineRef,
+    isFileTranscribingRef,
+    asrModelCountsRef,
     handleStartRecordingRef,
     handleStopRecordingRef,
     handlePauseRecordingRef,
@@ -123,8 +131,22 @@ export function useHotkeyListeners({
                     return;
                 }
 
-                // Block hotkey if no model is currently loaded
-                if (loadedEngineRef.current === null) {
+                if (isFileTranscribingRef.current) {
+                    playErrorRef.current?.();
+                    setHeaderStatusRef.current?.(
+                        "Cannot record while a file is being transcribed",
+                        4000
+                    );
+                    return;
+                }
+
+                const eng = activeEngineRef.current;
+                const counts = asrModelCountsRef.current;
+                const noModelsForEngine =
+                    (eng === "whisper" && counts.whisper === 0) ||
+                    (eng === "parakeet" && counts.parakeet === 0) ||
+                    (eng === "cohere" && counts.cohere === 0);
+                if (noModelsForEngine) {
                     playErrorRef.current?.();
                     triggerNoModelAttentionRef.current?.();
                     showTimedOverlayFeedback("no_model");
@@ -217,7 +239,10 @@ export function useHotkeyListeners({
 
             const unsub8 = await listen("model-unloaded", () => {
                 setLoadedEngine(null);
-                setHeaderStatusRef.current?.("Model unloaded — VRAM freed");
+                setHeaderStatusRef.current?.(
+                    "Model unloaded — VRAM freed. Next dictation will load the model again.",
+                    5000
+                );
             });
 
             // Silence detection: show a hint when audio level stays near-zero for 3 s
