@@ -203,9 +203,14 @@ export function useHotkeyListeners({
                 setHeaderStatusRef.current?.(`Mic lost, using fallback: ${deviceName}`, 6000);
             });
 
-            const unsub6 = await listen("audio-disconnected", (_event) => {
+            const unsub6 = await listen<{ code?: string; message?: string } | string>("audio-disconnected", (event) => {
+                const payload = typeof event.payload === "string"
+                    ? { code: "audio_device_disconnected", message: event.payload }
+                    : event.payload;
                 setHeaderStatusRef.current?.(
-                    "Microphone disconnected! Recording stopped.",
+                    payload?.message
+                        ? `Microphone disconnected: ${payload.message}`
+                        : "Microphone disconnected! Recording stopped.",
                     6000
                 );
                 if (isRecordingRef.current && !stopInProgressRef.current) {

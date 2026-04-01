@@ -1,7 +1,7 @@
 use crate::parakeet;
 use crate::state::AudioState;
 use crate::tray;
-use crate::types::ASREngine;
+use crate::types::{ASREngine, CommandResult};
 use crate::whisper;
 use std::sync::atomic::Ordering;
 use tauri::State;
@@ -30,22 +30,30 @@ pub async fn switch_model(
     app: tauri::AppHandle,
     model_id: String,
     use_gpu: Option<bool>,
-) -> Result<String, String> {
+) -> Result<CommandResult<String>, String> {
     let force_cpu = !use_gpu.unwrap_or(true);
 
     // 1. Safety check: don't switch models while recording.
     {
         let handle = state.recording_handle.lock().unwrap();
         if handle.is_some() {
-            return Err("Cannot switch models while recording".to_string());
+            return Ok(CommandResult::err(
+                "already_recording",
+                "Cannot switch models while recording",
+            ));
         }
     }
 
     // 2. Atomically claim the loading slot — bail if another load is already in flight.
-    if state.engine_loading.compare_exchange(
-        false, true, Ordering::Acquire, Ordering::Relaxed,
-    ).is_err() {
-        return Err("A model is already loading — please wait".to_string());
+    if state
+        .engine_loading
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return Ok(CommandResult::err(
+            "engine_loading",
+            "A model is already loading — please wait",
+        ));
     }
 
     println!(
@@ -53,19 +61,20 @@ pub async fn switch_model(
         model_id,
         if force_cpu { " [CPU-only]" } else { "" }
     );
+    crate::memory::log_process_memory("switch_model command start");
 
-    let parakeet_arc   = state.parakeet.clone();
-    let cohere_arc     = state.cohere.clone();
-    let whisper_arc    = state.whisper.clone();
+    let parakeet_arc = state.parakeet.clone();
+    let cohere_arc = state.cohere.clone();
+    let whisper_arc = state.whisper.clone();
     let active_engine_arc = state.active_engine.clone();
     let mid = model_id.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         // 3. Check what is currently loaded.
-        let whisper_current  = whisper_arc.lock().unwrap().get_current_model().cloned();
-        let parakeet_loaded  = parakeet_arc.lock().unwrap().get_status().loaded;
-        let cohere_loaded    = cohere_arc.lock().unwrap().get_status().loaded;
-        let active           = *active_engine_arc.lock().unwrap();
+        let whisper_current = whisper_arc.lock().unwrap().get_current_model().cloned();
+        let parakeet_loaded = parakeet_arc.lock().unwrap().get_status().loaded;
+        let cohere_loaded = cohere_arc.lock().unwrap().get_status().loaded;
+        let active = *active_engine_arc.lock().unwrap();
 
         let whisper_on_cpu = {
             let w = whisper_arc.lock().unwrap();
@@ -79,7 +88,10 @@ pub async fn switch_model(
             && !cohere_loaded
             && whisper_on_cpu == force_cpu
         {
-            println!("[INFO] Whisper model '{}' is already loaded — skipping reload", mid);
+            println!(
+                "[INFO] Whisper model '{}' is already loaded — skipping reload",
+                mid
+            );
             return Ok("Already loaded".to_string());
         }
 
@@ -109,15 +121,26 @@ pub async fn switch_model(
         Ok(Ok(msg)) => {
             state.model_loaded.store(true, Ordering::Relaxed);
             tray::update_tray_model_item(&app, true);
-            Ok(msg)
+            crate::memory::log_process_memory("switch_model command success");
+            Ok(CommandResult::ok(msg))
         }
         Ok(Err(e)) => {
             tray::reconcile_model_loaded_tray(&app, &state);
-            Err(e)
+            let code = if e.to_lowercase().contains("no models")
+                || e.to_lowercase().contains("not found")
+                || e.to_lowercase().contains("missing")
+            {
+                "model_missing"
+            } else {
+                "model_load_failed"
+            };
+            crate::memory::log_process_memory("switch_model command error");
+            Ok(CommandResult::err(code, e))
         }
         Err(join_err) => {
             tray::reconcile_model_loaded_tray(&app, &state);
-            Err(join_err)
+            crate::memory::log_process_memory("switch_model command join_error");
+            Ok(CommandResult::err("model_load_failed", join_err))
         }
     }
 }
@@ -139,27 +162,33 @@ pub async fn init_parakeet(
     app: tauri::AppHandle,
     model_id: Option<String>,
     use_gpu: Option<bool>,
-) -> Result<String, String> {
+) -> Result<CommandResult<String>, String> {
     let force_cpu = !use_gpu.unwrap_or(true);
+    crate::memory::log_process_memory("init_parakeet command start");
 
     // 1. Atomically claim the loading slot — bail if another load is already in flight.
-    if state.engine_loading.compare_exchange(
-        false, true, Ordering::Acquire, Ordering::Relaxed,
-    ).is_err() {
-        return Err("A model is already loading — please wait".to_string());
+    if state
+        .engine_loading
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return Ok(CommandResult::err(
+            "engine_loading",
+            "A model is already loading — please wait",
+        ));
     }
 
-    let whisper_arc       = state.whisper.clone();
-    let parakeet_arc      = state.parakeet.clone();
-    let cohere_arc        = state.cohere.clone();
+    let whisper_arc = state.whisper.clone();
+    let parakeet_arc = state.parakeet.clone();
+    let cohere_arc = state.cohere.clone();
     let active_engine_arc = state.active_engine.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         // 2. Check what is currently loaded.
-        let parakeet_status  = parakeet_arc.lock().unwrap().get_status();
-        let whisper_loaded   = whisper_arc.lock().unwrap().get_current_model().is_some();
-        let cohere_loaded    = cohere_arc.lock().unwrap().get_status().loaded;
-        let active           = *active_engine_arc.lock().unwrap();
+        let parakeet_status = parakeet_arc.lock().unwrap().get_status();
+        let whisper_loaded = whisper_arc.lock().unwrap().get_current_model().is_some();
+        let cohere_loaded = cohere_arc.lock().unwrap().get_status().loaded;
+        let active = *active_engine_arc.lock().unwrap();
 
         // 3. Skip if the same Parakeet model is already active on the same CPU/GPU preference.
         let target_id = model_id.as_deref();
@@ -206,15 +235,26 @@ pub async fn init_parakeet(
         Ok(Ok(msg)) => {
             state.model_loaded.store(true, Ordering::Relaxed);
             tray::update_tray_model_item(&app, true);
-            Ok(msg)
+            crate::memory::log_process_memory("init_parakeet command success");
+            Ok(CommandResult::ok(msg))
         }
         Ok(Err(e)) => {
             tray::reconcile_model_loaded_tray(&app, &state);
-            Err(e)
+            let code = if e.to_lowercase().contains("no models")
+                || e.to_lowercase().contains("not found")
+                || e.to_lowercase().contains("missing")
+            {
+                "model_missing"
+            } else {
+                "model_load_failed"
+            };
+            crate::memory::log_process_memory("init_parakeet command error");
+            Ok(CommandResult::err(code, e))
         }
         Err(join_err) => {
             tray::reconcile_model_loaded_tray(&app, &state);
-            Err(join_err)
+            crate::memory::log_process_memory("init_parakeet command join_error");
+            Ok(CommandResult::err("model_load_failed", join_err))
         }
     }
 }

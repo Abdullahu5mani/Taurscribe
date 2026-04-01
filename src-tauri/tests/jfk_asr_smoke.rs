@@ -114,7 +114,11 @@ fn jfk_audio_through_whisper_parakeet_and_granite() {
     }
 
     let pcm = jfk_pcm16_preprocessed_for_asr().unwrap_or_else(|e| panic!("{e}"));
-    assert!(pcm.len() > 8000, "jfk buffer too short: {} samples", pcm.len());
+    assert!(
+        pcm.len() > 8000,
+        "jfk buffer too short: {} samples",
+        pcm.len()
+    );
 
     let mut failures: Vec<String> = Vec::new();
 
@@ -135,7 +139,9 @@ fn jfk_audio_through_whisper_parakeet_and_granite() {
             }
             w.unload();
         }
-        Ok(_) => failures.push("Whisper: no ggml-*.bin in models dir (download a Whisper model)".into()),
+        Ok(_) => {
+            failures.push("Whisper: no ggml-*.bin in models dir (download a Whisper model)".into())
+        }
         Err(e) => failures.push(format!("Whisper list_models: {e}")),
     }
 
@@ -155,7 +161,8 @@ fn jfk_audio_through_whisper_parakeet_and_granite() {
             }
             p.unload();
         }
-        Ok(_) => failures.push("Parakeet: no ONNX bundle in models dir (download Parakeet/Nemotron)".into()),
+        Ok(_) => failures
+            .push("Parakeet: no ONNX bundle in models dir (download Parakeet/Nemotron)".into()),
         Err(e) => failures.push(format!("Parakeet list_models: {e}")),
     }
 
@@ -173,5 +180,9 @@ fn jfk_audio_through_whisper_parakeet_and_granite() {
     }
     g.unload();
 
-    assert!(failures.is_empty(), "jfk three-engine smoke failed:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "jfk three-engine smoke failed:\n{}",
+        failures.join("\n")
+    );
 }

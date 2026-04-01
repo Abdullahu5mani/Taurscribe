@@ -23,7 +23,12 @@ pub fn decode_audio_interleaved_f32(path: &Path) -> Result<(Vec<f32>, u32, u32),
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| format!("Cannot probe audio format: {}", e))?;
 
     let mut format = probed.format;

@@ -35,8 +35,7 @@ pub struct FileTranscriptionResult {
 
 // ── Cancellation (same pattern as model downloads) ───────────────────────────
 
-static FILE_TRANSCRIBE_CANCEL: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
-    OnceLock::new();
+static FILE_TRANSCRIBE_CANCEL: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 
 fn cancel_flags() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     FILE_TRANSCRIBE_CANCEL.get_or_init(|| Mutex::new(HashMap::new()))
@@ -196,18 +195,19 @@ fn transcribe_file_blocking(
 
     // ── Energy VAD: only feed detected speech to ASR (file drop) ───────────────
     // Adaptive RMS thresholding finds speech regions; silent gaps are dropped.
-    let mut speech_audio = crate::vad::assemble_speech_audio(&mono, Some(&cancel)).map_err(|e| {
-        if e == "Transcription cancelled" {
-            emit_progress(
-                app,
-                path,
-                0,
-                "cancelled",
-                Some("Cancelled by user".to_string()),
-            );
-        }
-        e
-    })?;
+    let mut speech_audio =
+        crate::vad::assemble_speech_audio(&mono, Some(&cancel)).map_err(|e| {
+            if e == "Transcription cancelled" {
+                emit_progress(
+                    app,
+                    path,
+                    0,
+                    "cancelled",
+                    Some("Cancelled by user".to_string()),
+                );
+            }
+            e
+        })?;
 
     // Universal chain on speech-only buffer (HPF / RNNoise if noisy / level assist / clamp).
     audio_preprocess::preprocess_assembled_speech_16k(&mut speech_audio);
@@ -242,8 +242,8 @@ fn transcribe_file_blocking(
         // Whisper: chunked so the user can cancel between segments (long files).
         ASREngine::Whisper => {
             const WHISPER_CHUNK_SAMPLES: usize = 16000 * 180; // 3 minutes
-            let total_w = (speech_audio.len() + WHISPER_CHUNK_SAMPLES - 1).max(1)
-                / WHISPER_CHUNK_SAMPLES;
+            let total_w =
+                (speech_audio.len() + WHISPER_CHUNK_SAMPLES - 1).max(1) / WHISPER_CHUNK_SAMPLES;
             let mut parts: Vec<String> = Vec::new();
 
             for (i, raw_chunk) in speech_audio.chunks(WHISPER_CHUNK_SAMPLES).enumerate() {
@@ -253,6 +253,18 @@ fn transcribe_file_blocking(
                 emit_progress(app, path, percent, "transcribing", None);
 
                 let chunk = raw_chunk.to_vec();
+                crate::memory::maybe_log_process_memory_with_sizes(
+                    "file transcription whisper chunk",
+                    &[
+                        ("chunk_index", i + 1),
+                        ("total_chunks", total_w),
+                        ("chunk_samples", chunk.len()),
+                        (
+                            "chunk_audio_bytes",
+                            chunk.len() * std::mem::size_of::<f32>(),
+                        ),
+                    ],
+                );
                 let mut w = whisper
                     .lock()
                     .map_err(|_| "Whisper lock poisoned".to_string())?;
@@ -284,6 +296,18 @@ fn transcribe_file_blocking(
                 emit_progress(app, path, percent, "transcribing", None);
 
                 let chunk = raw_chunk.to_vec();
+                crate::memory::maybe_log_process_memory_with_sizes(
+                    "file transcription chunk",
+                    &[
+                        ("chunk_index", i + 1),
+                        ("total_chunks", total_chunks),
+                        ("chunk_samples", chunk.len()),
+                        (
+                            "chunk_audio_bytes",
+                            chunk.len() * std::mem::size_of::<f32>(),
+                        ),
+                    ],
+                );
 
                 let t = match active_engine {
                     ASREngine::Parakeet => {
@@ -321,4 +345,3 @@ fn transcribe_file_blocking(
         processing_time_ms,
     })
 }
-

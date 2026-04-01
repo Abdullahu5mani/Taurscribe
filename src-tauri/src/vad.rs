@@ -147,7 +147,11 @@ impl VADManager {
 
         println!(
             "[VAD] Found {} speech segment(s) (onset={}, offset={}, max_prob={:.3}, frames={})",
-            merged.len(), onset, offset, max_prob, frame_count,
+            merged.len(),
+            onset,
+            offset,
+            max_prob,
+            frame_count,
         );
 
         Ok(merged)
@@ -162,8 +166,8 @@ pub fn assemble_speech_audio(
 ) -> Result<Vec<f32>, String> {
     const SAMPLE_RATE: f32 = 16000.0;
     const ENERGY_FRAME_SAMPLES: usize = 800; // 50ms at 16kHz
-    const MIN_SILENCE_FRAMES: usize = 16;    // 800ms hangover
-    const PAD_FRAMES: usize = 2;             // 100ms padding each side
+    const MIN_SILENCE_FRAMES: usize = 16; // 800ms hangover
+    const PAD_FRAMES: usize = 2; // 100ms padding each side
 
     if let Some(c) = cancel {
         if c.load(Ordering::Relaxed) {
@@ -234,11 +238,16 @@ pub fn assemble_speech_audio(
     }
 
     if segments.is_empty() {
-        println!("[FILE_TRANSCRIBE] Energy VAD found no active speech — not sending silence to ASR");
+        println!(
+            "[FILE_TRANSCRIBE] Energy VAD found no active speech — not sending silence to ASR"
+        );
         return Ok(Vec::new());
     }
 
-    println!("[FILE_TRANSCRIBE] Energy VAD: {} segment(s)", segments.len());
+    println!(
+        "[FILE_TRANSCRIBE] Energy VAD: {} segment(s)",
+        segments.len()
+    );
 
     let mut assembled = Vec::new();
     let nseg = segments.len();
@@ -253,9 +262,8 @@ pub fn assemble_speech_audio(
         }
         let sample_start = fs.saturating_sub(PAD_FRAMES) * ENERGY_FRAME_SAMPLES;
         let sample_end = ((fe + PAD_FRAMES) * ENERGY_FRAME_SAMPLES).min(mono.len());
-        let log_line = nseg <= LOG_EACH
-            || i < LOG_EACH / 2
-            || i >= nseg.saturating_sub(LOG_EACH / 2);
+        let log_line =
+            nseg <= LOG_EACH || i < LOG_EACH / 2 || i >= nseg.saturating_sub(LOG_EACH / 2);
         if log_line {
             println!(
                 "  Energy segment {}: {:.2}s - {:.2}s",
@@ -264,7 +272,10 @@ pub fn assemble_speech_audio(
                 sample_end as f32 / SAMPLE_RATE
             );
         } else if i == LOG_EACH / 2 {
-            println!("  Energy segment ... ({} segments omitted) ...", nseg.saturating_sub(LOG_EACH));
+            println!(
+                "  Energy segment ... ({} segments omitted) ...",
+                nseg.saturating_sub(LOG_EACH)
+            );
         }
         assembled.extend_from_slice(&mono[sample_start..sample_end]);
     }

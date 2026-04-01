@@ -24,7 +24,9 @@ pub enum RecordingMode {
 }
 
 impl Default for RecordingMode {
-    fn default() -> Self { RecordingMode::Hold }
+    fn default() -> Self {
+        RecordingMode::Hold
+    }
 }
 
 /// Hotkey binding — up to 2 keyboard keys held simultaneously.
@@ -43,7 +45,10 @@ impl Default for HotkeyBinding {
         let keys = vec!["ControlLeft".to_string(), "AltLeft".to_string()];
         #[cfg(not(target_os = "macos"))]
         let keys = vec!["ControlLeft".to_string(), "MetaLeft".to_string()];
-        HotkeyBinding { keys, mode: RecordingMode::default() }
+        HotkeyBinding {
+            keys,
+            mode: RecordingMode::default(),
+        }
     }
 }
 
@@ -53,4 +58,60 @@ pub struct TranscriptionChunk {
     pub text: String,
     pub processing_time_ms: u32,
     pub method: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommandError {
+    pub code: String,
+    pub message: String,
+}
+
+impl CommandError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommandResult<T>
+where
+    T: serde::Serialize,
+{
+    pub ok: bool,
+    pub data: Option<T>,
+    pub error: Option<CommandError>,
+}
+
+impl<T> CommandResult<T>
+where
+    T: serde::Serialize,
+{
+    pub fn ok(data: T) -> Self {
+        Self {
+            ok: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    pub fn err(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            data: None,
+            error: Some(CommandError::new(code, message)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EngineSelectionState {
+    pub active_engine: String,
+    pub selected_model_id: Option<String>,
+    pub loaded_engine: Option<String>,
+    pub loaded_model_id: Option<String>,
+    pub backend: String,
+    pub engine_loading: bool,
 }

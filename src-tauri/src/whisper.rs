@@ -1,9 +1,9 @@
+use crate::utils::strip_whitelisted_sound_captions;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 }; // Import tools for resampling audio (changing sample rate)
 use std::ffi::c_void; // Import raw pointer types for interacting with C code
 use std::os::raw::c_char; // Import C-style character types
-use crate::utils::strip_whitelisted_sound_captions;
 use whisper_rs::{
     print_system_info, set_log_callback, FullParams, SamplingStrategy, WhisperContext,
     WhisperContextParameters,
@@ -69,10 +69,10 @@ fn warn_whisper_backend_mismatch(info: &str, backend: &GpuBackend) {
 /// Determines which hardware is powering the AI
 #[derive(Debug, Clone)]
 pub enum GpuBackend {
-    Cuda,    // NVIDIA GPUs (Very Fast)
-    CoreML,  // macOS Apple Silicon / Neural Engine
-    Vulkan,  // AMD/Intel/Other GPUs (Fast)
-    Cpu,     // Processor (Slow fallback)
+    Cuda,   // NVIDIA GPUs (Very Fast)
+    CoreML, // macOS Apple Silicon / Neural Engine
+    Vulkan, // AMD/Intel/Other GPUs (Fast)
+    Cpu,    // Processor (Slow fallback)
 }
 
 // Allow printing the backend name nicely (e.g. "CUDA" instead of "Cuda")
@@ -191,7 +191,11 @@ impl WhisperManager {
                         // Strip any quantization suffix (e.g. "-q5_1", "-q5_0", "-q4_0")
                         // so that "small.en-q5_1" looks for "ggml-small.en-encoder.mlmodelc",
                         // not the non-existent "ggml-small.en-q5_1-encoder.mlmodelc".
-                        let base_id = if let Some(pos) = id.find("-q") { &id[..pos] } else { &id };
+                        let base_id = if let Some(pos) = id.find("-q") {
+                            &id[..pos]
+                        } else {
+                            &id
+                        };
                         let encoder_dir_name = format!("ggml-{}-encoder.mlmodelc", base_id);
                         let has_coreml = models_dir.join(&encoder_dir_name).is_dir();
 
@@ -280,11 +284,28 @@ impl WhisperManager {
     pub fn unload(&mut self) {
         if self.context.is_some() {
             println!("[INFO] Unloading Whisper model...");
+            let resampler_buffer_len = self
+                .resampler
+                .as_ref()
+                .map(|(_, size, _)| *size)
+                .unwrap_or(0);
+            crate::memory::maybe_log_process_memory_with_sizes(
+                "whisper before unload",
+                &[
+                    ("last_transcript_chars", self.last_transcript.len()),
+                    ("resampler_input_samples", resampler_buffer_len),
+                ],
+            );
             self.context = None;
             self.current_model = None;
             self.backend = GpuBackend::Cpu;
             // Also clear resampler to save a bit more
             self.resampler = None;
+            crate::memory::trim_process_memory();
+            crate::memory::maybe_log_process_memory_with_sizes(
+                "whisper after unload",
+                &[("last_transcript_chars", self.last_transcript.len())],
+            );
             println!("[SUCCESS] Whisper model unloaded");
         }
     }
@@ -382,10 +403,7 @@ impl WhisperManager {
         );
         println!("[INFO] Model loaded: {}", target_model);
 
-        println!(
-            "[INFO] Warming up {} compute backend...",
-            backend
-        );
+        println!("[INFO] Warming up {} compute backend...", backend);
         println!("[DEBUG] Creating warmup audio buffer...");
         let warmup_audio = vec![0.0_f32; 16000]; // Create 1 second of silence
         println!("[DEBUG] Starting transcribe_chunk for warmup...");
@@ -447,14 +465,14 @@ impl WhisperManager {
     /// Check for NVIDIA drivers
     fn is_cuda_available(&self) -> bool {
         let mut cmd = std::process::Command::new("nvidia-smi");
-        
+
         // Windows: Hide console window to prevent flashing
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW flag
         }
-        
+
         cmd.output()
             .map(|output| output.status.success()) // True if command ran successfully
             .unwrap_or(false) // False if command failed/not found
@@ -491,6 +509,17 @@ impl WhisperManager {
         samples: &[f32],        // Raw audio numbers
         input_sample_rate: u32, // e.g. 48000 Hz
     ) -> Result<String, String> {
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "whisper before transcribe_chunk",
+            &[
+                ("input_samples", samples.len()),
+                (
+                    "input_audio_bytes",
+                    samples.len() * std::mem::size_of::<f32>(),
+                ),
+                ("context_chars", self.last_transcript.len()),
+            ],
+        );
         // Get access to the loaded brain
         let ctx = self
             .context
@@ -535,6 +564,18 @@ impl WhisperManager {
         } else {
             samples.to_vec()
         };
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "whisper after resample",
+            &[
+                ("input_samples", samples.len()),
+                ("resampled_samples", audio_data.len()),
+                (
+                    "resampled_audio_bytes",
+                    audio_data.len() * std::mem::size_of::<f32>(),
+                ),
+                ("context_chars", self.last_transcript.len()),
+            ],
+        );
 
         // 🧠 STEP 2: Create a state for this specific transcription task
         let mut state = ctx
@@ -549,9 +590,10 @@ impl WhisperManager {
         // so audio capture threads aren't starved during live chunked transcription.
         let n_threads = (std::thread::available_parallelism()
             .map(|n| n.get())
-            .unwrap_or(4) / 2)
-            .max(4)
-            .min(8) as i32;
+            .unwrap_or(4)
+            / 2)
+        .max(4)
+        .min(8) as i32;
         params.set_n_threads(n_threads);
         params.set_translate(false);
         params.set_language(Some("en"));
@@ -576,10 +618,10 @@ impl WhisperManager {
         };
         params.set_audio_ctx(audio_ctx);
 
-        params.set_no_timestamps(true);    // skip timestamp token generation entirely
-        params.set_single_segment(true);   // one chunk = one segment; no split overhead
-        params.set_max_tokens(128);        // cap decoder to prevent hallucination loops on noise
-        params.set_temperature_inc(0.0);   // disable fallback retries — VAD already filters silence
+        params.set_no_timestamps(true); // skip timestamp token generation entirely
+        params.set_single_segment(true); // one chunk = one segment; no split overhead
+        params.set_max_tokens(128); // cap decoder to prevent hallucination loops on noise
+        params.set_temperature_inc(0.0); // disable fallback retries — VAD already filters silence
 
         // 🧠 STEP 4: Context / Prompting
         // We feed the PREVIOUS text as a "prompt" to the AI.
@@ -629,6 +671,15 @@ impl WhisperManager {
             duration.as_millis(),
             speedup
         );
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "whisper after transcribe_chunk",
+            &[
+                ("resampled_samples", audio_data.len()),
+                ("segments", num_segments as usize),
+                ("final_text_chars", final_text.len()),
+                ("session_context_chars", self.last_transcript.len()),
+            ],
+        );
 
         Ok(final_text)
     }
@@ -638,7 +689,11 @@ impl WhisperManager {
     ///
     /// `initial_prompt` — optional text injected before decoding to bias Whisper
     /// toward the vocabulary of the active application (e.g. the window title).
-    pub fn transcribe_audio_data(&mut self, audio_data: &[f32], initial_prompt: Option<&str>) -> Result<String, String> {
+    pub fn transcribe_audio_data(
+        &mut self,
+        audio_data: &[f32],
+        initial_prompt: Option<&str>,
+    ) -> Result<String, String> {
         let ctx = self
             .context
             .as_mut()
@@ -675,8 +730,8 @@ impl WhisperManager {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_token_timestamps(false);
-        params.set_no_timestamps(true);  // timestamps never displayed; skip their generation
-        params.set_max_tokens(256);      // reasonable cap for a full recording pass
+        params.set_no_timestamps(true); // timestamps never displayed; skip their generation
+        params.set_max_tokens(256); // reasonable cap for a full recording pass
         params.set_suppress_nst(true);
 
         // Inject active-app context as initial prompt so Whisper favours

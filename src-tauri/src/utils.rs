@@ -96,8 +96,8 @@ fn is_whitelisted_sound_caption_inner(inner: &str) -> bool {
             return true;
         }
     }
-    let stripped = n
-        .trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ':' | ';' | '…'));
+    let stripped =
+        n.trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ':' | ';' | '…'));
     stripped != n.as_str() && set.contains(stripped)
 }
 

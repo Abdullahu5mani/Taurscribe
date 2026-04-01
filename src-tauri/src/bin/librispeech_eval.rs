@@ -214,14 +214,11 @@ fn median(mut xs: Vec<f64>) -> f64 {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
-    let audio_root = args
-        .audio_root
-        .clone()
-        .or_else(|| {
-            std::env::var("TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT")
-                .ok()
-                .map(PathBuf::from)
-        });
+    let audio_root = args.audio_root.clone().or_else(|| {
+        std::env::var("TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT")
+            .ok()
+            .map(PathBuf::from)
+    });
     let manifest_path = Path::new(&args.manifest);
     let text = std::fs::read_to_string(manifest_path)?;
     let mut rows: Vec<ManifestRow> = Vec::new();
@@ -240,17 +237,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut out = std::io::BufWriter::new(std::fs::File::create(&args.out_csv)?);
-    writeln!(
-        out,
-        "utt_id,engine,wer,ref_word_count,hyp_snippet"
-    )?;
+    writeln!(out, "utt_id,engine,wer,ref_word_count,hyp_snippet")?;
 
     let force = args.force_cpu;
-    let mut summary: Vec<(Engine, Vec<f64>)> = args
-        .engines
-        .iter()
-        .map(|e| (*e, Vec::new()))
-        .collect();
+    let mut summary: Vec<(Engine, Vec<f64>)> =
+        args.engines.iter().map(|e| (*e, Vec::new())).collect();
 
     for eng in &args.engines {
         eprintln!("[eval] loading {} ...", eng.as_str());

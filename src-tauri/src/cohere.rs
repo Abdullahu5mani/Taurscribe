@@ -3,10 +3,10 @@
 use half::f16;
 use ort::memory::Allocator;
 use ort::session::Session;
-use serde::Deserialize;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
+use serde::Deserialize;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
@@ -67,9 +67,14 @@ struct LayerKv {
     encoder_value: KvTensor,
 }
 
+struct CohereRuntime {
+    generation: u64,
+    encoder_session: Session,
+    decoder_session: Session,
+}
+
 pub struct CohereManager {
-    encoder_session: Option<Session>,
-    decoder_session: Option<Session>,
+    runtime: Option<CohereRuntime>,
     tokenizer: Option<tokenizers::Tokenizer>,
     backend: GpuBackend,
     model_name: Option<String>,
@@ -81,6 +86,7 @@ pub struct CohereManager {
     debug_decode: bool,
     // (input_sample_rate, input_len, resampler)
     resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>,
+    next_runtime_generation: u64,
 }
 
 #[inline]
@@ -91,8 +97,7 @@ fn should_trace(debug_decode: bool) -> bool {
 impl CohereManager {
     pub fn new() -> Self {
         Self {
-            encoder_session: None,
-            decoder_session: None,
+            runtime: None,
             tokenizer: None,
             backend: GpuBackend::Cpu,
             model_name: None,
@@ -103,13 +108,14 @@ impl CohereManager {
             max_new_tokens: DEFAULT_MAX_NEW_TOKENS,
             debug_decode: false,
             resampler: None,
+            next_runtime_generation: 1,
         }
     }
 
     pub fn get_status(&self) -> CohereStatus {
         let hybrid = matches!(self.backend, GpuBackend::Hybrid);
         CohereStatus {
-            loaded: self.encoder_session.is_some() && self.decoder_session.is_some(),
+            loaded: self.runtime.is_some(),
             model_id: self.model_name.clone(),
             backend: self.backend.to_string(),
             gpu_only: hybrid,
@@ -117,18 +123,57 @@ impl CohereManager {
     }
 
     pub fn unload(&mut self) {
-        if self.encoder_session.is_some() || self.decoder_session.is_some() {
+        if let Some(runtime) = self.runtime.take() {
             println!("[COHERE] Unloading model...");
-            self.encoder_session = None;
-            self.decoder_session = None;
+            let resampler_buffer_len = self
+                .resampler
+                .as_ref()
+                .map(|(_, size, _)| *size)
+                .unwrap_or(0);
+            crate::memory::maybe_log_process_memory_with_sizes(
+                "cohere before unload",
+                &[
+                    ("prompt_tokens", self.prompt_token_ids.len()),
+                    ("resampler_input_samples", resampler_buffer_len),
+                    (
+                        "model_name_chars",
+                        self.model_name.as_ref().map(|s| s.len()).unwrap_or(0),
+                    ),
+                ],
+            );
             self.tokenizer = None;
+            self.model_name = None;
             self.prompt_token_ids.clear();
             self.resampler = None;
+            println!(
+                "[COHERE] Dropping runtime generation {}",
+                runtime.generation
+            );
+            drop(runtime);
+            crate::memory::maybe_log_process_memory_with_sizes(
+                "cohere after runtime teardown",
+                &[(
+                    "next_runtime_generation",
+                    self.next_runtime_generation as usize,
+                )],
+            );
+            crate::memory::trim_process_memory();
+            crate::memory::maybe_log_process_memory_with_sizes(
+                "cohere after unload",
+                &[(
+                    "next_runtime_generation",
+                    self.next_runtime_generation as usize,
+                )],
+            );
             println!("[COHERE] Model unloaded");
         }
     }
 
-    pub fn initialize(&mut self, model_id: Option<&str>, force_cpu: bool) -> Result<String, String> {
+    pub fn initialize(
+        &mut self,
+        model_id: Option<&str>,
+        force_cpu: bool,
+    ) -> Result<String, String> {
         let models_dir = crate::utils::get_models_dir()?;
         let model_dir = resolve_granite_model_dir(&models_dir, model_id)?;
         if !granite_int4_bundle_ready(&model_dir) {
@@ -159,8 +204,9 @@ impl CohereManager {
             encoder_path.display(),
             decoder_path.display()
         );
+        crate::memory::maybe_log_process_memory("cohere before initialize");
 
-        if self.encoder_session.is_some() || self.decoder_session.is_some() {
+        if self.runtime.is_some() {
             self.unload();
         }
 
@@ -177,7 +223,10 @@ impl CohereManager {
                     .map_err(|e| format!("Cohere hybrid init (decoder CPU) failed: {}", e))?;
                 (GpuBackend::Hybrid, enc, dec)
             }
-            #[cfg(any(not(target_os = "windows"), all(target_os = "windows", not(target_arch = "x86_64"))))]
+            #[cfg(any(
+                not(target_os = "windows"),
+                all(target_os = "windows", not(target_arch = "x86_64"))
+            ))]
             {
                 let enc = self
                     .create_session_cuda(&encoder_path)
@@ -188,13 +237,20 @@ impl CohereManager {
                 (GpuBackend::Cuda, enc, dec)
             }
         };
+        crate::memory::maybe_log_process_memory("cohere after session create");
 
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| format!("Failed to load tokenizer: {}", e))?;
-        let runtime_cfg = load_runtime_config(&generation_config_path, &model_config_path, &tokenizer)?;
+        let runtime_cfg =
+            load_runtime_config(&generation_config_path, &model_config_path, &tokenizer)?;
 
-        self.encoder_session = Some(enc);
-        self.decoder_session = Some(dec);
+        let generation = self.next_runtime_generation;
+        self.next_runtime_generation += 1;
+        self.runtime = Some(CohereRuntime {
+            generation,
+            encoder_session: enc,
+            decoder_session: dec,
+        });
         self.tokenizer = Some(tokenizer);
         self.prompt_token_ids = runtime_cfg.prompt_token_ids;
         self.decoder_start_token_id = runtime_cfg.decoder_start_token_id;
@@ -208,6 +264,7 @@ impl CohereManager {
         };
         self.backend = backend.clone();
         self.model_name = Some(MODEL_ID_UNIVERSAL.to_string());
+        println!("[COHERE] Runtime generation {} loaded", generation);
         if should_trace(self.debug_decode) {
             println!(
                 "[COHERE][TRACE] runtime cfg: prompt_tokens={} decoder_start={} eos={} pad={} max_new_tokens={} backend={}",
@@ -222,15 +279,42 @@ impl CohereManager {
 
         let msg = format!("[COHERE] Model loaded ({})", backend);
         println!("{}", msg);
+        crate::memory::maybe_log_process_memory("cohere after initialize");
         Ok(msg)
     }
 
-    pub fn transcribe_chunk(&mut self, samples: &[f32], sample_rate: u32) -> Result<String, String> {
+    pub fn transcribe_chunk(
+        &mut self,
+        samples: &[f32],
+        sample_rate: u32,
+    ) -> Result<String, String> {
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "cohere before transcribe_chunk",
+            &[
+                ("input_samples", samples.len()),
+                (
+                    "input_audio_bytes",
+                    samples.len() * std::mem::size_of::<f32>(),
+                ),
+                ("prompt_tokens", self.prompt_token_ids.len()),
+            ],
+        );
         let audio: Cow<[f32]> = if sample_rate != 16000 {
             Cow::Owned(self.resample(samples, sample_rate)?)
         } else {
             Cow::Borrowed(samples)
         };
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "cohere after resample",
+            &[
+                ("input_samples", samples.len()),
+                ("resampled_samples", audio.len()),
+                (
+                    "resampled_audio_bytes",
+                    audio.len() * std::mem::size_of::<f32>(),
+                ),
+            ],
+        );
 
         let start = std::time::Instant::now();
         let features = cohere_features::extract_features(&audio);
@@ -248,10 +332,23 @@ impl CohereManager {
             );
         }
         let feature_data: Vec<f32> = features.iter().cloned().collect();
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "cohere after feature extraction",
+            &[
+                ("feature_frames", n_frames),
+                ("feature_dims", features.ncols()),
+                ("feature_data_len", feature_data.len()),
+                (
+                    "feature_data_bytes",
+                    feature_data.len() * std::mem::size_of::<f32>(),
+                ),
+            ],
+        );
         let encoder_input = make_tensor_f32(vec![1, n_frames, 128], feature_data)?;
 
-        let encoder = self.encoder_session.as_mut().ok_or("Encoder not loaded")?;
-        let decoder = self.decoder_session.as_mut().ok_or("Decoder not loaded")?;
+        let runtime = self.runtime.as_mut().ok_or("Runtime not loaded")?;
+        let encoder = &mut runtime.encoder_session;
+        let decoder = &mut runtime.decoder_session;
         let tokenizer = self.tokenizer.as_ref().ok_or("Tokenizer not loaded")?;
 
         let enc_out = encoder
@@ -267,6 +364,18 @@ impl CohereManager {
             .get(1)
             .copied()
             .ok_or("Bad encoder output shape")?;
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "cohere after encoder run",
+            &[
+                ("encoder_shape_dims", encoder_shape.len()),
+                ("encoder_seq_len", encoder_seq_len as usize),
+                ("encoder_data_len", encoder_data.len()),
+                (
+                    "encoder_data_bytes",
+                    encoder_data.len() * std::mem::size_of::<f32>(),
+                ),
+            ],
+        );
         if should_trace(self.debug_decode) {
             println!(
                 "[COHERE][TRACE] encoder out shape={:?} seq_len={} data_len={}",
@@ -275,9 +384,6 @@ impl CohereManager {
                 encoder_data.len()
             );
         }
-
-        // Build encoder_hidden_states once for prefill; decode steps won't resend it.
-        let encoder_hidden_states = make_tensor_f32(encoder_shape.clone(), encoder_data.clone())?;
 
         // Prompt: decoder_start + language token.
         let mut prompt = if self.prompt_token_ids.is_empty() {
@@ -297,7 +403,8 @@ impl CohereManager {
         // since past_encoder_sequence_length=0) and the first output token.
         let (mut next_token, prefill_cache) = run_decoder_prefill(
             decoder,
-            &encoder_hidden_states,
+            &encoder_shape,
+            &encoder_data,
             encoder_seq_len,
             &prompt,
             self.pad_token_id,
@@ -307,21 +414,42 @@ impl CohereManager {
         // Freeze encoder KV after prefill — the merged decoder returns 0-sized
         // present.*.encoder.* on subsequent steps (it signals "cached, reuse yours").
         // We must hold our own copy and pass it every step.
-        let frozen_encoder_kv: Vec<(KvTensor, KvTensor)> = prefill_cache
+        let mut frozen_encoder_kv: Vec<(KvTensor, KvTensor)> =
+            Vec::with_capacity(prefill_cache.len());
+        let mut decoder_kv: Vec<(KvTensor, KvTensor)> = Vec::with_capacity(prefill_cache.len());
+        for layer in prefill_cache {
+            frozen_encoder_kv.push((layer.encoder_key, layer.encoder_value));
+            decoder_kv.push((layer.decoder_key, layer.decoder_value));
+        }
+        let frozen_encoder_kv_bytes: usize = frozen_encoder_kv
             .iter()
-            .map(|l| (l.encoder_key.clone(), l.encoder_value.clone()))
-            .collect();
-        let mut decoder_kv: Vec<(KvTensor, KvTensor)> = prefill_cache
-            .into_iter()
-            .map(|l| (l.decoder_key, l.decoder_value))
-            .collect();
+            .map(|(k, v)| (k.data.len() + v.data.len()) * std::mem::size_of::<f16>())
+            .sum();
+        let decoder_kv_bytes: usize = decoder_kv
+            .iter()
+            .map(|(k, v)| (k.data.len() + v.data.len()) * std::mem::size_of::<f16>())
+            .sum();
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "cohere after decoder prefill",
+            &[
+                ("prompt_tokens", prompt.len()),
+                ("frozen_encoder_kv_bytes", frozen_encoder_kv_bytes),
+                ("decoder_kv_bytes", decoder_kv_bytes),
+            ],
+        );
 
         if self.debug_decode {
             if let Some((ek, _)) = frozen_encoder_kv.first() {
-                println!("[COHERE][DEBUG] encoder_kv frozen shape={:?} (reused every step)", ek.shape);
+                println!(
+                    "[COHERE][DEBUG] encoder_kv frozen shape={:?} (reused every step)",
+                    ek.shape
+                );
             }
             if let Some((dk, _)) = decoder_kv.first() {
-                println!("[COHERE][DEBUG] decoder_kv after prefill shape={:?}", dk.shape);
+                println!(
+                    "[COHERE][DEBUG] decoder_kv after prefill shape={:?}",
+                    dk.shape
+                );
             }
         }
 
@@ -353,7 +481,10 @@ impl CohereManager {
             decoder_kv = new_decoder_kv;
             if self.debug_decode && step < 4 {
                 if let Some((dk, _)) = decoder_kv.first() {
-                    println!("[COHERE][DEBUG] decoder_kv shape after step={} → {:?}", step, dk.shape);
+                    println!(
+                        "[COHERE][DEBUG] decoder_kv shape after step={} → {:?}",
+                        step, dk.shape
+                    );
                 }
             }
         }
@@ -379,34 +510,43 @@ impl CohereManager {
             speedup,
             out.trim()
         );
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "cohere after transcribe_chunk",
+            &[
+                ("generated_tokens", generated.len()),
+                ("final_text_chars", out.len()),
+                ("frozen_encoder_kv_bytes", frozen_encoder_kv_bytes),
+                ("decoder_kv_bytes", decoder_kv_bytes),
+            ],
+        );
 
         Ok(out)
     }
-
 }
 
 fn run_decoder_prefill(
-        decoder: &mut Session,
-        encoder_hidden_states: &ort::value::DynValue,
-        encoder_seq_len: i64,
-        input_ids: &[i64],
-        _pad_token_id: i64,
-        debug_decode: bool,
-    ) -> Result<(i64, Vec<LayerKv>), String> {
-        let seq_len = input_ids.len();
-        if seq_len == 0 {
-            return Err("Decoder prefill: empty input_ids".to_string());
-        }
-        if seq_len > MAX_SAFE_PROMPT_TOKENS {
-            return Err(format!(
-                "Decoder prefill prompt too long: {} > {}",
-                seq_len, MAX_SAFE_PROMPT_TOKENS
-            ));
-        }
-        if should_trace(debug_decode) {
-            let est_self_attn = (seq_len as u128) * (seq_len as u128);
-            let est_cross_attn = (seq_len as u128) * (encoder_seq_len.max(0) as u128);
-            println!(
+    decoder: &mut Session,
+    encoder_shape: &[usize],
+    encoder_data: &[f32],
+    encoder_seq_len: i64,
+    input_ids: &[i64],
+    _pad_token_id: i64,
+    debug_decode: bool,
+) -> Result<(i64, Vec<LayerKv>), String> {
+    let seq_len = input_ids.len();
+    if seq_len == 0 {
+        return Err("Decoder prefill: empty input_ids".to_string());
+    }
+    if seq_len > MAX_SAFE_PROMPT_TOKENS {
+        return Err(format!(
+            "Decoder prefill prompt too long: {} > {}",
+            seq_len, MAX_SAFE_PROMPT_TOKENS
+        ));
+    }
+    if should_trace(debug_decode) {
+        let est_self_attn = (seq_len as u128) * (seq_len as u128);
+        let est_cross_attn = (seq_len as u128) * (encoder_seq_len.max(0) as u128);
+        println!(
                 "[COHERE][TRACE] prefill inputs: seq_len={} encoder_seq_len={} est_self_attn={} est_cross_attn={} prompt_head={:?}",
                 seq_len,
                 encoder_seq_len,
@@ -414,78 +554,79 @@ fn run_decoder_prefill(
                 est_cross_attn,
                 &input_ids[..input_ids.len().min(16)]
             );
-        }
-        let mut inputs: Vec<(String, ort::value::DynValue)> = Vec::new();
-        inputs.push(("input_ids".into(), make_tensor_i64(vec![1, seq_len], input_ids.to_vec())?));
-        inputs.push((
-            "attention_mask".into(),
-            make_tensor_i64(vec![1, seq_len], vec![1_i64; seq_len])?,
-        ));
-        // position_ids is required by decoder/pos_emb/Gather_Quant in this export.
-        inputs.push((
-            "position_ids".into(),
-            make_tensor_i64(
-                vec![1, seq_len],
-                (0_i64..seq_len as i64).collect(),
-            )?,
-        ));
-        inputs.push(("num_logits_to_keep".into(), make_tensor_i64(vec![], vec![1])?));
-        // NOTE: ort DynValue isn't Clone; prefill is only called once per chunk, so re-create it here.
-        // We keep the heavy optimization for decode steps (where it matters most).
-        let (shape, data) = encoder_hidden_states
-            .try_extract_tensor::<f32>()
-            .map_err(|e| format!("Extract encoder_hidden_states for prefill rebuild: {}", e))?;
-        inputs.push((
-            "encoder_hidden_states".into(),
-            make_tensor_f32(shape.iter().map(|&d| d as usize).collect(), data.to_vec())?,
-        ));
+    }
+    let mut inputs: Vec<(String, ort::value::DynValue)> = Vec::new();
+    inputs.push((
+        "input_ids".into(),
+        make_tensor_i64_from_slice(&[1, seq_len], input_ids)?,
+    ));
+    inputs.push((
+        "attention_mask".into(),
+        make_tensor_i64(vec![1, seq_len], vec![1_i64; seq_len])?,
+    ));
+    // position_ids is required by decoder/pos_emb/Gather_Quant in this export.
+    inputs.push((
+        "position_ids".into(),
+        make_tensor_i64(vec![1, seq_len], (0_i64..seq_len as i64).collect())?,
+    ));
+    inputs.push((
+        "num_logits_to_keep".into(),
+        make_tensor_i64(vec![], vec![1])?,
+    ));
+    inputs.push((
+        "encoder_hidden_states".into(),
+        make_tensor_f32_from_slice(encoder_shape, encoder_data)?,
+    ));
 
-        // Initial past KV: empty (past_seq_len=0). Must use Tensor::new (allocator path)
-        // because CreateTensorWithDataAsOrtValue rejects 0-sized dims; CreateTensorAsOrtValue
-        // (used by Tensor::new) does not have that restriction.
-        // past_encoder_sequence_length=0 signals the merged decoder to compute encoder KV
-        // fresh from encoder_hidden_states on this first call.
-        let alloc = Allocator::default();
-        for layer in 0..NUM_LAYERS {
-            inputs.push((
-                format!("past_key_values.{}.decoder.key", layer),
-                make_empty_kv_f16(&alloc)?,
-            ));
-            inputs.push((
-                format!("past_key_values.{}.decoder.value", layer),
-                make_empty_kv_f16(&alloc)?,
-            ));
-            inputs.push((
-                format!("past_key_values.{}.encoder.key", layer),
-                make_empty_kv_f16(&alloc)?,
-            ));
-            inputs.push((
-                format!("past_key_values.{}.encoder.value", layer),
-                make_empty_kv_f16(&alloc)?,
-            ));
-        }
+    // Initial past KV: empty (past_seq_len=0). Must use Tensor::new (allocator path)
+    // because CreateTensorWithDataAsOrtValue rejects 0-sized dims; CreateTensorAsOrtValue
+    // (used by Tensor::new) does not have that restriction.
+    // past_encoder_sequence_length=0 signals the merged decoder to compute encoder KV
+    // fresh from encoder_hidden_states on this first call.
+    let alloc = decoder.allocator();
+    for layer in 0..NUM_LAYERS {
+        inputs.push((
+            format!("past_key_values.{}.decoder.key", layer),
+            make_empty_kv_f16(alloc)?,
+        ));
+        inputs.push((
+            format!("past_key_values.{}.decoder.value", layer),
+            make_empty_kv_f16(alloc)?,
+        ));
+        inputs.push((
+            format!("past_key_values.{}.encoder.key", layer),
+            make_empty_kv_f16(alloc)?,
+        ));
+        inputs.push((
+            format!("past_key_values.{}.encoder.value", layer),
+            make_empty_kv_f16(alloc)?,
+        ));
+    }
 
-        let outputs = decoder
-            .run(ort::session::SessionInputs::from(
-                inputs
-                    .into_iter()
-                    .map(|(k, v)| (Cow::<str>::from(k), v))
-                    .collect::<Vec<_>>(),
-            ))
-            .map_err(|e| {
-                format!(
-                    "Decoder prefill run: {} | seq_len={} encoder_seq_len={} prompt_head={:?}",
-                    e,
-                    seq_len,
-                    encoder_seq_len,
-                    &input_ids[..input_ids.len().min(16)]
-                )
-            })?;
-        if debug_decode {
-            println!("[COHERE][DEBUG] prefill seq_len={} encoder_seq={}", seq_len, encoder_seq_len);
-        }
+    let outputs = decoder
+        .run(ort::session::SessionInputs::from(
+            inputs
+                .into_iter()
+                .map(|(k, v)| (Cow::<str>::from(k), v))
+                .collect::<Vec<_>>(),
+        ))
+        .map_err(|e| {
+            format!(
+                "Decoder prefill run: {} | seq_len={} encoder_seq_len={} prompt_head={:?}",
+                e,
+                seq_len,
+                encoder_seq_len,
+                &input_ids[..input_ids.len().min(16)]
+            )
+        })?;
+    if debug_decode {
+        println!(
+            "[COHERE][DEBUG] prefill seq_len={} encoder_seq={}",
+            seq_len, encoder_seq_len
+        );
+    }
 
-        extract_decoder_outputs(&outputs, encoder_seq_len as usize, debug_decode)
+    extract_decoder_outputs(&outputs, encoder_seq_len as usize, debug_decode)
 }
 
 /// One autoregressive decode step.
@@ -493,91 +634,103 @@ fn run_decoder_prefill(
 /// `frozen_encoder_kv`: per-layer (enc_key, enc_value) fixed from prefill — the merged
 /// decoder returns 0-sized present.*.encoder.* on step 2+ so we must keep our own copy.
 fn run_decoder_step(
-        decoder: &mut Session,
-        encoder_shape: &[usize],
-        encoder_data: &[f32],
-        decoder_kv: &[(KvTensor, KvTensor)],
-        frozen_encoder_kv: &[(KvTensor, KvTensor)],
-        input_ids: &[i64],
-        debug_decode: bool,
-    ) -> Result<(i64, Vec<(KvTensor, KvTensor)>), String> {
-        let seq_len = input_ids.len();
-        let past_decoder_len = decoder_kv
-            .first()
-            .and_then(|(dk, _)| dk.shape.get(2).copied())
-            .unwrap_or(0);
-        let total_seq = past_decoder_len + seq_len;
-        if total_seq == 0 {
-            return Err("Decoder step: computed total_seq=0".to_string());
-        }
-        if should_trace(debug_decode) {
-            let est_self_attn = (total_seq as u128) * (total_seq as u128);
-            println!(
+    decoder: &mut Session,
+    encoder_shape: &[usize],
+    encoder_data: &[f32],
+    decoder_kv: &[(KvTensor, KvTensor)],
+    frozen_encoder_kv: &[(KvTensor, KvTensor)],
+    input_ids: &[i64],
+    debug_decode: bool,
+) -> Result<(i64, Vec<(KvTensor, KvTensor)>), String> {
+    let seq_len = input_ids.len();
+    let past_decoder_len = decoder_kv
+        .first()
+        .and_then(|(dk, _)| dk.shape.get(2).copied())
+        .unwrap_or(0);
+    let total_seq = past_decoder_len + seq_len;
+    if total_seq == 0 {
+        return Err("Decoder step: computed total_seq=0".to_string());
+    }
+    if should_trace(debug_decode) {
+        let est_self_attn = (total_seq as u128) * (total_seq as u128);
+        println!(
                 "[COHERE][TRACE] step inputs: seq_len={} past_decoder_len={} total_seq={} est_self_attn={}",
                 seq_len, past_decoder_len, total_seq, est_self_attn
             );
-        }
+    }
 
-        if should_trace(debug_decode) {
+    if should_trace(debug_decode) {
+        println!(
+            "[COHERE][DEBUG] step: past_dec_len={} seq_len={} total_seq={} enc_kv_shape={:?}",
+            past_decoder_len,
+            seq_len,
+            total_seq,
+            frozen_encoder_kv.first().map(|(ek, _)| &ek.shape)
+        );
+    }
+
+    let mut inputs: Vec<(String, ort::value::DynValue)> = Vec::new();
+    inputs.push((
+        "input_ids".into(),
+        make_tensor_i64_from_slice(&[1, seq_len], input_ids)?,
+    ));
+    inputs.push((
+        "attention_mask".into(),
+        make_tensor_i64(vec![1, total_seq], vec![1_i64; total_seq])?,
+    ));
+    // position_ids is required by decoder/pos_emb/Gather_Quant in this export.
+    inputs.push((
+        "position_ids".into(),
+        make_tensor_i64(
+            vec![1, seq_len],
+            ((past_decoder_len as i64)..(past_decoder_len as i64 + seq_len as i64)).collect(),
+        )?,
+    ));
+    inputs.push((
+        "num_logits_to_keep".into(),
+        make_tensor_i64(vec![], vec![1])?,
+    ));
+    inputs.push((
+        "encoder_hidden_states".into(),
+        make_tensor_f32_from_slice(encoder_shape, encoder_data)?,
+    ));
+
+    for layer in 0..NUM_LAYERS {
+        let (dk, dv) = decoder_kv
+            .get(layer)
+            .ok_or_else(|| format!("decoder_kv missing layer {}", layer))?;
+        let (ek, ev) = frozen_encoder_kv
+            .get(layer)
+            .ok_or_else(|| format!("encoder_kv missing layer {}", layer))?;
+        let (dk_shape, dk_data) = normalize_kv_for_input(dk);
+        let (dv_shape, dv_data) = normalize_kv_for_input(dv);
+        let (ek_shape, ek_data) = normalize_kv_for_input(ek);
+        let (ev_shape, ev_data) = normalize_kv_for_input(ev);
+        if debug_decode && layer == 0 {
             println!(
-                "[COHERE][DEBUG] step: past_dec_len={} seq_len={} total_seq={} enc_kv_shape={:?}",
-                past_decoder_len, seq_len, total_seq,
-                frozen_encoder_kv.first().map(|(ek, _)| &ek.shape)
+                "[COHERE][DEBUG] layer0 kv shapes: dec_k={:?} enc_k={:?}",
+                dk_shape, ek_shape
             );
         }
-
-        let mut inputs: Vec<(String, ort::value::DynValue)> = Vec::new();
-        inputs.push(("input_ids".into(), make_tensor_i64(vec![1, seq_len], input_ids.to_vec())?));
         inputs.push((
-            "attention_mask".into(),
-            make_tensor_i64(vec![1, total_seq], vec![1_i64; total_seq])?,
+            format!("past_key_values.{}.decoder.key", layer),
+            make_tensor_f16_from_slice(dk_shape.as_ref(), dk_data.as_ref())?,
         ));
-        // position_ids is required by decoder/pos_emb/Gather_Quant in this export.
         inputs.push((
-            "position_ids".into(),
-            make_tensor_i64(
-                vec![1, seq_len],
-                ((past_decoder_len as i64)..(past_decoder_len as i64 + seq_len as i64)).collect(),
-            )?,
+            format!("past_key_values.{}.decoder.value", layer),
+            make_tensor_f16_from_slice(dv_shape.as_ref(), dv_data.as_ref())?,
         ));
-        inputs.push(("num_logits_to_keep".into(), make_tensor_i64(vec![], vec![1])?));
         inputs.push((
-            "encoder_hidden_states".into(),
-            make_tensor_f32(encoder_shape.to_vec(), encoder_data.to_vec())?,
+            format!("past_key_values.{}.encoder.key", layer),
+            make_tensor_f16_from_slice(ek_shape.as_ref(), ek_data.as_ref())?,
         ));
+        inputs.push((
+            format!("past_key_values.{}.encoder.value", layer),
+            make_tensor_f16_from_slice(ev_shape.as_ref(), ev_data.as_ref())?,
+        ));
+    }
 
-        for layer in 0..NUM_LAYERS {
-            let (dk, dv) = decoder_kv.get(layer).ok_or_else(|| format!("decoder_kv missing layer {}", layer))?;
-            let (ek, ev) = frozen_encoder_kv.get(layer).ok_or_else(|| format!("encoder_kv missing layer {}", layer))?;
-            let (dk_shape, dk_data) = normalize_kv_for_input(dk);
-            let (dv_shape, dv_data) = normalize_kv_for_input(dv);
-            let (ek_shape, ek_data) = normalize_kv_for_input(ek);
-            let (ev_shape, ev_data) = normalize_kv_for_input(ev);
-            if debug_decode && layer == 0 {
-                println!(
-                    "[COHERE][DEBUG] layer0 kv shapes: dec_k={:?} enc_k={:?}",
-                    dk_shape, ek_shape
-                );
-            }
-            inputs.push((
-                format!("past_key_values.{}.decoder.key", layer),
-                make_tensor_f16(dk_shape, dk_data)?,
-            ));
-            inputs.push((
-                format!("past_key_values.{}.decoder.value", layer),
-                make_tensor_f16(dv_shape, dv_data)?,
-            ));
-            inputs.push((
-                format!("past_key_values.{}.encoder.key", layer),
-                make_tensor_f16(ek_shape, ek_data)?,
-            ));
-            inputs.push((
-                format!("past_key_values.{}.encoder.value", layer),
-                make_tensor_f16(ev_shape, ev_data)?,
-            ));
-        }
-
-        let outputs = decoder
+    let outputs = decoder
             .run(ort::session::SessionInputs::from(
                 inputs
                     .into_iter()
@@ -595,9 +748,9 @@ fn run_decoder_step(
                 )
             })?;
 
-        // Extract next token and updated decoder KV; discard present.*.encoder.* output
-        // (it's 0-sized after step 1 — the model signals "I've already cached this").
-        extract_step_outputs(&outputs, debug_decode)
+    // Extract next token and updated decoder KV; discard present.*.encoder.* output
+    // (it's 0-sized after step 1 — the model signals "I've already cached this").
+    extract_step_outputs(&outputs, debug_decode)
 }
 
 impl CohereManager {
@@ -633,8 +786,12 @@ impl CohereManager {
     }
 
     fn create_session_cpu(&self, path: &Path) -> Result<Session, String> {
-        Session::builder()
+        let builder = Session::builder()
             .map_err(|e| format!("ORT builder: {}", e))?
+            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
+            .map_err(|e| format!("CPU opt level: {}", e))?;
+        let builder = crate::ort_session::configure_low_ram_session_builder(builder, "cohere-cpu")?;
+        builder
             .commit_from_file(path)
             .map_err(|e| format!("CPU session load {}: {}", path.display(), e))
     }
@@ -644,18 +801,20 @@ impl CohereManager {
         all(target_os = "windows", target_arch = "x86_64")
     ))]
     fn create_session_cuda(&self, path: &Path) -> Result<Session, String> {
-        Session::builder()
+        let builder = Session::builder()
             .map_err(|e| format!("ORT builder: {}", e))?
-            .with_execution_providers([
-                ort::execution_providers::CUDAExecutionProvider::default()
-                    .build()
-                    .error_on_failure(),
-            ])
+            .with_execution_providers([crate::ort_session::build_low_ram_cuda_execution_provider()
+                .build()
+                .error_on_failure()])
             .map_err(|e| format!("CUDA EP: {}", e))?
+            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
+            .map_err(|e| format!("CUDA opt level: {}", e))?;
+        let builder =
+            crate::ort_session::configure_low_ram_session_builder(builder, "cohere-cuda")?;
+        builder
             .commit_from_file(path)
             .map_err(|e| format!("CUDA load {}: {}", path.display(), e))
     }
-
 }
 
 /// Creates a zero-element f16 KV tensor of shape [1, NUM_HEADS, 0, HEAD_DIM].
@@ -667,16 +826,37 @@ fn make_empty_kv_f16(alloc: &Allocator) -> Result<ort::value::DynValue, String> 
         .map_err(|e| format!("Empty KV tensor creation error: {}", e))
 }
 
+fn make_tensor_f32_from_slice(
+    shape: &[usize],
+    data: &[f32],
+) -> Result<ort::value::DynValue, String> {
+    make_tensor_f32(shape.to_vec(), data.to_vec())
+}
+
 fn make_tensor_f32(shape: Vec<usize>, data: Vec<f32>) -> Result<ort::value::DynValue, String> {
     ort::value::Value::from_array((shape, data))
         .map(|t| t.into_dyn())
         .map_err(|e| format!("Tensor creation error: {}", e))
 }
 
+fn make_tensor_f16_from_slice(
+    shape: &[usize],
+    data: &[f16],
+) -> Result<ort::value::DynValue, String> {
+    make_tensor_f16(shape.to_vec(), data.to_vec())
+}
+
 fn make_tensor_f16(shape: Vec<usize>, data: Vec<f16>) -> Result<ort::value::DynValue, String> {
     ort::value::Tensor::<f16>::from_array((shape.clone(), data))
         .map(|t| t.into_dyn())
         .map_err(|e| format!("Tensor creation error (f16 shape={:?}): {}", shape, e))
+}
+
+fn make_tensor_i64_from_slice(
+    shape: &[usize],
+    data: &[i64],
+) -> Result<ort::value::DynValue, String> {
+    make_tensor_i64(shape.to_vec(), data.to_vec())
 }
 
 fn make_tensor_i64(shape: Vec<usize>, data: Vec<i64>) -> Result<ort::value::DynValue, String> {
@@ -783,18 +963,19 @@ fn get_present(outputs: &ort::session::SessionOutputs, name: &str) -> Result<KvT
     })
 }
 
-fn normalize_kv_for_input(kv: &KvTensor) -> (Vec<usize>, Vec<f16>) {
-    let shape = kv.shape.clone();
-    let expected = shape.iter().product::<usize>();
+fn normalize_kv_for_input<'a>(kv: &'a KvTensor) -> (Cow<'a, [usize]>, Cow<'a, [f16]>) {
+    let shape = Cow::Borrowed(kv.shape.as_slice());
+    let expected = kv.shape.iter().product::<usize>();
     if expected == kv.data.len() {
-        return (shape, kv.data.clone());
+        return (shape, Cow::Borrowed(kv.data.as_slice()));
     }
     if expected == 0 {
-        return (shape, Vec::new());
+        let empty: &[f16] = &[];
+        return (shape, Cow::Borrowed(empty));
     }
     let mut data = kv.data.clone();
     data.resize(expected, f16::from_f32(0.0));
-    (shape, data)
+    (shape, Cow::Owned(data))
 }
 
 #[derive(Debug, Deserialize)]
@@ -861,10 +1042,19 @@ fn load_runtime_config(
         .unwrap_or_default();
 
     let order = [
-        defaults.get("source_lang").cloned().unwrap_or(lang_token.clone()),
+        defaults
+            .get("source_lang")
+            .cloned()
+            .unwrap_or(lang_token.clone()),
         defaults.get("target_lang").cloned().unwrap_or(lang_token),
-        defaults.get("pnc").cloned().unwrap_or_else(|| "<|pnc|>".to_string()),
-        defaults.get("itn").cloned().unwrap_or_else(|| "<|noitn|>".to_string()),
+        defaults
+            .get("pnc")
+            .cloned()
+            .unwrap_or_else(|| "<|pnc|>".to_string()),
+        defaults
+            .get("itn")
+            .cloned()
+            .unwrap_or_else(|| "<|noitn|>".to_string()),
         defaults
             .get("timestamp")
             .cloned()
@@ -893,7 +1083,10 @@ fn load_runtime_config(
     })
 }
 
-pub(crate) fn resolve_granite_model_dir(models_dir: &Path, model_id: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn resolve_granite_model_dir(
+    models_dir: &Path,
+    model_id: Option<&str>,
+) -> Result<PathBuf, String> {
     let dir = match model_id {
         None => models_dir.join(DEFAULT_MODEL_DIR),
         Some(id) => {

@@ -74,7 +74,8 @@ pub fn start_hotkey_listener(
 
     let recording_active = Arc::new(AtomicBool::new(false));
     // &'static str: key_to_code() returns static strings — no String allocation per keypress
-    let held_keys: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::with_capacity(MAX_HOTKEY_KEYS)));
+    let held_keys: Arc<Mutex<Vec<&'static str>>> =
+        Arc::new(Mutex::new(Vec::with_capacity(MAX_HOTKEY_KEYS)));
     // Prevents keyboard auto-repeat from firing the action multiple times per physical press.
     let combo_triggered = Arc::new(AtomicBool::new(false));
 
@@ -105,7 +106,10 @@ pub fn start_hotkey_listener(
                         held.push(code);
                     }
                     let all_held = config.keys.iter().all(|k| held.iter().any(|h| k == h));
-                    if all_held && !config.keys.is_empty() && !combo_triggered_c.load(Ordering::SeqCst) {
+                    if all_held
+                        && !config.keys.is_empty()
+                        && !combo_triggered_c.load(Ordering::SeqCst)
+                    {
                         combo_triggered_c.store(true, Ordering::SeqCst);
                         drop(held);
                         match config.mode {
@@ -172,13 +176,15 @@ fn macos_accessibility_trusted(prompt: bool) -> bool {
     use core_foundation::string::CFString;
 
     extern "C" {
-        fn AXIsProcessTrustedWithOptions(
-            options: core_foundation::base::CFTypeRef,
-        ) -> bool;
+        fn AXIsProcessTrustedWithOptions(options: core_foundation::base::CFTypeRef) -> bool;
     }
 
     let key = CFString::new("AXTrustedCheckOptionPrompt");
-    let value = if prompt { CFBoolean::true_value() } else { CFBoolean::false_value() };
+    let value = if prompt {
+        CFBoolean::true_value()
+    } else {
+        CFBoolean::false_value()
+    };
     let options = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);
 
     unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) }
