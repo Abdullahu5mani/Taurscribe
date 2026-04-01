@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "./useModels";
 import type { DownloadProgress } from "../components/settings/types";
+import type { CommandResult, SessionNotice } from "../types/session";
 import { COHERE_FP16_MODEL_ID } from "../utils/engineUtils";
 
 export type ASREngine = "whisper" | "parakeet" | "cohere";
@@ -27,6 +28,8 @@ interface UseEngineSwitchParams {
     cohereGpuOnlyLocked: boolean;
     isRecordingRef: React.RefObject<boolean>;
     downloadProgressRef: React.RefObject<Record<string, DownloadProgress>>;
+    setSessionPhase?: (phase: "idle" | "loading_model" | "recording" | "paused" | "processing" | "success" | "warning" | "error") => void;
+    setSessionNotice?: (notice: SessionNotice | null) => void;
 }
 
 /**
@@ -52,6 +55,8 @@ export function useEngineSwitch({
     cohereGpuOnlyLocked,
     isRecordingRef,
     downloadProgressRef,
+    setSessionPhase,
+    setSessionNotice,
 }: UseEngineSwitchParams) {
     const [activeEngine, setActiveEngine] = useState<ASREngine>("whisper");
     const [loadedEngine, setLoadedEngine] = useState<ASREngine | null>(null);
@@ -80,6 +85,7 @@ export function useEngineSwitch({
             setLoadingTargetEngine(engine);
             setLoadingMessage(message);
         });
+        setSessionPhase?.("loading_model");
         // Do not clear loadedEngine here — avoids flashing every engine to "unloaded"
         // during a switch; handlers update loadedEngine on success.
         setHeaderStatus(message, 60_000);
@@ -94,6 +100,7 @@ export function useEngineSwitch({
                 setLoadingMessage("");
                 setLoadingTargetEngine(null);
             });
+            setSessionPhase?.("idle");
             setTransferLineFadingOut(true);
             await setTrayState("ready");
         }
@@ -118,7 +125,8 @@ export function useEngineSwitch({
         const displayName = models.find(m => m.id === modelId)?.display_name || modelId;
 
         await withEngineLoad("whisper", `Loading ${displayName}...`, async () => {
-            await invoke("switch_model", { modelId, useGpu: asrBackend === "gpu" });
+            const result = await invoke<CommandResult<string>>("switch_model", { modelId, useGpu: asrBackend === "gpu" });
+            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Whisper");
 
             if (activeEngine !== "whisper") {
                 setActiveEngine("whisper");
@@ -127,6 +135,7 @@ export function useEngineSwitch({
             } else {
                 setHeaderStatus(`Switched model to ${modelId}`);
             }
+            setSessionNotice?.(null);
 
             setCurrentModel(modelId);
             setLoadedEngine("whisper");
@@ -141,6 +150,14 @@ export function useEngineSwitch({
             setBackendInfo(backend as string);
         }).catch(e => {
             setHeaderStatus(`Error switching model: ${e}`, 5000);
+            setSessionPhase?.("error");
+            setSessionNotice?.({
+                level: "error",
+                code: "model_load_failed",
+                title: "Whisper failed to load",
+                message: String(e),
+                sticky: true,
+            });
         });
     };
 
@@ -200,12 +217,14 @@ export function useEngineSwitch({
         const targetModel = targetModelOverride || currentParakeetModel || parakeetModels[0].id;
 
         await withEngineLoad("parakeet", `Loading Parakeet (${targetModel})...`, async () => {
-            await invoke("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
+            const result = await invoke<CommandResult<string>>("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
+            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Parakeet");
 
             setCurrentParakeetModel(targetModel);
             setActiveEngine("parakeet");
             activeEngineRef.current = "parakeet";
             setLoadedEngine("parakeet");
+            setSessionNotice?.(null);
 
             if (storeRef.current) {
                 await storeRef.current.set("parakeet_model", targetModel);
@@ -218,6 +237,14 @@ export function useEngineSwitch({
             setBackendInfo(backend as string);
         }).catch(e => {
             setHeaderStatus(`Error switching to Parakeet: ${e}`, 5000);
+            setSessionPhase?.("error");
+            setSessionNotice?.({
+                level: "error",
+                code: "model_load_failed",
+                title: "Parakeet failed to load",
+                message: String(e),
+                sticky: true,
+            });
         });
     };
 
@@ -253,15 +280,17 @@ export function useEngineSwitch({
 
         await withEngineLoad("cohere", "Loading Cohere Speech...", async () => {
             const fp16 = targetModel === COHERE_FP16_MODEL_ID;
-            await invoke("init_cohere", {
+            const result = await invoke<CommandResult<string>>("init_cohere", {
                 modelId: targetModel,
                 forceCpu: asrBackend === "cpu" && !fp16,
             });
+            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Cohere Speech");
 
             setCurrentCohereModel(targetModel);
             setActiveEngine("cohere");
             activeEngineRef.current = "cohere";
             setLoadedEngine("cohere");
+            setSessionNotice?.(null);
 
             if (fp16) {
                 setAsrBackend("gpu");
@@ -281,6 +310,14 @@ export function useEngineSwitch({
             setBackendInfo(backend as string);
         }).catch(e => {
             setHeaderStatus(`Error switching to Cohere Speech: ${e}`, 5000);
+            setSessionPhase?.("error");
+            setSessionNotice?.({
+                level: "error",
+                code: "model_load_failed",
+                title: "Cohere Speech failed to load",
+                message: String(e),
+                sticky: true,
+            });
         });
     };
 
@@ -313,31 +350,45 @@ export function useEngineSwitch({
             if (engine === "whisper") {
                 const displayName = models.find(m => m.id === currentModel)?.display_name || currentModel;
                 setLoadingMessage(`Reloading ${displayName} on ${label}...`);
-                await invoke("switch_model", { modelId: currentModel, useGpu });
+                const result = await invoke<CommandResult<string>>("switch_model", { modelId: currentModel, useGpu });
+                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Whisper to ${label}`);
                 setLoadedEngine("whisper");
                 const info = await invoke("get_backend_info");
                 setBackendInfo(info as string);
                 setHeaderStatus(`Whisper running on ${label}`);
+                setSessionNotice?.(null);
             } else if (engine === "parakeet") {
                 const targetModel = currentParakeetModel || parakeetModels[0]?.id;
-                await invoke("init_parakeet", { modelId: targetModel, useGpu });
+                const result = await invoke<CommandResult<string>>("init_parakeet", { modelId: targetModel, useGpu });
+                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Parakeet to ${label}`);
                 setLoadedEngine("parakeet");
                 const info = await invoke("get_backend_info");
                 setBackendInfo(info as string);
                 setHeaderStatus(`Parakeet running on ${label}`);
+                setSessionNotice?.(null);
             } else if (engine === "cohere") {
                 const gid = currentCohereModel || cohereModels[0]?.id;
-                await invoke("init_cohere", {
+                const result = await invoke<CommandResult<string>>("init_cohere", {
                     modelId: gid,
                     forceCpu: !useGpu,
                 });
+                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Cohere Speech to ${label}`);
                 setLoadedEngine("cohere");
                 const info = await invoke("get_backend_info");
                 setBackendInfo(info as string);
                 setHeaderStatus(`Cohere Speech running on ${label}`);
+                setSessionNotice?.(null);
             }
         }).catch(e => {
             setHeaderStatus(`Failed to switch to ${label}: ${e}`, 5000);
+            setSessionPhase?.("error");
+            setSessionNotice?.({
+                level: "error",
+                code: "model_load_failed",
+                title: `Failed to switch to ${label}`,
+                message: String(e),
+                sticky: true,
+            });
         });
     };
 

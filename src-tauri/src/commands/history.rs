@@ -41,9 +41,15 @@ fn ensure_history_db() -> Result<Connection, String> {
     })?;
 
     // Migrate existing DBs that predate newer columns.
-    let _ = conn.execute("ALTER TABLE transcriptions ADD COLUMN processing_time_ms INTEGER", []);
+    let _ = conn.execute(
+        "ALTER TABLE transcriptions ADD COLUMN processing_time_ms INTEGER",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE transcriptions ADD COLUMN model_id TEXT", []);
-    let _ = conn.execute("ALTER TABLE transcriptions ADD COLUMN audio_source TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE transcriptions ADD COLUMN audio_source TEXT",
+        [],
+    );
 
     Ok(conn)
 }
@@ -78,7 +84,15 @@ pub async fn save_transcript_history(
     audio_source: Option<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        save_transcript_history_blocking(transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source)
+        save_transcript_history_blocking(
+            transcript,
+            engine,
+            duration_ms,
+            grammar_llm_used,
+            processing_time_ms,
+            model_id,
+            audio_source,
+        )
     })
     .await
     .map_err(|e| format!("save_transcript_history task failed: {}", e))?
@@ -133,11 +147,9 @@ pub async fn list_transcript_history(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<TranscriptRecord>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        list_transcript_history_blocking(limit, offset)
-    })
-    .await
-    .map_err(|e| format!("list_transcript_history task failed: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || list_transcript_history_blocking(limit, offset))
+        .await
+        .map_err(|e| format!("list_transcript_history task failed: {}", e))?
 }
 
 fn list_transcript_history_blocking(
@@ -203,11 +215,9 @@ fn list_transcript_history_blocking(
 /// macOS fix: Async with spawn_blocking to avoid blocking the AppKit main thread.
 #[tauri::command]
 pub async fn delete_transcript_history(id: i64) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        delete_transcript_history_blocking(id)
-    })
-    .await
-    .map_err(|e| format!("delete_transcript_history task failed: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || delete_transcript_history_blocking(id))
+        .await
+        .map_err(|e| format!("delete_transcript_history task failed: {}", e))?
 }
 
 fn delete_transcript_history_blocking(id: i64) -> Result<(), String> {

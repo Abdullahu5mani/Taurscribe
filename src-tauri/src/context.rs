@@ -57,7 +57,9 @@ fn windows_context() -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn macos_context() -> Option<String> {
-    use accessibility_sys::{AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, kAXErrorSuccess};
+    use accessibility_sys::{
+        kAXErrorSuccess, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
+    };
     use core_foundation::{
         base::{CFRelease, CFTypeRef, TCFType},
         string::{CFString, CFStringRef},

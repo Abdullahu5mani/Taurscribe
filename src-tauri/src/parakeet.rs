@@ -4,7 +4,8 @@ use rubato::{
 };
 use std::path::PathBuf;
 
-use crate::parakeet_loaders::{init_ctc, init_eou, init_nemotron, init_tdt};
+use crate::parakeet_loaders::{init_ctc, init_eou, init_nemotron, init_tdt, ParakeetLoadPath};
+use crate::parakeet_runtime::LoadedParakeetRuntime;
 
 /// GPU Backend Type
 #[derive(Debug, Clone, serde::Serialize)]
@@ -35,7 +36,7 @@ pub struct ParakeetModelInfo {
 }
 
 /// Wrapper for different loaded model types
-enum LoadedModel {
+pub(crate) enum LoadedModel {
     Nemotron(Nemotron),
     Ctc(Parakeet),
     Eou(ParakeetEOU),
@@ -49,24 +50,29 @@ pub struct ParakeetStatus {
     pub model_id: Option<String>,
     pub model_type: Option<String>,
     pub backend: String,
+    pub load_path: String,
 }
 
 /// The Manager that controls the Parakeet ASR
 pub struct ParakeetManager {
-    model: Option<LoadedModel>,
+    runtime: Option<LoadedParakeetRuntime>,
     model_name: Option<String>,
     backend: GpuBackend,
+    load_path: ParakeetLoadPath,
     resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>, // (Sample Rate, Input Size, Resampler)
+    next_runtime_generation: u64,
 }
 
 impl ParakeetManager {
     /// Create a new Parakeet Manager (Constructor)
     pub fn new() -> Self {
         ParakeetManager {
-            model: None,
+            runtime: None,
             model_name: None,
             backend: GpuBackend::Cpu,
+            load_path: ParakeetLoadPath::FallbackGpu,
             resampler: None,
+            next_runtime_generation: 1,
         }
     }
 
@@ -157,7 +163,7 @@ impl ParakeetManager {
 
     /// Get full status of the engine
     pub fn get_status(&self) -> ParakeetStatus {
-        let model_type = self.model.as_ref().map(|m| match m {
+        let model_type = self.runtime.as_ref().map(|slot| match &slot.model {
             LoadedModel::Nemotron(_) => "Nemotron".to_string(),
             LoadedModel::Ctc(_) => "CTC".to_string(),
             LoadedModel::Eou(_) => "EOU".to_string(),
@@ -165,20 +171,56 @@ impl ParakeetManager {
         });
 
         ParakeetStatus {
-            loaded: self.model.is_some(),
+            loaded: self.runtime.is_some(),
             model_id: self.model_name.clone(),
             model_type,
             backend: self.backend.to_string(),
+            load_path: self.load_path.to_string(),
         }
     }
 
     /// Unload the model to free memory
     pub fn unload(&mut self) {
-        if self.model.is_some() {
+        if let Some(runtime) = self.runtime.take() {
             println!("[INFO] Unloading Parakeet model...");
-            self.model = None;
+            let resampler_buffer_len = self
+                .resampler
+                .as_ref()
+                .map(|(_, size, _)| *size)
+                .unwrap_or(0);
+            crate::memory::maybe_log_process_memory_with_sizes(
+                "parakeet before unload",
+                &[
+                    ("resampler_input_samples", resampler_buffer_len),
+                    (
+                        "model_name_chars",
+                        self.model_name.as_ref().map(|s| s.len()).unwrap_or(0),
+                    ),
+                ],
+            );
             self.model_name = None;
+            self.load_path = ParakeetLoadPath::FallbackGpu;
             self.resampler = None;
+            println!(
+                "[PARAKEET] Dropping runtime generation {}",
+                runtime.generation
+            );
+            drop(runtime);
+            crate::memory::maybe_log_process_memory_with_sizes(
+                "parakeet after runtime teardown",
+                &[(
+                    "next_runtime_generation",
+                    self.next_runtime_generation as usize,
+                )],
+            );
+            crate::memory::trim_process_memory();
+            crate::memory::maybe_log_process_memory_with_sizes(
+                "parakeet after unload",
+                &[(
+                    "next_runtime_generation",
+                    self.next_runtime_generation as usize,
+                )],
+            );
             println!("[SUCCESS] Parakeet model unloaded");
         }
     }
@@ -188,6 +230,15 @@ impl ParakeetManager {
         &mut self,
         model_id: Option<&str>,
         force_cpu: bool,
+    ) -> Result<String, String> {
+        self.initialize_with_load_path(model_id, force_cpu, ParakeetLoadPath::FallbackGpu)
+    }
+
+    pub fn initialize_with_load_path(
+        &mut self,
+        model_id: Option<&str>,
+        force_cpu: bool,
+        load_path: ParakeetLoadPath,
     ) -> Result<String, String> {
         let models_dir = Self::get_models_dir()?;
 
@@ -204,15 +255,17 @@ impl ParakeetManager {
             .ok_or_else(|| format!("Model ID '{}' not found in list", target_id))?;
 
         println!(
-            "[PARAKEET] Initializing model: {} ({}){}",
+            "[PARAKEET] Initializing model: {} ({}){} [load_path={}]",
             info.display_name,
             info.model_type,
-            if force_cpu { " [CPU-only mode]" } else { "" }
+            if force_cpu { " [CPU-only mode]" } else { "" },
+            load_path,
         );
+        crate::memory::maybe_log_process_memory("parakeet before initialize");
 
         // Explicit unload so ONNX sessions are dropped before new ones are created (clear logs +
         // predictable VRAM release when switching Parakeet models or reloading).
-        if self.model.is_some() {
+        if self.runtime.is_some() {
             println!("[PARAKEET] Unloading previous Parakeet model before loading new weights...");
             self.unload();
         }
@@ -229,41 +282,47 @@ impl ParakeetManager {
 
         let (model, backend): (LoadedModel, GpuBackend) = match info.model_type.as_str() {
             "Nemotron" => {
-                let (m, b) = init_nemotron(&model_path, force_cpu)?;
+                let (m, b) = init_nemotron(&model_path, force_cpu, load_path)?;
                 (LoadedModel::Nemotron(m), b)
             }
             "CTC" => {
-                let (m, b) = init_ctc(&model_path, force_cpu)?;
+                let (m, b) = init_ctc(&model_path, force_cpu, load_path)?;
                 (LoadedModel::Ctc(m), b)
             }
             "EOU" => {
-                let (m, b) = init_eou(&model_path, force_cpu)?;
+                let (m, b) = init_eou(&model_path, force_cpu, load_path)?;
                 (LoadedModel::Eou(m), b)
             }
             "TDT" => {
-                let (m, b) = init_tdt(&model_path, force_cpu)?;
+                let (m, b) = init_tdt(&model_path, force_cpu, load_path)?;
                 (LoadedModel::Tdt(m), b)
             }
             _ => return Err(format!("Unknown model type: {}", info.model_type)),
         };
 
-        self.model = Some(model);
+        let generation = self.next_runtime_generation;
+        self.next_runtime_generation += 1;
+        self.runtime = Some(LoadedParakeetRuntime { generation, model });
         self.model_name = Some(target_id.to_string());
         self.backend = backend.clone();
+        self.load_path = load_path;
+        println!("[PARAKEET] Runtime generation {} loaded", generation);
 
         crate::parakeet_loaders::log_parakeet_backend_resolution(
             &info.model_type,
             &backend,
             force_cpu,
+            load_path,
         );
+        crate::memory::maybe_log_process_memory("parakeet after initialize");
 
         Ok(format!("Loaded {} ({})", info.display_name, backend))
     }
 
     /// Clear the internal context/state of the model (reset for new recording)
     pub fn clear_context(&mut self) {
-        if let Some(model) = &mut self.model {
-            if let LoadedModel::Nemotron(m) = model {
+        if let Some(slot) = &mut self.runtime {
+            if let LoadedModel::Nemotron(m) = &mut slot.model {
                 m.reset();
             }
         }
@@ -275,6 +334,20 @@ impl ParakeetManager {
         samples: &[f32],
         sample_rate: u32,
     ) -> Result<String, String> {
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "parakeet before transcribe_chunk",
+            &[
+                ("input_samples", samples.len()),
+                (
+                    "input_audio_bytes",
+                    samples.len() * std::mem::size_of::<f32>(),
+                ),
+                (
+                    "runtime_generation",
+                    self.next_runtime_generation.saturating_sub(1) as usize,
+                ),
+            ],
+        );
         // 1. Resample to 16 kHz if needed
         let audio = if sample_rate != 16000 {
             let needs_new_resampler = self
@@ -311,47 +384,151 @@ impl ParakeetManager {
         } else {
             samples.to_vec()
         };
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "parakeet after resample",
+            &[
+                ("input_samples", samples.len()),
+                ("resampled_samples", audio.len()),
+                (
+                    "resampled_audio_bytes",
+                    audio.len() * std::mem::size_of::<f32>(),
+                ),
+            ],
+        );
 
         // 2. Transcribe
-        if let Some(model) = &mut self.model {
-            match model {
+        if let Some(slot) = &mut self.runtime {
+            let result = match &mut slot.model {
                 LoadedModel::Nemotron(m) => {
                     let mut transcript = String::new();
                     const CHUNK_SIZE: usize = 8960; // 560 ms at 16 kHz
-                    for chunk in audio.chunks(CHUNK_SIZE) {
+                    let total_subchunks = audio.chunks(CHUNK_SIZE).len();
+                    for (idx, chunk) in audio.chunks(CHUNK_SIZE).enumerate() {
+                        crate::memory::maybe_log_process_memory_with_sizes(
+                            &format!(
+                                "parakeet nemotron subchunk {}/{} start",
+                                idx + 1,
+                                total_subchunks
+                            ),
+                            &[
+                                ("subchunk_samples", chunk.len()),
+                                (
+                                    "subchunk_audio_bytes",
+                                    chunk.len() * std::mem::size_of::<f32>(),
+                                ),
+                                ("transcript_chars_so_far", transcript.len()),
+                            ],
+                        );
                         let mut chunk_vec = chunk.to_vec();
                         if chunk_vec.len() < CHUNK_SIZE {
                             chunk_vec.resize(CHUNK_SIZE, 0.0);
                         }
                         transcript.push_str(&m.transcribe_chunk(&chunk_vec).unwrap_or_default());
+                        crate::memory::maybe_log_process_memory_with_sizes(
+                            &format!(
+                                "parakeet nemotron subchunk {}/{} end",
+                                idx + 1,
+                                total_subchunks
+                            ),
+                            &[
+                                ("padded_subchunk_samples", chunk_vec.len()),
+                                ("transcript_chars_so_far", transcript.len()),
+                            ],
+                        );
                     }
                     Ok(transcript)
                 }
                 LoadedModel::Ctc(m) => {
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "parakeet ctc before model run",
+                        &[
+                            ("audio_samples", audio.len()),
+                            ("audio_bytes", audio.len() * std::mem::size_of::<f32>()),
+                        ],
+                    );
                     let result = m
                         .transcribe_samples(audio.clone(), 16000, 1, Some(TimestampMode::Words))
                         .map_err(|e| format!("CTC Error: {}", e))?;
                     println!("[PARAKEET CTC] {}", result.text.trim());
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "parakeet ctc after model run",
+                        &[
+                            ("audio_samples", audio.len()),
+                            ("transcript_chars", result.text.len()),
+                        ],
+                    );
                     Ok(result.text)
                 }
                 LoadedModel::Eou(m) => {
                     let mut full_text = String::new();
                     const CHUNK_SIZE: usize = 2560; // 160 ms
-                    for chunk in audio.chunks(CHUNK_SIZE) {
+                    let total_subchunks = audio.chunks(CHUNK_SIZE).len();
+                    for (idx, chunk) in audio.chunks(CHUNK_SIZE).enumerate() {
+                        crate::memory::maybe_log_process_memory_with_sizes(
+                            &format!(
+                                "parakeet eou subchunk {}/{} start",
+                                idx + 1,
+                                total_subchunks
+                            ),
+                            &[
+                                ("subchunk_samples", chunk.len()),
+                                ("transcript_chars_so_far", full_text.len()),
+                            ],
+                        );
                         let text = m.transcribe(&chunk.to_vec(), false).unwrap_or_default();
                         full_text.push_str(&text);
+                        crate::memory::maybe_log_process_memory_with_sizes(
+                            &format!("parakeet eou subchunk {}/{} end", idx + 1, total_subchunks),
+                            &[
+                                ("subchunk_samples", chunk.len()),
+                                ("transcript_chars_so_far", full_text.len()),
+                            ],
+                        );
                     }
                     println!("[PARAKEET EOU] {}", full_text.trim());
                     Ok(full_text)
                 }
                 LoadedModel::Tdt(m) => {
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "parakeet tdt before model run",
+                        &[
+                            ("audio_samples", audio.len()),
+                            ("audio_bytes", audio.len() * std::mem::size_of::<f32>()),
+                        ],
+                    );
                     let result = m
                         .transcribe_samples(audio.clone(), 16000, 1, Some(TimestampMode::Sentences))
                         .map_err(|e| format!("TDT Error: {}", e))?;
                     println!("[PARAKEET TDT] {}", result.text.trim());
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "parakeet tdt after model run",
+                        &[
+                            ("audio_samples", audio.len()),
+                            ("transcript_chars", result.text.len()),
+                        ],
+                    );
                     Ok(result.text)
                 }
+            };
+            if let Ok(ref transcript) = result {
+                crate::memory::maybe_log_process_memory_with_sizes(
+                    "parakeet after transcribe_chunk",
+                    &[
+                        ("resampled_samples", audio.len()),
+                        ("transcript_chars", transcript.len()),
+                        ("runtime_generation", slot.generation as usize),
+                    ],
+                );
+            } else {
+                crate::memory::maybe_log_process_memory_with_sizes(
+                    "parakeet after transcribe_chunk error",
+                    &[
+                        ("resampled_samples", audio.len()),
+                        ("runtime_generation", slot.generation as usize),
+                    ],
+                );
             }
+            result
         } else {
             Err("No model loaded".to_string())
         }

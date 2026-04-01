@@ -92,7 +92,7 @@ fn prepare_file_audio(path: &Path) -> Result<Vec<f32>, String> {
 // ── Engine helpers (same chunk sizes as transcribe_file_blocking) ─────────────
 
 const WHISPER_CHUNK_SAMPLES: usize = 16000 * 180; // 3 minutes
-const STREAM_CHUNK_SAMPLES: usize = 16000 * 15;   // 15 seconds
+const STREAM_CHUNK_SAMPLES: usize = 16000 * 15; // 15 seconds
 
 fn transcribe_whisper(w: &mut WhisperManager, pcm: &[f32]) -> Result<String, String> {
     let parts: Vec<String> = pcm
@@ -190,15 +190,24 @@ fn file_drop_accuracy() {
                         );
                         let pcm = match prepare_file_audio(&flac) {
                             Ok(p) => p,
-                            Err(e) => { eprintln!("[whisper] {} audio error: {e}", row.utt_id); continue; }
+                            Err(e) => {
+                                eprintln!("[whisper] {} audio error: {e}", row.utt_id);
+                                continue;
+                            }
                         };
                         let hyp = match transcribe_whisper(&mut w, &pcm) {
                             Ok(t) => t,
-                            Err(e) => { eprintln!("[whisper] {} transcribe error: {e}", row.utt_id); continue; }
+                            Err(e) => {
+                                eprintln!("[whisper] {} transcribe error: {e}", row.utt_id);
+                                continue;
+                            }
                         };
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
-                        eprintln!("[whisper] {} | wer={:.3} | ref: {} | hyp: {}", row.utt_id, w_val, &row.ref_text, snippet);
+                        eprintln!(
+                            "[whisper] {} | wer={:.3} | ref: {} | hyp: {}",
+                            row.utt_id, w_val, &row.ref_text, snippet
+                        );
                         wers.push(w_val);
                     }
                 }
@@ -225,15 +234,24 @@ fn file_drop_accuracy() {
                         );
                         let pcm = match prepare_file_audio(&flac) {
                             Ok(p) => p,
-                            Err(e) => { eprintln!("[parakeet] {} audio error: {e}", row.utt_id); continue; }
+                            Err(e) => {
+                                eprintln!("[parakeet] {} audio error: {e}", row.utt_id);
+                                continue;
+                            }
                         };
                         let hyp = match transcribe_parakeet(&mut p, &pcm) {
                             Ok(t) => t,
-                            Err(e) => { eprintln!("[parakeet] {} transcribe error: {e}", row.utt_id); continue; }
+                            Err(e) => {
+                                eprintln!("[parakeet] {} transcribe error: {e}", row.utt_id);
+                                continue;
+                            }
                         };
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
-                        eprintln!("[parakeet] {} | wer={:.3} | ref: {} | hyp: {}", row.utt_id, w_val, &row.ref_text, snippet);
+                        eprintln!(
+                            "[parakeet] {} | wer={:.3} | ref: {} | hyp: {}",
+                            row.utt_id, w_val, &row.ref_text, snippet
+                        );
                         wers.push(w_val);
                     }
                 }
@@ -258,15 +276,24 @@ fn file_drop_accuracy() {
                 );
                 let pcm = match prepare_file_audio(&flac) {
                     Ok(p) => p,
-                    Err(e) => { eprintln!("[granite] {} audio error: {e}", row.utt_id); continue; }
+                    Err(e) => {
+                        eprintln!("[granite] {} audio error: {e}", row.utt_id);
+                        continue;
+                    }
                 };
                 let hyp = match transcribe_cohere(&mut g, &pcm) {
                     Ok(t) => t,
-                    Err(e) => { eprintln!("[granite] {} transcribe error: {e}", row.utt_id); continue; }
+                    Err(e) => {
+                        eprintln!("[granite] {} transcribe error: {e}", row.utt_id);
+                        continue;
+                    }
                 };
                 let w_val = wer(&row.ref_text, &hyp);
                 let snippet: String = hyp.chars().take(80).collect();
-                eprintln!("[granite] {} | wer={:.3} | ref: {} | hyp: {}", row.utt_id, w_val, &row.ref_text, snippet);
+                eprintln!(
+                    "[granite] {} | wer={:.3} | ref: {} | hyp: {}",
+                    row.utt_id, w_val, &row.ref_text, snippet
+                );
                 wers.push(w_val);
             }
         }
@@ -283,6 +310,9 @@ fn file_drop_accuracy() {
     for (engine, wers) in &results {
         let mean = wers.iter().sum::<f64>() / wers.len() as f64;
         let med = median(wers.clone());
-        eprintln!("[SUMMARY] {engine}: mean_wer={mean:.4} median_wer={med:.4} n={}", wers.len());
+        eprintln!(
+            "[SUMMARY] {engine}: mean_wer={mean:.4} median_wer={med:.4} n={}",
+            wers.len()
+        );
     }
 }

@@ -93,7 +93,8 @@ where
     let total = chunks.len();
 
     for (i, chunk) in chunks.iter().enumerate() {
-        let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(chunk, sample_rate, false, None);
+        let pcm16 =
+            audio_preprocess::preprocess_live_transcribe_chunk(chunk, sample_rate, false, None);
         if pcm16.is_empty() {
             continue;
         }
@@ -127,11 +128,7 @@ where
 
 /// Parakeet live path: 4s chunks, no VAD gate, pad to 64000 samples.
 /// Mirrors `parakeet_preprocess_for_transcribe` + accumulation loop.
-fn mic_sim_parakeet(
-    samples: &[f32],
-    sample_rate: u32,
-    p: &mut ParakeetManager,
-) -> String {
+fn mic_sim_parakeet(samples: &[f32], sample_rate: u32, p: &mut ParakeetManager) -> String {
     const MIN_PARAKEET_SAMPLES: usize = 16000 * 4; // 64000
 
     let chunk_size = (sample_rate as usize) * 4;
@@ -218,10 +215,15 @@ fn mic_accuracy() {
                         );
                         let (samples, rate) = match load_native_mono(&flac) {
                             Ok(v) => v,
-                            Err(e) => { eprintln!("[whisper] {} audio error: {e}", row.utt_id); continue; }
+                            Err(e) => {
+                                eprintln!("[whisper] {} audio error: {e}", row.utt_id);
+                                continue;
+                            }
                         };
                         // Reset LSTM state — simulates start of a fresh recording
-                        if let Ok(mut v) = vad.lock() { v.reset_state(); }
+                        if let Ok(mut v) = vad.lock() {
+                            v.reset_state();
+                        }
 
                         let vad_ref = Arc::clone(&vad);
                         let hyp = mic_sim_whisper_granite(&samples, rate, &vad_ref, |pcm| {
@@ -229,7 +231,10 @@ fn mic_accuracy() {
                         });
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
-                        eprintln!("[whisper] {} | wer={:.3} | ref: {} | hyp: {}", row.utt_id, w_val, &row.ref_text, snippet);
+                        eprintln!(
+                            "[whisper] {} | wer={:.3} | ref: {} | hyp: {}",
+                            row.utt_id, w_val, &row.ref_text, snippet
+                        );
                         wers.push(w_val);
                     }
                 }
@@ -256,12 +261,18 @@ fn mic_accuracy() {
                         );
                         let (samples, rate) = match load_native_mono(&flac) {
                             Ok(v) => v,
-                            Err(e) => { eprintln!("[parakeet] {} audio error: {e}", row.utt_id); continue; }
+                            Err(e) => {
+                                eprintln!("[parakeet] {} audio error: {e}", row.utt_id);
+                                continue;
+                            }
                         };
                         let hyp = mic_sim_parakeet(&samples, rate, &mut p);
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
-                        eprintln!("[parakeet] {} | wer={:.3} | ref: {} | hyp: {}", row.utt_id, w_val, &row.ref_text, snippet);
+                        eprintln!(
+                            "[parakeet] {} | wer={:.3} | ref: {} | hyp: {}",
+                            row.utt_id, w_val, &row.ref_text, snippet
+                        );
                         wers.push(w_val);
                     }
                 }
@@ -286,9 +297,14 @@ fn mic_accuracy() {
                 );
                 let (samples, rate) = match load_native_mono(&flac) {
                     Ok(v) => v,
-                    Err(e) => { eprintln!("[granite] {} audio error: {e}", row.utt_id); continue; }
+                    Err(e) => {
+                        eprintln!("[granite] {} audio error: {e}", row.utt_id);
+                        continue;
+                    }
                 };
-                if let Ok(mut v) = vad.lock() { v.reset_state(); }
+                if let Ok(mut v) = vad.lock() {
+                    v.reset_state();
+                }
 
                 let vad_ref = Arc::clone(&vad);
                 let hyp = mic_sim_whisper_granite(&samples, rate, &vad_ref, |pcm| {
@@ -296,7 +312,10 @@ fn mic_accuracy() {
                 });
                 let w_val = wer(&row.ref_text, &hyp);
                 let snippet: String = hyp.chars().take(80).collect();
-                eprintln!("[granite] {} | wer={:.3} | ref: {} | hyp: {}", row.utt_id, w_val, &row.ref_text, snippet);
+                eprintln!(
+                    "[granite] {} | wer={:.3} | ref: {} | hyp: {}",
+                    row.utt_id, w_val, &row.ref_text, snippet
+                );
                 wers.push(w_val);
             }
         }
@@ -313,6 +332,9 @@ fn mic_accuracy() {
     for (engine, wers) in &results {
         let mean = wers.iter().sum::<f64>() / wers.len() as f64;
         let med = median(wers.clone());
-        eprintln!("[SUMMARY] {engine}: mean_wer={mean:.4} median_wer={med:.4} n={}", wers.len());
+        eprintln!(
+            "[SUMMARY] {engine}: mean_wer={mean:.4} median_wer={med:.4} n={}",
+            wers.len()
+        );
     }
 }

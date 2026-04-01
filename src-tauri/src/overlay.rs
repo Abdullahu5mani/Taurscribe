@@ -6,7 +6,6 @@
 ///
 /// Windows → Tauri WebView window "overlay" + emitted "overlay-state" events.
 /// Linux    → no overlay window.
-
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
@@ -91,8 +90,7 @@ mod webview {
         if let Some(overlay) = app.get_webview_window("overlay") {
             remember_foreground_window();
 
-            let monitor = active_monitor(app)
-                .or_else(|| overlay.primary_monitor().ok().flatten());
+            let monitor = active_monitor(app).or_else(|| overlay.primary_monitor().ok().flatten());
 
             if let Some(m) = monitor {
                 let msize = m.size();
@@ -102,9 +100,7 @@ mod webview {
                     .unwrap_or(tauri::PhysicalSize::new(80, 80));
                 let x = mpos.x + ((msize.width as i32 - osize.width as i32) / 2);
                 let bottom_margin = (120.0 * m.scale_factor()) as i32;
-                let y = mpos.y + msize.height as i32
-                    - osize.height as i32
-                    - bottom_margin;
+                let y = mpos.y + msize.height as i32 - osize.height as i32 - bottom_margin;
                 let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
             }
             let _ = overlay.set_always_on_top(true);
@@ -143,7 +139,12 @@ mod webview {
         use std::ffi::c_void;
 
         #[repr(C)]
-        struct RECT { left: i32, top: i32, right: i32, bottom: i32 }
+        struct RECT {
+            left: i32,
+            top: i32,
+            right: i32,
+            bottom: i32,
+        }
 
         #[repr(C)]
         struct MONITORINFO {
@@ -163,18 +164,34 @@ mod webview {
 
         unsafe {
             let hwnd = GetForegroundWindow();
-            if hwnd.is_null() { return None; }
+            if hwnd.is_null() {
+                return None;
+            }
 
             let hmonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-            if hmonitor.is_null() { return None; }
+            if hmonitor.is_null() {
+                return None;
+            }
 
             let mut info = MONITORINFO {
                 cb_size: std::mem::size_of::<MONITORINFO>() as u32,
-                rc_monitor: RECT { left: 0, top: 0, right: 0, bottom: 0 },
-                rc_work: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+                rc_monitor: RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                },
+                rc_work: RECT {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                },
                 dw_flags: 0,
             };
-            if GetMonitorInfoW(hmonitor, &mut info) == 0 { return None; }
+            if GetMonitorInfoW(hmonitor, &mut info) == 0 {
+                return None;
+            }
 
             // Match by top-left origin — Tauri uses the same coordinate space
             let ml = info.rc_monitor.left;
@@ -189,16 +206,25 @@ mod webview {
     /// Cursor-position fallback (used when GetForegroundWindow returns null).
     fn cursor_monitor(app: &AppHandle) -> Option<tauri::Monitor> {
         #[repr(C)]
-        struct POINT { x: i32, y: i32 }
-        extern "system" { fn GetCursorPos(lp: *mut POINT) -> i32; }
+        struct POINT {
+            x: i32,
+            y: i32,
+        }
+        extern "system" {
+            fn GetCursorPos(lp: *mut POINT) -> i32;
+        }
         let mut pt = POINT { x: 0, y: 0 };
-        if unsafe { GetCursorPos(&mut pt) } == 0 { return None; }
+        if unsafe { GetCursorPos(&mut pt) } == 0 {
+            return None;
+        }
         let (cx, cy) = (pt.x, pt.y);
         app.available_monitors().ok()?.into_iter().find(|m| {
             let pos = m.position();
             let size = m.size();
-            cx >= pos.x && cx < pos.x + size.width as i32
-                && cy >= pos.y && cy < pos.y + size.height as i32
+            cx >= pos.x
+                && cx < pos.x + size.width as i32
+                && cy >= pos.y
+                && cy < pos.y + size.height as i32
         })
     }
 
@@ -254,10 +280,10 @@ mod mac {
     const STATUS_WINDOW_LEVEL: i64 = 25;
 
     // NSWindowCollectionBehavior raw flag values
-    const CAN_JOIN_ALL_SPACES: u64 = 1 << 0;   // NSWindowCollectionBehaviorCanJoinAllSpaces
-    const STATIONARY: u64 = 1 << 4;             // NSWindowCollectionBehaviorStationary
-    const IGNORES_CYCLE: u64 = 1 << 6;          // NSWindowCollectionBehaviorIgnoresCycle
-    const FULL_SCREEN_AUXILIARY: u64 = 1 << 8;  // NSWindowCollectionBehaviorFullScreenAuxiliary
+    const CAN_JOIN_ALL_SPACES: u64 = 1 << 0; // NSWindowCollectionBehaviorCanJoinAllSpaces
+    const STATIONARY: u64 = 1 << 4; // NSWindowCollectionBehaviorStationary
+    const IGNORES_CYCLE: u64 = 1 << 6; // NSWindowCollectionBehaviorIgnoresCycle
+    const FULL_SCREEN_AUXILIARY: u64 = 1 << 8; // NSWindowCollectionBehaviorFullScreenAuxiliary
 
     // NSFontWeight: medium ≈ 0.23
     const FONT_WEIGHT_MEDIUM: f64 = 0.23;
@@ -350,7 +376,8 @@ mod mac {
             //    fullscreen Spaces (native macOS fullscreen, not exclusive-mode games).
             let level = STATUS_WINDOW_LEVEL;
             let _: () = msg_send![&panel, setLevel: level];
-            let behavior: u64 = CAN_JOIN_ALL_SPACES | STATIONARY | IGNORES_CYCLE | FULL_SCREEN_AUXILIARY;
+            let behavior: u64 =
+                CAN_JOIN_ALL_SPACES | STATIONARY | IGNORES_CYCLE | FULL_SCREEN_AUXILIARY;
             let _: () = msg_send![&panel, setCollectionBehavior: behavior];
 
             // 4. Transparent, click-through, no shadow
@@ -366,9 +393,7 @@ mod mac {
                     let radius = 14.0_f64;
                     let _: () = msg_send![&layer, setCornerRadius: radius];
                     // rgba(10, 10, 18, 0.90) — dark navy, matches app palette
-                    let bg = NSColor::colorWithRed_green_blue_alpha(
-                        0.039, 0.039, 0.071, 0.90_f64,
-                    );
+                    let bg = NSColor::colorWithRed_green_blue_alpha(0.039, 0.039, 0.071, 0.90_f64);
                     let cg_color: *mut AnyObject = msg_send![&bg, CGColor];
                     let _: () = msg_send![&layer, setBackgroundColor: cg_color];
                 }
@@ -411,8 +436,8 @@ mod mac {
     }
 
     fn show_panel() {
-        use objc2::runtime::AnyObject;
         use objc2::msg_send;
+        use objc2::runtime::AnyObject;
         use objc2_app_kit::NSScreen;
         use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 
@@ -426,12 +451,13 @@ mod mac {
             let mtm = MainThreadMarker::new_unchecked();
 
             // Bottom-centre of the main screen (Dock-coordinates, flipped)
-            let screen_frame: NSRect = NSScreen::mainScreen(mtm)
-                .map(|s| s.frame())
-                .unwrap_or(NSRect::new(
-                    NSPoint::new(0.0, 0.0),
-                    NSSize::new(1440.0, 900.0),
-                ));
+            let screen_frame: NSRect =
+                NSScreen::mainScreen(mtm)
+                    .map(|s| s.frame())
+                    .unwrap_or(NSRect::new(
+                        NSPoint::new(0.0, 0.0),
+                        NSSize::new(1440.0, 900.0),
+                    ));
 
             let w = 340.0_f64;
             let h = 64.0_f64;
@@ -447,8 +473,8 @@ mod mac {
     }
 
     fn hide_panel() {
-        use objc2::runtime::AnyObject;
         use objc2::msg_send;
+        use objc2::runtime::AnyObject;
 
         let ptr = PANEL_PTR.load(Ordering::Relaxed);
         if ptr == 0 {
@@ -464,8 +490,8 @@ mod mac {
     /// Translate the current PhaseState into a display string and push it to
     /// the NSTextField. Must be called on the main thread.
     fn refresh_text() {
-        use objc2::runtime::AnyObject;
         use objc2::msg_send;
+        use objc2::runtime::AnyObject;
         use objc2_foundation::NSString;
 
         let tf_ptr = TEXTFIELD_PTR.load(Ordering::Relaxed);
@@ -503,7 +529,9 @@ mod mac {
             "transcribing" => format!("·  ·  ·   {} transcribing", engine_label),
             "correcting" => format!("·  ·  ·   {} correcting", engine_label),
             "done" => match done_ms {
-                Some(ms) if ms >= 1000 => format!("✓  {} done  ({:.1}s)", engine_label, ms as f64 / 1000.0),
+                Some(ms) if ms >= 1000 => {
+                    format!("✓  {} done  ({:.1}s)", engine_label, ms as f64 / 1000.0)
+                }
                 Some(ms) => format!("✓  {} done  ({}ms)", engine_label, ms),
                 None => format!("✓  {} done", engine_label),
             },

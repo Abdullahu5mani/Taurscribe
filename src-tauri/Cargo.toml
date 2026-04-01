@@ -78,7 +78,7 @@ symphonia = { version = "0.5", features = ["mp3", "aac", "flac", "ogg", "wav", "
 # 1. Base / CPU Fallback (ARM Windows/Linux)
 # -------------------------------------------------------------------------
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
-parakeet-rs = { version = "=0.3.0" }
+parakeet-rs = { path = "vendor/parakeet-rs" }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "half"] }
 # Downloader & Verification
 futures-util = "0.3.31"
@@ -150,7 +150,7 @@ windows = { version = "0.58", features = [
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "cuda",
 ] }
-parakeet-rs = { version = "=0.3.0", features = ["cuda", "directml"] }
+parakeet-rs = { path = "vendor/parakeet-rs", features = ["cuda", "directml"] }
 ort = { version = "2.0.0-rc.11", features = [
     "download-binaries",
     "cuda",
@@ -181,7 +181,7 @@ whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = 
     "vulkan",
 ] }
 
-parakeet-rs = { version = "=0.3.0", features = ["cuda"] }
+parakeet-rs = { path = "vendor/parakeet-rs", features = ["cuda"] }
 
 ort = { version = "2.0.0-rc.11", features = [
     "download-binaries",
@@ -212,14 +212,14 @@ ort = { version = "2.0.0-rc.11", features = [
     "xnnpack",
     "half",
 ] }
-parakeet-rs = { version = "=0.3.0", features = ["directml"] }
+parakeet-rs = { path = "vendor/parakeet-rs", features = ["directml"] }
 
 # 5. Linux (ARM64) -> XNNPACK
 # XNNPACK: CPU optimization for ARM processors (Raspberry Pi, etc.)
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
-parakeet-rs = { version = "=0.3.0" }
+parakeet-rs = { path = "vendor/parakeet-rs" }
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack", "half"] }
 
 [dev-dependencies]
