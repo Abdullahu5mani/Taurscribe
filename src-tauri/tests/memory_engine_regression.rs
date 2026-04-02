@@ -39,6 +39,12 @@ struct MemorySnapshot {
     source: String,
 }
 
+impl MemorySnapshot {
+    fn ws_i64(&self) -> i64 {
+        self.working_set_bytes as i64
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct ScenarioReport {
     name: String,
@@ -171,32 +177,193 @@ fn jfk_pcm16_preprocessed_for_asr() -> Result<(PathBuf, Vec<f32>), String> {
     Ok((path, pcm16))
 }
 
+fn signed_mb(delta_bytes: i64) -> String {
+    let mb = delta_bytes as f64 / (1024.0 * 1024.0);
+    if delta_bytes >= 0 {
+        format!("+{:.1}", mb)
+    } else {
+        format!("{:.1}", mb)
+    }
+}
+
 fn summarize_report(report: &MemoryRegressionReport) {
-    eprintln!("\n[memory-test] summary");
+    eprintln!(
+        "\n[memory-test] ═══════════════════════════════════════════════════════"
+    );
+    eprintln!("[memory-test]  MEMORY REGRESSION SUMMARY");
+    eprintln!(
+        "[memory-test]  fixture : {} ({} samples, {:.1}s @ 16 kHz)",
+        report.audio_fixture,
+        report.sample_count_16k,
+        report.sample_count_16k as f64 / 16_000.0,
+    );
+    eprintln!("[memory-test]  force_cpu: {}", report.force_cpu);
+    eprintln!(
+        "[memory-test] ═══════════════════════════════════════════════════════"
+    );
+
+    let mut all_pass = true;
+
     for scenario in &report.scenarios {
-        let max_ws = scenario
-            .snapshots
-            .iter()
-            .map(|s| s.working_set_bytes)
-            .max()
-            .unwrap_or(0);
-        let max_private = scenario
-            .snapshots
-            .iter()
-            .filter_map(|s| s.private_bytes)
-            .max()
-            .unwrap_or(0);
         eprintln!(
-            "  - {} | duration={}ms | max_ws={:.1} MB | max_private={:.1} MB",
-            scenario.name,
-            scenario.duration_ms,
-            bytes_to_mb(max_ws),
-            bytes_to_mb(max_private),
+            "\n[memory-test] ── {} ({} ms) ──────────────────────────",
+            scenario.name, scenario.duration_ms,
         );
-        for note in &scenario.notes {
-            eprintln!("      note: {note}");
+
+        if scenario.snapshots.is_empty() {
+            for note in &scenario.notes {
+                eprintln!("  note: {note}");
+            }
+            continue;
+        }
+
+        let baseline_ws = scenario.snapshots[0].working_set_bytes as i64;
+
+        // Per-snapshot table
+        eprintln!(
+            "  {:<48} {:>9}  {:>10}  {:>10}  {:>12}",
+            "snapshot", "WS (MB)", "Δ prev", "Δ baseline", "private (MB)",
+        );
+        eprintln!("  {}", "─".repeat(96));
+
+        let baseline_private = scenario.snapshots[0].private_bytes.map(|v| v as i64);
+
+        // First pass: collect row data and find the single biggest positive jump
+        struct RowData {
+            label: String,
+            ws: i64,
+            delta_prev: i64,
+            delta_baseline: i64,
+            private_str: String,
+        }
+        let mut rows: Vec<RowData> = Vec::with_capacity(scenario.snapshots.len());
+        let mut prev_ws = baseline_ws;
+        let mut peak_ws: i64 = 0;
+        let mut after_unload_ws: Option<i64> = None;
+        let mut after_unload_private: Option<i64> = None;
+
+        for snap in &scenario.snapshots {
+            let ws = snap.ws_i64();
+            let delta_prev = ws - prev_ws;
+            let delta_baseline = ws - baseline_ws;
+            let private_str = snap
+                .private_bytes
+                .map(|b| format!("{:.1}", bytes_to_mb(b)))
+                .unwrap_or_else(|| "—".to_string());
+
+            if ws > peak_ws {
+                peak_ws = ws;
+            }
+            if snap.label.contains("after unload") || snap.label.contains("after final unload") {
+                after_unload_ws = Some(ws);
+                after_unload_private = snap.private_bytes.map(|b| b as i64);
+            }
+
+            rows.push(RowData { label: snap.label.clone(), ws, delta_prev, delta_baseline, private_str });
+            prev_ws = ws;
+        }
+
+        // Find index of the single largest positive jump (for spike marker)
+        let spike_idx = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.delta_prev > 100 * 1024 * 1024)
+            .max_by_key(|(_, r)| r.delta_prev)
+            .map(|(i, _)| i);
+
+        let biggest_jump = spike_idx.map(|i| rows[i].delta_prev).unwrap_or(0);
+        let biggest_jump_label = spike_idx.map(|i| rows[i].label.clone()).unwrap_or_default();
+
+        // Second pass: print table with spike marker only on the single spike row
+        for (i, row) in rows.iter().enumerate() {
+            let spike_marker = if Some(i) == spike_idx { " ← SPIKE" } else { "" };
+            eprintln!(
+                "  {:<48} {:>9.1}  {:>10}  {:>10}  {:>12}{}",
+                row.label,
+                bytes_to_mb(row.ws as u64),
+                signed_mb(row.delta_prev),
+                signed_mb(row.delta_baseline),
+                row.private_str,
+                spike_marker,
+            );
+        }
+
+        eprintln!("  {}", "─".repeat(96));
+
+        // Spike annotation
+        if biggest_jump > 100 * 1024 * 1024 {
+            let is_first_inference = biggest_jump_label.contains("first transcription")
+                || biggest_jump_label.contains("first transcription");
+            let interpretation = if is_first_inference {
+                "likely CUDA/ORT memory-mapped at first inference — not additional system RAM"
+            } else {
+                "review snapshot above"
+            };
+            eprintln!(
+                "  SPIKE     +{:.0} MB at \"{}\"",
+                bytes_to_mb(biggest_jump as u64),
+                biggest_jump_label,
+            );
+            eprintln!("            interpretation: {}", interpretation);
+            eprintln!(
+                "            working_set vs private: WS spike reflects GPU VRAM pages mapped \
+                into process address space — compare private_bytes for true RAM pressure"
+            );
+        }
+
+        // Leak check
+        // Threshold: allow up to 200 MB above baseline for CUDA/ORT page residuals
+        const LEAK_THRESHOLD_BYTES: i64 = 200 * 1024 * 1024;
+        if let Some(unload_ws) = after_unload_ws {
+            let retained = unload_ws - baseline_ws;
+            let pass = retained <= LEAK_THRESHOLD_BYTES;
+            if !pass {
+                all_pass = false;
+            }
+            eprintln!(
+                "  LEAK WS   baseline={:.1} MB  after-unload={:.1} MB  retained={}  {}",
+                bytes_to_mb(baseline_ws as u64),
+                bytes_to_mb(unload_ws as u64),
+                signed_mb(retained),
+                if pass { "✓ CLEAN" } else { "✗ POSSIBLE LEAK" },
+            );
+            // Private bytes: expect them to stay elevated after CUDA init (ORT holds pages)
+            if let (Some(unload_priv), Some(base_priv)) = (after_unload_private, baseline_private) {
+                let priv_retained = unload_priv - base_priv;
+                // Private bytes leak threshold is 1 GB (ORT/CUDA virtual commit is expected)
+                let priv_pass = priv_retained <= 1024 * 1024 * 1024;
+                if !priv_pass {
+                    all_pass = false;
+                }
+                eprintln!(
+                    "  LEAK PRIV baseline={:.1} MB  after-unload={:.1} MB  retained={}  {} \
+                    (ORT keeps virtual commit after first CUDA init)",
+                    bytes_to_mb(base_priv as u64),
+                    bytes_to_mb(unload_priv as u64),
+                    signed_mb(priv_retained),
+                    if priv_pass { "✓ expected" } else { "✗ EXCESSIVE" },
+                );
+            }
+        }
+
+        // Notes
+        if !scenario.notes.is_empty() {
+            eprint!("  notes     ");
+            eprintln!("{}", scenario.notes.join(" | "));
         }
     }
+
+    // Roll-up
+    eprintln!(
+        "\n[memory-test] ═══════════════════════════════════════════════════════"
+    );
+    eprintln!(
+        "[memory-test]  OVERALL: {}",
+        if all_pass { "✓ PASS — no leaks detected" } else { "✗ FAIL — possible leak(s) above" }
+    );
+    eprintln!(
+        "[memory-test] ═══════════════════════════════════════════════════════"
+    );
 }
 
 fn skipped_scenario(name: &str, reason: impl Into<String>) -> ScenarioReport {
@@ -544,4 +711,35 @@ fn memory_engine_regression() {
 
     summarize_report(&report);
     maybe_write_report(&report);
+
+    // Hard leak assertion: after-unload working set must be within 200 MB of baseline
+    // for every scenario that completed (non-skipped, has an unload snapshot).
+    const LEAK_THRESHOLD_BYTES: u64 = 200 * 1024 * 1024;
+    for scenario in &report.scenarios {
+        if scenario.duration_ms == 0 {
+            continue; // skipped
+        }
+        let baseline_ws = scenario
+            .snapshots
+            .first()
+            .map(|s| s.working_set_bytes)
+            .unwrap_or(0);
+        if let Some(unload_snap) = scenario.snapshots.iter().find(|s| {
+            s.label.contains("after unload") || s.label.contains("after final unload")
+        }) {
+            let after_unload_ws = unload_snap.working_set_bytes;
+            let retained = after_unload_ws.saturating_sub(baseline_ws);
+            assert!(
+                retained <= LEAK_THRESHOLD_BYTES,
+                "[memory-test] LEAK DETECTED in scenario '{}': \
+                after-unload WS={:.1} MB, baseline={:.1} MB, retained={:.1} MB (threshold={:.0} MB). \
+                Check engine unload paths.",
+                scenario.name,
+                bytes_to_mb(after_unload_ws),
+                bytes_to_mb(baseline_ws),
+                bytes_to_mb(retained),
+                bytes_to_mb(LEAK_THRESHOLD_BYTES),
+            );
+        }
+    }
 }

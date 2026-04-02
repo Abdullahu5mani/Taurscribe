@@ -28,6 +28,15 @@
     ]
   },
   "bundle": {
-    "resources": []
+    "resources": {
+      "target/release/llama.dll": "./llama.dll",
+      "target/release/ggml.dll": "./ggml.dll",
+      "target/release/ggml-base.dll": "./ggml-base.dll",
+      "target/release/ggml-cpu.dll": "./ggml-cpu.dll",
+      "target/release/onnxruntime_providers_shared.dll": "./onnxruntime_providers_shared.dll",
+      "target/release/onnxruntime_providers_cuda.dll": "./onnxruntime_providers_cuda.dll",
+      "target/release/onnxruntime_providers_tensorrt.dll": "./onnxruntime_providers_tensorrt.dll",
+      "target/release/DirectML.dll": "./DirectML.dll"
+    }
   }
 }

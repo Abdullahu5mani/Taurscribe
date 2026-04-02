@@ -286,27 +286,22 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
         // ── Parakeet ──────────────────────────────────────────────────────────
         // SHA-256 sourced from HuggingFace LFS metadata (lfs.oid).
         "parakeet-nemotron" => Some(ModelConfig {
-            repo: "altunenes/parakeet-rs",
+            repo: "lokkju/nemotron-speech-streaming-en-0.6b-int4",
             branch: "main",
             files: vec![
                 ModelFile {
                     filename: "decoder_joint.onnx",
-                    remote_path: "nemotron-speech-streaming-en-0.6b/decoder_joint.onnx",
-                    sha1: "8bcfde85fa9039a70caeb90204273f837923d63a706c186bd33e2ada25a91700",
+                    remote_path: "decoder_joint.onnx",
+                    sha1: "df20ba8ef87083231989fed74aefd79a72a2a95e5f4fac147fd716f2a5c71b87",
                 },
                 ModelFile {
                     filename: "encoder.onnx",
-                    remote_path: "nemotron-speech-streaming-en-0.6b/encoder.onnx",
-                    sha1: "5c5110ca2e961c3ff5edc2b0ff49f29888b5213287624f7865c60f7384ac02f0",
-                },
-                ModelFile {
-                    filename: "encoder.onnx.data",
-                    remote_path: "nemotron-speech-streaming-en-0.6b/encoder.onnx.data",
-                    sha1: "44f65771e1570546f61106b3d0c604a60b398d061476fda8042bb05432601bd4",
+                    remote_path: "encoder.onnx",
+                    sha1: "541304b1f563b2ed772be6d4c1c342b5ef96170252e2c860e0d9cd364c23333a",
                 },
                 ModelFile {
                     filename: "tokenizer.model",
-                    remote_path: "nemotron-speech-streaming-en-0.6b/tokenizer.model",
+                    remote_path: "tokenizer.model",
                     sha1: "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
                 },
             ],
@@ -315,8 +310,8 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
 
         // ── LLM ───────────────────────────────────────────────────────────────
         // SHA-256 sourced from HuggingFace LFS metadata (lfs.oid).
-        "flowscribe-qwen2.5-0.5b" => Some(ModelConfig {
-            repo: "Abdullahu5mani/flowscribe-qwen2.5-0.5b",
+        "flowscribe-qwen2.5-0.5b-v2" => Some(ModelConfig {
+            repo: "Abdullahu5mani/flowscribe-qwen2.5-0.5b-v2",
             branch: "main",
             files: vec![ModelFile {
                 filename: "model_q4_k_m.gguf",

@@ -54,13 +54,13 @@ export const MODELS: DownloadableModel[] = [
     { id: 'whisper-large-v3-turbo-q5_0', name: 'Large V3 Turbo (Q5_0)', type: 'Whisper', size: '547 MB', description: 'Quantized Turbo. 99+ languages.', downloaded: false },
 
     // --- Parakeet ---
-    { id: 'parakeet-nemotron', name: 'Nemotron Streaming', type: 'Parakeet', size: '1.2 GB', description: 'Ultra-low latency streaming. English only.', downloaded: true },
+    { id: 'parakeet-nemotron', name: 'Nemotron Streaming (INT4)', type: 'Parakeet', size: '663 MB', description: 'Ultra-low latency streaming. English only. INT4 quantized — fits entirely in GPU VRAM.', downloaded: true },
 
     // --- Cohere engine slot (Cohere Transcribe ONNX) ---
     { id: 'granite-speech-1b-cpu', name: 'Cohere Transcribe 03-2026 (q4f16)', type: 'Cohere', size: '~1.6 GB', description: 'Single universal ONNX bundle used by the Cohere engine slot; runs on CPU and supported GPU backends.', downloaded: false },
 
     // --- LLM ---
-    { id: 'flowscribe-qwen2.5-0.5b', name: 'FlowScribe Qwen 2.5 0.5B', type: 'LLM', size: '398 MB', description: 'Fine-tuned Q4_K_M GGUF for speech-to-text grammar correction.', downloaded: false },
+    { id: 'flowscribe-qwen2.5-0.5b-v2', name: 'FlowScribe Qwen 2.5 0.5B V2', type: 'LLM', size: '398 MB', description: 'Fine-tuned Q4_K_M GGUF for speech-to-text grammar correction.', downloaded: false },
 
 
     // --- CoreML Encoders (macOS Apple Silicon only) ---
