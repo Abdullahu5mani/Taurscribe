@@ -213,7 +213,7 @@ impl CohereManager {
         let (backend, enc, dec) = {
             #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
             {
-                // Windows workaround: ORT CUDA GQA currently conflicts with this decoder export.
+                // Windows x86_64 workaround: ORT CUDA GQA currently conflicts with this decoder export.
                 // Run encoder on CUDA and decoder on CPU (hybrid) for stable inference.
                 let enc = self
                     .create_session_cuda(&encoder_path)
@@ -223,10 +223,18 @@ impl CohereManager {
                     .map_err(|e| format!("Cohere hybrid init (decoder CPU) failed: {}", e))?;
                 (GpuBackend::Hybrid, enc, dec)
             }
-            #[cfg(any(
-                not(target_os = "windows"),
-                all(target_os = "windows", not(target_arch = "x86_64"))
-            ))]
+            #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+            {
+                // Windows ARM64: no CUDA, use DirectML for both sessions.
+                let enc = self
+                    .create_session_directml(&encoder_path)
+                    .map_err(|e| format!("Cohere DirectML init (encoder) failed: {}", e))?;
+                let dec = self
+                    .create_session_directml(&decoder_path)
+                    .map_err(|e| format!("Cohere DirectML init (decoder) failed: {}", e))?;
+                (GpuBackend::DirectML, enc, dec)
+            }
+            #[cfg(not(target_os = "windows"))]
             {
                 let enc = self
                     .create_session_cuda(&encoder_path)
@@ -794,6 +802,21 @@ impl CohereManager {
         builder
             .commit_from_file(path)
             .map_err(|e| format!("CPU session load {}: {}", path.display(), e))
+    }
+
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    fn create_session_directml(&self, path: &Path) -> Result<Session, String> {
+        let builder = Session::builder()
+            .map_err(|e| format!("ORT builder: {}", e))?
+            .with_execution_providers([ort::ep::DirectML::default().build()])
+            .map_err(|e| format!("DirectML EP: {}", e))?
+            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
+            .map_err(|e| format!("DirectML opt level: {}", e))?;
+        let builder =
+            crate::ort_session::configure_low_ram_session_builder(builder, "cohere-directml")?;
+        builder
+            .commit_from_file(path)
+            .map_err(|e| format!("DirectML load {}: {}", path.display(), e))
     }
 
     #[cfg(any(

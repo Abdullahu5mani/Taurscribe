@@ -528,6 +528,11 @@ impl ParakeetManager {
                     ],
                 );
             }
+            // Release the 2.3 GB encoder mmap pages from the working set now that inference
+            // is done. The OS page cache keeps them warm for the next transcription, so the
+            // re-fault cost is ~50 ms (NVMe page-cache read) rather than a full cold load.
+            // Without this, Task Manager shows the process holding 2-3 GB between recordings.
+            crate::memory::trim_process_memory();
             result
         } else {
             Err("No model loaded".to_string())

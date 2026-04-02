@@ -9,8 +9,9 @@ This document explains the accuracy testing and evaluation suite in Taurscribe: 
 The testing suite has three purposes:
 
 1. **Smoke test** — quickly verify that all three ASR engines load and produce non-empty output on a known audio clip (JFK speech).
-2. **Integration accuracy tests** — run the same library code paths as the live app against a real speech dataset and compute Word Error Rate (WER).
-3. **Offline batch evaluation** — standalone CLI (`librispeech_eval`) for bulk WER benchmarking, outputting CSV for analysis.
+2. **Memory regression test** — verify that engine load/transcribe/unload cycles and engine-switching sequences do not leak or unexpectedly retain RAM.
+3. **Integration accuracy tests** — run the same library code paths as the live app against a real speech dataset and compute Word Error Rate (WER).
+4. **Offline batch evaluation** — standalone CLI (`librispeech_eval`) for bulk WER benchmarking, outputting CSV for analysis.
 
 All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. Opt in with `cargo test -- --ignored`. Add `--nocapture` to print per-utterance WER lines and summaries in the terminal.
 
@@ -19,11 +20,11 @@ All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. 
 | What you have | What you can run |
 | --- | --- |
 | **Nothing extra** (fresh clone) | From `src-tauri`: `cargo test` **without** `--ignored`. That runs library unit tests only (e.g. WER math, preprocess sanity). No ASR weights or LibriSpeech required. |
-| **No ASR models** | `librispeech_eval` and the ignored integration tests **need** at least one engine’s weights under the [model locations](#model-locations) path, or they error / skip. To **mark ignored tests as passed without running inference** (e.g. CI): set `TAURSCRIBE_ASR_SMOKE_SKIP=1` when running `cargo test -- --ignored`. |
+| **No ASR models** | `librispeech_eval` and the ignored integration tests **need** at least one engine's weights under the [model locations](#model-locations) path, or they error / skip. To **mark ignored tests as passed without running inference** (e.g. CI): set `TAURSCRIBE_ASR_SMOKE_SKIP=1` when running `cargo test -- --ignored`. |
 | **No LibriSpeech** | You cannot build a manifest from `test-clean` or run `mic_accuracy` / `file_drop_accuracy` / full `librispeech_eval` on real audio until you [download the dataset](#downloading-the-librispeech-test-clean-dataset). |
-| **No `jfk.wav`** | The JFK smoke test fails unless you add `src-tauri/tests/fixtures/jfk.wav`, set `JFK_WAV`, or use `TAURSCRIBE_ASR_SMOKE_SKIP=1`. |
+| **No `jfk.wav`** | The JFK smoke test and memory regression test fail unless you add `src-tauri/tests/fixtures/jfk.wav`, set `JFK_WAV`, or use `TAURSCRIBE_ASR_SMOKE_SKIP=1`. |
 
-**Summary:** day-to-day development without GPUs or large downloads is still possible with plain `cargo test`. Full WER / smoke workflows need models (via **Settings → Downloads** in the app) and, for LibriSpeech-based tests, the dataset plus a manifest.
+**Summary:** day-to-day development without GPUs or large downloads is still possible with plain `cargo test`. Full WER / smoke / memory workflows need models (via **Settings → Downloads** in the app) and, for LibriSpeech-based tests, the dataset plus a manifest.
 
 ---
 
@@ -36,12 +37,131 @@ All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. 
 | `src-tauri/src/librispeech_wer.rs` | Library | Text normalization, token-level Levenshtein WER, LibriSpeech FLAC path resolution helpers |
 | `src-tauri/src/audio_decode.rs` | Library | Format-agnostic decode (FLAC, WAV, MP3, M4A, …) via Symphonia |
 | `src-tauri/src/audio_preprocess.rs` | Library | Resample, denoise, DC remove, HP filter, level assist, clamp |
+| `src-tauri/src/memory.rs` | Library | Process memory snapshots (`working_set`, `private_bytes`, `peak`) via Windows PSAPI / sysinfo; `trim_process_memory()` |
+| `src-tauri/src/ort_session.rs` | Library | Low-RAM ORT session builder helpers: disabled CPU arena, `SameAsRequested` CUDA arena, heuristic cuDNN search |
 | `src-tauri/tests/jfk_asr_smoke.rs` | Integration | JFK WAV → all three engines must return non-empty text |
+| `src-tauri/tests/memory_engine_regression.rs` | Integration | Load/transcribe/unload cycles + cross-engine switch sequences; snapshots RAM at each step |
+| `src-tauri/tests/parakeet_context_reset.rs` | Integration | Verifies `clear_context()` restores Parakeet to a fresh-session baseline (same audio → same transcript) |
 | `src-tauri/tests/file_drop_accuracy.rs` | Integration | Same pipeline as file drag-and-drop (energy VAD assembly + chunking) |
 | `src-tauri/tests/mic_accuracy.rs` | Integration | Same pipeline as live mic (chunking + energy VAD gate) |
 | `scripts/download_librispeech_test_clean.sh` | Script | Download + verify + extract LibriSpeech test-clean (macOS / Linux) |
 | `scripts/download_librispeech_test_clean.ps1` | Script | Same for Windows |
 | `src-tauri/tests/fixtures/` | Directory | Place `jfk.wav` here (not committed); or set `JFK_WAV` |
+
+---
+
+## Integration Tests Reference
+
+### `jfk_asr_smoke` — three-engine smoke test
+
+Runs preprocessed JFK audio (`resample → trim → preprocess_assembled_speech_16k`) through Whisper, Parakeet, and Cohere in sequence. Asserts each returns a non-empty transcript. Any engine whose models are missing is reported as a failure rather than silently skipped.
+
+```bash
+cd src-tauri
+cargo test jfk_audio_through_whisper_parakeet_and_granite -- --ignored --nocapture
+```
+
+**Requires:** `jfk.wav` + all three model bundles installed.
+**Skip without failing:** `TAURSCRIBE_ASR_SMOKE_SKIP=1`
+
+---
+
+### `memory_engine_regression` — RAM regression across load/unload cycles
+
+The most comprehensive memory test. Runs the following scenarios in order, taking a `ProcessMemoryStats` snapshot (working set, private bytes, peak) at each named step:
+
+| Scenario | What it does |
+| --- | --- |
+| `whisper_cycle` | Initialize → transcribe ×2 → unload. Asserts unload clears the model. |
+| `parakeet_cycle` | Same pattern with `FallbackGpu` load path (GPU with CPU fallback). |
+| `parakeet_strict_gpu_cycle` | Same with `StrictGpu` (no CPU fallback). Skipped if CUDA/DirectML unavailable. |
+| `parakeet_fallback_gpu_cycle` | Explicit `FallbackGpu` path (separate from default cycle). |
+| `parakeet_cpu_cycle` | Force CPU for Parakeet regardless of GPU availability. |
+| `cohere_cycle` | Initialize → transcribe ×2 → unload. Skipped if Cohere bundle missing. |
+| `switch_whisper_parakeet_whisper` | W→P→W with explicit unloads between. Verifies VRAM/RAM releases at each switch. |
+| `switch_whisper_cohere_whisper` | W→C→W. |
+| `switch_parakeet_cohere_parakeet` | P→C→P. |
+
+Each scenario prints peak working set and peak private bytes to stderr. The full structured report can be written to a JSON file for offline diffing.
+
+```powershell
+# PowerShell — basic run
+$env:TAURSCRIBE_LOG_MEMORY = '1'
+cargo test memory_engine_regression -- --ignored --nocapture
+```
+
+```powershell
+# Write a JSON report for diffing across builds
+$env:TAURSCRIBE_MEMORY_REPORT = 'memory_report.json'
+$env:TAURSCRIBE_LOG_MEMORY    = '1'
+cargo test memory_engine_regression -- --ignored --nocapture
+```
+
+```bash
+# Force all engines to CPU (useful on machines without GPU)
+TAURSCRIBE_MEMORY_FORCE_CPU=1 \
+cargo test memory_engine_regression -- --ignored --nocapture
+```
+
+**Env vars:**
+
+| Var | Effect |
+| --- | --- |
+| `TAURSCRIBE_LOG_MEMORY=1` | Enable per-step memory logging from `memory.rs` throughout the app |
+| `TAURSCRIBE_MEMORY_REPORT=path.json` | Write a full JSON report (all scenarios + snapshots) to the given path |
+| `TAURSCRIBE_MEMORY_FORCE_CPU=1` | Force CPU load path for all engines in the test |
+| `TAURSCRIBE_ASR_SMOKE_SKIP=1` | Skip the test entirely (pass) |
+
+**Requires:** `jfk.wav` + Whisper model + Parakeet model. Cohere scenarios are soft-skipped if the bundle is missing.
+
+---
+
+### `parakeet_clear_context_restores_session_baseline` — context reset regression
+
+Verifies that calling `ParakeetManager::clear_context()` (which `stop_recording` calls at the end of every Parakeet recording) fully resets the streaming session state. The test transcribes JFK audio, calls `clear_context()`, transcribes the same audio again, and asserts both transcripts are identical. A mismatch means accumulated decoder state is bleeding between recordings.
+
+```bash
+cd src-tauri
+cargo test parakeet_clear_context_restores_session_baseline -- --ignored --nocapture
+```
+
+**Requires:** `jfk.wav` + at least one Parakeet/Nemotron ONNX bundle.
+
+---
+
+### `file_drop_accuracy` — file drag-and-drop pipeline WER
+
+Mirrors `commands/file_transcription.rs: transcribe_file_blocking` exactly:
+
+```
+decode → mono mix → resample 16 kHz → trim edges
+  → assemble_speech_audio (adaptive energy/RMS VAD)
+  → preprocess_assembled_speech_16k
+  → chunked engine call → clean_transcript → WER
+```
+
+```bash
+cd src-tauri
+TAURSCRIBE_EVAL_MANIFEST=../taurscribe-runtime/librispeech/eval_manifest.jsonl \
+TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT=../taurscribe-runtime/librispeech/LibriSpeech/test-clean \
+  cargo test file_drop_accuracy -- --ignored --nocapture
+```
+
+---
+
+### `mic_accuracy` — live recording pipeline WER
+
+Mirrors `commands/recording.rs` without cpal or Tauri. Audio files are decoded at native sample rate and fed through the same chunk-accumulation loop as a live recording:
+
+- **Whisper / Cohere:** 6s chunks → `preprocess_live_transcribe_chunk` → energy VAD gate (0.35) → transcribe
+- **Parakeet:** 4s chunks → `preprocess_live_transcribe_chunk` → pad to ≥64 000 samples → transcribe (no VAD gate)
+
+```bash
+cd src-tauri
+TAURSCRIBE_EVAL_MANIFEST=../taurscribe-runtime/librispeech/eval_manifest.jsonl \
+TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT=../taurscribe-runtime/librispeech/LibriSpeech/test-clean \
+  cargo test mic_accuracy -- --ignored --nocapture
+```
 
 ---
 
@@ -60,7 +180,7 @@ All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. 
 
 The JFK sample is **not** in the repository. Use either:
 
-1. `src-tauri/tests/fixtures/jfk.wav`, or  
+1. `src-tauri/tests/fixtures/jfk.wav`, or
 2. **`JFK_WAV`** pointing at any path on disk.
 
 ---
@@ -94,8 +214,8 @@ bash scripts/download_librispeech_test_clean.sh
 
 ### What the scripts do
 
-1. **Download** `https://www.openslr.org/resources/12/test-clean.tar.gz` (~346 MB) into a destination folder as `test-clean.tar.gz`.  
-2. **Verify** the archive MD5 matches `32fa31d27d2e1cad72775fee3f4849a9`. On mismatch, delete the bad file and retry.  
+1. **Download** `https://www.openslr.org/resources/12/test-clean.tar.gz` (~346 MB) into a destination folder as `test-clean.tar.gz`.
+2. **Verify** the archive MD5 matches `32fa31d27d2e1cad72775fee3f4849a9`. On mismatch, delete the bad file and retry.
 3. **Extract** with `tar -xzf` so you get a `LibriSpeech/test-clean/` tree with readers, chapters, `.flac`, and `.trans.txt` files.
 
 The process is **idempotent**: if the tarball already exists, download is skipped; if `LibriSpeech/test-clean` already exists, extraction is skipped.
@@ -104,7 +224,7 @@ The process is **idempotent**: if the tarball already exists, download is skippe
 
 By default, data goes under **`taurscribe-runtime/librispeech/`** at the repo root (that folder is gitignored). After a successful run you should have:
 
-- `taurscribe-runtime/librispeech/test-clean.tar.gz` — cached archive  
+- `taurscribe-runtime/librispeech/test-clean.tar.gz` — cached archive
 - `taurscribe-runtime/librispeech/LibriSpeech/test-clean/` — extracted corpus (this is the path you pass to `librispeech_manifest --root` and to `TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT` / `--audio-root`)
 
 To install elsewhere, set **`LIBRISPEECH_ROOT`** to the **parent directory** that should contain the `LibriSpeech` folder (not the `test-clean` path itself).
@@ -131,9 +251,9 @@ When the script finishes, it prints a sample **`librispeech_manifest`** command 
 
 If you do not use the scripts:
 
-1. Download [test-clean.tar.gz](https://www.openslr.org/resources/12/test-clean.tar.gz) from [OpenSLR 12](https://www.openslr.org/12/).  
-2. Confirm MD5 `32fa31d27d2e1cad72775fee3f4849a9` (see [md5sum.txt](https://www.openslr.org/resources/12/md5sum.txt)).  
-3. Extract: `tar -xzf test-clean.tar.gz` in a directory of your choice.  
+1. Download [test-clean.tar.gz](https://www.openslr.org/resources/12/test-clean.tar.gz) from [OpenSLR 12](https://www.openslr.org/12/).
+2. Confirm MD5 `32fa31d27d2e1cad72775fee3f4849a9` (see [md5sum.txt](https://www.openslr.org/resources/12/md5sum.txt)).
+3. Extract: `tar -xzf test-clean.tar.gz` in a directory of your choice.
 4. Use the resulting **`.../LibriSpeech/test-clean`** path as `--root` for `librispeech_manifest` and as the audio root for eval/tests when needed.
 
 ---
@@ -152,6 +272,8 @@ If you do not use the scripts:
 | --- | --- | --- | --- |
 | `librispeech_eval` | *(standalone; no UI)* | No — utterances are short clips | Whisper: 3 min; Parakeet / Cohere: 15 s |
 | `jfk_asr_smoke` | Sanity check only | No | Full clip |
+| `memory_engine_regression` | Engine manager lifecycle | No | Full JFK clip per scenario |
+| `parakeet_context_reset` | `stop_recording` → `clear_context()` | No | Full JFK clip |
 | `file_drop_accuracy` | `commands/file_transcription.rs` | Yes — **adaptive energy (RMS)** segment assembly | Same as eval binary for engines |
 | `mic_accuracy` | `commands/recording.rs` | Yes — energy gate on 6 s windows | Parakeet: 4 s chunks, no gate, padded to ≥64k samples |
 
@@ -186,11 +308,43 @@ decode → mono 16 kHz → trim_file_buffer_edges_16k → preprocess_assembled_s
 
 ---
 
+## Memory Infrastructure
+
+### `memory.rs`
+
+Provides `ProcessMemoryStats` (working set, private bytes, virtual bytes, peak working set) and two collection backends:
+
+- **Windows:** `GetProcessMemoryInfo` via PSAPI — accurate private bytes and peak working set
+- **Fallback:** `sysinfo` crate — working set + virtual memory only
+
+Key functions:
+
+| Function | Purpose |
+| --- | --- |
+| `process_memory_stats()` | Snapshot current process memory |
+| `log_process_memory(label)` | Print a formatted memory line to stdout |
+| `maybe_log_process_memory(label)` | Same but only when `TAURSCRIBE_LOG_MEMORY=1` |
+| `trim_process_memory()` | Ask the OS to reclaim idle pages: `EmptyWorkingSet` (Windows), `malloc_trim(0)` (Linux) |
+
+### `ort_session.rs`
+
+Centralises low-RAM ORT session configuration so all three engines use the same settings:
+
+| Helper | What it configures |
+| --- | --- |
+| `initialize_low_ram_ort_environment()` | Shared global ORT thread pool (avoids per-session pool overhead); thread counts via `TAURSCRIBE_ORT_INTRA_THREADS` / `TAURSCRIBE_ORT_INTER_THREADS` |
+| `build_low_ram_cuda_execution_provider()` | `SameAsRequested` arena growth, heuristic cuDNN search, 32 MB conv workspace cap, optional `TAURSCRIBE_ORT_CUDA_MEM_LIMIT_MB` |
+| `configure_low_ram_session_builder(builder, label)` | Disables CPU mem arena, memory pattern, prepacking, inter/intra-op thread spinning |
+
+These are applied to every ORT session created by Cohere (`cohere.rs`) and Parakeet (`vendor/parakeet-rs/src/execution.rs`).
+
+---
+
 ## Manifest paths and moving the corpus
 
 `librispeech_manifest` writes **absolute** `flac_path` strings. If you move LibriSpeech, copy the manifest to another machine, or run from a different checkout, those paths may break.
 
-**Resolution:** If the stored path is missing, tools rebuild  
+**Resolution:** If the stored path is missing, tools rebuild
 `test-clean/<reader>/<chapter>/<utt_id>.flac` from `utt_id` when you set the **`test-clean`** root:
 
 | Mechanism | Where |
@@ -208,11 +362,11 @@ WER counts word-level insertions, substitutions, and deletions vs. the reference
 
 **Normalization** (reference and hypothesis):
 
-1. Lowercase  
-2. Non-alphanumeric → space, except apostrophes kept  
-3. Collapse whitespace → word tokens  
+1. Lowercase
+2. Non-alphanumeric → space, except apostrophes kept
+3. Collapse whitespace → word tokens
 
-**Formula:** `Levenshtein(ref_tokens, hyp_tokens) / max(len(ref_tokens), 1)`  
+**Formula:** `Levenshtein(ref_tokens, hyp_tokens) / max(len(ref_tokens), 1)`
 
 The eval binary applies `clean_transcript()` to raw ASR output before normalization.
 
@@ -285,7 +439,7 @@ for bin in "$MODELS"/ggml-*.bin; do
 done
 ```
 
-**Parakeet IDs** look like `nemotron:folder_name` (directory under the models folder that contains Nemotron ONNX files). Get exact strings from the app’s model list or from folder names under `models/`. Loop the same way with `TAURSCRIBE_PARAKEET_MODEL_ID` and `--engines parakeet`.
+**Parakeet IDs** look like `nemotron:folder_name` (directory under the models folder that contains Nemotron ONNX files). Get exact strings from the app's model list or from folder names under `models/`. Loop the same way with `TAURSCRIBE_PARAKEET_MODEL_ID` and `--engines parakeet`.
 
 **Cohere engine:** this uses a single q4f16 universal bundle under `granite-speech-1b`. Set `TAURSCRIBE_GRANITE_MODEL_ID=granite-speech-1b` (or `granite-speech-1b-cpu`) and run with `--engines cohere`.
 
@@ -294,8 +448,23 @@ done
 ### 4. Integration tests (`cd src-tauri`)
 
 ```bash
-# JFK — needs jfk.wav (fixtures or JFK_WAV) and models installed
-cargo test --test jfk_asr_smoke -- --ignored --nocapture
+# JFK smoke — needs jfk.wav + all three models installed
+cargo test jfk_audio_through_whisper_parakeet_and_granite -- --ignored --nocapture
+
+# Memory regression — needs jfk.wav + Whisper + Parakeet (Cohere optional)
+TAURSCRIBE_LOG_MEMORY=1 \
+  cargo test memory_engine_regression -- --ignored --nocapture
+
+# Memory regression — write JSON report for diffing
+TAURSCRIBE_LOG_MEMORY=1 TAURSCRIBE_MEMORY_REPORT=memory_report.json \
+  cargo test memory_engine_regression -- --ignored --nocapture
+
+# Memory regression — CPU only (no GPU required)
+TAURSCRIBE_MEMORY_FORCE_CPU=1 \
+  cargo test memory_engine_regression -- --ignored --nocapture
+
+# Parakeet context reset — needs jfk.wav + Parakeet bundle
+cargo test parakeet_clear_context_restores_session_baseline -- --ignored --nocapture
 
 # Accuracy — needs manifest + corpus (use audio root if paths are stale)
 TAURSCRIBE_EVAL_MANIFEST=../taurscribe-runtime/librispeech/eval_manifest.jsonl \
@@ -311,8 +480,30 @@ Skip without failing when models are missing: `TAURSCRIBE_ASR_SMOKE_SKIP=1`.
 cd src-tauri
 TAURSCRIBE_EVAL_MANIFEST=../taurscribe-runtime/librispeech/eval_manifest.jsonl \
 TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT=../taurscribe-runtime/librispeech/LibriSpeech/test-clean \
+TAURSCRIBE_LOG_MEMORY=1 \
   cargo test -- --ignored --nocapture
 ```
+
+---
+
+## Environment Variable Reference
+
+| Variable | Used by | Effect |
+| --- | --- | --- |
+| `TAURSCRIBE_ASR_SMOKE_SKIP=1` | All ignored tests | Skip the test (pass silently) |
+| `TAURSCRIBE_LOG_MEMORY=1` | App + memory regression | Print per-step memory snapshots to stdout |
+| `TAURSCRIBE_MEMORY_REPORT=path.json` | `memory_engine_regression` | Write full JSON scenario report to path |
+| `TAURSCRIBE_MEMORY_FORCE_CPU=1` | `memory_engine_regression` | Force CPU load path for all engines |
+| `TAURSCRIBE_ORT_INTRA_THREADS=N` | App startup (`ort_session.rs`) | Override ORT global intra-op thread count (default 1) |
+| `TAURSCRIBE_ORT_INTER_THREADS=N` | App startup (`ort_session.rs`) | Override ORT global inter-op thread count (default 1) |
+| `TAURSCRIBE_ORT_CUDA_MEM_LIMIT_MB=N` | App startup (`ort_session.rs`) | Cap CUDA device arena in MB |
+| `TAURSCRIBE_EVAL_MANIFEST=path` | `file_drop_accuracy`, `mic_accuracy` | Path to JSONL manifest |
+| `TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT=path` | `librispeech_eval`, accuracy tests | Override stale FLAC paths in manifest |
+| `TAURSCRIBE_WHISPER_MODEL_ID=id` | `librispeech_eval`, smoke | Pin specific Whisper model (e.g. `base.en`) |
+| `TAURSCRIBE_PARAKEET_MODEL_ID=id` | `librispeech_eval`, smoke | Pin specific Parakeet model (e.g. `nemotron:folder`) |
+| `TAURSCRIBE_GRANITE_MODEL_ID=id` | `librispeech_eval`, smoke | Pin Cohere model dir name |
+| `LIBRISPEECH_ROOT=path` | Download scripts | Override where test-clean is downloaded |
+| `JFK_WAV=path` | Smoke + memory tests | Path to `jfk.wav` if not in `tests/fixtures/` |
 
 ---
 

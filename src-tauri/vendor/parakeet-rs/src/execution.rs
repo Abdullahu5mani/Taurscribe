@@ -89,24 +89,49 @@ impl ModelConfig {
         ))]
         use ort::ep::CPU as CPUExecutionProvider;
         use ort::session::builder::GraphOptimizationLevel;
+        use ort::{AsPointer, ortsys};
 
         let mut builder = builder
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(self.intra_threads)?
-            .with_inter_threads(self.inter_threads)?;
+            .with_inter_threads(self.inter_threads)?
+            .with_memory_pattern(false)?
+            .with_prepacking(false)?
+            .with_inter_op_spinning(false)?
+            .with_intra_op_spinning(false)?;
+
+        // Disable the CPU memory arena (pinned staging buffer) for all session types.
+        // This is the primary lever for reducing post-inference RAM: the BFC arena
+        // otherwise retains a large page-locked slab indefinitely after first inference.
+        (|| -> ort::Result<()> {
+            ortsys![unsafe DisableCpuMemArena(builder.ptr_mut())?];
+            Ok(())
+        })()
+        .map_err(crate::error::Error::Ort)?;
 
         builder = match self.execution_provider {
             ExecutionProvider::Cpu => builder,
 
             #[cfg(feature = "cuda")]
             ExecutionProvider::Cuda => {
+                // SameAsRequested: arena grows by exact bytes needed, not doubling.
+                // Heuristic conv search: avoids exhaustive cuDNN benchmark on first run.
+                // with_conv_max_workspace(false): caps cuDNN workspace to 32 MB.
+                let cuda_ep = ort::ep::CUDA::default()
+                    .with_arena_extend_strategy(ort::ep::ArenaExtendStrategy::SameAsRequested)
+                    .with_conv_algorithm_search(ort::ep::cuda::ConvAlgorithmSearch::Heuristic)
+                    .with_conv_max_workspace(false)
+                    .build();
                 if self.gpu_fallback_to_cpu {
                     builder.with_execution_providers([
-                        ort::ep::CUDA::default().build(),
-                        CPUExecutionProvider::default().build().error_on_failure(),
+                        cuda_ep,
+                        CPUExecutionProvider::default()
+                            .with_arena_allocator(false)
+                            .build()
+                            .error_on_failure(),
                     ])?
                 } else {
-                    builder.with_execution_providers([ort::ep::CUDA::default().build()])?
+                    builder.with_execution_providers([cuda_ep])?
                 }
             }
 
@@ -115,7 +140,10 @@ impl ModelConfig {
                 if self.gpu_fallback_to_cpu {
                     builder.with_execution_providers([
                         ort::ep::TensorRT::default().build(),
-                        CPUExecutionProvider::default().build().error_on_failure(),
+                        CPUExecutionProvider::default()
+                            .with_arena_allocator(false)
+                            .build()
+                            .error_on_failure(),
                     ])?
                 } else {
                     builder.with_execution_providers([ort::ep::TensorRT::default().build()])?
@@ -130,7 +158,10 @@ impl ModelConfig {
                         CoreML::default()
                             .with_compute_units(ComputeUnits::CPUAndGPU)
                             .build(),
-                        CPUExecutionProvider::default().build().error_on_failure(),
+                        CPUExecutionProvider::default()
+                            .with_arena_allocator(false)
+                            .build()
+                            .error_on_failure(),
                     ])?
                 } else {
                     builder.with_execution_providers([
@@ -146,7 +177,10 @@ impl ModelConfig {
                 if self.gpu_fallback_to_cpu {
                     builder.with_execution_providers([
                         ort::ep::DirectML::default().build(),
-                        CPUExecutionProvider::default().build().error_on_failure(),
+                        CPUExecutionProvider::default()
+                            .with_arena_allocator(false)
+                            .build()
+                            .error_on_failure(),
                     ])?
                 } else {
                     builder.with_execution_providers([ort::ep::DirectML::default().build()])?
@@ -158,7 +192,10 @@ impl ModelConfig {
                 if self.gpu_fallback_to_cpu {
                     builder.with_execution_providers([
                         ort::ep::ROCm::default().build(),
-                        CPUExecutionProvider::default().build().error_on_failure(),
+                        CPUExecutionProvider::default()
+                            .with_arena_allocator(false)
+                            .build()
+                            .error_on_failure(),
                     ])?
                 } else {
                     builder.with_execution_providers([ort::ep::ROCm::default().build()])?
@@ -170,7 +207,10 @@ impl ModelConfig {
                 if self.gpu_fallback_to_cpu {
                     builder.with_execution_providers([
                         ort::ep::OpenVINO::default().build(),
-                        CPUExecutionProvider::default().build().error_on_failure(),
+                        CPUExecutionProvider::default()
+                            .with_arena_allocator(false)
+                            .build()
+                            .error_on_failure(),
                     ])?
                 } else {
                     builder.with_execution_providers([ort::ep::OpenVINO::default().build()])?
@@ -182,7 +222,10 @@ impl ModelConfig {
                 if self.gpu_fallback_to_cpu {
                     builder.with_execution_providers([
                         ort::ep::WebGPU::default().build(),
-                        CPUExecutionProvider::default().build().error_on_failure(),
+                        CPUExecutionProvider::default()
+                            .with_arena_allocator(false)
+                            .build()
+                            .error_on_failure(),
                     ])?
                 } else {
                     builder.with_execution_providers([ort::ep::WebGPU::default().build()])?
@@ -194,7 +237,10 @@ impl ModelConfig {
                 if self.gpu_fallback_to_cpu {
                     builder.with_execution_providers([
                         ort::ep::NNAPI::default().build(),
-                        CPUExecutionProvider::default().build().error_on_failure(),
+                        CPUExecutionProvider::default()
+                            .with_arena_allocator(false)
+                            .build()
+                            .error_on_failure(),
                     ])?
                 } else {
                     builder.with_execution_providers([ort::ep::NNAPI::default().build()])?
