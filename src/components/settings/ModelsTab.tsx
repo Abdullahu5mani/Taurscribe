@@ -288,6 +288,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             <div className="model-group" ref={cohereGroupRef}>
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Cohere</h3>
+                    <span className="model-group-badge model-group-badge--warn">Not Recommended</span>
                     <span className="model-group-sub model-group-sub--cohere">by Cohere · English · ONNX</span>
                 </div>
                 <div className="model-list">

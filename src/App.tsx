@@ -832,6 +832,12 @@ function App() {
         handleCancelDownload={handleCancelDownloadWithSelection}
         downloadProgress={downloadProgress}
         settingsModels={settingsModels}
+        enableDenoise={enableDenoise}
+        setEnableDenoise={setEnableDenoise}
+        enableOverlay={enableOverlay}
+        setEnableOverlay={setEnableOverlay}
+        muteBackgroundAudio={muteBackgroundAudio}
+        setMuteBackgroundAudio={setMuteBackgroundAudio}
       />
     );
   }
@@ -1223,6 +1229,7 @@ function App() {
               <div className="status-card-header">
                 <span className="engine-badge">Cohere</span>
                 <div className="status-card-header-right">
+                  <span className="engine-card-pill engine-card-pill--warn">Not Recommended</span>
                   <span className="info-icon" data-tooltip="Cohere Transcribe · English ONNX ASR model">
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="10" />
