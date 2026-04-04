@@ -797,6 +797,12 @@
   font-family: 'Zodiak', serif;
 }
 
+.model-group-badge--warn {
+  background: rgba(234, 179, 8, 0.12);
+  border-color: rgba(234, 179, 8, 0.35);
+  color: #facc15;
+}
+
 .model-group-desc {
   font-size: var(--font-sm);
   color: var(--text-secondary);

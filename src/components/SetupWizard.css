@@ -61,6 +61,9 @@
   align-items: center;
   justify-content: center;
   padding: 0 32px 40px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
 }
 
 /* Enter animations */
@@ -186,6 +189,18 @@
 /* ─────────────────────────────────────────────────────────────
    STEP 0 — WELCOME
    ───────────────────────────────────────────────────────────── */
+
+.setup-welcome-logo-image {
+  width: min(240px, 58vw);
+  max-height: 148px;
+  object-fit: contain;
+  margin: 0 0 16px;
+  filter: drop-shadow(0 8px 26px rgba(0, 0, 0, 0.45));
+  animation: fadeUp 0.55s 0.08s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+  opacity: 0;
+  user-select: none;
+  pointer-events: none;
+}
 
 .welcome-logo {
   font-family: 'Poppins', sans-serif;
@@ -455,6 +470,232 @@
   animation: fadeUp 0.4s 0.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
 }
 
+.setup-engine-carousel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+  min-height: clamp(300px, 42vh, 360px);
+}
+
+.setup-engine-carousel-card {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 18px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: clamp(244px, 34vh, 296px);
+  transition: border-color 480ms cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 480ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.setup-engine-carousel-card--whisper {
+  border-color: rgba(104, 149, 210, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(104, 149, 210, 0.1);
+}
+
+.setup-engine-carousel-card--parakeet {
+  border-color: rgba(62, 207, 165, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(62, 207, 165, 0.09);
+}
+
+.setup-engine-carousel-card--cohere {
+  border-color: rgba(15, 98, 254, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(15, 98, 254, 0.1);
+}
+
+.setup-engine-carousel-bg {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 0;
+}
+
+.setup-engine-carousel-bg--whisper {
+  background: linear-gradient(180deg, rgba(104, 149, 210, 0.14), rgba(255, 255, 255, 0.03) 68%);
+}
+
+.setup-engine-carousel-bg--parakeet {
+  background: linear-gradient(180deg, rgba(62, 207, 165, 0.14), rgba(255, 255, 255, 0.03) 68%);
+}
+
+.setup-engine-carousel-bg--cohere {
+  background: linear-gradient(180deg, rgba(15, 98, 254, 0.14), rgba(255, 255, 255, 0.03) 68%);
+}
+
+.setup-engine-carousel-bg.is-active {
+  opacity: 1;
+}
+
+.setup-engine-carousel-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.setup-engine-carousel-content--next {
+  animation: setupCarouselSlideInNext 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.setup-engine-carousel-content--prev {
+  animation: setupCarouselSlideInPrev 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes setupCarouselSlideInNext {
+  from { opacity: 0; transform: translateX(18px) translateY(2px); }
+  to { opacity: 1; transform: translateX(0) translateY(0); }
+}
+
+@keyframes setupCarouselSlideInPrev {
+  from { opacity: 0; transform: translateX(-18px) translateY(2px); }
+  to { opacity: 1; transform: translateX(0) translateY(0); }
+}
+
+.setup-engine-carousel-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.setup-engine-chip {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.setup-engine-chip--whisper {
+  color: var(--whisper-color, #6895d2);
+  border-color: rgba(104, 149, 210, 0.45);
+  background: rgba(104, 149, 210, 0.12);
+}
+
+.setup-engine-chip--parakeet {
+  color: var(--parakeet-color, #3ecfa5);
+  border-color: rgba(62, 207, 165, 0.45);
+  background: rgba(62, 207, 165, 0.12);
+}
+
+.setup-engine-chip--cohere {
+  color: var(--cohere-color, #5ca3ff);
+  border-color: rgba(15, 98, 254, 0.45);
+  background: rgba(15, 98, 254, 0.12);
+}
+
+.setup-engine-slide-index {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted, #6b6b76);
+}
+
+.setup-engine-carousel-subtitle {
+  margin: 0;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 0.92rem;
+  color: var(--text-primary, #ededef);
+  line-height: 1.45;
+  min-height: clamp(2.1em, 3.2vh, 2.4em);
+}
+
+.setup-engine-carousel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-height: clamp(150px, 22vh, 168px);
+}
+
+.setup-engine-carousel-column {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.18);
+  padding: 10px 12px;
+}
+
+.setup-engine-column-title {
+  margin: 0 0 8px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--accent-primary, #e09f3e);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.setup-engine-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 0.83rem;
+  line-height: 1.42;
+  color: var(--text-secondary, #8b8b95);
+  min-height: clamp(92px, 14vh, 120px);
+}
+
+.setup-engine-carousel-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.setup-engine-carousel-btn {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary, #8b8b95);
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.setup-engine-carousel-btn:hover {
+  color: var(--text-primary, #ededef);
+  border-color: rgba(var(--accent-primary-rgb), 0.34);
+}
+
+.setup-engine-carousel-dots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setup-engine-carousel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  transition: width 220ms ease, background-color 260ms ease;
+}
+
+.setup-engine-carousel-dot--active {
+  width: 20px;
+  background: var(--accent-primary, #e09f3e);
+}
+
 .setup-use-cases {
   width: 100%;
   display: grid;
@@ -678,7 +919,82 @@
 }
 
 /* ─────────────────────────────────────────────────────────────
-   STEP 3 — HOTKEY
+   STEP 4 — RECORDING SETTINGS
+   ───────────────────────────────────────────────────────────── */
+
+.setup-recording-settings-grid {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setup-recording-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 14px 16px;
+}
+
+.setup-recording-setting-copy {
+  min-width: 0;
+}
+
+.setup-recording-setting-title {
+  margin: 0 0 4px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-primary, #ededef);
+}
+
+.setup-recording-setting-desc {
+  margin: 0;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #8b8b95);
+  line-height: 1.45;
+}
+
+.setup-recording-toggle {
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.setup-recording-toggle-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f3f4f6;
+  transition: transform 0.2s ease;
+}
+
+.setup-recording-toggle--on {
+  background: rgba(var(--accent-primary-rgb), 0.32);
+  border-color: rgba(var(--accent-primary-rgb), 0.7);
+}
+
+.setup-recording-toggle--on .setup-recording-toggle-thumb {
+  transform: translateX(20px);
+}
+
+/* ─────────────────────────────────────────────────────────────
+  STEP 4 — HOTKEY
    ───────────────────────────────────────────────────────────── */
 
 .hotkey-keys {
@@ -883,6 +1199,17 @@
   gap: 8px;
 }
 
+.ready-download-bundle-indicator {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.68rem;
+  color: var(--text-secondary, #8b8b95);
+  font-family: var(--font-mono, 'Martian Mono', monospace);
+  letter-spacing: 0.03em;
+}
+
 .ready-download-name {
   font-size: 0.74rem;
   font-family: var(--font-mono, 'Martian Mono', monospace);
@@ -1080,6 +1407,12 @@
     padding: 0 16px 32px;
   }
 
+  .setup-welcome-logo-image {
+    width: min(200px, 62vw);
+    max-height: 120px;
+    margin-bottom: 12px;
+  }
+
   .setup-heading {
     font-size: 1.8rem;
     letter-spacing: 0.08em;
@@ -1092,8 +1425,38 @@
 
   .setup-use-cases,
   .setup-recommendation-stack,
-  .setup-engine-legend {
+  .setup-engine-legend,
+  .setup-engine-carousel-grid {
     grid-template-columns: 1fr;
+  }
+
+  .setup-engine-carousel-controls {
+    gap: 8px;
+  }
+
+  .setup-engine-carousel {
+    min-height: 470px;
+  }
+
+  .setup-engine-carousel-card {
+    min-height: 392px;
+  }
+
+  .setup-engine-carousel-subtitle {
+    min-height: 3.2em;
+  }
+
+  .setup-engine-carousel-grid {
+    min-height: 224px;
+  }
+
+  .setup-engine-list {
+    min-height: 96px;
+  }
+
+  .setup-engine-carousel-btn {
+    padding: 7px 10px;
+    font-size: 0.66rem;
   }
 
   .hotkey-keys {
@@ -1123,6 +1486,7 @@
   .setup-step--exit-right,
   .hw-row,
   .hw-scan-bar::after,
+  .setup-welcome-logo-image,
   .welcome-logo,
   .welcome-rule,
   .welcome-tagline,
@@ -1136,7 +1500,12 @@
   .hotkey-privacy,
   .ready-cta-note,
   .perm-restart-notice,
-  .setup-dot {
+  .setup-dot,
+  .setup-engine-carousel-card,
+  .setup-engine-carousel-dot--active,
+  .setup-engine-carousel-content--next,
+  .setup-engine-carousel-content--prev,
+  .setup-engine-carousel-bg {
     animation: none !important;
     opacity: 1 !important;
     transform: none !important;

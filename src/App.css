@@ -1019,6 +1019,24 @@ body {
   gap: 8px;
 }
 
+.engine-card-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-family: 'Martian Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1;
+}
+
+.engine-card-pill--warn {
+  border: 1px solid rgba(234, 179, 8, 0.42);
+  background: rgba(234, 179, 8, 0.14);
+  color: #facc15;
+}
+
 /* ── Tooltips ── */
 
 /* 1. Simple CSS-only tooltips for Engine Cards (info-icon) */

@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar } from './TitleBar';
 import {
-  ONBOARDING_USE_CASES,
   computeModelRecommendation,
   type OnboardingUseCase,
   type SystemInfo,
@@ -16,6 +15,12 @@ interface Props {
   handleCancelDownload: (id: string) => void;
   downloadProgress: Record<string, DownloadProgress>;
   settingsModels: DownloadableModel[];
+  enableDenoise: boolean;
+  setEnableDenoise: (val: boolean) => void;
+  enableOverlay: boolean;
+  setEnableOverlay: (val: boolean) => void;
+  muteBackgroundAudio: boolean;
+  setMuteBackgroundAudio: (val: boolean) => void;
 }
 
 // Step entry tracks which step and which direction it entered from
@@ -25,17 +30,128 @@ interface StepEntry {
   key: number;
 }
 
-const STEPS = 6;
+type SetupEngineId = 'whisper' | 'parakeet' | 'cohere';
 
-export function SetupWizard({ onComplete, handleDownload, handleCancelDownload, downloadProgress, settingsModels }: Props) {
+const ENGINE_CAROUSEL_SLIDES: Array<{
+  id: SetupEngineId;
+  title: string;
+  subtitle: string;
+  goodAt: string[];
+  usage: string[];
+}> = [
+  {
+    id: 'whisper',
+    title: 'Whisper',
+    subtitle: 'Most accurate all-rounder. Best default for mixed audio.',
+    goodAt: [
+      'Meetings, interviews, and long-form dictation.',
+      'Multilingual transcription and mixed accents.',
+      'When you want fewer corrections over raw speed.',
+    ],
+    usage: [
+      'Start with Small or Medium for daily use.',
+      'Use multilingual variants when language may vary.',
+      'Pick quantized models on lower-memory machines.',
+    ],
+  },
+  {
+    id: 'parakeet',
+    title: 'Parakeet',
+    subtitle: 'Fastest live captions. Tuned for English streaming.',
+    goodAt: [
+      'Real-time dictation where latency matters most.',
+      'Short commands and rapid back-to-back notes.',
+      'Power users who prioritize immediate feedback.',
+    ],
+    usage: [
+      'Use for active typing sessions and coding flow.',
+      'Best with a stable microphone and clear speech.',
+      'Switch to Whisper for harder audio or multilingual content.',
+    ],
+  },
+  {
+    id: 'cohere',
+    title: 'Cohere Speech',
+    subtitle: 'English ONNX path for specific hardware workflows.',
+    goodAt: [
+      'English transcription with the Cohere runtime path.',
+      'Users validating ONNX backend behavior.',
+      'Controlled comparisons against Whisper/Parakeet.',
+    ],
+    usage: [
+      'Treat as a specialized option, not first choice.',
+      'Use when you specifically want Cohere engine output.',
+      'For general daily use, Whisper or Parakeet is usually better.',
+    ],
+  },
+];
+
+const SETUP_WELCOME_LOGOS = [
+  '/logos/animated_logo_assemble.svg',
+  '/logos/animated_logo_blueprint.svg',
+  '/logos/animated_logo_bottom_spin.svg',
+  '/logos/animated_logo_bounce.svg',
+  '/logos/animated_logo_breathe.svg',
+  '/logos/animated_logo_coaster.svg',
+  '/logos/animated_logo_crt.svg',
+  '/logos/animated_logo_debris.svg',
+  '/logos/animated_logo_flare.svg',
+  '/logos/animated_logo_flip.svg',
+  '/logos/animated_logo_focus.svg',
+  '/logos/animated_logo_glitch.svg',
+  '/logos/animated_logo_grow.svg',
+  '/logos/animated_logo_handwrite.svg',
+  '/logos/animated_logo_heartbeat.svg',
+  '/logos/animated_logo_hologram.svg',
+  '/logos/animated_logo_laser_trace.svg',
+  '/logos/animated_logo_liquid.svg',
+  '/logos/animated_logo_orbit.svg',
+  '/logos/animated_logo_pulse_reveal.svg',
+  '/logos/animated_logo_quantum_flip.svg',
+  '/logos/animated_logo_ripple.svg',
+  '/logos/animated_logo_rubberband.svg',
+  '/logos/animated_logo_scan_reveal.svg',
+  '/logos/animated_logo_shockwave.svg',
+  '/logos/animated_logo_slice.svg',
+  '/logos/animated_logo_spiral.svg',
+  '/logos/animated_logo_split_door.svg',
+  '/logos/animated_logo_stomp.svg',
+  '/logos/animated_logo_swing.svg',
+  '/logos/animated_logo_thin_air.svg',
+  '/logos/animated_logo_wiper.svg',
+  '/logos/animated_logo_write.svg',
+  '/logos/animated_logo_zigzag.svg',
+];
+
+function pickRandomSetupLogo(): string | null {
+  if (SETUP_WELCOME_LOGOS.length === 0) return null;
+  const index = Math.floor(Math.random() * SETUP_WELCOME_LOGOS.length);
+  return SETUP_WELCOME_LOGOS[index];
+}
+
+export function SetupWizard({
+  onComplete,
+  handleDownload,
+  handleCancelDownload,
+  downloadProgress,
+  settingsModels,
+  enableDenoise,
+  setEnableDenoise,
+  enableOverlay,
+  setEnableOverlay,
+  muteBackgroundAudio,
+  setMuteBackgroundAudio,
+}: Props) {
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
   const [platform, setPlatform] = useState<string>('');
   const [isAppleSilicon, setIsAppleSilicon] = useState(false);
   const [useCase, setUseCase] = useState<OnboardingUseCase>('quick_notes');
+  const [welcomeLogoSrc] = useState<string | null>(() => pickRandomSetupLogo());
   const [current, setCurrent] = useState<StepEntry>({ idx: 0, enterDir: 'right', key: 0 });
   const [exiting, setExiting] = useState<{ idx: number; exitDir: 'left' | 'right'; key: number } | null>(null);
   const transitioning = useRef(false);
   const recommendation = computeModelRecommendation({ sysInfo, isAppleSilicon, useCase });
+  const totalSteps = platform === 'macos' ? 7 : 6;
 
   useEffect(() => {
     invoke<SystemInfo>('get_system_info')
@@ -72,27 +188,36 @@ export function SetupWizard({ onComplete, handleDownload, handleCancelDownload, 
 
   const renderStep = (idx: number) => {
     switch (idx) {
-      case 0: return <StepWelcome onNext={next} />;
-      case 1: return <StepHardware sysInfo={sysInfo} platform={platform} onNext={next} onBack={back} />;
+      case 0: return <StepWelcome onNext={next} logoSrc={welcomeLogoSrc} />;
+      case 1: return <StepHardware sysInfo={sysInfo} platform={platform} onNext={next} onBack={back} totalSteps={totalSteps} />;
       case 2: return (
         <StepEngines
-          sysInfo={sysInfo}
-          platform={platform}
-          isAppleSilicon={isAppleSilicon}
-          useCase={useCase}
-          onUseCaseChange={setUseCase}
           onNext={next}
           onBack={back}
+          totalSteps={totalSteps}
         />
       );
-      case 3: return <StepHotkey onNext={next} onBack={back} platform={platform} />;
-      case 4:
+      case 3: return <StepHotkey onNext={next} onBack={back} platform={platform} totalSteps={totalSteps} />;
+      case 4: return (
+        <StepRecordingSettings
+          onNext={next}
+          onBack={back}
+          totalSteps={totalSteps}
+          enableDenoise={enableDenoise}
+          setEnableDenoise={setEnableDenoise}
+          enableOverlay={enableOverlay}
+          setEnableOverlay={setEnableOverlay}
+          muteBackgroundAudio={muteBackgroundAudio}
+          setMuteBackgroundAudio={setMuteBackgroundAudio}
+        />
+      );
+      case 5:
         // Skip permissions step on non-macOS platforms
         if (platform !== 'macos') {
           return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
         }
-        return <StepPermissions onNext={next} onBack={back} platform={platform} />;
-      case 5: return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
+        return <StepPermissions onNext={next} onBack={back} platform={platform} totalSteps={totalSteps} />;
+      case 6: return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
       default: return null;
     }
   };
@@ -101,7 +226,7 @@ export function SetupWizard({ onComplete, handleDownload, handleCancelDownload, 
     <div className="setup-overlay">
       <TitleBar />
       <div className="setup-dots">
-        {Array.from({ length: STEPS }).map((_, i) => (
+        {Array.from({ length: totalSteps }).map((_, i) => (
           <div
             key={i}
             className={`setup-dot ${i === current.idx ? 'active' : i < current.idx ? 'passed' : ''}`}
@@ -132,9 +257,18 @@ export function SetupWizard({ onComplete, handleDownload, handleCancelDownload, 
 // ─────────────────────────────────────────────────────────────────
 // STEP 0 — WELCOME
 // ─────────────────────────────────────────────────────────────────
-function StepWelcome({ onNext }: { onNext: () => void }) {
+function StepWelcome({ onNext, logoSrc }: { onNext: () => void; logoSrc: string | null }) {
   return (
     <>
+      {logoSrc && (
+        <img
+          className="setup-welcome-logo-image"
+          src={logoSrc}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+        />
+      )}
       <h1 className="welcome-logo">Taurscribe</h1>
       <hr className="welcome-rule" />
       <p className="welcome-tagline">Local AI speech recognition</p>
@@ -171,11 +305,13 @@ function StepHardware({
   platform,
   onNext,
   onBack,
+  totalSteps,
 }: {
   sysInfo: SystemInfo | null;
   platform: string;
   onNext: () => void;
   onBack: () => void;
+  totalSteps: number;
 }) {
   const loading = sysInfo === null;
   // macOS fix: On Apple Silicon, memory is unified (shared between CPU and GPU).
@@ -197,7 +333,7 @@ function StepHardware({
 
   return (
     <>
-      <p className="setup-eyebrow">Step 2 of 6</p>
+      <p className="setup-eyebrow">Step 2 of {totalSteps}</p>
       <h2 className="setup-heading">System Analysis</h2>
       <p className="setup-sub">Checking your hardware for AI readiness.</p>
 
@@ -261,69 +397,97 @@ function StepHardware({
 // STEP 2 — ENGINES
 // ─────────────────────────────────────────────────────────────────
 function StepEngines({
-  sysInfo,
-  isAppleSilicon,
-  useCase,
-  onUseCaseChange,
   onNext,
   onBack,
+  totalSteps,
 }: {
-  sysInfo: SystemInfo | null;
-  platform: string;
-  isAppleSilicon: boolean;
-  useCase: OnboardingUseCase;
-  onUseCaseChange: (value: OnboardingUseCase) => void;
   onNext: () => void;
   onBack: () => void;
+  totalSteps: number;
 }) {
-  const recommendation = computeModelRecommendation({ sysInfo, isAppleSilicon, useCase });
+  const [activeSlide, setActiveSlide] = useState(0);
+  const [navDirection, setNavDirection] = useState<'next' | 'prev'>('next');
+  const slide = ENGINE_CAROUSEL_SLIDES[activeSlide];
+
+  const goToSlide = (index: number, direction: 'next' | 'prev') => {
+    setNavDirection(direction);
+    setActiveSlide(index);
+  };
+
+  const goPrev = () => {
+    const target = activeSlide === 0 ? ENGINE_CAROUSEL_SLIDES.length - 1 : activeSlide - 1;
+    goToSlide(target, 'prev');
+  };
+
+  const goNext = () => {
+    const target = (activeSlide + 1) % ENGINE_CAROUSEL_SLIDES.length;
+    goToSlide(target, 'next');
+  };
 
   return (
     <>
-      <p className="setup-eyebrow">Step 3 of 6</p>
-      <h2 className="setup-heading">Recommended Setup</h2>
-      <p className="setup-sub">Pick what you do most often.</p>
+      <p className="setup-eyebrow">Step 3 of {totalSteps}</p>
+      <h2 className="setup-heading">Meet The Engines</h2>
+      <p className="setup-sub">Swipe through each engine to learn where it shines and when to use it.</p>
 
-      <div className="setup-use-cases">
-        {ONBOARDING_USE_CASES.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            className={`setup-use-case${useCase === option.id ? ' setup-use-case--active' : ''}`}
-            onClick={() => onUseCaseChange(option.id)}
-          >
-            <span className="setup-use-case-kicker">{option.audience}</span>
-            <span className="setup-use-case-title">{option.label}</span>
-          </button>
-        ))}
-      </div>
+      <div className="setup-engine-carousel" aria-live="polite">
+        <div className={`setup-engine-carousel-card setup-engine-carousel-card--${slide.id}`}>
+          <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--whisper${slide.id === 'whisper' ? ' is-active' : ''}`} />
+          <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--parakeet${slide.id === 'parakeet' ? ' is-active' : ''}`} />
+          <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--cohere${slide.id === 'cohere' ? ' is-active' : ''}`} />
 
-      <div className="setup-recommendation-stack">
-        <div className="setup-recommendation-card setup-recommendation-card--primary">
-          <div className="setup-recommendation-topline">
-            <span className="setup-recommendation-badge">Start with</span>
-            <span className={`setup-recommendation-engine setup-recommendation-engine--${recommendation.primaryEngine}`}>
-              {recommendation.primaryEngineLabel}
-            </span>
+          <div key={`${slide.id}-${activeSlide}`} className={`setup-engine-carousel-content setup-engine-carousel-content--${navDirection}`}>
+            <div className="setup-engine-carousel-topline">
+              <span className={`setup-engine-chip setup-engine-chip--${slide.id}`}>{slide.title}</span>
+              <span className="setup-engine-slide-index">{activeSlide + 1} / {ENGINE_CAROUSEL_SLIDES.length}</span>
+            </div>
+            <p className="setup-engine-carousel-subtitle">{slide.subtitle}</p>
+
+            <div className="setup-engine-carousel-grid">
+              <div className="setup-engine-carousel-column">
+                <p className="setup-engine-column-title">Good At</p>
+                <ul className="setup-engine-list">
+                  {slide.goodAt.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="setup-engine-carousel-column">
+                <p className="setup-engine-column-title">How To Use</p>
+                <ul className="setup-engine-list">
+                  {slide.usage.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           </div>
-          <div className="setup-recommendation-model">{recommendation.primaryLabel}</div>
-          <p className="setup-recommendation-summary">{recommendation.summary}</p>
         </div>
 
-        {recommendation.backupModelId && recommendation.backupLabel && recommendation.backupEngine && recommendation.backupEngineLabel && (
-          <div className="setup-recommendation-card">
-            <div className="setup-recommendation-topline">
-              <span className="setup-recommendation-badge setup-recommendation-badge--secondary">Backup</span>
-              <span className={`setup-recommendation-engine setup-recommendation-engine--${recommendation.backupEngine}`}>
-                {recommendation.backupEngineLabel}
-              </span>
-            </div>
-            <div className="setup-recommendation-model">{recommendation.backupLabel}</div>
+        <div className="setup-engine-carousel-controls">
+          <button type="button" className="setup-engine-carousel-btn" onClick={goPrev} aria-label="Previous engine">
+            ← Prev
+          </button>
+          <div className="setup-engine-carousel-dots" role="tablist" aria-label="Engine slides">
+            {ENGINE_CAROUSEL_SLIDES.map((engine, index) => (
+              <button
+                key={engine.id}
+                type="button"
+                role="tab"
+                aria-selected={index === activeSlide}
+                className={`setup-engine-carousel-dot${index === activeSlide ? ' setup-engine-carousel-dot--active' : ''}`}
+                onClick={() => goToSlide(index, index >= activeSlide ? 'next' : 'prev')}
+                title={engine.title}
+              />
+            ))}
           </div>
-        )}
+          <button type="button" className="setup-engine-carousel-btn" onClick={goNext} aria-label="Next engine">
+            Next →
+          </button>
+        </div>
       </div>
 
-      <p className="engines-note">{recommendation.hardwareLine}</p>
+      <p className="engines-note">You can switch engines anytime from the main panel after setup.</p>
 
       <div className="setup-nav setup-nav--spread">
         <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
@@ -336,7 +500,7 @@ function StepEngines({
 // ─────────────────────────────────────────────────────────────────
 // STEP 3 — HOTKEY
 // ─────────────────────────────────────────────────────────────────
-function StepHotkey({ onNext, onBack, platform }: { onNext: () => void; onBack: () => void; platform: string }) {
+function StepHotkey({ onNext, onBack, platform, totalSteps }: { onNext: () => void; onBack: () => void; platform: string; totalSteps: number }) {
   // macOS default: Ctrl + Option (Cmd is intercepted by the OS)
   // Windows/Linux default: Ctrl + Win/Super
   const isMac = platform === 'macos';
@@ -345,7 +509,7 @@ function StepHotkey({ onNext, onBack, platform }: { onNext: () => void; onBack: 
 
   return (
     <>
-      <p className="setup-eyebrow">Step 4 of 6</p>
+      <p className="setup-eyebrow">Step 4 of {totalSteps}</p>
       <h2 className="setup-heading">One Hotkey</h2>
       <p className="setup-sub">Use Taurscribe from anywhere, without switching windows.</p>
 
@@ -381,16 +545,106 @@ function StepHotkey({ onNext, onBack, platform }: { onNext: () => void; onBack: 
 }
 
 // ─────────────────────────────────────────────────────────────────
-// STEP 4 — PERMISSIONS
+// STEP 4 — RECORDING SETTINGS
+// ─────────────────────────────────────────────────────────────────
+function StepRecordingSettings({
+  onNext,
+  onBack,
+  totalSteps,
+  enableDenoise,
+  setEnableDenoise,
+  enableOverlay,
+  setEnableOverlay,
+  muteBackgroundAudio,
+  setMuteBackgroundAudio,
+}: {
+  onNext: () => void;
+  onBack: () => void;
+  totalSteps: number;
+  enableDenoise: boolean;
+  setEnableDenoise: (val: boolean) => void;
+  enableOverlay: boolean;
+  setEnableOverlay: (val: boolean) => void;
+  muteBackgroundAudio: boolean;
+  setMuteBackgroundAudio: (val: boolean) => void;
+}) {
+  return (
+    <>
+      <p className="setup-eyebrow">Step 5 of {totalSteps}</p>
+      <h2 className="setup-heading">Recording Settings</h2>
+      <p className="setup-sub">Set your default behavior now. You can change these anytime in Settings.</p>
+
+      <div className="setup-recording-settings-grid">
+        <div className="setup-recording-setting-row">
+          <div className="setup-recording-setting-copy">
+            <p className="setup-recording-setting-title">Denoise</p>
+            <p className="setup-recording-setting-desc">Reduces background noise before transcription.</p>
+          </div>
+          <button
+            type="button"
+            className={`setup-recording-toggle ${enableDenoise ? 'setup-recording-toggle--on' : ''}`}
+            aria-label="Toggle denoise"
+            aria-pressed={enableDenoise}
+            onClick={() => setEnableDenoise(!enableDenoise)}
+          >
+            <span className="setup-recording-toggle-thumb" />
+          </button>
+        </div>
+
+        <div className="setup-recording-setting-row">
+          <div className="setup-recording-setting-copy">
+            <p className="setup-recording-setting-title">Live Overlay</p>
+            <p className="setup-recording-setting-desc">Shows a floating live transcript while you speak.</p>
+          </div>
+          <button
+            type="button"
+            className={`setup-recording-toggle ${enableOverlay ? 'setup-recording-toggle--on' : ''}`}
+            aria-label="Toggle live overlay"
+            aria-pressed={enableOverlay}
+            onClick={() => setEnableOverlay(!enableOverlay)}
+          >
+            <span className="setup-recording-toggle-thumb" />
+          </button>
+        </div>
+
+        <div className="setup-recording-setting-row">
+          <div className="setup-recording-setting-copy">
+            <p className="setup-recording-setting-title">Mute Background Audio</p>
+            <p className="setup-recording-setting-desc">Mutes system playback while recording to reduce bleed-in.</p>
+          </div>
+          <button
+            type="button"
+            className={`setup-recording-toggle ${muteBackgroundAudio ? 'setup-recording-toggle--on' : ''}`}
+            aria-label="Toggle mute background audio"
+            aria-pressed={muteBackgroundAudio}
+            onClick={() => setMuteBackgroundAudio(!muteBackgroundAudio)}
+          >
+            <span className="setup-recording-toggle-thumb" />
+          </button>
+        </div>
+      </div>
+
+      <div className="setup-nav setup-nav--spread">
+        <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
+        <button className="setup-btn setup-btn--primary" onClick={onNext}>Continue →</button>
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// STEP 5 — PERMISSIONS
 // ─────────────────────────────────────────────────────────────────
 function StepPermissions({
   onNext,
   onBack,
   platform,
+  totalSteps,
 }: {
   onNext: () => void;
   onBack: () => void;
   platform: string;
+  totalSteps: number;
 }) {
   const isMac = platform === 'macos';
 
@@ -491,7 +745,7 @@ function StepPermissions({
 
   return (
     <>
-      <p className="setup-eyebrow">Step 5 of 6</p>
+      <p className="setup-eyebrow">Step 6 of {totalSteps}</p>
       <h2 className="setup-heading">Permissions</h2>
       <p className="setup-sub">Three permissions needed for recording, hotkeys, and typing text system-wide.</p>
 
@@ -620,9 +874,19 @@ function StepReady({
   const activeStatuses = ['starting', 'downloading', 'extracting', 'verifying', 'finalizing'];
   const isDownloading = !!progress && activeStatuses.includes(progress.status);
 
-  const progressPct = isDownloading && progress.total > 0
+  const totalFiles = Math.max(1, progress?.total_files ?? 1);
+  const currentFile = Math.min(Math.max(1, progress?.current_file ?? 1), totalFiles);
+  const isMultiFileDownload = isDownloading && totalFiles > 1;
+
+  const perFileProgressPct = isDownloading && progress.total > 0
     ? Math.min(100, Math.round((progress.bytes / progress.total) * 100))
     : 0;
+
+  // For multi-file bundles (like Nemotron), show monotonic overall progress
+  // so the bar does not appear to jump backwards at file boundaries.
+  const progressPct = isMultiFileDownload
+    ? Math.min(100, Math.round((((currentFile - 1) + (perFileProgressPct / 100)) / totalFiles) * 100))
+    : perFileProgressPct;
 
   const progressLabel =
     progress?.status === 'verifying' ? 'Verifying…' :
@@ -672,6 +936,12 @@ function StepReady({
               <span className="ready-download-name">{recommendation.primaryLabel}</span>
               <span className="ready-download-pct">{progressLabel}</span>
             </div>
+            {isMultiFileDownload && (
+              <div className="ready-download-bundle-indicator" role="status">
+                <span>Bundle files</span>
+                <span>File {currentFile} / {totalFiles}</span>
+              </div>
+            )}
             <div className="ready-download-bar">
               <div
                 className="ready-download-bar-fill"
