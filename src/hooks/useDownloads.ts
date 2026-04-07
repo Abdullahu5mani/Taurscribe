@@ -27,6 +27,39 @@ export function useDownloads(
     const onDownloadFailedRef = useRef(onDownloadFailed);
     onDownloadFailedRef.current = onDownloadFailed;
 
+    const updateProgressState = useCallback(
+        (payload: DownloadProgressPayload, statusOverride?: string) => {
+            const nextStatus = statusOverride ?? payload.status;
+            setDownloadProgress((prev) => {
+                const current = prev[payload.model_id];
+                const next: DownloadProgress = {
+                    bytes: payload.downloaded_bytes,
+                    total: payload.total_bytes,
+                    status: nextStatus,
+                    current_file: payload.current_file,
+                    total_files: payload.total_files,
+                };
+
+                if (
+                    current &&
+                    current.bytes === next.bytes &&
+                    current.total === next.total &&
+                    current.status === next.status &&
+                    current.current_file === next.current_file &&
+                    current.total_files === next.total_files
+                ) {
+                    return prev;
+                }
+
+                return {
+                    ...prev,
+                    [payload.model_id]: next,
+                };
+            });
+        },
+        [],
+    );
+
     const clearProgress = useCallback((modelId: string) => {
         setDownloadProgress((prev) => {
             const next = { ...prev };
@@ -83,28 +116,8 @@ export function useDownloads(
                     }
                 }
 
-                setDownloadProgress((prev) => ({
-                    ...prev,
-                    [payload.model_id]: {
-                        bytes: payload.downloaded_bytes,
-                        total: payload.total_bytes,
-                        status: payload.status,
-                        current_file: payload.current_file,
-                        total_files: payload.total_files,
-                    },
-                }));
-
                 if (payload.status === "done") {
-                    setDownloadProgress((prev) => ({
-                        ...prev,
-                        [payload.model_id]: {
-                            bytes: payload.downloaded_bytes,
-                            total: payload.total_bytes,
-                            status: "finalizing",
-                            current_file: payload.current_file,
-                            total_files: payload.total_files,
-                        },
-                    }));
+                    updateProgressState(payload, "finalizing");
                     Promise.resolve(onModelDownloaded(payload.model_id))
                         .catch((err) => {
                             console.warn("onModelDownloaded failed:", err);
@@ -127,6 +140,8 @@ export function useDownloads(
                     clearProgress(payload.model_id);
                 } else if (payload.status === "delete-done") {
                     clearProgress(payload.model_id);
+                } else {
+                    updateProgressState(payload);
                 }
             });
         };
@@ -136,7 +151,7 @@ export function useDownloads(
         return () => {
             if (unlisten) unlisten();
         };
-    }, [onModelDownloaded, clearProgress, markError]);
+    }, [onModelDownloaded, clearProgress, markError, updateProgressState]);
 
     const handleDownload = async (id: string, name: string) => {
         if (activeDownloadsRef.current.has(id)) {

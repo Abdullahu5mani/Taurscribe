@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { memo, useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -42,7 +42,7 @@ interface FileTranscriptionPanelProps {
     onFileProcessingChange?: (processing: boolean) => void;
 }
 
-export function FileTranscriptionPanel({ activeEngine, currentModel, currentParakeetModel, currentCohereModel, isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
+function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentParakeetModel, currentCohereModel, isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
     const isParakeet = activeEngine === "parakeet";
     const isParakeetRef = useRef(isParakeet);
     const isModelLoadingRef = useRef(isModelLoading);
@@ -63,6 +63,8 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
     const [isDragOver, setIsDragOver] = useState(false);
     const processingRef = useRef(false);
     const queueRef = useRef<FileItem[]>([]);
+    const pendingProgressRef = useRef<Map<string, ProgressPayload>>(new Map());
+    const progressRafRef = useRef<number | null>(null);
 
     const AUDIO_EXTS = ["wav", "mp3", "m4a", "aac", "flac", "ogg", "mp4", "mov"];
 
@@ -102,6 +104,54 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
         });
     }, []);
 
+    const flushProgressUpdates = useCallback(() => {
+        progressRafRef.current = null;
+        const pending = Array.from(pendingProgressRef.current.values());
+        if (pending.length === 0) return;
+        pendingProgressRef.current.clear();
+
+        const updatesByPath = new Map(pending.map((payload) => [payload.path, payload]));
+
+        setFiles(prev => {
+            let changed = false;
+            const next = prev.map(file => {
+                const payload = updatesByPath.get(file.path);
+                if (!payload) return file;
+
+                const nextStatus: FileItem["status"] = payload.status === "done"
+                    ? "done"
+                    : payload.status === "error"
+                      ? "error"
+                      : payload.status === "cancelled"
+                        ? "cancelled"
+                        : "processing";
+
+                const nextProgress = payload.status === "cancelled" ? 0 : payload.percent;
+                const nextError = payload.status === "cancelled"
+                    ? payload.error ?? "Cancelled"
+                    : payload.error;
+
+                if (
+                    file.status === nextStatus &&
+                    file.progress === nextProgress &&
+                    file.error === nextError
+                ) {
+                    return file;
+                }
+
+                changed = true;
+                return {
+                    ...file,
+                    progress: nextProgress,
+                    status: nextStatus,
+                    error: nextError,
+                };
+            });
+
+            return changed ? next : prev;
+        });
+    }, []);
+
     // Tauri OS-level file drop
     useEffect(() => {
         let unlisten: (() => void) | undefined;
@@ -125,29 +175,19 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
     useEffect(() => {
         let unlisten: (() => void) | undefined;
         listen<ProgressPayload>("file-transcription-progress", event => {
-            const { path, percent, status, error } = event.payload;
-            setFiles(prev =>
-                prev.map(f => {
-                    if (f.path !== path) return f;
-                    if (status === "cancelled") {
-                        return { ...f, progress: 0, status: "cancelled", error: error ?? "Cancelled" };
-                    }
-                    return {
-                        ...f,
-                        progress: percent,
-                        status:
-                            status === "done"
-                                ? "done"
-                                : status === "error"
-                                  ? "error"
-                                  : "processing",
-                        error,
-                    };
-                })
-            );
+            pendingProgressRef.current.set(event.payload.path, event.payload);
+            if (progressRafRef.current !== null) return;
+            progressRafRef.current = requestAnimationFrame(flushProgressUpdates);
         }).then(fn => { unlisten = fn; });
-        return () => { unlisten?.(); };
-    }, []);
+        return () => {
+            unlisten?.();
+            if (progressRafRef.current !== null) {
+                cancelAnimationFrame(progressRafRef.current);
+                progressRafRef.current = null;
+            }
+            pendingProgressRef.current.clear();
+        };
+    }, [flushProgressUpdates]);
 
     // Process queue: one file at a time
     useEffect(() => {
@@ -485,7 +525,7 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
                                     <div className="file-card-progress-bar">
                                         <div
                                             className="file-card-progress-fill"
-                                            style={{ width: `${item.progress}%` }}
+                                            style={{ transform: `scaleX(${Math.min(1, Math.max(0, item.progress / 100))})` }}
                                         />
                                     </div>
                                 </div>
@@ -541,3 +581,5 @@ export function FileTranscriptionPanel({ activeEngine, currentModel, currentPara
         </div>
     );
 }
+
+export const FileTranscriptionPanel = memo(FileTranscriptionPanelComponent);

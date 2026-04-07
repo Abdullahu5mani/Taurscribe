@@ -1,5 +1,5 @@
 
-import { useState, useEffect } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconBolt, IconCpu, IconVolumeHigh, IconVolumeLow, IconVolumeMuted, InfoTooltip } from "./Icons";
 
@@ -79,7 +79,7 @@ function Row({
     );
 }
 
-export function QuickSettings({
+function QuickSettingsComponent({
     enableGrammarLM, setEnableGrammarLM, llmStatus,
     enableDenoise, setEnableDenoise,
     enableOverlay, setEnableOverlay,
@@ -102,6 +102,25 @@ export function QuickSettings({
             llmStatus === "Loading..." ? "loading…" :
                 llmStatus === "Loaded" ? "loaded" : undefined;
 
+    const openFullSettings = useCallback(() => {
+        onOpenSettingsTab();
+    }, [onOpenSettingsTab]);
+
+    const openTextSettings = useCallback(() => {
+        onOpenSettingsTab("text");
+    }, [onOpenSettingsTab]);
+
+    const volumeLabel = useMemo(() => {
+        return soundMuted ? "Off" : `${Math.round(soundVolume * 100)}%`;
+    }, [soundMuted, soundVolume]);
+
+    const onVolumeChange = useCallback((value: number) => {
+        setSoundVolume(value);
+        if (value > 0 && soundMuted) {
+            setSoundMuted(false);
+        }
+    }, [setSoundMuted, setSoundVolume, soundMuted]);
+
     return (
         <aside className="quick-settings">
             <div className="qs-header">
@@ -109,7 +128,7 @@ export function QuickSettings({
                 <button
                     type="button"
                     className="qs-settings-link"
-                    onClick={() => onOpenSettingsTab()}
+                    onClick={openFullSettings}
                     title="Open full settings"
                     aria-label="Open settings"
                 >
@@ -204,23 +223,19 @@ export function QuickSettings({
                         max={1}
                         step={0.01}
                         value={soundMuted ? 0 : soundVolume}
-                        onChange={e => {
-                            const v = Number(e.target.value);
-                            setSoundVolume(v);
-                            if (v > 0 && soundMuted) setSoundMuted(false);
-                        }}
+                        onChange={e => onVolumeChange(Number(e.target.value))}
                         aria-label="Sound volume"
                     />
-                    <span className="qs-volume-label">{soundMuted ? "Off" : `${Math.round(soundVolume * 100)}%`}</span>
+                    <span className="qs-volume-label">{volumeLabel}</span>
                 </div>
 
                 {/* ── Personalisation ─────────────────────────── */}
                 <Section label="Personalisation" />
-                <button type="button" className="qs-personal-row" onClick={() => onOpenSettingsTab('text')}>
+                <button type="button" className="qs-personal-row" onClick={openTextSettings}>
                     <span>Dictionary</span>
                     <span className="qs-personal-count">{dictionaryCount} entries →</span>
                 </button>
-                <button type="button" className="qs-personal-row" onClick={() => onOpenSettingsTab('text')}>
+                <button type="button" className="qs-personal-row" onClick={openTextSettings}>
                     <span>Snippets</span>
                     <span className="qs-personal-count">{snippetsCount} entries →</span>
                 </button>
@@ -228,3 +243,5 @@ export function QuickSettings({
         </aside>
     );
 }
+
+export const QuickSettings = memo(QuickSettingsComponent);

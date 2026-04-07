@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface ModelInfo {
@@ -42,16 +42,17 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
     const [cohereModels, setCohereModels] = useState<CohereModelInfo[]>([]);
     const [currentCohereModel, setCurrentCohereModel] = useState<string | null>(null);
 
-    const refreshModels = async (showToast = true) => {
+    const refreshModels = useCallback(async (showToast = true) => {
         try {
             console.log("[INFO] Refreshing model lists...");
-            const modelList = await invoke("list_models") as ModelInfo[];
+            const [modelList, pModels, gModels] = await Promise.all([
+                invoke<ModelInfo[]>("list_models"),
+                invoke<ParakeetModelInfo[]>("list_parakeet_models"),
+                invoke<CohereModelInfo[]>("list_cohere_models"),
+            ]);
+
             setModels(modelList);
-
-            const pModels = await invoke("list_parakeet_models") as ParakeetModelInfo[];
             setParakeetModels(pModels);
-
-            const gModels = await invoke("list_cohere_models") as CohereModelInfo[];
             setCohereModels(gModels);
 
             setCurrentModel(prev => {
@@ -76,7 +77,7 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
         } catch (e) {
             console.error("Failed to refresh models:", e);
         }
-    };
+    }, [setHeaderStatus]);
 
     return {
         models,

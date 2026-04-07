@@ -5,9 +5,15 @@ import { MODELS } from "../components/settings/types";
 import type { DownloadableModel, DownloadProgress } from "../components/settings/types";
 
 interface UseModelsWatcherParams {
-    refreshModels: (force: boolean) => void;
+    refreshModels: (showToast?: boolean) => Promise<void>;
     downloadProgressRef: React.RefObject<Record<string, DownloadProgress>>;
     setSettingsModels: React.Dispatch<React.SetStateAction<DownloadableModel[]>>;
+}
+
+interface DownloadStatus {
+    id: string;
+    downloaded: boolean;
+    verified: boolean;
 }
 
 /**
@@ -24,18 +30,29 @@ export function useModelsWatcher({
     useEffect(() => {
         let active = true;
         let unlisten: (() => void) | undefined;
+        let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+        let refreshInFlight = false;
+        let refreshQueued = false;
 
-        const handleModelsChanged = async () => {
-            // Refresh backend model lists (Whisper + Parakeet + Cohere)
-            refreshModels(false);
+        const runRefresh = async () => {
+            if (refreshInFlight) {
+                refreshQueued = true;
+                return;
+            }
 
-            // Refresh AppMall status (downloaded / verified flags) so the UI
-            // reflects SHA-256 verification results as soon as they complete.
+            refreshInFlight = true;
             try {
-                const statuses = await invoke<any[]>("get_download_status", {
+                // Refresh backend model lists (Whisper + Parakeet + Cohere)
+                await refreshModels(false);
+
+                // Refresh AppMall status (downloaded / verified flags) so the UI
+                // reflects SHA-256 verification results as soon as they complete.
+                const statuses = await invoke<DownloadStatus[]>("get_download_status", {
                     modelIds: MODELS.map((m) => m.id),
                 });
                 if (!active) return;
+
+                const statusById = new Map(statuses.map((status) => [status.id, status]));
                 const activeOps = downloadProgressRef.current ?? {};
                 setSettingsModels((prev) =>
                     prev.map((m) => {
@@ -56,13 +73,29 @@ export function useModelsWatcher({
                         ) {
                             return m;
                         }
-                        const s = statuses.find((x) => x.id === m.id);
+                        const s = statusById.get(m.id);
                         return s ? { ...m, downloaded: s.downloaded, verified: s.verified } : m;
                     })
                 );
             } catch (e) {
-                console.error("Failed to refresh model statuses after models-changed:", e);
+                console.error("Failed to refresh models after models-changed:", e);
+            } finally {
+                refreshInFlight = false;
+                if (refreshQueued && active) {
+                    refreshQueued = false;
+                    void runRefresh();
+                }
             }
+        };
+
+        const handleModelsChanged = () => {
+            if (debounceTimer !== null) {
+                clearTimeout(debounceTimer);
+            }
+            debounceTimer = setTimeout(() => {
+                debounceTimer = null;
+                void runRefresh();
+            }, 120);
         };
 
         const setup = async () => {
@@ -74,7 +107,10 @@ export function useModelsWatcher({
         setup();
         return () => {
             active = false;
+            if (debounceTimer !== null) {
+                clearTimeout(debounceTimer);
+            }
             if (unlisten) unlisten();
         };
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [refreshModels, downloadProgressRef, setSettingsModels]);
 }

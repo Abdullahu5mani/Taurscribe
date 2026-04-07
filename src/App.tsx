@@ -126,6 +126,47 @@ function App() {
     }, 150);
   }, [isLogoShuttering, pickRandomLogo]);
 
+  useEffect(() => {
+    let resizeRaf: number | null = null;
+    let resizeDoneTimer: number | null = null;
+
+    const markResizing = () => {
+      if (!document.body.classList.contains("is-resizing")) {
+        document.body.classList.add("is-resizing");
+      }
+      if (resizeDoneTimer !== null) {
+        window.clearTimeout(resizeDoneTimer);
+      }
+      resizeDoneTimer = window.setTimeout(() => {
+        document.body.classList.remove("is-resizing");
+        resizeDoneTimer = null;
+      }, 140);
+    };
+
+    const onResize = () => {
+      if (resizeRaf !== null) {
+        return;
+      }
+      resizeRaf = window.requestAnimationFrame(() => {
+        resizeRaf = null;
+        markResizing();
+      });
+    };
+
+    window.addEventListener("resize", onResize, { passive: true });
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (resizeRaf !== null) {
+        window.cancelAnimationFrame(resizeRaf);
+      }
+      if (resizeDoneTimer !== null) {
+        window.clearTimeout(resizeDoneTimer);
+      }
+      document.body.classList.remove("is-resizing");
+    };
+  }, []);
+
   // Close the settings modal when the window is hidden to tray so the hotkey
   // works immediately when the user restores the window.
   useEffect(() => {
@@ -174,6 +215,7 @@ function App() {
   // home view so the user can switch mics without opening Settings.
   const [activeMic, setActiveMic] = useState<string | null>(null);
   const [inputDevices, setInputDevices] = useState<string[]>([]);
+  const inputDevicesRefreshRef = useRef({ inFlight: false, lastFetchAt: 0 });
   // Close-button behavior: 'tray' = hide to tray (default), 'quit' = exit process
   const [closeBehavior, setCloseBehavior] = useState<'tray' | 'quit'>('tray');
   useEffect(() => {
@@ -181,14 +223,33 @@ function App() {
   }, []);
   const isMac = platform === 'macos';
 
+  const refreshInputDevices = useCallback((force = false) => {
+    const now = Date.now();
+    if (!force && now - inputDevicesRefreshRef.current.lastFetchAt < 1200) {
+      return;
+    }
+    if (inputDevicesRefreshRef.current.inFlight) {
+      return;
+    }
+
+    inputDevicesRefreshRef.current.inFlight = true;
+    inputDevicesRefreshRef.current.lastFetchAt = now;
+    invoke<string[]>('list_input_devices')
+      .then(setInputDevices)
+      .catch(() => {})
+      .finally(() => {
+        inputDevicesRefreshRef.current.inFlight = false;
+      });
+  }, []);
+
   // Fetch the active mic and the full device list on launch (all platforms).
   useEffect(() => {
     invoke<string>('get_active_input_device').then(setActiveMic).catch(() => {});
-    invoke<string[]>('list_input_devices').then(setInputDevices).catch(() => {});
-  }, []);
+    refreshInputDevices(true);
+  }, [refreshInputDevices]);
 
   // Handle mic selection from the hardware bar dropdown.
-  const handleMicChange = async (name: string) => {
+  const handleMicChange = useCallback(async (name: string) => {
     const value = name || null; // empty string = system default
     setActiveMic(name || null);
     try {
@@ -199,8 +260,9 @@ function App() {
       await store.save();
       // Re-resolve the actual device name (in case "default" mapped to a real name)
       invoke<string>('get_active_input_device').then(setActiveMic).catch(() => {});
+      refreshInputDevices(true);
     } catch (e) { console.error('Failed to set input device:', e); }
-  };
+  }, [refreshInputDevices]);
 
   const refreshMacPermissions = useCallback(async () => {
     if (!isMac) {
@@ -261,7 +323,7 @@ function App() {
 
   // Factory: refreshes model status after a download event. `fallbackDownloaded`
   // is what we assume if the status check fails — true on success, false on failure.
-  const makeDownloadStatusHandler = (fallbackDownloaded: boolean) => async (id: string) => {
+  const makeDownloadStatusHandler = useCallback((fallbackDownloaded: boolean) => async (id: string) => {
     const [statuses] = await Promise.all([
       invoke<{ id: string; downloaded: boolean; verified: boolean }[]>("get_download_status", { modelIds: [id] }).catch(() => null),
       refreshModels(false),
@@ -270,7 +332,7 @@ function App() {
     setSettingsModels(prev => prev.map(m =>
       m.id === id ? { ...m, downloaded: s?.downloaded ?? fallbackDownloaded, verified: s?.verified ?? false } : m
     ));
-  };
+  }, [refreshModels]);
 
   // Keep stable references so useDownloads doesn't re-subscribe its event
   // listener on every render (which would cause missed events).
@@ -280,26 +342,21 @@ function App() {
   const onModelDownloadedRef = useRef(onModelDownloadedImpl);
   const onModelDownloaded = useCallback((id: string) => onModelDownloadedRef.current(id), []);
 
-  const onDownloadFailedImpl = async (id: string) => {
+  const onDownloadFailedImpl = useCallback(async (id: string) => {
     if (pendingAutoLoadModelIdRef.current === id) {
       pendingAutoLoadModelIdRef.current = null;
     }
     await makeDownloadStatusHandler(false)(id);
-  };
+  }, [makeDownloadStatusHandler]);
   const onDownloadFailedRef = useRef(onDownloadFailedImpl);
   useEffect(() => {
-    onDownloadFailedRef.current = async (id: string) => {
-      if (pendingAutoLoadModelIdRef.current === id) {
-        pendingAutoLoadModelIdRef.current = null;
-      }
-      await makeDownloadStatusHandler(false)(id);
-    };
-  });
+    onDownloadFailedRef.current = onDownloadFailedImpl;
+  }, [onDownloadFailedImpl]);
   const onDownloadFailed = useCallback((id: string) => onDownloadFailedRef.current(id), []);
 
   const { downloadProgress, handleDownload, handleCancelDownload } = useDownloads(onModelDownloaded, onDownloadFailed);
   const downloadProgressRef = useRef(downloadProgress);
-  useEffect(() => { downloadProgressRef.current = downloadProgress; });
+  useEffect(() => { downloadProgressRef.current = downloadProgress; }, [downloadProgress]);
 
 
   const handleDownloadWithCoreml = (id: string, name: string) => {
@@ -719,6 +776,23 @@ function App() {
     (activeEngine === "cohere" && noCohereModel);
   const noModel = activeEngineHasNoModel;
   const noLlm = llmStatus === "Not Downloaded";
+  const downloadProgressKeys = useMemo(() => Object.keys(downloadProgress), [downloadProgress]);
+  const isWhisperDownloading = useMemo(
+    () => downloadProgressKeys.some((key) => key.startsWith("whisper-")),
+    [downloadProgressKeys],
+  );
+  const isParakeetDownloading = useMemo(
+    () => downloadProgressKeys.some((key) => key.startsWith("parakeet")),
+    [downloadProgressKeys],
+  );
+  const isCohereDownloading = useMemo(
+    () => downloadProgressKeys.some((key) => key.startsWith("granite")),
+    [downloadProgressKeys],
+  );
+  const availableWhisperModels = useMemo(
+    () => models.filter((model) => !downloadProgress[`whisper-${model.id.replace('.', '-')}`]),
+    [models, downloadProgress],
+  );
 
   const recordBtnBusy = isLoading || isProcessingTranscript;
   const recordBtnClass =
@@ -753,6 +827,18 @@ function App() {
       void handleSwitchToCohere();
     }
   }, [activeEngine, noWhisperModel, noParakeetModel, noCohereModel, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToCohere]);
+
+  const handleOpenSettingsTab = useCallback((tab?: string) => {
+    setSettingsInitialTab(tab);
+    setIsSettingsOpen(true);
+  }, []);
+
+  const handleCloseSettings = useCallback(() => {
+    setIsSettingsOpen(false);
+    // Refresh the mic dropdown in case the user changed the device in Settings.
+    invoke<string>('get_active_input_device').then(setActiveMic).catch(() => {});
+    refreshInputDevices(true);
+  }, [refreshInputDevices]);
 
   useEffect(() => {
     if (!activeEngineHasNoModel) return;
@@ -992,12 +1078,8 @@ function App() {
                 aria-label="Input device"
                 value={activeMic ?? ''}
                 onChange={(e) => handleMicChange(e.target.value)}
-                onFocus={() => {
-                  invoke<string[]>('list_input_devices').then(setInputDevices).catch(() => {});
-                }}
-                onMouseEnter={() => {
-                  invoke<string[]>('list_input_devices').then(setInputDevices).catch(() => {});
-                }}
+                onFocus={() => refreshInputDevices(false)}
+                onMouseEnter={() => refreshInputDevices(false)}
               >
                 <option value="">System Default</option>
                 {inputDevices.map((d) => (
@@ -1213,8 +1295,8 @@ function App() {
               </div>
               <div className="status-item">
                 <span className="status-label">Model</span>
-                <span className={`status-value ${parakeetModels.length === 0 && !Object.keys(downloadProgress).some(k => k.startsWith('parakeet')) ? "error" : Object.keys(downloadProgress).some(k => k.startsWith('parakeet')) ? "processing" : ""}`}>
-                  {Object.keys(downloadProgress).some(k => k.startsWith('parakeet')) ? "Downloading…" : parakeetModels.length === 0 ? "Download required" : (parakeetModels.find(m => m.id === currentParakeetModel) ?? parakeetModels[0]).display_name.split(' - ')[0].replace(/\s*\(.*?\)/g, '').trim()}
+                <span className={`status-value ${parakeetModels.length === 0 && !isParakeetDownloading ? "error" : isParakeetDownloading ? "processing" : ""}`}>
+                  {isParakeetDownloading ? "Downloading…" : parakeetModels.length === 0 ? "Download required" : (parakeetModels.find(m => m.id === currentParakeetModel) ?? parakeetModels[0]).display_name.split(' - ')[0].replace(/\s*\(.*?\)/g, '').trim()}
                 </span>
               </div>
             </div>
@@ -1247,8 +1329,8 @@ function App() {
               </div>
               <div className="status-item">
                 <span className="status-label">Model</span>
-                <span className={`status-value ${cohereModels.length === 0 && !Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "error" : Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "processing" : ""}`}>
-                  {Object.keys(downloadProgress).some(k => k.startsWith('granite')) ? "Downloading…" : cohereModels.length === 0 ? "Download required" : (cohereModels.find(m => m.id === currentCohereModel) ?? cohereModels[0]).display_name}
+                <span className={`status-value ${cohereModels.length === 0 && !isCohereDownloading ? "error" : isCohereDownloading ? "processing" : ""}`}>
+                  {isCohereDownloading ? "Downloading…" : cohereModels.length === 0 ? "Download required" : (cohereModels.find(m => m.id === currentCohereModel) ?? cohereModels[0]).display_name}
                 </span>
               </div>
             </div>
@@ -1272,15 +1354,14 @@ function App() {
                       title={isFileTranscribing ? "Cannot switch model while a file is being transcribed" : undefined}
                     >
                       {isInitialLoading && <option value="">Loading models...</option>}
-                      {!isInitialLoading && models.filter(m => !downloadProgress['whisper-' + m.id.replace('.', '-')]).length === 0 && (
+                      {!isInitialLoading && availableWhisperModels.length === 0 && (
                         <option value="">
-                          {Object.keys(downloadProgress).some(k => k.startsWith('whisper-'))
+                          {isWhisperDownloading
                             ? 'Downloading model...'
                             : 'No models — open Settings to download'}
                         </option>
                       )}
-                      {models
-                        .filter(m => !downloadProgress['whisper-' + m.id.replace('.', '-')])
+                      {availableWhisperModels
                         .map((model) => (
                           <option key={model.id} value={model.id}>
                             {beautifyModelName(model.display_name)} ({formatSize(model.size_mb)}){model.has_coreml ? ' ⚡' : ''}
@@ -1527,12 +1608,7 @@ function App() {
 
           <SettingsModal
             isOpen={isSettingsOpen}
-            onClose={() => {
-              setIsSettingsOpen(false);
-              // Refresh the mic dropdown in case the user changed the device in Settings.
-              invoke<string>('get_active_input_device').then(setActiveMic).catch(() => {});
-              invoke<string[]>('list_input_devices').then(setInputDevices).catch(() => {});
-            }}
+            onClose={handleCloseSettings}
             initialTab={settingsInitialTab as Parameters<typeof SettingsModal>[0]['initialTab']}
             scrollTarget={settingsScrollTarget ?? undefined}
             onScrollHandled={() => setSettingsScrollTarget(null)}
@@ -1592,10 +1668,7 @@ function App() {
           setSoundMuted={setMuted}
           dictionaryCount={dictionary.length}
           snippetsCount={snippets.length}
-          onOpenSettingsTab={(tab) => {
-            setSettingsInitialTab(tab);
-            setIsSettingsOpen(true);
-          }}
+          onOpenSettingsTab={handleOpenSettingsTab}
         />
       </div>
     </>
