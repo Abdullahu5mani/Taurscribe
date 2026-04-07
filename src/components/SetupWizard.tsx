@@ -145,7 +145,7 @@ export function SetupWizard({
   const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
   const [platform, setPlatform] = useState<string>('');
   const [isAppleSilicon, setIsAppleSilicon] = useState(false);
-  const [useCase, setUseCase] = useState<OnboardingUseCase>('quick_notes');
+  const useCase: OnboardingUseCase = 'quick_notes';
   const [welcomeLogoSrc] = useState<string | null>(() => pickRandomSetupLogo());
   const [current, setCurrent] = useState<StepEntry>({ idx: 0, enterDir: 'right', key: 0 });
   const [exiting, setExiting] = useState<{ idx: number; exitDir: 'left' | 'right'; key: number } | null>(null);
