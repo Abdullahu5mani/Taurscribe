@@ -68,6 +68,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  contain: layout paint;
 }
 
 .settings-header {
@@ -176,6 +177,7 @@
   overflow-y: auto;
   background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(var(--accent-primary-rgb), 0.03) 0%, transparent 50%);
   animation: settingsTabIn 0.2s cubic-bezier(0.23, 1, 0.32, 1) both;
+  contain: paint;
 }
 
 @keyframes settingsTabIn {
@@ -205,6 +207,8 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  content-visibility: auto;
+  contain-intrinsic-size: 740px;
 }
 
 .model-item {
@@ -218,6 +222,9 @@
   align-items: flex-start;
   transition: border-color 0.2s cubic-bezier(0.25, 1, 0.5, 1),
               background 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+  contain: paint;
+  content-visibility: auto;
+  contain-intrinsic-size: 130px;
 }
 
 .model-item:hover {

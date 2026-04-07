@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
@@ -70,7 +70,7 @@ const formatTimestamp = (iso: string) => {
     }
 };
 
-export function TranscriptFeed({
+function TranscriptFeedComponent({
     refreshKey,
     isRecording,
     isPaused,
@@ -278,3 +278,5 @@ export function TranscriptFeed({
         </div>
     );
 }
+
+export const TranscriptFeed = memo(TranscriptFeedComponent);
