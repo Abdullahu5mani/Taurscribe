@@ -58,6 +58,9 @@ const dllPatterns = [
 // Track copied DLLs for cleanup
 const copiedDlls: string[] = [];
 
+// Save original config before any changes
+const originalWindowsConf = readFileSync(windowsConfPath, "utf8");
+
 function cleanup() {
   // Remove copied DLLs from src-tauri/
   for (const dll of copiedDlls) {
@@ -72,8 +75,11 @@ function cleanup() {
   } catch {}
 }
 
-// Save original config before any changes
-const originalWindowsConf = readFileSync(windowsConfPath, "utf8");
+function failAndExit(message: string): never {
+  console.error(message);
+  cleanup();
+  process.exit(1);
+}
 
 // Handle interrupts gracefully
 process.on("SIGINT", () => {
@@ -81,6 +87,12 @@ process.on("SIGINT", () => {
   cleanup();
   process.exit(1);
 });
+
+// Bootstrap: first cargo build must not depend on preexisting DLL resource files.
+const bootstrapWindowsConf = JSON.parse(originalWindowsConf);
+bootstrapWindowsConf.bundle = bootstrapWindowsConf.bundle || {};
+bootstrapWindowsConf.bundle.resources = [];
+writeFileSync(windowsConfPath, JSON.stringify(bootstrapWindowsConf, null, 2) + "\n");
 
 // ── Step 1: Build Rust binary ────────────────────────────────
 console.log("\n🔨 Step 1: Building Rust binary...\n");
@@ -95,15 +107,13 @@ const cargoBuild = spawnSync("cargo", cargoArgs, {
   shell: true,
 });
 if (cargoBuild.status !== 0) {
-  console.error("❌ Cargo build failed");
-  process.exit(1);
+  failAndExit("❌ Cargo build failed");
 }
 
 // ── Step 2: Detect DLLs ──────────────────────────────────────
 console.log("\n📦 Step 2: Detecting DLLs...\n");
 if (!existsSync(releaseDir)) {
-  console.error(`❌ Release directory not found: ${releaseDir}`);
-  process.exit(1);
+  failAndExit(`❌ Release directory not found: ${releaseDir}`);
 }
 
 const allFiles = readdirSync(releaseDir);
@@ -119,7 +129,7 @@ if (foundDlls.length === 0) {
 }
 
 // ── Step 3: Copy DLLs into src-tauri/ ────────────────────────
-console.log("\n� Step 3: Copying DLLs into src-tauri/...\n");
+console.log("\n📁 Step 3: Copying DLLs into src-tauri/...\n");
 for (const dll of foundDlls) {
   const src = join(releaseDir, dll);
   const dest = join(srcTauri, dll);
