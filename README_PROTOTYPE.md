@@ -150,6 +150,8 @@ Engines are **mutually exclusive**—switching unloads the previous one to free 
 
 Raw ASR output is often rough. FlowScribe v2 is a fine-tuned, locally-hosted language model that runs in under 100ms:
 
+Model: [flowscribe-qwen2.5-0.5b-v2](https://huggingface.co/Abdullahu5mani/flowscribe-qwen2.5-0.5b-v2)
+
 ```
 Raw:       "im going to the coffee shop tomorrow at two"
 Refined:   "I'm going to the coffee shop tomorrow at 2 PM."
