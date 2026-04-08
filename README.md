@@ -100,7 +100,7 @@ Built on Tauri (Rust + React), Taurscribe gives you the speed and accuracy of cl
 
 Accumulates ~6 seconds of audio with voice activity detection (VAD), then sends to the Whisper encoder when speech is detected.
 
-\\\
+```
 Input: Microphone (16kHz mono)
   ▼
 Ring Buffer (6s accumulation)
@@ -110,13 +110,13 @@ Voice Activity Detector
   ├─ Speech detected → send to encoder
   ▼
 Whisper Encoder → Output
-\\\
+```
 
 ### Parakeet: Lock-free streaming approach
 
 Uses a non-blocking ring buffer for sub-500ms latency. The inference process "chases" the write pointer, producing output continuously.
 
-\\\
+```
 Microphone (48kHz stereo)
   ▼
 Resampler (16kHz mono)
@@ -126,7 +126,7 @@ Lock-Free Ring Buffer (write → read)
 Parakeet Engine (continuous inference)
   ▼
 CTC Decoding → Output stream
-\\\
+```
 
 **Why two?**
 - **Whisper** optimizes for accuracy; best for meetings, interviews, archival
@@ -150,10 +150,10 @@ Engines are **mutually exclusive**—switching unloads the previous one to free 
 
 Raw ASR output is often rough. FlowScribe v2 is a fine-tuned, locally-hosted language model that runs in under 100ms:
 
-\\\
+```
 Raw:       "im going to the coffee shop tomorrow at two"
 Refined:   "I'm going to the coffee shop tomorrow at 2 PM."
-\\\
+```
 
 Handles:
 * Punctuation and capitalization
@@ -187,7 +187,7 @@ Handles:
 * Download via in-app interface with progress tracking
 * Automatic extraction (ZIP, CoreML)
 * SHA verification for integrity
-* \.verified\ markers prevent re-checks
+* `.verified` markers prevent re-checks
 
 ---
 
@@ -223,7 +223,7 @@ SHA-1 integrity check pipeline:
 1. **Registry** — Hashes in binary (OpenAI/official upstream)
 2. **Download** — Stream from Hugging Face with progress
 3. **Verify** — 8KB chunk-by-chunk validation
-4. **Mark** — \.verified\ file prevents re-verification
+4. **Mark** — `.verified` file prevents re-verification
 5. **Safe** — Load fails explicitly if hash mismatches
 
 All Whisper GGML models verified (tiny through large-v3-turbo, all quantizations).
@@ -275,7 +275,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for deeper dive.
 
 ## Development
 
-\\\ash
+```bash
 # Install dependencies
 npm install
 
@@ -290,7 +290,7 @@ cd src-tauri && cargo check
 
 # Run test suite
 cd src-tauri && cargo test
-\\\
+```
 
 See [CLAUDE.md](./CLAUDE.md) and [AGENTS.md](./AGENTS.md) for development guidance.
 
