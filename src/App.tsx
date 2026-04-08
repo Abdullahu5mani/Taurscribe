@@ -33,7 +33,7 @@ import "./App.css";
 import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, IconSettings, IconEject, InfoTooltip } from "./components/Icons";
 import { TICKER_PHRASES } from "./constants/ticker";
 import { getEngineForModelId } from "./utils/engineUtils";
-import type { CommandResult, EngineSelectionState } from "./types/session";
+import type { CommandResult } from "./types/session";
 
 const ANIMATED_LOGOS = [
   "animated_logo_assemble.svg",
@@ -741,30 +741,6 @@ function App() {
     </>
   ), []);
 
-  const engineSelectionState = useMemo<EngineSelectionState>(() => ({
-    active_engine: activeEngine,
-    selected_model_id:
-      activeEngine === "whisper" ? currentModel :
-      activeEngine === "parakeet" ? currentParakeetModel :
-      currentCohereModel,
-    loaded_engine: loadedEngine,
-    loaded_model_id:
-      loadedEngine === "whisper" ? currentModel :
-      loadedEngine === "parakeet" ? currentParakeetModel :
-      loadedEngine === "cohere" ? currentCohereModel :
-      null,
-    backend: backendInfo,
-    engine_loading: isLoading,
-  }), [
-    activeEngine,
-    currentModel,
-    currentParakeetModel,
-    currentCohereModel,
-    loadedEngine,
-    backendInfo,
-    isLoading,
-  ]);
-
   // --- Derived UI state ---
   const noWhisperModel = models.length === 0;
   const noParakeetModel = parakeetModels.length === 0;
@@ -814,22 +790,14 @@ function App() {
     else handleStartRecording();
   };
 
-  const switchFallbackEngine = useCallback(() => {
-    if (!noWhisperModel && activeEngine !== "whisper") {
-      void handleSwitchToWhisper();
-      return;
-    }
-    if (!noParakeetModel && activeEngine !== "parakeet") {
-      void handleSwitchToParakeet();
-      return;
-    }
-    if (!noCohereModel && activeEngine !== "cohere") {
-      void handleSwitchToCohere();
-    }
-  }, [activeEngine, noWhisperModel, noParakeetModel, noCohereModel, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToCohere]);
-
   const handleOpenSettingsTab = useCallback((tab?: string) => {
     setSettingsInitialTab(tab);
+    setIsSettingsOpen(true);
+  }, []);
+
+  const openModelSettingsForEngine = useCallback((engine: 'whisper' | 'parakeet' | 'cohere') => {
+    setSettingsInitialTab('models');
+    setSettingsScrollTarget(engine);
     setIsSettingsOpen(true);
   }, []);
 
@@ -839,40 +807,6 @@ function App() {
     invoke<string>('get_active_input_device').then(setActiveMic).catch(() => {});
     refreshInputDevices(true);
   }, [refreshInputDevices]);
-
-  useEffect(() => {
-    if (!activeEngineHasNoModel) return;
-    const fallbackAvailable =
-      (activeEngine !== "whisper" && !noWhisperModel) ||
-      (activeEngine !== "parakeet" && !noParakeetModel) ||
-      (activeEngine !== "cohere" && !noCohereModel);
-
-    setSessionNotice({
-      level: "warning",
-      code: "model_missing",
-      title: `${engineSelectionState.active_engine[0].toUpperCase()}${engineSelectionState.active_engine.slice(1)} needs a model`,
-      message: fallbackAvailable
-        ? "The active engine has no installed model. Download one from Settings or switch to another engine that is already ready."
-        : "The active engine has no installed model yet. Download one from Settings to start transcribing.",
-      sticky: true,
-      actions: [
-        {
-          id: "open-settings",
-          label: "Open Settings",
-          onClick: () => {
-            setSettingsInitialTab("models");
-            setSettingsScrollTarget(activeEngine as "whisper" | "parakeet" | "cohere");
-            setIsSettingsOpen(true);
-          },
-        },
-        ...(fallbackAvailable ? [{
-          id: "switch-engine",
-          label: "Switch Engine",
-          onClick: switchFallbackEngine,
-        }] : []),
-      ],
-    });
-  }, [activeEngineHasNoModel, activeEngine, engineSelectionState.active_engine, noWhisperModel, noParakeetModel, noCohereModel, switchFallbackEngine, setSessionNotice]);
 
   useEffect(() => {
     if (!activeEngineHasNoModel && sessionState.notice?.code === "model_missing") {
@@ -1345,42 +1279,83 @@ function App() {
                     {isFileTranscribing && (
                       <span className="model-in-use-warning">Model in use — file transcription in progress</span>
                     )}
-                    <select
-                      id="model-select"
-                      className="model-select"
-                      value={currentModel || ""}
-                      onChange={(e) => handleModelChange(e.target.value)}
-                      disabled={isRecording || isLoading || isInitialLoading || isFileTranscribing}
-                      title={isFileTranscribing ? "Cannot switch model while a file is being transcribed" : undefined}
-                    >
-                      {isInitialLoading && <option value="">Loading models...</option>}
-                      {!isInitialLoading && availableWhisperModels.length === 0 && (
-                        <option value="">
-                          {isWhisperDownloading
-                            ? 'Downloading model...'
-                            : 'No models — open Settings to download'}
-                        </option>
-                      )}
-                      {availableWhisperModels
-                        .map((model) => (
-                          <option key={model.id} value={model.id}>
-                            {beautifyModelName(model.display_name)} ({formatSize(model.size_mb)}){model.has_coreml ? ' ⚡' : ''}
-                          </option>
-                        ))}
-                    </select>
+                    {!isInitialLoading && availableWhisperModels.length === 0 ? (
+                      <div
+                        className="model-select"
+                        role={!isWhisperDownloading ? 'button' : undefined}
+                        tabIndex={!isWhisperDownloading ? 0 : -1}
+                        aria-label={!isWhisperDownloading ? 'Download Whisper from Settings' : undefined}
+                        onClick={() => {
+                          if (!isWhisperDownloading) {
+                            openModelSettingsForEngine('whisper');
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (!isWhisperDownloading && (e.key === 'Enter' || e.key === ' ')) {
+                            e.preventDefault();
+                            openModelSettingsForEngine('whisper');
+                          }
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: !isWhisperDownloading ? 'pointer' : 'default',
+                          background: !isWhisperDownloading ? 'rgba(220, 38, 38, 0.08)' : 'var(--bg-tertiary)',
+                          color: !isWhisperDownloading ? 'var(--error)' : 'inherit',
+                          textDecoration: !isWhisperDownloading ? 'underline' : 'none',
+                          textUnderlineOffset: !isWhisperDownloading ? '0.18em' : undefined,
+                        }}
+                      >
+                        {isWhisperDownloading ? 'Downloading model...' : 'Download Whisper from Settings'}
+                      </div>
+                    ) : (
+                      <select
+                        id="model-select"
+                        className="model-select"
+                        value={currentModel || ""}
+                        onChange={(e) => handleModelChange(e.target.value)}
+                        disabled={isRecording || isLoading || isInitialLoading || isFileTranscribing}
+                        title={isFileTranscribing ? "Cannot switch model while a file is being transcribed" : undefined}
+                      >
+                        {isInitialLoading && <option value="">Loading models...</option>}
+                        {availableWhisperModels
+                          .map((model) => (
+                            <option key={model.id} value={model.id}>
+                              {beautifyModelName(model.display_name)} ({formatSize(model.size_mb)}){model.has_coreml ? ' ⚡' : ''}
+                            </option>
+                          ))}
+                      </select>
+                    )}
                   </>
                 ) : activeEngine === "parakeet" ? (
                   <>
                     <span className="model-label">Active model</span>
                     <div
                       className="model-select"
+                      role={!isInitialLoading && parakeetModels.length === 0 ? 'button' : undefined}
+                      tabIndex={!isInitialLoading && parakeetModels.length === 0 ? 0 : -1}
+                      aria-label={!isInitialLoading && parakeetModels.length === 0 ? 'Download Nemotron from Settings' : undefined}
+                      onClick={() => {
+                        if (!isInitialLoading && parakeetModels.length === 0) {
+                          openModelSettingsForEngine('parakeet');
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (!isInitialLoading && parakeetModels.length === 0 && (e.key === 'Enter' || e.key === ' ')) {
+                          e.preventDefault();
+                          openModelSettingsForEngine('parakeet');
+                        }
+                      }}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        cursor: 'default',
+                        cursor: !isInitialLoading && parakeetModels.length === 0 ? 'pointer' : 'default',
                         background: parakeetModels.length === 0 ? 'rgba(220, 38, 38, 0.08)' : 'var(--bg-tertiary)',
-                        color: parakeetModels.length === 0 ? 'var(--error)' : 'inherit'
+                        color: parakeetModels.length === 0 ? 'var(--error)' : 'inherit',
+                        textDecoration: !isInitialLoading && parakeetModels.length === 0 ? 'underline' : 'none',
+                        textUnderlineOffset: !isInitialLoading && parakeetModels.length === 0 ? '0.18em' : undefined,
                       }}
                     >
                       {isInitialLoading ? "Loading..." : (
@@ -1395,13 +1370,29 @@ function App() {
                     <span className="model-label">Active model</span>
                     <div
                       className="model-select"
+                      role={!isInitialLoading && cohereModels.length === 0 ? 'button' : undefined}
+                      tabIndex={!isInitialLoading && cohereModels.length === 0 ? 0 : -1}
+                      aria-label={!isInitialLoading && cohereModels.length === 0 ? 'Download Cohere from Settings' : undefined}
+                      onClick={() => {
+                        if (!isInitialLoading && cohereModels.length === 0) {
+                          openModelSettingsForEngine('cohere');
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (!isInitialLoading && cohereModels.length === 0 && (e.key === 'Enter' || e.key === ' ')) {
+                          e.preventDefault();
+                          openModelSettingsForEngine('cohere');
+                        }
+                      }}
                       style={{
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        cursor: 'default',
+                        cursor: !isInitialLoading && cohereModels.length === 0 ? 'pointer' : 'default',
                         background: cohereModels.length === 0 ? 'rgba(220, 38, 38, 0.08)' : 'var(--bg-tertiary)',
-                        color: cohereModels.length === 0 ? 'var(--error)' : 'inherit'
+                        color: cohereModels.length === 0 ? 'var(--error)' : 'inherit',
+                        textDecoration: !isInitialLoading && cohereModels.length === 0 ? 'underline' : 'none',
+                        textUnderlineOffset: !isInitialLoading && cohereModels.length === 0 ? '0.18em' : undefined,
                       }}
                     >
                       {isInitialLoading ? "Loading..." : (
@@ -1582,9 +1573,7 @@ function App() {
                   className={`empty-state-cta${noModelCtaAttention ? " empty-state-cta--attention" : ""}`}
                   onClick={() => {
                     setNoModelCtaAttention(false);
-                    setSettingsInitialTab('models');
-                    setSettingsScrollTarget(activeEngine as 'whisper' | 'parakeet' | 'cohere');
-                    setIsSettingsOpen(true);
+                    openModelSettingsForEngine(activeEngine as 'whisper' | 'parakeet' | 'cohere');
                   }}
                 >
                   Open Settings → Download Models

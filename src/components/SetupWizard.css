@@ -1051,9 +1051,56 @@
   text-align: center;
 }
 
-.fs-process-arrow {
-  color: var(--accent-primary, #e09f3e);
-  font-size: 0.8rem;
+.fs-process-arrows {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 16px;
+  padding: 0 2px;
+}
+
+.fs-process-arrows::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 1px;
+  background: linear-gradient(90deg, rgba(var(--accent-primary-rgb), 0.12), rgba(var(--accent-primary-rgb), 0.6), rgba(var(--accent-primary-rgb), 0.12));
+}
+
+.fs-process-chevron {
+  position: relative;
+  width: 7px;
+  height: 7px;
+  border-top: 1.5px solid rgba(var(--accent-primary-rgb), 0.86);
+  border-right: 1.5px solid rgba(var(--accent-primary-rgb), 0.86);
+  transform: rotate(45deg);
+  filter: drop-shadow(0 0 4px rgba(var(--accent-primary-rgb), 0.25));
+  animation: fsChevronFlow 1.2s ease-in-out infinite;
+}
+
+.fs-process-chevron:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.fs-process-chevron:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes fsChevronFlow {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: rotate(45deg) translateX(0);
+  }
+  50% {
+    opacity: 1;
+    transform: rotate(45deg) translateX(2px);
+  }
 }
 
 .fs-rack-specs {
@@ -1119,7 +1166,7 @@
   .fs-process-steps {
     flex-direction: row;
   }
-  .fs-process-arrow {
+  .fs-process-arrows {
     transform: rotate(90deg);
   }
 }

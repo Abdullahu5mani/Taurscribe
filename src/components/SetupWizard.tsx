@@ -533,12 +533,12 @@ function StepFlowScribe({
   return (
     <>
       <p className="setup-eyebrow">Step 4 of {totalSteps}</p>
-      <h2 className="setup-heading">FlowScribe LLM</h2>
-      <p className="setup-sub">A tiny, specialized on-device model that refines your raw transcripts with structural precision.</p>
+      <h2 className="setup-heading">FlowScribe LLM v2</h2>
+      <p className="setup-sub">FlowScribe v2 is a tiny, specialized on-device model that refines your raw transcripts with structural precision.</p>
 
-      <div className="fs-processor-rack" aria-label="Hardware processor visualization of FlowScribe">
+      <div className="fs-processor-rack" aria-label="Hardware processor visualization of FlowScribe v2">
         <div className="fs-rack-headers">
-          <div className="fs-rack-brand">TAURSCRIBE DSP // FLOWSCRIBE 0.5B</div>
+          <div className="fs-rack-brand">TAURSCRIBE DSP // FLOWSCRIBE V2 0.5B</div>
           <div className="fs-rack-status">
             <span className="fs-rack-led fs-rack-led--active"></span> ONLINE
           </div>
@@ -558,7 +558,11 @@ function StepFlowScribe({
               <div className="fs-p-step">CASING</div>
               <div className="fs-p-step">PUNCTUATION</div>
             </div>
-            <div className="fs-process-arrow">→</div>
+            <div className="fs-process-arrows" aria-hidden="true">
+              <span className="fs-process-chevron" />
+              <span className="fs-process-chevron" />
+              <span className="fs-process-chevron" />
+            </div>
           </div>
 
           <div className="fs-rack-panel fs-rack-output">
