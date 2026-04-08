@@ -151,7 +151,7 @@ export function SetupWizard({
   const [exiting, setExiting] = useState<{ idx: number; exitDir: 'left' | 'right'; key: number } | null>(null);
   const transitioning = useRef(false);
   const recommendation = computeModelRecommendation({ sysInfo, isAppleSilicon, useCase });
-  const totalSteps = platform === 'macos' ? 7 : 6;
+  const totalSteps = platform === 'macos' ? 8 : 7;
 
   useEffect(() => {
     invoke<SystemInfo>('get_system_info')
@@ -197,8 +197,9 @@ export function SetupWizard({
           totalSteps={totalSteps}
         />
       );
-      case 3: return <StepHotkey onNext={next} onBack={back} platform={platform} totalSteps={totalSteps} />;
-      case 4: return (
+      case 3: return <StepFlowScribe onNext={next} onBack={back} totalSteps={totalSteps} />;
+      case 4: return <StepHotkey onNext={next} onBack={back} platform={platform} totalSteps={totalSteps} />;
+      case 5: return (
         <StepRecordingSettings
           onNext={next}
           onBack={back}
@@ -211,13 +212,13 @@ export function SetupWizard({
           setMuteBackgroundAudio={setMuteBackgroundAudio}
         />
       );
-      case 5:
+      case 6:
         // Skip permissions step on non-macOS platforms
         if (platform !== 'macos') {
           return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
         }
         return <StepPermissions onNext={next} onBack={back} platform={platform} totalSteps={totalSteps} />;
-      case 6: return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
+      case 7: return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
       default: return null;
     }
   };
@@ -407,7 +408,23 @@ function StepEngines({
 }) {
   const [activeSlide, setActiveSlide] = useState(0);
   const [navDirection, setNavDirection] = useState<'next' | 'prev'>('next');
+  const [visitedSlides, setVisitedSlides] = useState<boolean[]>(() =>
+    ENGINE_CAROUSEL_SLIDES.map((_, index) => index === 0),
+  );
   const slide = ENGINE_CAROUSEL_SLIDES[activeSlide];
+  const viewedCount = visitedSlides.filter(Boolean).length;
+  const hasViewedAllSlides = viewedCount === ENGINE_CAROUSEL_SLIDES.length;
+
+  useEffect(() => {
+    setVisitedSlides((prev) => {
+      if (prev[activeSlide]) {
+        return prev;
+      }
+      const nextVisited = [...prev];
+      nextVisited[activeSlide] = true;
+      return nextVisited;
+    });
+  }, [activeSlide]);
 
   const goToSlide = (index: number, direction: 'next' | 'prev') => {
     setNavDirection(direction);
@@ -428,7 +445,7 @@ function StepEngines({
     <>
       <p className="setup-eyebrow">Step 3 of {totalSteps}</p>
       <h2 className="setup-heading">Meet The Engines</h2>
-      <p className="setup-sub">Swipe through each engine to learn where it shines and when to use it.</p>
+      <p className="setup-sub">Swipe through each engine to learn where it shines and when to use it. Continue unlocks after all cards are viewed.</p>
 
       <div className="setup-engine-carousel" aria-live="polite">
         <div className={`setup-engine-carousel-card setup-engine-carousel-card--${slide.id}`}>
@@ -487,7 +504,95 @@ function StepEngines({
         </div>
       </div>
 
-      <p className="engines-note">You can switch engines anytime from the main panel after setup.</p>
+      <p className="engines-note">
+        {hasViewedAllSlides
+          ? 'All engines reviewed. You can continue.'
+          : `Review every engine card to continue (${viewedCount}/${ENGINE_CAROUSEL_SLIDES.length}).`}
+      </p>
+
+      <div className="setup-nav setup-nav--spread">
+        <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
+        <button className="setup-btn setup-btn--primary" onClick={onNext} disabled={!hasViewedAllSlides}>Continue →</button>
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// STEP 3 — FLOWSCRIBE LLM
+// ─────────────────────────────────────────────────────────────────
+function StepFlowScribe({
+  onNext,
+  onBack,
+  totalSteps,
+}: {
+  onNext: () => void;
+  onBack: () => void;
+  totalSteps: number;
+}) {
+  return (
+    <>
+      <p className="setup-eyebrow">Step 4 of {totalSteps}</p>
+      <h2 className="setup-heading">FlowScribe LLM</h2>
+      <p className="setup-sub">A tiny, specialized on-device model that refines your raw transcripts with structural precision.</p>
+
+      <div className="fs-processor-rack" aria-label="Hardware processor visualization of FlowScribe">
+        <div className="fs-rack-headers">
+          <div className="fs-rack-brand">TAURSCRIBE DSP // FLOWSCRIBE 0.5B</div>
+          <div className="fs-rack-status">
+            <span className="fs-rack-led fs-rack-led--active"></span> ONLINE
+          </div>
+        </div>
+
+        <div className="fs-rack-io">
+          <div className="fs-rack-panel fs-rack-input">
+            <div className="fs-panel-label">CH 01 / RAW ASR</div>
+            <div className="fs-panel-screen">
+              &gt; hey team can we ship this friday i think we should test payment edge cases first
+            </div>
+          </div>
+
+          <div className="fs-rack-center">
+            <div className="fs-process-steps">
+              <div className="fs-p-step">GRAMMAR</div>
+              <div className="fs-p-step">CASING</div>
+              <div className="fs-p-step">PUNCTUATION</div>
+            </div>
+            <div className="fs-process-arrow">→</div>
+          </div>
+
+          <div className="fs-rack-panel fs-rack-output">
+            <div className="fs-panel-label">CH 02 / POLISHED</div>
+            <div className="fs-panel-screen">
+              &gt; Hey team, can we ship this Friday? I think we should test payment edge cases first.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="fs-rack-specs">
+        <div className="fs-spec-item">
+          <span className="fs-spec-num">01</span>
+          <div className="fs-spec-content">
+            <span className="fs-spec-title">100% LOCAL</span>
+            <span className="fs-spec-desc">Runs entirely on-device. Zero cloud telemetry.</span>
+          </div>
+        </div>
+        <div className="fs-spec-item">
+          <span className="fs-spec-num">02</span>
+          <div className="fs-spec-content">
+            <span className="fs-spec-title">COGNITIVE PASS</span>
+            <span className="fs-spec-desc">Fixes structural errors the ASR misses.</span>
+          </div>
+        </div>
+        <div className="fs-spec-item">
+          <span className="fs-spec-num">03</span>
+          <div className="fs-spec-content">
+            <span className="fs-spec-title">OPTIONAL</span>
+            <span className="fs-spec-desc">Can be fully bypassed in Quick Settings.</span>
+          </div>
+        </div>
+      </div>
 
       <div className="setup-nav setup-nav--spread">
         <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
@@ -498,7 +603,7 @@ function StepEngines({
 }
 
 // ─────────────────────────────────────────────────────────────────
-// STEP 3 — HOTKEY
+// STEP 4 — HOTKEY
 // ─────────────────────────────────────────────────────────────────
 function StepHotkey({ onNext, onBack, platform, totalSteps }: { onNext: () => void; onBack: () => void; platform: string; totalSteps: number }) {
   // macOS default: Ctrl + Option (Cmd is intercepted by the OS)
@@ -509,7 +614,7 @@ function StepHotkey({ onNext, onBack, platform, totalSteps }: { onNext: () => vo
 
   return (
     <>
-      <p className="setup-eyebrow">Step 4 of {totalSteps}</p>
+      <p className="setup-eyebrow">Step 5 of {totalSteps}</p>
       <h2 className="setup-heading">One Hotkey</h2>
       <p className="setup-sub">Use Taurscribe from anywhere, without switching windows.</p>
 
@@ -545,7 +650,7 @@ function StepHotkey({ onNext, onBack, platform, totalSteps }: { onNext: () => vo
 }
 
 // ─────────────────────────────────────────────────────────────────
-// STEP 4 — RECORDING SETTINGS
+// STEP 5 — RECORDING SETTINGS
 // ─────────────────────────────────────────────────────────────────
 function StepRecordingSettings({
   onNext,
@@ -570,7 +675,7 @@ function StepRecordingSettings({
 }) {
   return (
     <>
-      <p className="setup-eyebrow">Step 5 of {totalSteps}</p>
+      <p className="setup-eyebrow">Step 6 of {totalSteps}</p>
       <h2 className="setup-heading">Recording Settings</h2>
       <p className="setup-sub">Set your default behavior now. You can change these anytime in Settings.</p>
 
@@ -633,7 +738,7 @@ function StepRecordingSettings({
 }
 
 // ─────────────────────────────────────────────────────────────────
-// STEP 5 — PERMISSIONS
+// STEP 6 — PERMISSIONS
 // ─────────────────────────────────────────────────────────────────
 function StepPermissions({
   onNext,
@@ -745,7 +850,7 @@ function StepPermissions({
 
   return (
     <>
-      <p className="setup-eyebrow">Step 6 of {totalSteps}</p>
+      <p className="setup-eyebrow">Step 7 of {totalSteps}</p>
       <h2 className="setup-heading">Permissions</h2>
       <p className="setup-sub">Three permissions needed for recording, hotkeys, and typing text system-wide.</p>
 
@@ -842,7 +947,7 @@ function StepPermissions({
 }
 
 // ─────────────────────────────────────────────────────────────────
-// STEP 5 — READY
+// FINAL — READY
 // ─────────────────────────────────────────────────────────────────
 function StepReady({
   onComplete,
