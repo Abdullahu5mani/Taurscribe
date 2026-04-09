@@ -31,14 +31,6 @@ jobs:
             arch: 'ARM64'
             acceleration: 'Metal'
 
-          - platform: 'macos-15-intel'
-            name: 'macOS (Intel)'
-            target: 'x86_64-apple-darwin'
-            cuda: false
-            os_name: 'macOS'
-            arch: 'x86_64'
-            acceleration: 'CPU'
-
           # --- 2. Windows (x86_64) ---
           # Standard Windows builds. "windows-latest" currently points to Windows Server 2022.
           # We enable CUDA here for NVIDIA GPU acceleration.

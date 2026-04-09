@@ -24,14 +24,6 @@ jobs:
             os_name: 'macOS'
             arch: 'ARM64'
 
-          # Intel Mac DMG — requires x86_64 host (GitHub: macos-15-intel)
-          - platform: 'macos-15-intel'
-            name: 'macOS (Intel)'
-            target: 'x86_64-apple-darwin'
-            cuda: false
-            os_name: 'macOS'
-            arch: 'x86_64'
-
           - platform: 'windows-latest'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
@@ -502,12 +494,11 @@ jobs:
             done
           fi
 
-          # macOS DMG — Apple Silicon vs Intel
+          # macOS DMG (Apple Silicon only)
           if [ "${{ matrix.os_name }}" = "macOS" ]; then
-            MAC_SUFFIX=$([ "${{ matrix.target }}" = "x86_64-apple-darwin" ] && echo "x64" || echo "arm64")
             for f in src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg; do
               if [ -f "$f" ]; then
-                cp "$f" "release-assets/taurscribe-${TAG}-macos-${MAC_SUFFIX}.dmg"
+                cp "$f" "release-assets/taurscribe-${TAG}-macos-arm64.dmg"
               fi
             done
           fi
