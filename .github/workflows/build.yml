@@ -31,6 +31,14 @@ jobs:
             arch: 'ARM64'
             acceleration: 'Metal'
 
+          - platform: 'macos-15-intel'
+            name: 'macOS (Intel)'
+            target: 'x86_64-apple-darwin'
+            cuda: false
+            os_name: 'macOS'
+            arch: 'x86_64'
+            acceleration: 'CPU'
+
           # --- 2. Windows (x86_64) ---
           # Standard Windows builds. "windows-latest" currently points to Windows Server 2022.
           # We enable CUDA here for NVIDIA GPU acceleration.
@@ -156,8 +164,21 @@ jobs:
             libssl-dev \
             libgtk-3-dev \
             cmake \
+            ninja-build \
+            mold \
+            sccache \
+            ccache \
             libvulkan-dev \
             pkg-config
+
+      - name: Cache ccache (Linux)
+        if: contains(matrix.platform, 'ubuntu')
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: linux-ccache-v1-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            linux-ccache-v1-
 
       # Install Vulkan SDK on Linux for GPU-accelerated audio processing (Whisper Vulkan backend)
       - name: Install Vulkan SDK (Linux)
@@ -175,6 +196,13 @@ jobs:
         run: |
           echo "LD_LIBRARY_PATH=${VULKAN_SDK}/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
           echo "LIBRARY_PATH=${VULKAN_SDK}/lib:${LIBRARY_PATH}" >> $GITHUB_ENV
+
+      - name: Linux — parallelism and ccache dir
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)" >> $GITHUB_ENV
+          echo "CCACHE_DIR=${HOME}/.ccache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
 
       - name: Verify Vulkan Installation (Linux)
         if: contains(matrix.platform, 'ubuntu')
@@ -252,6 +280,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+        if: contains(matrix.platform, 'ubuntu')
 
       # Clean config: Rewrite local paths in .cargo/config.toml to match CI environment.
       # This file often contains absolute paths from the developer's machine that break CI.
@@ -380,28 +411,26 @@ jobs:
       - name: Build Rust binary
         if: matrix.os_name != 'Windows'
         run: |
+          if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then unset CCACHE_DISABLE; fi
           cd src-tauri
           cargo build --release --target ${{ matrix.target }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues
-          CMAKE_C_COMPILER_LAUNCHER: ""  # Explicitly no launcher (override any cached ccache)
-          CMAKE_CXX_COMPILER_LAUNCHER: "" # Explicitly no launcher
-          CMAKE_DISABLE_FIND_PACKAGE_Ccache: "TRUE" # Prevent CMake from finding/using ccache
+          CCACHE_DISABLE: "1"            # Linux: unset in script so ccache + CMake launchers work
+          CMAKE_C_COMPILER_LAUNCHER: ${{ contains(matrix.platform, 'ubuntu') && 'ccache' || '' }}
+          CMAKE_CXX_COMPILER_LAUNCHER: ${{ contains(matrix.platform, 'ubuntu') && 'ccache' || '' }}
+          CMAKE_DISABLE_FIND_PACKAGE_Ccache: ${{ contains(matrix.platform, 'ubuntu') && 'OFF' || 'TRUE' }}
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
-          # Serial CMake builds on Windows to avoid whisper-rs-sys vs llama-cpp-sys-2
-          # ggml.c race condition (LNK1181). Linux/macOS use parallel builds — cargo
-          # isolates each -sys crate into its own OUT_DIR so they don't collide.
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
+          # Windows: serial (LNK1181). Linux: CMAKE_BUILD_PARALLEL_LEVEL from nproc (GITHUB_ENV). macOS: 4.
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || contains(matrix.platform, 'ubuntu') && env.CMAKE_BUILD_PARALLEL_LEVEL || '4' }}
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
 
-          # CCACHE_DISABLE=1 is set globally; keep GGML_CCACHE=OFF everywhere to stay consistent.
-          GGML_CCACHE: "OFF"
+          GGML_CCACHE: ${{ contains(matrix.platform, 'ubuntu') && 'ON' || 'OFF' }}
 
-          # Windows: use Ninja (simpler, avoids MSBuild/ExternalProject path issues). macOS/Linux: Unix Makefiles.
-          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
+          # Windows/Linux (Ubuntu): Ninja. macOS: Unix Makefiles.
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || contains(matrix.platform, 'ubuntu') && 'Ninja' || 'Unix Makefiles' }}
           CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && '' || '' }}
 
           # Enable AVX/AVX2 for Whisper/ggml (faster on modern CPUs and typical CI runners).
@@ -429,7 +458,7 @@ jobs:
           # LD_LIBRARY_PATH is set via GITHUB_ENV but we also pass it explicitly here
           # and add a -L flag via RUSTFLAGS so rustc's linker invocation finds libvulkan.so.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
-          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -C link-arg=-fuse-ld=mold', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           # Match Bundle step env vars so cargo doesn't see a changed environment and recompile
           CI: "true"
           NO_STRIP: "true"
@@ -468,11 +497,12 @@ jobs:
       - name: Bundle application
         # Remove the extra "--" before --bundles
         run: |
+          if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then unset CCACHE_DISABLE; fi
           if [ "${{ matrix.os_name }}" = "Windows" ]; then
             # Use build-windows.ts which handles DLL bundling
             bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
-            bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm
+            bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm,appimage
           else
             bun run tauri build --target ${{ matrix.target }}
           fi
@@ -484,22 +514,19 @@ jobs:
         env:
           CI: "true"                    # Tauri expects CI=true (not CI=1) for non-interactive DMG on macOS
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CCACHE_DISABLE: "1"            # Force ccache off to avoid CI cache issues
-          CMAKE_C_COMPILER_LAUNCHER: ""  # Explicitly no launcher (override any cached ccache)
-          CMAKE_CXX_COMPILER_LAUNCHER: "" # Explicitly no launcher
-          CMAKE_DISABLE_FIND_PACKAGE_Ccache: "TRUE" # Prevent CMake from finding/using ccache
+          CCACHE_DISABLE: "1"            # Linux: unset at start of run script
+          CMAKE_C_COMPILER_LAUNCHER: ${{ contains(matrix.platform, 'ubuntu') && 'ccache' || '' }}
+          CMAKE_CXX_COMPILER_LAUNCHER: ${{ contains(matrix.platform, 'ubuntu') && 'ccache' || '' }}
+          CMAKE_DISABLE_FIND_PACKAGE_Ccache: ${{ contains(matrix.platform, 'ubuntu') && 'OFF' || 'TRUE' }}
           MSBUILDDISABLENODEREUSE: 1     # Prevent zombie MSBuild processes locking files
           TRACKFILEACCESS: "false"       # Disable FileTracker to avoid path length issues on Windows
           RUST_BACKTRACE: 1              # Print full stack traces on panic
-          # Serial CMake builds on Windows only (LNK1181 race). Linux uses parallel builds.
-          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || '4' }}
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ contains(matrix.platform, 'windows') && '1' || contains(matrix.platform, 'ubuntu') && env.CMAKE_BUILD_PARALLEL_LEVEL || '4' }}
           CMAKE_VERBOSE_MAKEFILE: "ON"   # Show exact compiler commands for debugging
           
-          # CCACHE_DISABLE=1 is set globally; keep GGML_CCACHE=OFF everywhere to stay consistent.
-          GGML_CCACHE: "OFF"
+          GGML_CCACHE: ${{ contains(matrix.platform, 'ubuntu') && 'ON' || 'OFF' }}
           
-          # Windows: use Ninja (simpler, avoids MSBuild/ExternalProject path issues). macOS/Linux: Unix Makefiles.
-          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || 'Unix Makefiles' }}
+          CMAKE_GENERATOR: ${{ contains(matrix.platform, 'windows') && 'Ninja' || contains(matrix.platform, 'ubuntu') && 'Ninja' || 'Unix Makefiles' }}
           CMAKE_GENERATOR_PLATFORM: ${{ contains(matrix.platform, 'windows') && '' || '' }}
           
           # Enable AVX/AVX2 for Whisper/ggml (faster on modern CPUs and typical CI runners).
@@ -525,60 +552,74 @@ jobs:
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
           # Linux: ensure the Vulkan SDK lib dir is on the linker search path.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
-          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -C link-arg=-fuse-ld=mold', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           # Linux AppImage: linuxdeploy requires FUSE to self-mount, but CI runners lack it.
           # This flag makes it extract to a temp directory instead.
           APPIMAGE_EXTRACT_AND_RUN: "1"
           # Preserve debug symbols so __TAURI_BUNDLE_TYPE is found by the bundler.
           NO_STRIP: "true"
 
-      # --- Create portable ZIP for Windows (no installer needed) ---
-      - name: Create portable ZIP (Windows)
+      - name: Stage Windows NSIS installer (before portable bundle)
         if: matrix.os_name == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          $target = "${{ matrix.target }}"
-          $arch = if ("${{ matrix.arch }}" -eq "ARM64") { "arm64" } else { "x64" }
-          
-          # On Windows, CARGO_TARGET_DIR is set to C:\bld to shorten paths
-          $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
-          $releaseDir = "$targetDir/$target/release"
-          $binaryPath = "$releaseDir/taurscribe.exe"
-          
-          if (Test-Path $binaryPath) {
-            $portableDir = "taurscribe-portable-windows-$arch"
-            New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
-            Copy-Item $binaryPath "$portableDir/"
-            
-            # Copy WebView2Loader if present
-            $webview2 = "$releaseDir/WebView2Loader.dll"
-            if (Test-Path $webview2) { Copy-Item $webview2 "$portableDir/" }
-            
-            # DLLs (llama.dll, ggml.dll) are staged to src-tauri/windows-dlls/ by beforeBundleCommand.
-            # Also check the release dir as a fallback.
-            Get-ChildItem "src-tauri/windows-dlls/*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination "$portableDir/"
-            Get-ChildItem "$releaseDir/*.dll" -ErrorAction SilentlyContinue | Where-Object { -not (Test-Path "$portableDir/$($_.Name)") } | Copy-Item -Destination "$portableDir/"
-            
-            Compress-Archive -Path "$portableDir/*" -DestinationPath "taurscribe-0.1.0-windows-$arch-portable.zip"
-            echo "Created: taurscribe-0.1.0-windows-$arch-portable.zip"
-          } else {
-            echo "WARNING: Binary not found at $binaryPath"
-          }
+          mkdir -p windows-nsis-staging
+          for dir in "C:/bld" "src-tauri/target"; do
+            d="$dir/${{ matrix.target }}/release/bundle/nsis"
+            if [ -d "$d" ]; then
+              cp "$d"/*.exe windows-nsis-staging/ 2>/dev/null || true
+            fi
+          done
+          ls -la windows-nsis-staging/ || true
+
+      - name: Bundle Windows portable (NSIS)
+        if: matrix.os_name == 'Windows'
+        shell: bash
+        env:
+          PORTABLE_CFG: '{"bundle":{"windows":{"nsis":{"installMode":"portable"}}}}'
+          CI: "true"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CCACHE_DISABLE: "1"
+          CMAKE_C_COMPILER_LAUNCHER: ""
+          CMAKE_CXX_COMPILER_LAUNCHER: ""
+          CMAKE_DISABLE_FIND_PACKAGE_Ccache: "TRUE"
+          MSBUILDDISABLENODEREUSE: 1
+          TRACKFILEACCESS: "false"
+          RUST_BACKTRACE: 1
+          CMAKE_BUILD_PARALLEL_LEVEL: "1"
+          CMAKE_VERBOSE_MAKEFILE: "ON"
+          GGML_CCACHE: "OFF"
+          CMAKE_GENERATOR: "Ninja"
+          WHISPER_NO_AVX: "0"
+          WHISPER_NO_AVX2: "0"
+          GGML_AVX: "ON"
+          GGML_AVX2: "ON"
+          CMAKE_CUDA_ARCHITECTURES: "75;86;89"
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          VULKAN_SDK: ${{ env.VULKAN_SDK }}
+          VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
+          VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
+          RUSTFLAGS: "-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          NO_STRIP: "true"
+        run: bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis --config "$PORTABLE_CFG"
 
       # --- Upload Artifacts ---
 
-      # Windows: copy installer into workspace first (CARGO_TARGET_DIR=C:\bld is outside workspace,
-      # and upload-artifact@v4 requires files to be inside the workspace root)
-      - name: Collect Windows installer into workspace
+      # Windows: copy installers into workspace (CARGO_TARGET_DIR may be outside workspace)
+      - name: Collect Windows bundles into workspace
         if: matrix.os_name == 'Windows'
         shell: pwsh
         run: |
           $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
-          $arch = if ("${{ matrix.arch }}" -eq "ARM64") { "arm64" } else { "x64" }
-          New-Item -ItemType Directory -Force -Path "dist-windows" | Out-Null
+          New-Item -ItemType Directory -Force -Path "dist-windows-setup" | Out-Null
+          New-Item -ItemType Directory -Force -Path "dist-windows-portable" | Out-Null
+          if (Test-Path "windows-nsis-staging") {
+            Get-ChildItem "windows-nsis-staging\*.exe" -ErrorAction SilentlyContinue | Copy-Item -Destination "dist-windows-setup\"
+          }
           $src = "$targetDir\${{ matrix.target }}\release\bundle\nsis"
           if (Test-Path $src) {
-            Get-ChildItem "$src\*.exe" | Copy-Item -Destination "dist-windows\"
+            Get-ChildItem "$src\*.exe" -ErrorAction SilentlyContinue | Copy-Item -Destination "dist-windows-portable\"
           }
 
       # Windows: NSIS installer (.exe)
@@ -587,16 +628,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: taurscribe-windows-${{ matrix.arch }}-setup
-          path: dist-windows/*.exe
+          path: dist-windows-setup/*.exe
           if-no-files-found: warn
 
-      # Windows: Portable ZIP
-      - name: Upload portable ZIP (Windows)
+      # Windows: Portable NSIS (.exe)
+      - name: Upload portable NSIS (Windows)
         if: matrix.os_name == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: taurscribe-windows-${{ matrix.arch }}-portable
-          path: taurscribe-*-portable.zip
+          path: dist-windows-portable/*.exe
           if-no-files-found: warn
 
       # macOS: DMG
@@ -627,4 +668,36 @@ jobs:
           name: taurscribe-linux-rpm
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+          if-no-files-found: warn
+
+      # Linux: AppImage
+      - name: Upload AppImage (Linux)
+        if: matrix.os_name == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: taurscribe-linux-appimage
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+          if-no-files-found: warn
+
+      # Linux: portable tarball (same layout as .deb payload)
+      - name: Create Linux tarball (Linux)
+        if: matrix.os_name == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          DEB=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb 2>/dev/null | head -1)
+          if [ -n "$DEB" ] && [ -f "$DEB" ]; then
+            rm -rf /tmp/taurscribe-deb-root linux-portable-tarball
+            mkdir -p /tmp/taurscribe-deb-root linux-portable-tarball
+            dpkg-deb -x "$DEB" /tmp/taurscribe-deb-root
+            tar -czf linux-portable-tarball/taurscribe-linux-x64.tar.gz -C /tmp/taurscribe-deb-root .
+          fi
+
+      - name: Upload Linux tarball (Linux)
+        if: matrix.os_name == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: taurscribe-linux-tarball
+          path: linux-portable-tarball/*.tar.gz
           if-no-files-found: warn
