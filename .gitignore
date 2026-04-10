@@ -23,7 +23,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-taurscribe-runtime/
 .claude/
 generated_logos/
 
@@ -42,6 +41,15 @@ GRANITE_SPEECH.md
 # Test audio fixtures (large binary, not for the repo)
 *.wav
 *.mp3
+
+# Runtime dir: ignore everything except the README and sample audio
+# (exceptions must come after the *.wav rule to take effect)
+taurscribe-runtime/*
+!taurscribe-runtime/README.md
+!taurscribe-runtime/samples/
+taurscribe-runtime/samples/*
+!taurscribe-runtime/samples/jfk.wav
+!taurscribe-runtime/samples/otherjack.wav
 
 # Build logs & misc artifacts
 build_log.txt
