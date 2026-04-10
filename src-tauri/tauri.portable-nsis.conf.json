@@ -1,10 +1,3 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
-  "bundle": {
-    "windows": {
-      "nsis": {
-        "installMode": "portable"
-      }
-    }
-  }
+  "$schema": "https://schema.tauri.app/config/2"
 }
