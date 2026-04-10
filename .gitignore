@@ -68,6 +68,9 @@ src-tauri/linux-libs/*.so.*
 # Agents folder
 .agents/
 
+# Claude Code harness
+skills-lock.json
+
 # LibriSpeech / offline eval (local manifests & CSV output)
 manifest.jsonl
 eval_manifest.jsonl
