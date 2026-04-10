@@ -551,66 +551,38 @@ jobs:
           # Preserve debug symbols so __TAURI_BUNDLE_TYPE is found by the bundler.
           NO_STRIP: "true"
 
-      - name: Stage Windows NSIS installer (before portable bundle)
+      # Portable: zip the binary + DLLs from the already-built release directory.
+      # Tauri 2.10+ dropped "installMode: portable" from the NSIS schema, so a
+      # second full NSIS build is no longer a viable path for portable artifacts.
+      - name: Create Windows portable zip
         if: matrix.os_name == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
-          mkdir -p windows-nsis-staging
-          for dir in "C:/bld" "src-tauri/target"; do
-            d="$dir/${{ matrix.target }}/release/bundle/nsis"
-            if [ -d "$d" ]; then
-              cp "$d"/*.exe windows-nsis-staging/ 2>/dev/null || true
-            fi
-          done
-          ls -la windows-nsis-staging/ || true
-
-      - name: Bundle Windows portable (NSIS)
-        if: matrix.os_name == 'Windows'
-        shell: bash
-        env:
-          CI: "true"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CCACHE_DISABLE: "1"
-          CMAKE_C_COMPILER_LAUNCHER: ""
-          CMAKE_CXX_COMPILER_LAUNCHER: ""
-          CMAKE_DISABLE_FIND_PACKAGE_Ccache: "TRUE"
-          MSBUILDDISABLENODEREUSE: 1
-          TRACKFILEACCESS: "false"
-          RUST_BACKTRACE: 1
-          CMAKE_BUILD_PARALLEL_LEVEL: "1"
-          CMAKE_VERBOSE_MAKEFILE: "ON"
-          GGML_CCACHE: "OFF"
-          CMAKE_GENERATOR: "Ninja"
-          WHISPER_NO_AVX: "0"
-          WHISPER_NO_AVX2: "0"
-          GGML_AVX: "ON"
-          GGML_AVX2: "ON"
-          CMAKE_CUDA_ARCHITECTURES: "75;86;89"
-          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
-          VULKAN_SDK: ${{ env.VULKAN_SDK }}
-          VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
-          VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
-          RUSTFLAGS: "-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006"
-          APPIMAGE_EXTRACT_AND_RUN: "1"
-          NO_STRIP: "true"
-        run: bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis --config src-tauri/tauri.portable-nsis.conf.json
+          $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $releaseDir = "$targetDir\${{ matrix.target }}\release"
+          New-Item -ItemType Directory -Force -Path "dist-windows-portable" | Out-Null
+          $files = [System.Collections.Generic.List[string]]::new()
+          if (Test-Path "$releaseDir\taurscribe.exe") { $files.Add("$releaseDir\taurscribe.exe") }
+          Get-ChildItem "$releaseDir\*.dll" -ErrorAction SilentlyContinue | ForEach-Object { $files.Add($_.FullName) }
+          if ($files.Count -eq 0) {
+            Write-Warning "No files found for portable zip"
+          } else {
+            Compress-Archive -Path $files -DestinationPath "dist-windows-portable\taurscribe-portable.zip" -Force
+            Write-Host "Created portable zip with $($files.Count) file(s)"
+          }
 
       # --- Upload Artifacts ---
 
-      # Windows: copy installers into workspace (CARGO_TARGET_DIR may be outside workspace)
+      # Windows: copy NSIS installer into workspace (CARGO_TARGET_DIR may be outside workspace)
       - name: Collect Windows bundles into workspace
         if: matrix.os_name == 'Windows'
         shell: pwsh
         run: |
           $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
           New-Item -ItemType Directory -Force -Path "dist-windows-setup" | Out-Null
-          New-Item -ItemType Directory -Force -Path "dist-windows-portable" | Out-Null
-          if (Test-Path "windows-nsis-staging") {
-            Get-ChildItem "windows-nsis-staging\*.exe" -ErrorAction SilentlyContinue | Copy-Item -Destination "dist-windows-setup\"
-          }
           $src = "$targetDir\${{ matrix.target }}\release\bundle\nsis"
           if (Test-Path $src) {
-            Get-ChildItem "$src\*.exe" -ErrorAction SilentlyContinue | Copy-Item -Destination "dist-windows-portable\"
+            Get-ChildItem "$src\*.exe" -ErrorAction SilentlyContinue | Copy-Item -Destination "dist-windows-setup\"
           }
 
       # Windows: NSIS installer (.exe)
@@ -622,13 +594,13 @@ jobs:
           path: dist-windows-setup/*.exe
           if-no-files-found: warn
 
-      # Windows: Portable NSIS (.exe)
-      - name: Upload portable NSIS (Windows)
+      # Windows: portable zip (exe + DLLs, no installer required)
+      - name: Upload portable zip (Windows)
         if: matrix.os_name == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: taurscribe-windows-${{ matrix.arch }}-portable
-          path: dist-windows-portable/*.exe
+          path: dist-windows-portable/*.zip
           if-no-files-found: warn
 
       # macOS: DMG
