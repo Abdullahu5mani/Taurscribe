@@ -568,7 +568,6 @@ jobs:
         if: matrix.os_name == 'Windows'
         shell: bash
         env:
-          PORTABLE_CFG: '{"bundle":{"windows":{"nsis":{"installMode":"portable"}}}}'
           CI: "true"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"
@@ -594,7 +593,7 @@ jobs:
           RUSTFLAGS: "-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006"
           APPIMAGE_EXTRACT_AND_RUN: "1"
           NO_STRIP: "true"
-        run: bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis --config "$PORTABLE_CFG"
+        run: bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis --config src-tauri/tauri.portable-nsis.conf.json
 
       # --- Upload Artifacts ---
 
