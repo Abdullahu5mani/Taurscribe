@@ -161,7 +161,9 @@ jobs:
             sccache \
             ccache \
             libvulkan-dev \
-            pkg-config
+            pkg-config \
+            libfuse2t64 \
+            desktop-file-utils
 
       - name: Cache ccache (Linux)
         if: contains(matrix.platform, 'ubuntu')

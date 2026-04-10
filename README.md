@@ -294,7 +294,19 @@ cd src-tauri && cargo check
 cd src-tauri && cargo test
 ```
 
-See [CLAUDE.md](./CLAUDE.md) and [AGENTS.md](./AGENTS.md) for development guidance.
+---
+
+## Developer Documentation
+
+| File | Audience | What it covers |
+|---|---|---|
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | All developers | Comprehensive technical reference: ASCII diagram, data flows, module reference, IPC table, memory management, common patterns, glossary. **Start here.** |
+| [CODEBASE_GUIDE.md](./CODEBASE_GUIDE.md) | New to this codebase | Beginner-friendly tour with analogies, step-by-step recording flow, hook-by-hook frontend breakdown. |
+| [CLAUDE.md](./CLAUDE.md) | Contributors / AI assistants | Build commands, all ~60 Tauri commands, module inventory, env vars, constraints. Kept up-to-date. |
+| [TESTING.md](./TESTING.md) | Contributors | Integration tests, LibriSpeech eval pipeline, accuracy benchmarking. |
+| [GRANITE_SPEECH.md](./GRANITE_SPEECH.md) | Engine contributors | Deep dive on the Cohere/Granite Speech ONNX engine: mel spectrogram math, KV cache, tensor shapes, decoder loop. See banner inside for updated file names. |
+| [FEATURES.md](./FEATURES.md) | Product / contributors | Complete feature inventory by category. |
+| [AGENTS.md](./AGENTS.md) | AI coding assistants | Guidance for AI agents working in this repo; includes brand/design context. |
 
 ---
 
