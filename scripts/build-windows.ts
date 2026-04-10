@@ -157,10 +157,11 @@ console.log("\n🚀 Step 5: Running tauri build...\n");
 
 // Get CLI args passed to this script (e.g. --bundles nsis)
 const extraArgs = process.argv.slice(2);
+// shell:false — on Windows, shell:true mangles --config JSON (quotes stripped → invalid JSON).
 const tauriBuild = spawnSync("bunx", ["tauri", "build", ...extraArgs], {
   stdio: "inherit",
   cwd: root,
-  shell: true,
+  shell: false,
 });
 
 // ── Step 6: Clean up ─────────────────────────────────────────
