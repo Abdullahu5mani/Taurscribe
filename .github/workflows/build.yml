@@ -233,17 +233,13 @@ jobs:
         shell: pwsh
         run: |
           choco install llvm ninja -y
-          # Install NASM with fallback to direct download if Chocolatey CDN is unavailable
-          choco install nasm -y
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Chocolatey CDN unavailable for nasm, falling back to direct download"
-            $nasmVer = "2.16.03"
-            $url = "https://www.nasm.us/pub/nasm/releasebuilds/$nasmVer/win64/nasm-$nasmVer-installer-x64.exe"
-            $out = "$env:TEMP\nasm-setup.exe"
-            Invoke-WebRequest $url -OutFile $out -UseBasicParsing
-            Start-Process $out -ArgumentList "/S" -Wait
-            echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          }
+          # Install NASM directly — Chocolatey CDN is unreliable in CI (frequent 499s)
+          $nasmVer = "2.16.03"
+          $url = "https://www.nasm.us/pub/nasm/releasebuilds/$nasmVer/win64/nasm-$nasmVer-installer-x64.exe"
+          $out = "$env:TEMP\nasm-setup.exe"
+          Invoke-WebRequest $url -OutFile $out -UseBasicParsing
+          Start-Process $out -ArgumentList "/S" -Wait
+          echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       # FIX: Remove Git's link.exe which conflicts with MSVC's link.exe
