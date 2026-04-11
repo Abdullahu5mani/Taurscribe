@@ -38,12 +38,13 @@ jobs:
             os_name: 'Windows'
             arch: 'ARM64'
 
-          - platform: 'ubuntu-24.04'
-            name: 'Linux (x86_64)'
-            target: 'x86_64-unknown-linux-gnu'
-            cuda: true
-            os_name: 'Linux'
-            arch: 'x86_64'
+          # --- Linux (x86_64) --- TEMPORARILY DISABLED
+          # - platform: 'ubuntu-24.04'
+          #   name: 'Linux (x86_64)'
+          #   target: 'x86_64-unknown-linux-gnu'
+          #   cuda: true
+          #   os_name: 'Linux'
+          #   arch: 'x86_64'
 
     runs-on: ${{ matrix.platform }}
     name: Build - ${{ matrix.name }}

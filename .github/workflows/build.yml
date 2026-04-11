@@ -53,16 +53,14 @@ jobs:
             arch: 'ARM64'
             acceleration: 'CPU'
 
-          # --- 4. Linux (x86_64) ---
-          # Standard Linux build on Ubuntu 24.04 (Noble Numbat).
-          # Includes CUDA support for Linux users with NVIDIA cards.
-          - platform: 'ubuntu-24.04'
-            name: 'Linux (x86_64)'
-            target: 'x86_64-unknown-linux-gnu'
-            cuda: true
-            os_name: 'Linux'
-            arch: 'x86_64'
-            acceleration: 'CUDA'
+          # --- 4. Linux (x86_64) --- TEMPORARILY DISABLED
+          # - platform: 'ubuntu-24.04'
+          #   name: 'Linux (x86_64)'
+          #   target: 'x86_64-unknown-linux-gnu'
+          #   cuda: true
+          #   os_name: 'Linux'
+          #   arch: 'x86_64'
+          #   acceleration: 'CUDA'
           
           # Note: Linux ARM builds (e.g., Raspberry Pi) are commented out.
           # They require complex cross-compilation setup (linker issues with GTK/Webkit).
