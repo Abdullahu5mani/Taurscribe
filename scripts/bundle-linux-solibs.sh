@@ -80,7 +80,10 @@ done
 
 if [ -n "$LLAMA_BUILD_DIR" ]; then
   echo "bundle-linux-solibs: Copying llama-cpp libs from $LLAMA_BUILD_DIR"
-  find "$LLAMA_BUILD_DIR" \( -name "*.so" -o -name "*.so.*" \) -exec cp -Lf {} "$LIBS_DIR/" \; 2>/dev/null || true
+  # Copy only real files (! -type l) to avoid duplicating the 490 MB libggml-cuda.so
+  # three times via its versioned symlinks. Symlinks are recreated below.
+  find "$LLAMA_BUILD_DIR" \( -name "*.so" -o -name "*.so.*" \) ! -type l \
+    -exec cp -f {} "$LIBS_DIR/" \; 2>/dev/null || true
 else
   echo "bundle-linux-solibs: WARNING - llama-cpp-sys-2 build output not found"
   echo "If grammar LLM is enabled, the app will fail to start."
@@ -101,13 +104,25 @@ done < <(find "$BUILD_BASE/release/build" "$TARGET_DIR/release/build" \
 if [ -n "$ORT_SO" ]; then
   ORT_DIR="$(dirname "$ORT_SO")"
   echo "bundle-linux-solibs: Copying ORT libs from $ORT_DIR"
-  # Copy the main lib and any versioned aliases (libonnxruntime.so.1.x.x etc.)
-  find "$ORT_DIR" \( -name "libonnxruntime.so" -o -name "libonnxruntime.so.*" \) \
-    -exec cp -Lf {} "$LIBS_DIR/" \; 2>/dev/null || true
+  # Copy only real files to avoid duplicating versioned symlinks.
+  find "$ORT_DIR" \( -name "libonnxruntime.so" -o -name "libonnxruntime.so.*" \) ! -type l \
+    -exec cp -f {} "$LIBS_DIR/" \; 2>/dev/null || true
 else
   echo "bundle-linux-solibs: WARNING - libonnxruntime.so not found in build output"
   echo "Parakeet transcription will fail to load on the target system."
 fi
+
+# ---- Recreate versioned symlinks --------------------------------------------
+# After copying only real files above, restore the standard .so and .so.MAJOR
+# symlinks so the runtime linker can find libraries by soname.
+# Pattern: libfoo.so.MAJOR.MINOR.PATCH  →  libfoo.so.MAJOR  →  libfoo.so
+(cd "$LIBS_DIR" && for f in *.so.*.*; do
+  [ -f "$f" ] || continue
+  major="${f%.*.*}"   # libfoo.so.0.9.5  →  libfoo.so.0
+  base="${f%.*.*.*}"  # libfoo.so.0.9.5  →  libfoo.so
+  [ -e "$major" ] || ln -sf "$f" "$major"
+  [ -e "$base"  ] || ln -sf "$major" "$base"
+done)
 
 # ---- Report -----------------------------------------------------------------
 SO_COUNT=$(find "$LIBS_DIR" \( -name "*.so" -o -name "*.so.*" \) | wc -l)

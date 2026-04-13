@@ -336,7 +336,6 @@ jobs:
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -C link-arg=-fuse-ld=mold', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           # Match Bundle step env vars so cargo doesn't see a changed environment and recompile
           CI: "true"
-          NO_STRIP: "true"
           APPIMAGE_EXTRACT_AND_RUN: "1"
 
       - name: Build frontend
@@ -392,7 +391,11 @@ jobs:
             # Use build-windows.ts which handles DLL bundling
             bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
-            bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm,appimage
+            # rpm and appimage are dropped: packaging a ~1 GB payload (531 MB binary +
+            # 490 MB libggml-cuda.so) via rpmbuild/mksquashfs takes 4+ hours and risks
+            # hitting the 6-hour GHA timeout. .deb + .tar.gz cover all practical Linux
+            # install scenarios. Re-add rpm/appimage if the binary size is reduced.
+            bun run tauri build --target ${{ matrix.target }} --bundles deb
           else
             bun run tauri build --target ${{ matrix.target }}
           fi
@@ -426,7 +429,6 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -C link-arg=-fuse-ld=mold', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           APPIMAGE_EXTRACT_AND_RUN: "1"
-          NO_STRIP: "true"
 
       # Portable: zip the binary + DLLs from the already-built release directory.
       # Tauri 2.10+ dropped "installMode: portable" from the NSIS schema, so a
@@ -485,25 +487,12 @@ jobs:
             done
           fi
 
-          # Linux: DEB, RPM, AppImage, and portable tarball (from .deb root layout)
+          # Linux: DEB + portable tarball (extracted from .deb)
+          # rpm and appimage dropped — see bundle step comment above.
           if [ "${{ matrix.os_name }}" = "Linux" ]; then
-            for f in src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb; do
-              if [ -f "$f" ]; then
-                cp "$f" "release-assets/taurscribe-${TAG}-linux-amd64.deb"
-              fi
-            done
-            for f in src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm; do
-              if [ -f "$f" ]; then
-                cp "$f" "release-assets/taurscribe-${TAG}-linux-x86_64.rpm"
-              fi
-            done
-            for f in src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage; do
-              if [ -f "$f" ]; then
-                cp "$f" "release-assets/taurscribe-${TAG}-linux-x86_64.AppImage"
-              fi
-            done
             DEB=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb 2>/dev/null | head -1)
             if [ -n "$DEB" ] && [ -f "$DEB" ]; then
+              cp "$DEB" "release-assets/taurscribe-${TAG}-linux-amd64.deb"
               rm -rf /tmp/taurscribe-deb-root
               mkdir -p /tmp/taurscribe-deb-root
               dpkg-deb -x "$DEB" /tmp/taurscribe-deb-root
