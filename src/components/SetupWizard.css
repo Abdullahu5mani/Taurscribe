@@ -103,7 +103,7 @@
 
 /* ── Shared step typography ────────────────────────────────── */
 .setup-eyebrow {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.18em;
@@ -113,7 +113,7 @@
 }
 
 .setup-heading {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 2.6rem;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -125,7 +125,7 @@
 }
 
 .setup-sub {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.95rem;
   color: var(--text-secondary, #6b6b76);
   text-align: center;
@@ -149,7 +149,7 @@
 }
 
 .setup-btn {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -217,7 +217,7 @@
 }
 
 .welcome-logo {
-  font-family: 'Poppins', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 3.2rem;
   font-weight: 800;
   letter-spacing: 0.22em;
@@ -248,7 +248,7 @@
 }
 
 .welcome-tagline {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 1rem;
   color: var(--text-secondary, #6b6b76);
   letter-spacing: 0.05em;
@@ -272,7 +272,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.9rem;
   color: var(--text-primary, #ededef);
   opacity: 0;
@@ -361,7 +361,7 @@
 }
 
 .hw-label {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.65rem;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -372,7 +372,7 @@
 }
 
 .hw-value {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.85rem;
   color: var(--text-primary, #ededef);
   flex: 1;
@@ -391,7 +391,7 @@
 .hw-status--bad { background: var(--error, #dc2626); }
 
 .hw-verdict {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.9rem;
   color: var(--text-secondary, #6b6b76);
   text-align: center;
@@ -430,7 +430,7 @@
 .engine-card:nth-child(2) { animation-delay: 0.25s; border-top: 2px solid var(--parakeet-color, #3ecfa5); }
 
 .engine-card-name {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 1.1rem;
   font-weight: 800;
   letter-spacing: 0.1em;
@@ -440,7 +440,7 @@
 .engine-card:nth-child(2) .engine-card-name { color: var(--parakeet-color, #3ecfa5); }
 
 .engine-card-source {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.6rem;
   letter-spacing: 0.08em;
   color: var(--text-muted, #44444d);
@@ -458,7 +458,7 @@
 }
 
 .engine-card-trait {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.82rem;
   color: var(--text-secondary, #6b6b76);
   display: flex;
@@ -476,7 +476,7 @@
 }
 
 .engines-note {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.85rem;
   color: var(--text-muted, #44444d);
   text-align: center;
@@ -583,7 +583,7 @@
 }
 
 .setup-engine-chip {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.7rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -611,7 +611,7 @@
 }
 
 .setup-engine-slide-index {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.7rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -620,7 +620,7 @@
 
 .setup-engine-carousel-subtitle {
   margin: 0;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.92rem;
   color: var(--text-primary, #ededef);
   line-height: 1.45;
@@ -637,13 +637,13 @@
 .setup-engine-carousel-column {
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.18);
+  background: #000000;
   padding: 10px 12px;
 }
 
 .setup-engine-column-title {
   margin: 0 0 8px;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.68rem;
   font-weight: 700;
   color: var(--accent-primary, #e09f3e);
@@ -657,7 +657,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.83rem;
   line-height: 1.42;
   color: var(--text-secondary, #8b8b95);
@@ -672,7 +672,7 @@
 }
 
 .setup-engine-carousel-btn {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.72rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -745,7 +745,7 @@
 }
 
 .setup-use-case-kicker {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.62rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -753,7 +753,7 @@
 }
 
 .setup-use-case-title {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -761,7 +761,7 @@
 }
 
 .setup-use-case-copy {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.82rem;
   line-height: 1.45;
 }
@@ -799,7 +799,7 @@
 }
 
 .setup-recommendation-badge {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -812,7 +812,7 @@
 }
 
 .setup-recommendation-engine {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.7rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -831,7 +831,7 @@
 }
 
 .setup-recommendation-model {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 1.18rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -840,7 +840,7 @@
 
 .setup-recommendation-summary {
   margin: 0;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.84rem;
   color: var(--text-secondary, #8b8b95);
   line-height: 1.5;
@@ -859,7 +859,7 @@
   display: flex;
   align-items: flex-start;
   gap: 9px;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.8rem;
   color: var(--text-secondary, #8b8b95);
   line-height: 1.45;
@@ -891,7 +891,7 @@
   border: 1px solid rgba(255,255,255,0.06);
   background: rgba(255,255,255,0.025);
   color: var(--text-secondary, #7f7f89);
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.78rem;
   line-height: 1.45;
 }
@@ -941,7 +941,7 @@
   max-width: 580px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: var(--bg-primary, #111110);
+  background: var(--bg-primary, #000000);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 8px 30px rgba(0, 0, 0, 0.4);
   padding: 14px;
   margin-bottom: 20px;
@@ -960,14 +960,14 @@
 }
 
 .fs-rack-brand {
-  font-family: var(--font-mono, 'Martian Mono', monospace);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   font-size: 0.6rem;
   letter-spacing: 0.18em;
   color: var(--text-muted, #767680);
 }
 
 .fs-rack-status {
-  font-family: var(--font-mono, 'Martian Mono', monospace);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   font-size: 0.55rem;
   letter-spacing: 0.18em;
   color: var(--accent-primary, #e09f3e);
@@ -999,21 +999,21 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  background: rgba(0, 0, 0, 0.4);
+  background: #000000;
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 4px;
   padding: 10px 12px;
 }
 
 .fs-panel-label {
-  font-family: var(--font-mono, 'Martian Mono', monospace);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   font-size: 0.55rem;
   letter-spacing: 0.1em;
   color: var(--text-muted, #767680);
 }
 
 .fs-panel-screen {
-  font-family: var(--font-mono, 'Martian Mono', monospace);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   font-size: 0.72rem;
   line-height: 1.5;
   color: rgba(255, 255, 255, 0.5);
@@ -1040,7 +1040,7 @@
 }
 
 .fs-p-step {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.6rem;
   letter-spacing: 0.15em;
   color: var(--accent-primary, #e09f3e);
@@ -1125,7 +1125,7 @@
 }
 
 .fs-spec-num {
-  font-family: var(--font-mono, 'Martian Mono', monospace);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   font-size: 0.65rem;
   color: var(--text-muted, #767680);
   background: rgba(255, 255, 255, 0.03);
@@ -1141,7 +1141,7 @@
 }
 
 .fs-spec-title {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.8rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1149,7 +1149,7 @@
 }
 
 .fs-spec-desc {
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: 'IBM Plex Sans', sans-serif;
   font-size: 0.8rem;
   line-height: 1.4;
   color: var(--text-secondary, #8b8b95);
@@ -1199,7 +1199,7 @@
 
 .setup-recording-setting-title {
   margin: 0 0 4px;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.9rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1208,7 +1208,7 @@
 
 .setup-recording-setting-desc {
   margin: 0;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.8rem;
   color: var(--text-secondary, #8b8b95);
   line-height: 1.45;
@@ -1260,7 +1260,7 @@
 }
 
 .hotkey-key {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.05em;
@@ -1274,7 +1274,7 @@
 }
 
 .hotkey-plus {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 1.4rem;
   color: var(--text-muted, #44444d);
 }
@@ -1303,7 +1303,7 @@
 .hotkey-step:nth-child(5) { animation-delay: 0.8s; }
 
 .hotkey-step-num {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.65rem;
   font-weight: 600;
   color: var(--accent-primary, #e09f3e);
@@ -1312,13 +1312,13 @@
 }
 
 .hotkey-step-text {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.9rem;
   color: var(--text-secondary, #6b6b76);
 }
 
 .hotkey-privacy {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.65rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1346,7 +1346,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.9rem;
   color: var(--text-secondary, #6b6b76);
   opacity: 0;
@@ -1372,7 +1372,7 @@
 }
 
 .ready-cta-note {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.9rem;
   color: var(--text-muted, #44444d);
   text-align: center;
@@ -1429,7 +1429,7 @@
   gap: 8px;
   color: var(--accent-primary, #e09f3e);
   font-size: 0.78rem;
-  font-family: var(--font-mono, 'Martian Mono', monospace);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   letter-spacing: 0.04em;
 }
 
@@ -1459,20 +1459,20 @@
   gap: 8px;
   font-size: 0.68rem;
   color: var(--text-secondary, #8b8b95);
-  font-family: var(--font-mono, 'Martian Mono', monospace);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   letter-spacing: 0.03em;
 }
 
 .ready-download-name {
   font-size: 0.74rem;
-  font-family: var(--font-mono, 'Martian Mono', monospace);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   color: var(--text-primary, #ededef);
   letter-spacing: 0.02em;
 }
 
 .ready-download-pct {
   font-size: 0.7rem;
-  font-family: var(--font-mono, 'Martian Mono', monospace);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   color: var(--accent-primary, #e09f3e);
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -1580,7 +1580,7 @@
 }
 
 .perm-name {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.88rem;
   font-weight: 600;
   color: var(--text-primary, #e2e8f0);
@@ -1588,7 +1588,7 @@
 }
 
 .perm-desc {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.78rem;
   color: var(--text-muted, #44444d);
   margin-top: 2px;
@@ -1605,7 +1605,7 @@
 }
 
 .perm-badge {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.75rem;
   font-weight: 600;
   padding: 4px 10px;
@@ -1636,7 +1636,7 @@
   border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
   border-radius: 10px;
   padding: 12px 16px;
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-size: 0.83rem;
   color: var(--text-secondary, #6b6b76);
   text-align: center;

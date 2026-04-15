@@ -41,7 +41,7 @@
   background: rgba(220, 38, 38, 0.12);
   border: 1px solid rgba(220, 38, 38, 0.3);
   color: #f87171;
-  font-family: 'Barlow', sans-serif;
+  font-family: 'IBM Plex Sans', sans-serif;
   font-size: 0.78rem;
   font-weight: 500;
   letter-spacing: 0.01em;
@@ -56,7 +56,7 @@
 .settings-modal {
   /* L3 fix: solid opaque fallback so the modal is visible even when
    * backdrop-filter is unavailable (e.g. some Linux WMs, reduced-motion). */
-  background: color-mix(in srgb, var(--bg-primary) 94%, white 6%);
+  background: #000000;
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -82,7 +82,7 @@
 
 .settings-header h2 {
   margin: 0;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-size: var(--font-md);
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -141,7 +141,7 @@
 .settings-tab-btn {
   padding: 0 18px;
   height: 44px;
-  font-family: 'Martian Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
   font-size: 0.68rem;
   font-weight: 500;
   letter-spacing: 0.12em;
@@ -186,7 +186,7 @@
 }
 
 .settings-section-title {
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-size: var(--font-md);
   font-weight: 700;
   margin-bottom: 24px;
@@ -239,7 +239,7 @@
 
 .model-info h3 {
   margin: 0 0 6px 0;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-size: var(--font-base);
   font-weight: 600;
   color: var(--text-primary);
@@ -253,7 +253,7 @@
   font-size: var(--font-sm);
   display: flex;
   gap: 12px;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
 }
 
 .model-tag {
@@ -261,7 +261,7 @@
   padding: 3px 8px;
   border-radius: 6px;
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   color: var(--text-secondary);
 }
 
@@ -271,7 +271,7 @@
   color: var(--accent-primary);
   padding: 8px 16px;
   border-radius: 8px;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 600;
   font-size: var(--font-base);
   cursor: pointer;
@@ -391,7 +391,7 @@
 
 .delete-confirm-label {
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 600;
   color: var(--error-light, #f87171);
 }
@@ -400,7 +400,7 @@
   padding: 6px 14px;
   border-radius: 6px;
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1),
@@ -442,7 +442,7 @@
   padding: 8px 16px;
   border-radius: 8px;
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 600;
   color: var(--error-light, #f87171);
   background: rgba(239, 68, 68, 0.08);
@@ -606,14 +606,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 600;
   font-size: var(--font-base);
   color: var(--text-primary);
 }
 
 .setting-card-label-plain {
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 600;
   font-size: var(--font-base);
   color: var(--text-primary);
@@ -621,7 +621,7 @@
 
 .setting-card-meta {
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   color: var(--text-muted);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -660,7 +660,7 @@
 
 .status-badge {
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 600;
 }
 
@@ -677,7 +677,7 @@
 /* ── Select input ──────────────────────────────────────────────────── */
 
 .select-input {
-  background: #1c1c1f;
+  background: #000000;
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
   border-radius: 8px;
@@ -685,7 +685,7 @@
   padding: 6px 10px;
   cursor: pointer;
   outline: none;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -694,7 +694,7 @@
    they fall back to the OS default (white on Windows), making near-white text
    invisible. Force solid dark + light text so the dropdown list is readable. */
 .select-input option {
-  background: #1c1c1f;
+  background: #000000;
   color: #ededef;
 }
 
@@ -725,7 +725,7 @@
   border-radius: 6px;
   padding: 5px 12px;
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   cursor: pointer;
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1),
               color 0.15s cubic-bezier(0.25, 1, 0.5, 1),
@@ -787,7 +787,7 @@
 .model-group-sub {
   font-size: var(--font-sm);
   color: var(--text-muted);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
 }
 
 .model-group-sub--whisper  { color: var(--whisper-color);  }
@@ -801,7 +801,7 @@
   color: var(--accent-primary);
   border-radius: 4px;
   padding: 2px 7px;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
 }
 
 .model-group-badge--warn {
@@ -844,7 +844,7 @@
   color: var(--accent-secondary, #a855f7);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
 }
 
 .coreml-divider {
@@ -871,7 +871,7 @@
   border: 1px solid rgba(255, 255, 255, 0.07);
   color: var(--text-secondary);
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1),
@@ -901,7 +901,7 @@
   font-size: var(--font-sm);
   color: var(--text-muted);
   margin: 0 0 16px;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
 }
 
 /* Recommended wrapper */
@@ -958,7 +958,7 @@
   left: 16px;
   transform: translateY(-50%);
   font-size: var(--font-xs);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -994,7 +994,7 @@
   border: 1px solid rgba(255, 255, 255, 0.07);
   color: var(--text-secondary);
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   cursor: pointer;
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1),
               color 0.15s cubic-bezier(0.25, 1, 0.5, 1),
@@ -1042,7 +1042,7 @@
 .backend-toggle-btn {
   padding: 6px 14px;
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 500;
   color: var(--text-secondary);
   background: transparent;
@@ -1114,7 +1114,7 @@
   cursor: pointer;
   font: inherit;
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1), color 0.15s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
@@ -1164,7 +1164,7 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--text-primary);
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   letter-spacing: 0.03em;
 }
 
@@ -1230,7 +1230,7 @@
 }
 
 .hotkey-step-num {
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-size: var(--font-sm);
   color: var(--text-muted);
   min-width: 20px;
@@ -1264,7 +1264,7 @@
   color: var(--text-secondary);
   min-width: 34px;
   text-align: right;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
 }
 
 .sound-events {
@@ -1288,7 +1288,7 @@
 .sound-event-file {
   font-size: var(--font-sm);
   color: var(--text-muted);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
 }
 
 /* ── About tab ─────────────────────────────────────────────────────── */
@@ -1306,7 +1306,7 @@
 }
 
 .about-app-name {
-  font-family: 'Poppins', sans-serif;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
   font-weight: 700;
   font-size: var(--font-md);
   color: var(--text-primary);
@@ -1316,7 +1316,7 @@
 
 .about-version {
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   color: var(--text-muted);
 }
 
@@ -1347,7 +1347,7 @@
 
 .about-path {
   font-size: var(--font-sm);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   color: var(--accent-primary);
   word-break: break-all;
   text-align: right;
@@ -1359,7 +1359,7 @@
 }
 
 .about-open-btn {
-  font-family: 'Martian Mono', monospace;
+  font-family: 'IBM Plex Mono', monospace;
   font-size: 0.6rem;
   letter-spacing: 0.06em;
   color: var(--accent-primary);
@@ -1416,7 +1416,7 @@
 .dict-field-label {
   font-size: var(--font-sm);
   color: var(--text-secondary);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1429,7 +1429,7 @@
   font-size: var(--font-sm);
   padding: 9px 12px;
   outline: none;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   transition: border-color 0.15s cubic-bezier(0.25, 1, 0.5, 1);
   width: 100%;
   box-sizing: border-box;
@@ -1559,7 +1559,7 @@
   font-size: var(--font-sm);
   padding: 9px 12px;
   outline: none;
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   transition: border-color 0.15s cubic-bezier(0.25, 1, 0.5, 1);
   width: 100%;
   box-sizing: border-box;
@@ -1625,7 +1625,7 @@
 .snippet-label {
   font-size: var(--font-sm);
   color: var(--text-secondary);
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   text-transform: uppercase;
   flex-shrink: 0;
   min-width: 28px;
@@ -1679,7 +1679,7 @@
 }
 
 .close-behavior-option-title {
-  font-family: 'Zodiak', serif;
+  font-family: 'IBM Plex Sans Condensed', serif;
   font-weight: 600;
   font-size: var(--font-sm);
   color: var(--text-primary);

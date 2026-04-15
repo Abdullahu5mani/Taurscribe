@@ -5,7 +5,7 @@ use std::sync::Arc;
 // Wrapper struct to make the Audio Stream "moveable" between threads.
 // By default, raw pointers/streams aren't thread-safe.
 // We implement Send and Sync manually (unsafe) to tell Rust "Check constraints are met".
-#[allow(dead_code)]
+// Held in RecordingHandle solely for RAII ownership — dropped when recording stops.
 pub struct SendStream(pub cpal::Stream);
 unsafe impl Send for SendStream {} // Can be moved to another thread
 unsafe impl Sync for SendStream {} // Can be accessed from multiple threads
@@ -19,6 +19,4 @@ pub struct RecordingHandle {
     pub transcriber_thread: std::thread::JoinHandle<()>,
     pub level_stop: Arc<AtomicBool>, // Signal the level-emitter thread to exit
     pub level_thread: std::thread::JoinHandle<()>,
-    #[allow(dead_code)]
-    pub sample_rate: u32, // Sample rate of the recording (needed for silence padding)
 }

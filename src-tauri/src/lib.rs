@@ -84,7 +84,6 @@ pub fn run() {
     // 1. Create Whisper manager only. The model itself loads lazily on first use.
     println!("[INFO] Initializing Whisper transcription engine manager...");
     let whisper = WhisperManager::new();
-    let whisper_loaded_at_startup = false;
     println!("[INFO] Whisper startup load disabled; model will load on demand");
 
     // 2. Initialize VAD
@@ -138,19 +137,12 @@ pub fn run() {
             // Setup System Tray
             tray::setup_tray(app)?;
 
-            // Sync initial model state with tray menu item.
+            // Sync initial model state with tray menu item (no model loaded at startup).
             use std::sync::atomic::Ordering;
-            if whisper_loaded_at_startup {
-                app.state::<AudioState>()
-                    .model_loaded
-                    .store(true, Ordering::Relaxed);
-                tray::update_tray_model_item(app.handle(), true);
-            } else {
-                app.state::<AudioState>()
-                    .model_loaded
-                    .store(false, Ordering::Relaxed);
-                tray::update_tray_model_item(app.handle(), false);
-            }
+            app.state::<AudioState>()
+                .model_loaded
+                .store(false, Ordering::Relaxed);
+            tray::update_tray_model_item(app.handle(), false);
 
             // Start Hotkey Listener in Background Thread
             // Clone the hotkey_config Arc so the listener reacts to config changes immediately.

@@ -30,45 +30,17 @@ import { formatSize, beautifyModelName } from "./utils/modelDisplay";
 import type { OnboardingUseCase } from "./modelRecommendations";
 import "./components/TitleBar.css";
 import "./App.css";
-import { IconChat, IconFileText, IconSparkle, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, IconSettings, IconEject, InfoTooltip } from "./components/Icons";
-import { TICKER_PHRASES } from "./constants/ticker";
+import { IconChat, IconFileText, IconCode, IconTie, IconBolt, IconCpu, IconDownload, IconMic, IconLightbulb, IconSettings, IconEject, InfoTooltip } from "./components/Icons";
 import { getEngineForModelId } from "./utils/engineUtils";
 import type { CommandResult } from "./types/session";
 
 const ANIMATED_LOGOS = [
-  "animated_logo_assemble.svg",
-  "animated_logo_blueprint.svg",
-  "animated_logo_bottom_spin.svg",
-  "animated_logo_bounce.svg",
-  "animated_logo_flip.svg",
-  "animated_logo_grow.svg",
-  "animated_logo_scan_reveal.svg",
-  "animated_logo_shockwave.svg",
-  "animated_logo_slice.svg",
-  "animated_logo_stomp.svg",
-  "animated_logo_write.svg",
-  "animated_logo_pulse_reveal.svg",
-  "animated_logo_swing.svg",
-  "animated_logo_zigzag.svg",
-  "animated_logo_spiral.svg",
   "animated_logo_breathe.svg",
-  "animated_logo_thin_air.svg",
-  "animated_logo_glitch.svg",
-  "animated_logo_orbit.svg",
-  "animated_logo_rubberband.svg",
+  "animated_logo_scan_reveal.svg",
   "animated_logo_focus.svg",
   "animated_logo_crt.svg",
-  "animated_logo_liquid.svg",
-  "animated_logo_hologram.svg",
-  "animated_logo_wiper.svg",
-  "animated_logo_heartbeat.svg",
-  "animated_logo_laser_trace.svg",
-  "animated_logo_split_door.svg",
-  "animated_logo_ripple.svg",
-  "animated_logo_flare.svg",
-  "animated_logo_handwrite.svg",
-  "animated_logo_quantum_flip.svg",
-  "animated_logo_debris.svg"
+  "animated_logo_pulse_reveal.svg",
+  "animated_logo_stomp.svg",
 ];
 
 
@@ -76,7 +48,7 @@ const ANIMATED_LOGOS = [
 const TONE_STYLES: { value: string; label: string; icon: React.ReactNode; accent: string; desc: string }[] = [
   { value: 'Casual', label: 'Casual', icon: <IconChat size={18} />, accent: '#6895d2', desc: 'Relaxed, conversational tone. Great for notes, emails, and quick messages.' },
   { value: 'Verbatim', label: 'Verbatim', icon: <IconFileText size={18} />, accent: '#94a3b8', desc: 'Minimal changes. Keeps your original speech intact with filler words preserved.' },
-  { value: 'Enthusiastic', label: 'Enthusiastic', icon: <IconSparkle size={18} />, accent: '#f472b6', desc: 'Energetic and expressive. Perfect for pitches, presentations, and vlogs.' },
+  { value: 'Enthusiastic', label: 'Enthusiastic', icon: <IconBolt size={18} />, accent: '#e09f3e', desc: 'Energetic and expressive. Perfect for pitches, presentations, and vlogs.' },
   { value: 'Software_Dev', label: 'Software Dev', icon: <IconCode size={18} />, accent: '#3ecfa5', desc: 'Technical language with proper code terms, casing, and dev conventions.' },
   { value: 'Professional', label: 'Professional', icon: <IconTie size={18} />, accent: '#2563eb', desc: 'Formal and polished. Ideal for reports, documentation, and client work.' },
 ];
@@ -725,22 +697,6 @@ function App() {
     }
   }, [isRecording]);
 
-  // --- Ticker (short list in constants/ticker.ts; styled muted in App.css) ---
-  const tickerContent = useMemo(() => (
-    <>
-      {TICKER_PHRASES.flatMap((phrase, i) => [
-        i > 0 ? <span key={`sep-${i}`} className="ticker-sep"> — </span> : null,
-        <span key={i} className="header-ticker-phrase">
-          {phrase.parts.map((p, j) => {
-            if (!p.highlight) return p.text;
-            const cls = p.highlight === "whisper" ? "ticker-whisper" : p.highlight === "parakeet" ? "ticker-parakeet" : p.highlight === "cohere" ? "ticker-cohere" : "ticker-accent";
-            return <span key={j} className={cls}>{p.text}</span>;
-          })}
-        </span>,
-      ]).filter(Boolean)}
-    </>
-  ), []);
-
   // --- Derived UI state ---
   const noWhisperModel = models.length === 0;
   const noParakeetModel = parakeetModels.length === 0;
@@ -838,7 +794,7 @@ function App() {
 
   if (showSetupWizard === null) {
     return (
-      <div className="app-loading" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-primary, #09090b)", color: "var(--text-secondary)" }}>
+      <div className="app-loading" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-primary, #000000)", color: "var(--text-secondary)" }}>
         Loading…
       </div>
     );
@@ -899,15 +855,6 @@ function App() {
                     {colorizedStatus}
                   </span>
                 )}
-                <div
-                  className={`header-ticker header-ticker-fade-in${headerStatusMessage !== null ? " header-ticker--with-status" : ""}`}
-                  aria-hidden="true"
-                >
-                  <div className="header-ticker-track">
-                    <span className="header-ticker-segment">{tickerContent}</span>
-                    <span className="header-ticker-segment" aria-hidden="true">{tickerContent}</span>
-                  </div>
-                </div>
               </div>
               {/* Eject / Load button — hidden while loading or recording */}
               {!isLoading && !isRecording && !isProcessingTranscript && (
@@ -1647,8 +1594,6 @@ function App() {
           setEnableOverlay={setEnableOverlay}
           muteBackgroundAudio={muteBackgroundAudio}
           setMuteBackgroundAudio={setMuteBackgroundAudio}
-          transcriptionStyle={transcriptionStyle}
-          setTranscriptionStyle={setTranscriptionStyle}
           llmBackend={llmBackend}
           setLlmBackend={setLlmBackend}
           soundVolume={volume}

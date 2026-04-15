@@ -93,7 +93,7 @@ export function useRecording({
     const [isRecording, setIsRecording] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
     const [isProcessingTranscript, setIsProcessingTranscript] = useState(false);
-    const [liveTranscript, setLiveTranscript] = useState("");
+    const [, setLiveTranscript] = useState("");
     const [latestLatency, setLatestLatency] = useState<number | null>(null);
 
     const isRecordingRef = useRef(false);
@@ -660,7 +660,10 @@ export function useRecording({
     };
 
     const handleTranscriptionChunk = (chunkText: string) => {
-        if (!isRecordingRef.current || isPausedRef.current || isProcessingTranscript) return;
+        // Accept chunks when actively recording OR during the processing window
+        // (tail flush events arrive while stop_recording is awaited). Reject when
+        // the session is fully idle or paused — that would be stale/cross-session audio.
+        if ((!isRecordingRef.current && !isProcessingTranscript) || isPausedRef.current) return;
         const cleanChunk = chunkText.trim();
         if (!cleanChunk) return;
 
@@ -679,7 +682,6 @@ export function useRecording({
         isRecordingRef,
         isPaused,
         isProcessingTranscript,
-        liveTranscript,
         latestLatency,
         handleStartRecording,
         handlePauseRecording,
