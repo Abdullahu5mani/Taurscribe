@@ -793,9 +793,6 @@ pub async fn factory_reset_app_data(
     if let Ok(mut last_recording_path) = state.last_recording_path.lock() {
         *last_recording_path = None;
     }
-    if let Ok(mut app_state) = state.current_app_state.lock() {
-        *app_state = AppState::Ready;
-    }
     if let Ok(mut active_engine) = state.active_engine.lock() {
         *active_engine = ASREngine::Whisper;
     }

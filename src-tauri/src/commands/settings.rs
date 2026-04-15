@@ -178,10 +178,9 @@ pub fn set_close_behavior(state: State<AudioState>, behavior: String) -> Result<
 #[tauri::command]
 pub fn set_tray_state(
     app: AppHandle,
-    state: State<AudioState>,
+    _state: State<AudioState>,
     new_state: String,
 ) -> Result<(), String> {
-    // Convert string command ("ready") to Enum (AppState::Ready)
     let app_state = match new_state.as_str() {
         "ready" => AppState::Ready,
         "recording" => AppState::Recording,
@@ -189,10 +188,6 @@ pub fn set_tray_state(
         _ => return Err(format!("Unknown state: {}", new_state)),
     };
 
-    // Update our internal memory of the state
-    *state.current_app_state.lock().unwrap() = app_state;
-
-    // Actually change the visual icon
     tray::update_tray_icon(&app, app_state)?;
 
     Ok(())

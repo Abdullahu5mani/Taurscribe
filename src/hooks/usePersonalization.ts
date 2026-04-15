@@ -113,11 +113,6 @@ export function usePersonalization() {
     }, []);
 
     // ── Dictionary operations ────────────────────────────────────────────
-    const setDictionary = useCallback((entries: DictEntry[]) => {
-        setDictionaryState(entries);
-        persist("custom_dictionary", entries);
-    }, [persist]);
-
     const addDictEntry = useCallback((entry: Omit<DictEntry, "id">) => {
         setDictionaryState((prev) => {
             const next = [...prev, { ...entry, id: genId() }];
@@ -143,11 +138,6 @@ export function usePersonalization() {
     }, [persist]);
 
     // ── Snippet operations ───────────────────────────────────────────────
-    const setSnippets = useCallback((entries: SnippetEntry[]) => {
-        setSnippetsState(entries);
-        persist("snippets", entries);
-    }, [persist]);
-
     const addSnippet = useCallback((entry: Omit<SnippetEntry, "id">) => {
         setSnippetsState((prev) => {
             const next = [...prev, { ...entry, id: genId() }];
@@ -176,7 +166,6 @@ export function usePersonalization() {
         // Dictionary
         dictionary,
         dictionaryRef,
-        setDictionary,
         addDictEntry,
         updateDictEntry,
         removeDictEntry,
@@ -184,7 +173,6 @@ export function usePersonalization() {
         // Snippets
         snippets,
         snippetsRef,
-        setSnippets,
         addSnippet,
         updateSnippet,
         removeSnippet,

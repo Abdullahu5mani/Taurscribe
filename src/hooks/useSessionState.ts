@@ -27,16 +27,11 @@ export function useSessionState() {
     setSessionState((prev) => ({ ...prev, latestLatency }));
   }, []);
 
-  const patchSessionState = useCallback((patch: Partial<SessionState>) => {
-    setSessionState((prev) => ({ ...prev, ...patch }));
-  }, []);
-
   return {
     sessionState,
     setSessionPhase,
     setSessionNotice,
     setLastTranscript,
     setLatestLatency,
-    patchSessionState,
   };
 }

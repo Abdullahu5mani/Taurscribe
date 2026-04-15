@@ -203,8 +203,20 @@ fn start_recording_blocking(
     // 5. Create COMMUNICATION PIPES (Channels)
     // Bounded: prevents unbounded memory growth if file writer or transcriber falls behind.
     // Audio callback uses try_send so it never blocks the real-time capture thread.
+    //
+    // Cohere encoder can take 8+ seconds per 15-second chunk. At 48 kHz / 1024-sample
+    // callbacks (~21 ms each) that's ~380 callbacks during one encode pass. A 32-message
+    // bound fills in ~672 ms and then try_send silently drops audio — causing the "whole
+    // last sentence disappeared" symptom. 512 messages ≈ 10.7 s of headroom, enough for
+    // even the slowest Cohere runs on CPU. Parakeet and Whisper are fast enough that 64
+    // is comfortable headroom.
     let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5s headroom at 48kHz/1024
-    let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(32); // transcriber has its own accumulator
+    let transcriber_channel_bound = match active_engine {
+        ASREngine::Cohere => 512,
+        ASREngine::Parakeet => 64,
+        ASREngine::Whisper => 32,
+    };
+    let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(transcriber_channel_bound);
 
     let file_tx_clone = file_tx.clone();
     let whisper_tx_clone = whisper_tx.clone();
@@ -337,7 +349,11 @@ fn start_recording_blocking(
                             method: method.to_string(),
                         },
                     );
-                    session_transcript.lock().unwrap().push_str(&text);
+                    {
+                        let mut st = session_transcript.lock().unwrap();
+                        if !st.is_empty() { st.push(' '); }
+                        st.push_str(text.trim());
+                    }
                     true
                 }
                 Ok(_) => false,
@@ -510,7 +526,11 @@ fn start_recording_blocking(
                                         method: "Parakeet".to_string(),
                                     },
                                 );
-                                session_transcript.lock().unwrap().push_str(&transcript);
+                                {
+                                    let mut st = session_transcript.lock().unwrap();
+                                    if !st.is_empty() { st.push(' '); }
+                                    st.push_str(transcript.trim());
+                                }
                             }
                             Ok(_) => {}
                             Err(e) => eprintln!("[ERROR] Parakeet error: {}", e),
@@ -532,11 +552,18 @@ fn start_recording_blocking(
         let silence_samples = (sample_rate as usize) * 400 / 1000;
         buffer.extend(std::iter::repeat(0.0_f32).take(silence_samples));
 
-        // Flush full-sized chunks from the tail buffer
-        while buffer.len() >= chunk_size {
+        // Flush full-sized chunks from the tail buffer.
+        // Use the same chunk size as the live loop for each engine so this loop
+        // actually runs for Parakeet (live=4 s) instead of being dead code (was 6 s).
+        let flush_chunk_size = match active_engine {
+            ASREngine::Parakeet => parakeet_min_samples(sample_rate),
+            ASREngine::Cohere => (sample_rate * 15) as usize,
+            _ => (sample_rate * 6) as usize,
+        };
+        while buffer.len() >= flush_chunk_size {
             chunk.clear();
-            chunk.extend_from_slice(&buffer[..chunk_size]);
-            buffer.drain(..chunk_size);
+            chunk.extend_from_slice(&buffer[..flush_chunk_size]);
+            buffer.drain(..flush_chunk_size);
             match active_engine {
                 ASREngine::Whisper => {
                     crate::memory::maybe_log_process_memory_with_sizes(
@@ -610,14 +637,26 @@ fn start_recording_blocking(
                             ),
                         ],
                     );
+                    let flush_start = std::time::Instant::now();
                     if let Ok(transcript) = parakeet_manager
                         .lock()
                         .unwrap()
                         .transcribe_chunk(&buf16, 16000)
                     {
                         if !transcript.is_empty() {
-                            session_transcript.lock().unwrap().push_str(&transcript);
-                            println!("[TRANSCRIPT] 🦜 (Final) \"{}\"", transcript.trim());
+                            let elapsed = flush_start.elapsed().as_millis() as u32;
+                            println!("[TRANSCRIPT] 🦜 (Final) \"{}\" (took {}ms)", transcript.trim(), elapsed);
+                            let _ = app_clone.emit(
+                                "transcription-chunk",
+                                TranscriptionChunk {
+                                    text: transcript.clone(),
+                                    processing_time_ms: elapsed,
+                                    method: "Parakeet".to_string(),
+                                },
+                            );
+                            let mut st = session_transcript.lock().unwrap();
+                            if !st.is_empty() { st.push(' '); }
+                            st.push_str(transcript.trim());
                         }
                     }
                 }
@@ -674,7 +713,9 @@ fn start_recording_blocking(
                                         method: "Whisper".to_string(),
                                     },
                                 );
-                                session_transcript.lock().unwrap().push_str(&text);
+                                let mut st = session_transcript.lock().unwrap();
+                                if !st.is_empty() { st.push(' '); }
+                                st.push_str(text.trim());
                             }
                         }
                     }
@@ -721,7 +762,9 @@ fn start_recording_blocking(
                                         method: "Cohere".to_string(),
                                     },
                                 );
-                                session_transcript.lock().unwrap().push_str(&text);
+                                let mut st = session_transcript.lock().unwrap();
+                                if !st.is_empty() { st.push(' '); }
+                                st.push_str(text.trim());
                             }
                         }
                     }
@@ -748,14 +791,26 @@ fn start_recording_blocking(
                             ),
                         ],
                     );
+                    let tail_start = std::time::Instant::now();
                     if let Ok(transcript) = parakeet_manager
                         .lock()
                         .unwrap()
                         .transcribe_chunk(&buf16, 16000)
                     {
                         if !transcript.is_empty() {
-                            session_transcript.lock().unwrap().push_str(&transcript);
-                            println!("[TRANSCRIPT] 🦜 (Final Partial) \"{}\"", transcript.trim());
+                            let elapsed = tail_start.elapsed().as_millis() as u32;
+                            println!("[TRANSCRIPT] 🦜 (Tail) \"{}\" (took {}ms)", transcript.trim(), elapsed);
+                            let _ = app_clone.emit(
+                                "transcription-chunk",
+                                TranscriptionChunk {
+                                    text: transcript.clone(),
+                                    processing_time_ms: elapsed,
+                                    method: "Parakeet".to_string(),
+                                },
+                            );
+                            let mut st = session_transcript.lock().unwrap();
+                            if !st.is_empty() { st.push(' '); }
+                            st.push_str(transcript.trim());
                         }
                     }
                 }
@@ -854,7 +909,6 @@ fn start_recording_blocking(
         transcriber_thread,
         level_stop,
         level_thread,
-        sample_rate,
     });
 
     Ok(format!("Recording started: {}", path.display()))

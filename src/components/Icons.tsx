@@ -193,12 +193,6 @@ export const IconFileText = ({ size = 16, ...props }: IconProps) => (
     </svg>
 );
 
-export const IconSparkle = ({ size = 16, ...props }: IconProps) => (
-    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
-        <polygon points="11 4 13 11 20 13 13 15 11 22 9 15 2 13 9 11" />
-        <polygon points="18 3 19 5 21 6 19 7 18 9 17 7 15 6 17 5" />
-    </svg>
-);
 
 export const IconCode = ({ size = 16, ...props }: IconProps) => (
     <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -267,17 +261,6 @@ export const IconCopy = ({ size = 16, ...props }: IconProps) => (
         <path d="M7 18H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3" />
         <path d="M15 8h2a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2h2" />
         <rect x="11" y="6" width="4" height="4" rx="1" ry="1" />
-    </svg>
-);
-
-export const IconKeyboard = ({ size = 16, ...props }: IconProps) => (
-    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
-        <rect x="2" y="5" width="20" height="14" rx="2" ry="2" />
-        <line x1="6" y1="9" x2="6.01" y2="9" /><line x1="10" y1="9" x2="10.01" y2="9" />
-        <line x1="14" y1="9" x2="14.01" y2="9" /><line x1="18" y1="9" x2="18.01" y2="9" />
-        <line x1="6" y1="12" x2="6.01" y2="12" /><line x1="10" y1="12" x2="10.01" y2="12" />
-        <line x1="14" y1="12" x2="14.01" y2="12" /><line x1="18" y1="12" x2="18.01" y2="12" />
-        <line x1="8" y1="15" x2="16" y2="15" />
     </svg>
 );
 

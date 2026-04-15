@@ -14,9 +14,6 @@ interface QuickSettingsProps {
     setEnableOverlay: (val: boolean) => void;
     muteBackgroundAudio: boolean;
     setMuteBackgroundAudio: (val: boolean) => void;
-    // Style
-    transcriptionStyle: string;
-    setTranscriptionStyle: (val: string) => void;
     // LLM backend
     llmBackend: "gpu" | "cpu";
     setLlmBackend: (val: "gpu" | "cpu") => void;
@@ -84,8 +81,6 @@ function QuickSettingsComponent({
     enableDenoise, setEnableDenoise,
     enableOverlay, setEnableOverlay,
     muteBackgroundAudio, setMuteBackgroundAudio,
-    transcriptionStyle: _transcriptionStyle,
-    setTranscriptionStyle: _setTranscriptionStyle,
     llmBackend, setLlmBackend,
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
     dictionaryCount, snippetsCount,

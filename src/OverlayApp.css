@@ -87,7 +87,7 @@ html, body, #root {
 }
 
 .overlay-pill__time {
-  font-family: "Martian Mono", monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.03em;

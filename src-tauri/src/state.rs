@@ -2,7 +2,7 @@ use crate::audio::RecordingHandle;
 use crate::cohere::CohereManager;
 use crate::denoise::Denoiser;
 use crate::parakeet::ParakeetManager;
-use crate::types::{ASREngine, AppState, HotkeyBinding};
+use crate::types::{ASREngine, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
 use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
@@ -31,9 +31,6 @@ pub struct AudioState {
 
     // macOS fix: Arc-wrapped so async commands can clone it into spawn_blocking.
     pub last_recording_path: Arc<Mutex<Option<String>>>,
-
-    // macOS fix: Arc-wrapped for async command access.
-    pub current_app_state: Arc<Mutex<AppState>>,
 
     // macOS fix: Arc-wrapped for async command access.
     pub active_engine: Arc<Mutex<ASREngine>>,
@@ -92,7 +89,6 @@ impl AudioState {
             parakeet: Arc::new(Mutex::new(parakeet)),
             vad: Arc::new(Mutex::new(vad)),
             last_recording_path: Arc::new(Mutex::new(None)),
-            current_app_state: Arc::new(Mutex::new(AppState::Ready)),
             active_engine: Arc::new(Mutex::new(ASREngine::Whisper)),
             session_transcript: Arc::new(Mutex::new(String::new())),
             llm: Arc::new(Mutex::new(None)),

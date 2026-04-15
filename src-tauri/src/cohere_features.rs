@@ -174,8 +174,3 @@ pub fn extract_features(audio: &[f32]) -> Array2<f32> {
 
     mel
 }
-
-#[allow(dead_code)]
-pub const fn expected_sample_rate() -> u32 {
-    SAMPLE_RATE as u32
-}
