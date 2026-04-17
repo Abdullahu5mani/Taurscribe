@@ -352,4 +352,3 @@ fn granite_speech_files() -> Vec<ModelFile> {
         ModelFile { filename: "config.json",             remote_path: "config.json",             sha1: "" },
     ]
 }
-

@@ -14,22 +14,50 @@ use crate::state::AudioState;
 use crate::types::{ASREngine, CommandResult, TranscriptionChunk};
 use crate::utils::{clean_transcript, get_recordings_dir, strip_whitelisted_sound_captions};
 
-/// Live Parakeet chunk length in seconds. Very short windows (~1s) hurt accuracy on
-/// streaming CTC; ~4s trades a bit of latency for much better context (see NeMo
-/// streaming / buffered-chunk guidance).
-const PARAKEET_LIVE_CHUNK_SECS: f32 = 4.0;
+/// Nemotron is a true streaming model and the upstream example feeds it 560 ms windows.
+/// Keep buffered 4 s chunks only for non-streaming Parakeet variants.
+const PARAKEET_BUFFERED_CHUNK_SECS: f32 = 4.0;
+const PARAKEET_NEMOTRON_CHUNK_SAMPLES_16K: usize = 8_960; // 560 ms @ 16 kHz
+const PARAKEET_EOU_CHUNK_SAMPLES_16K: usize = 2_560; // 160 ms @ 16 kHz
+const PARAKEET_BUFFERED_CHUNK_SAMPLES_16K: usize = 16_000 * 4;
 
-#[inline]
-fn parakeet_min_samples(sample_rate: u32) -> usize {
-    (sample_rate as f32 * PARAKEET_LIVE_CHUNK_SECS) as usize
+#[derive(Clone, Copy)]
+struct ParakeetLiveConfig {
+    feed_secs: f32,
+    min_samples_16k: usize,
 }
 
-/// Universal preprocess → 16 kHz, then pad to `PARAKEET_LIVE_CHUNK_SECS` at 16 kHz.
+#[inline]
+fn parakeet_live_config(model_type: Option<&str>) -> ParakeetLiveConfig {
+    match model_type {
+        Some("Nemotron") | Some("Nemotron Streaming") => ParakeetLiveConfig {
+            feed_secs: PARAKEET_NEMOTRON_CHUNK_SAMPLES_16K as f32 / 16_000.0,
+            min_samples_16k: PARAKEET_NEMOTRON_CHUNK_SAMPLES_16K,
+        },
+        Some("EOU") => ParakeetLiveConfig {
+            feed_secs: PARAKEET_EOU_CHUNK_SAMPLES_16K as f32 / 16_000.0,
+            min_samples_16k: PARAKEET_EOU_CHUNK_SAMPLES_16K,
+        },
+        _ => ParakeetLiveConfig {
+            feed_secs: PARAKEET_BUFFERED_CHUNK_SECS,
+            min_samples_16k: PARAKEET_BUFFERED_CHUNK_SAMPLES_16K,
+        },
+    }
+}
+
+#[inline]
+fn parakeet_live_chunk_samples(sample_rate: u32, config: ParakeetLiveConfig) -> usize {
+    ((sample_rate as f32 * config.feed_secs).round() as usize).max(1)
+}
+
+/// Universal preprocess → 16 kHz, then pad to the current Parakeet model's minimum
+/// streaming window so short utterances still get one full decode step.
 fn parakeet_preprocess_for_transcribe(
     buf: &[f32],
     sample_rate: u32,
     user_denoise: bool,
     denoiser_arc: &Arc<Mutex<Option<Denoiser>>>,
+    min_len_16k: usize,
 ) -> Vec<f32> {
     let mut guard = denoiser_arc.lock().unwrap();
     let mut pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
@@ -39,9 +67,8 @@ fn parakeet_preprocess_for_transcribe(
         guard.as_mut(),
     );
     drop(guard);
-    let min_len = parakeet_min_samples(16000);
-    if pcm16.len() < min_len {
-        pcm16.resize(min_len, 0.0);
+    if pcm16.len() < min_len_16k {
+        pcm16.resize(min_len_16k, 0.0);
     }
     pcm16
 }
@@ -351,7 +378,9 @@ fn start_recording_blocking(
                     );
                     {
                         let mut st = session_transcript.lock().unwrap();
-                        if !st.is_empty() { st.push(' '); }
+                        if !st.is_empty() {
+                            st.push(' ');
+                        }
                         st.push_str(text.trim());
                     }
                     true
@@ -376,6 +405,17 @@ fn start_recording_blocking(
     let app_clone = app_handle.clone();
     let transcriber_thread = std::thread::spawn(move || {
         let mut buffer = Vec::new();
+        let parakeet_live = if active_engine == ASREngine::Parakeet {
+            let status = parakeet_manager.lock().unwrap().get_status();
+            let config = parakeet_live_config(status.model_type.as_deref());
+            println!(
+                "[PARAKEET] Live mic config: model_type={:?} feed_secs={:.2} min_samples_16k={}",
+                status.model_type, config.feed_secs, config.min_samples_16k
+            );
+            Some(config)
+        } else {
+            None
+        };
         let chunk_size = match active_engine {
             ASREngine::Cohere => (sample_rate * 15) as usize,
             _ => (sample_rate * 6) as usize,
@@ -468,7 +508,7 @@ fn start_recording_blocking(
                 ASREngine::Parakeet => {
                     buffer.extend(samples);
                     let parakeet_chunk_size =
-                        (sample_rate as f32 * PARAKEET_LIVE_CHUNK_SECS) as usize;
+                        parakeet_live_chunk_samples(sample_rate, parakeet_live.unwrap());
                     let max_buffer_size = parakeet_chunk_size * 2;
                     while buffer.len() >= parakeet_chunk_size {
                         if buffer.len() > max_buffer_size {
@@ -493,6 +533,7 @@ fn start_recording_blocking(
                             sample_rate,
                             denoise_enabled_thread,
                             &denoiser_arc,
+                            parakeet_live.unwrap().min_samples_16k,
                         );
                         crate::memory::maybe_log_process_memory_with_sizes(
                             "recording parakeet live chunk after preprocess",
@@ -528,7 +569,9 @@ fn start_recording_blocking(
                                 );
                                 {
                                     let mut st = session_transcript.lock().unwrap();
-                                    if !st.is_empty() { st.push(' '); }
+                                    if !st.is_empty() {
+                                        st.push(' ');
+                                    }
                                     st.push_str(transcript.trim());
                                 }
                             }
@@ -554,9 +597,9 @@ fn start_recording_blocking(
 
         // Flush full-sized chunks from the tail buffer.
         // Use the same chunk size as the live loop for each engine so this loop
-        // actually runs for Parakeet (live=4 s) instead of being dead code (was 6 s).
+        // actually runs for Parakeet with its selected live cadence instead of the old 6 s default.
         let flush_chunk_size = match active_engine {
-            ASREngine::Parakeet => parakeet_min_samples(sample_rate),
+            ASREngine::Parakeet => parakeet_live_chunk_samples(sample_rate, parakeet_live.unwrap()),
             ASREngine::Cohere => (sample_rate * 15) as usize,
             _ => (sample_rate * 6) as usize,
         };
@@ -626,6 +669,7 @@ fn start_recording_blocking(
                         sample_rate,
                         denoise_enabled_thread,
                         &denoiser_arc,
+                        parakeet_live.unwrap().min_samples_16k,
                     );
                     crate::memory::maybe_log_process_memory_with_sizes(
                         "recording parakeet final flush chunk after preprocess",
@@ -645,7 +689,11 @@ fn start_recording_blocking(
                     {
                         if !transcript.is_empty() {
                             let elapsed = flush_start.elapsed().as_millis() as u32;
-                            println!("[TRANSCRIPT] 🦜 (Final) \"{}\" (took {}ms)", transcript.trim(), elapsed);
+                            println!(
+                                "[TRANSCRIPT] 🦜 (Final) \"{}\" (took {}ms)",
+                                transcript.trim(),
+                                elapsed
+                            );
                             let _ = app_clone.emit(
                                 "transcription-chunk",
                                 TranscriptionChunk {
@@ -655,7 +703,9 @@ fn start_recording_blocking(
                                 },
                             );
                             let mut st = session_transcript.lock().unwrap();
-                            if !st.is_empty() { st.push(' '); }
+                            if !st.is_empty() {
+                                st.push(' ');
+                            }
                             st.push_str(transcript.trim());
                         }
                     }
@@ -714,7 +764,9 @@ fn start_recording_blocking(
                                     },
                                 );
                                 let mut st = session_transcript.lock().unwrap();
-                                if !st.is_empty() { st.push(' '); }
+                                if !st.is_empty() {
+                                    st.push(' ');
+                                }
                                 st.push_str(text.trim());
                             }
                         }
@@ -763,7 +815,9 @@ fn start_recording_blocking(
                                     },
                                 );
                                 let mut st = session_transcript.lock().unwrap();
-                                if !st.is_empty() { st.push(' '); }
+                                if !st.is_empty() {
+                                    st.push(' ');
+                                }
                                 st.push_str(text.trim());
                             }
                         }
@@ -779,6 +833,7 @@ fn start_recording_blocking(
                         sample_rate,
                         denoise_enabled_thread,
                         &denoiser_arc,
+                        parakeet_live.unwrap().min_samples_16k,
                     );
                     crate::memory::maybe_log_process_memory_with_sizes(
                         "recording parakeet tail after preprocess",
@@ -799,7 +854,11 @@ fn start_recording_blocking(
                     {
                         if !transcript.is_empty() {
                             let elapsed = tail_start.elapsed().as_millis() as u32;
-                            println!("[TRANSCRIPT] 🦜 (Tail) \"{}\" (took {}ms)", transcript.trim(), elapsed);
+                            println!(
+                                "[TRANSCRIPT] 🦜 (Tail) \"{}\" (took {}ms)",
+                                transcript.trim(),
+                                elapsed
+                            );
                             let _ = app_clone.emit(
                                 "transcription-chunk",
                                 TranscriptionChunk {
@@ -809,7 +868,9 @@ fn start_recording_blocking(
                                 },
                             );
                             let mut st = session_transcript.lock().unwrap();
-                            if !st.is_empty() { st.push(' '); }
+                            if !st.is_empty() {
+                                st.push(' ');
+                            }
                             st.push_str(transcript.trim());
                         }
                     }

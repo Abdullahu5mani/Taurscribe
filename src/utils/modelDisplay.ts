@@ -15,6 +15,8 @@ export function formatSize(sizeMb: number): string {
  */
 export function beautifyModelName(rawName: string): string {
   let name = rawName
+    .replace("Nemotron (Streaming)", "Nemotron Streaming")
+    .replace("nemotron streaming", "Nemotron Streaming")
     .replace("ggml-", "")
     .replace(".bin", "")
     .replace("distil-", "Distil ")
@@ -24,7 +26,7 @@ export function beautifyModelName(rawName: string): string {
     .replace("base.en", "Base")
     .replace("-q8_0", " (Fast)")
     .replace("-q5_1", " (Balanced)")
-    .replace("nemotron", "Nemotron")
+    .replace("nemotron", "Nemotron Streaming")
     .replace("parakeet", "")
     .replace("ctc-", "CTC ")
     .replace("tdt-", "TDT ")
@@ -32,7 +34,9 @@ export function beautifyModelName(rawName: string): string {
     .replace("-", " ")
     .replace("_", " ")
     .trim();
-  return name.replace(/\b\w/g, l => l.toUpperCase());
+  return name
+    .replace(/Nemotron Streaming\s+Streaming/gi, "Nemotron Streaming")
+    .replace(/\b\w/g, l => l.toUpperCase());
 }
 
 /**
