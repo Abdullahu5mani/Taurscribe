@@ -31,7 +31,7 @@ impl std::fmt::Display for GpuBackend {
 pub struct ParakeetModelInfo {
     pub id: String,
     pub display_name: String,
-    pub model_type: String, // "Nemotron" | "CTC" | "EOU" | "TDT"
+    pub model_type: String, // "Nemotron Streaming" | "CTC" | "EOU" | "TDT"
     pub size_mb: f64,
 }
 
@@ -105,8 +105,8 @@ impl ParakeetManager {
                 if path.join("tokenizer.model").exists() {
                     models.push(ParakeetModelInfo {
                         id: format!("nemotron:{}", dir_name),
-                        display_name: format!("Nemotron (Streaming) - {}", dir_name),
-                        model_type: "Nemotron".to_string(),
+                        display_name: format!("Nemotron Streaming - {}", dir_name),
+                        model_type: "Nemotron Streaming".to_string(),
                         size_mb: Self::estimate_model_size(&path),
                     });
                 } else if path.join("tokenizer.json").exists() {
@@ -164,7 +164,7 @@ impl ParakeetManager {
     /// Get full status of the engine
     pub fn get_status(&self) -> ParakeetStatus {
         let model_type = self.runtime.as_ref().map(|slot| match &slot.model {
-            LoadedModel::Nemotron(_) => "Nemotron".to_string(),
+            LoadedModel::Nemotron(_) => "Nemotron Streaming".to_string(),
             LoadedModel::Ctc(_) => "CTC".to_string(),
             LoadedModel::Eou(_) => "EOU".to_string(),
             LoadedModel::Tdt(_) => "TDT".to_string(),
@@ -281,7 +281,7 @@ impl ParakeetManager {
         }
 
         let (model, backend): (LoadedModel, GpuBackend) = match info.model_type.as_str() {
-            "Nemotron" => {
+            "Nemotron" | "Nemotron Streaming" => {
                 let (m, b) = init_nemotron(&model_path, force_cpu, load_path)?;
                 (LoadedModel::Nemotron(m), b)
             }

@@ -1282,7 +1282,7 @@ function App() {
                       className="model-select"
                       role={!isInitialLoading && parakeetModels.length === 0 ? 'button' : undefined}
                       tabIndex={!isInitialLoading && parakeetModels.length === 0 ? 0 : -1}
-                      aria-label={!isInitialLoading && parakeetModels.length === 0 ? 'Download Nemotron from Settings' : undefined}
+                      aria-label={!isInitialLoading && parakeetModels.length === 0 ? 'Download Nemotron Streaming from Settings' : undefined}
                       onClick={() => {
                         if (!isInitialLoading && parakeetModels.length === 0) {
                           openModelSettingsForEngine('parakeet');
@@ -1307,8 +1307,8 @@ function App() {
                     >
                       {isInitialLoading ? "Loading..." : (
                         parakeetModels.length === 0
-                          ? "Download Nemotron from Settings"
-                          : `${beautifyModelName(parakeetModels[0]?.display_name || "Nemotron")} (${formatSize(parakeetModels[0]?.size_mb || 0)})`
+                          ? "Download Nemotron Streaming from Settings"
+                          : `${beautifyModelName(parakeetModels[0]?.display_name || "Nemotron Streaming")} (${formatSize(parakeetModels[0]?.size_mb || 0)})`
                       )}
                     </div>
                   </>
@@ -1499,7 +1499,7 @@ function App() {
                   ) : activeEngine === "whisper" ? (
                     <>You're on the <strong>Whisper</strong> engine but haven't downloaded a model yet. Try <strong>Whisper Base</strong> — it's small and accurate. Or switch to Parakeet if you already have it.</>
                   ) : activeEngine === "parakeet" ? (
-                    <>You're on the <strong>Parakeet</strong> engine but the Nemotron model isn't downloaded yet. Switch to Whisper if you already have a model, or download Parakeet from Settings.</>
+                    <>You're on the <strong>Parakeet</strong> engine but the Nemotron Streaming model isn't downloaded yet. Switch to Whisper if you already have a model, or download Parakeet from Settings.</>
                   ) : (
                     <>You're on the <strong>Cohere</strong> engine but the model isn't downloaded yet. Switch to Whisper or Parakeet if you already have a model, or download Cohere from Settings.</>
                   )}

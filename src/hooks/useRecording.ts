@@ -41,8 +41,8 @@ interface UseRecordingParams {
     setSessionLatency?: (latency: number | null) => void;
 }
 
-/** Minimum live mic time before stop; enforced in this hook only (not Rust). Keep in sync with AGENTS.md / CLAUDE.md. */
-const MIN_RECORDING_MS = 600;
+/** Minimum live mic time before stop; enforced in this hook only (not Rust). */
+const MIN_RECORDING_MS = 300;
 type OverlayPhase =
     | "recording"
     | "paused"

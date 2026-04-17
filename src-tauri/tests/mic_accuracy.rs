@@ -8,9 +8,11 @@
 //!   native-rate mono → 6s chunks → preprocess_live_transcribe_chunk
 //!     → vad.is_speech() > 0.35 gate → transcribe_chunk
 //!
-//! Parakeet (4s chunks, no VAD gate):
-//!   native-rate mono → 4s chunks → preprocess_live_transcribe_chunk
-//!     → pad to 64000 samples → transcribe_chunk
+//! Parakeet:
+//!   Nemotron/EOU streaming variants use the model's native live chunk size
+//!     (560 ms / 160 ms respectively); CTC/TDT stay on buffered 4 s windows.
+//!   All paths use preprocess_live_transcribe_chunk and pad short buffers enough
+//!   to give the selected model at least one decode step.
 //!
 //! Usage:
 //!   TAURSCRIBE_EVAL_MANIFEST=src-tauri/manifest.jsonl \
@@ -126,12 +128,38 @@ where
     parts.join(" ")
 }
 
-/// Parakeet live path: 4s chunks, no VAD gate, pad to 64000 samples.
-/// Mirrors `parakeet_preprocess_for_transcribe` + accumulation loop.
-fn mic_sim_parakeet(samples: &[f32], sample_rate: u32, p: &mut ParakeetManager) -> String {
-    const MIN_PARAKEET_SAMPLES: usize = 16000 * 4; // 64000
+#[derive(Clone, Copy)]
+struct ParakeetMicConfig {
+    feed_secs: f32,
+    min_samples_16k: usize,
+}
 
-    let chunk_size = (sample_rate as usize) * 4;
+fn parakeet_mic_config(model_type: Option<&str>) -> ParakeetMicConfig {
+    match model_type {
+        Some("Nemotron") | Some("Nemotron Streaming") => ParakeetMicConfig {
+            feed_secs: 8_960.0 / 16_000.0,
+            min_samples_16k: 8_960,
+        },
+        Some("EOU") => ParakeetMicConfig {
+            feed_secs: 2_560.0 / 16_000.0,
+            min_samples_16k: 2_560,
+        },
+        _ => ParakeetMicConfig {
+            feed_secs: 4.0,
+            min_samples_16k: 16_000 * 4,
+        },
+    }
+}
+
+/// Parakeet live path: feed the selected model at its native streaming cadence.
+/// Mirrors `parakeet_preprocess_for_transcribe` + accumulation loop.
+fn mic_sim_parakeet(
+    samples: &[f32],
+    sample_rate: u32,
+    p: &mut ParakeetManager,
+    config: ParakeetMicConfig,
+) -> String {
+    let chunk_size = ((sample_rate as f32) * config.feed_secs).round() as usize;
     let mut parts: Vec<String> = Vec::new();
 
     for chunk in samples.chunks(chunk_size) {
@@ -140,8 +168,8 @@ fn mic_sim_parakeet(samples: &[f32], sample_rate: u32, p: &mut ParakeetManager) 
         if pcm16.is_empty() {
             continue;
         }
-        if pcm16.len() < MIN_PARAKEET_SAMPLES {
-            pcm16.resize(MIN_PARAKEET_SAMPLES, 0.0);
+        if pcm16.len() < config.min_samples_16k {
+            pcm16.resize(config.min_samples_16k, 0.0);
         }
         if let Ok(t) = p.transcribe_chunk(&pcm16, 16000) {
             if !t.trim().is_empty() {
@@ -252,6 +280,7 @@ fn mic_accuracy() {
             let mut p = ParakeetManager::new();
             match p.initialize(None, true) {
                 Ok(_) => {
+                    let config = parakeet_mic_config(p.get_status().model_type.as_deref());
                     let wers = results.entry("parakeet").or_default();
                     for row in &rows {
                         let flac = librispeech_wer::resolve_librispeech_flac(
@@ -266,7 +295,7 @@ fn mic_accuracy() {
                                 continue;
                             }
                         };
-                        let hyp = mic_sim_parakeet(&samples, rate, &mut p);
+                        let hyp = mic_sim_parakeet(&samples, rate, &mut p, config);
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
                         eprintln!(

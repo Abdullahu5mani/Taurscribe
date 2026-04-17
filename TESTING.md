@@ -154,7 +154,7 @@ TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT=../taurscribe-runtime/librispeech/LibriSpeech/
 Mirrors `commands/recording.rs` without cpal or Tauri. Audio files are decoded at native sample rate and fed through the same chunk-accumulation loop as a live recording:
 
 - **Whisper / Cohere:** 6s chunks → `preprocess_live_transcribe_chunk` → energy VAD gate (0.35) → transcribe
-- **Parakeet:** 4s chunks → `preprocess_live_transcribe_chunk` → pad to ≥64 000 samples → transcribe (no VAD gate)
+- **Parakeet:** stream at the selected model's native cadence (Nemotron Streaming: 560 ms, EOU: 160 ms; buffered 4 s windows for non-streaming variants) → `preprocess_live_transcribe_chunk` → pad just enough for one decode step → transcribe (no VAD gate)
 
 ```bash
 cd src-tauri
