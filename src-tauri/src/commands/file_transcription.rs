@@ -320,7 +320,7 @@ fn transcribe_file_blocking(
                         let mut g = cohere
                             .lock()
                             .map_err(|_| "Cohere lock poisoned".to_string())?;
-                        g.transcribe_chunk(&chunk, 16000)?
+                        g.transcribe_chunk(&chunk, 16000, None)?
                     }
                     _ => unreachable!(),
                 };

@@ -378,7 +378,7 @@ function App() {
   const {
     isRecording, isRecordingRef, isPaused, isProcessingTranscript,
     latestLatency,
-    handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk,
+    handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk, handlePartialChunk,
   } = useRecording({
     activeEngineRef: activeEngineForwarded,
     models, parakeetModels, cohereModels, currentModel, currentParakeetModel, currentCohereModel,
@@ -495,6 +495,7 @@ function App() {
   const handleResumeRecordingRef = useSyncedRef(handleResumeRecording);
   const handleCancelRecordingRef = useSyncedRef(handleCancelRecording);
   const handleTranscriptionChunkRef = useSyncedRef(handleTranscriptionChunk);
+  const handlePartialChunkRef = useSyncedRef(handlePartialChunk);
   const asrModelCountsRef = useRef({
     whisper: 0,
     parakeet: 0,
@@ -580,6 +581,7 @@ function App() {
     handleResumeRecordingRef,
     handleCancelRecordingRef,
     handleTranscriptionChunkRef,
+    handlePartialChunkRef,
     playErrorRef,
     setHeaderStatusRef,
     triggerNoModelAttentionRef,

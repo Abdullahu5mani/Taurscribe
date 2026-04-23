@@ -67,9 +67,12 @@ fn parakeet_preprocess_for_transcribe(
         guard.as_mut(),
     );
     drop(guard);
-    if pcm16.len() < min_len_16k {
-        pcm16.resize(min_len_16k, 0.0);
-    }
+    // Always produce exactly min_len_16k samples: pad short buffers with silence,
+    // and truncate any resampler overrun (rubato SincFixedIn can produce ±1-2 extra
+    // samples at non-48 kHz rates).  An extra chunk caused by overrun would call
+    // Nemotron::transcribe_chunk with near-silence, advancing audio_processed by 8960
+    // samples over nothing and permanently skipping a 560 ms window.
+    pcm16.resize(min_len_16k, 0.0);
     pcm16
 }
 
@@ -235,12 +238,14 @@ fn start_recording_blocking(
     // callbacks (~21 ms each) that's ~380 callbacks during one encode pass. A 32-message
     // bound fills in ~672 ms and then try_send silently drops audio — causing the "whole
     // last sentence disappeared" symptom. 512 messages ≈ 10.7 s of headroom, enough for
-    // even the slowest Cohere runs on CPU. Parakeet and Whisper are fast enough that 64
-    // is comfortable headroom.
+    // even the slowest Cohere runs on CPU. Parakeet uses the same bound (see below).
     let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5s headroom at 48kHz/1024
+    // Nemotron is stateful — any audio dropped by try_send() corrupts the streaming
+    // position permanently (audio_processed advances over a silent gap).  Give Parakeet
+    // the same generous headroom as Cohere so inference spikes on CPU never fill the
+    // channel.  512 msgs × 1024 samples × (1/48 kHz) ≈ 10.9 s of headroom.
     let transcriber_channel_bound = match active_engine {
-        ASREngine::Cohere => 512,
-        ASREngine::Parakeet => 64,
+        ASREngine::Cohere | ASREngine::Parakeet => 512,
         ASREngine::Whisper => 32,
     };
     let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(transcriber_channel_bound);
@@ -487,8 +492,20 @@ fn start_recording_blocking(
                                 ],
                             );
                             let mut gs = cohere.lock().unwrap();
+                            let app_for_partial = app_clone.clone();
+                            let partial_cb = move |word: &str| {
+                                let _ = app_for_partial.emit(
+                                    "transcription-partial",
+                                    crate::types::TranscriptionChunk {
+                                        text: word.to_string(),
+                                        processing_time_ms: 0,
+                                        method: "Cohere".to_string(),
+                                    },
+                                );
+                            };
                             let mut transcribe = |c: &[f32], sr| {
-                                gs.transcribe_chunk(c, sr).map_err(|e| e.to_string())
+                                gs.transcribe_chunk(c, sr, Some(&partial_cb))
+                                    .map_err(|e| e.to_string())
                             };
                             vad_gated_transcribe(
                                 &mut chunk,
@@ -509,11 +526,7 @@ fn start_recording_blocking(
                     buffer.extend(samples);
                     let parakeet_chunk_size =
                         parakeet_live_chunk_samples(sample_rate, parakeet_live.unwrap());
-                    let max_buffer_size = parakeet_chunk_size * 2;
                     while buffer.len() >= parakeet_chunk_size {
-                        if buffer.len() > max_buffer_size {
-                            buffer.drain(..parakeet_chunk_size);
-                        }
                         chunk.clear();
                         chunk.extend_from_slice(&buffer[..parakeet_chunk_size]);
                         buffer.drain(..parakeet_chunk_size);
@@ -569,7 +582,11 @@ fn start_recording_blocking(
                                 );
                                 {
                                     let mut st = session_transcript.lock().unwrap();
-                                    if !st.is_empty() {
+                                    // Leading space = SentencePiece ▁ word boundary.
+                                    // Only insert a space when the chunk starts a new word.
+                                    // A chunk that continues the previous word (e.g. "ed" after
+                                    // "nest") carries no leading space and must be joined directly.
+                                    if !st.is_empty() && transcript.starts_with(' ') {
                                         st.push(' ');
                                     }
                                     st.push_str(transcript.trim());
@@ -642,7 +659,7 @@ fn start_recording_blocking(
                     );
                     let mut gs = cohere.lock().unwrap();
                     let mut t =
-                        |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                        |c: &[f32], sr| gs.transcribe_chunk(c, sr, None).map_err(|e| e.to_string());
                     vad_gated_transcribe(
                         &mut chunk,
                         sample_rate,
@@ -703,7 +720,7 @@ fn start_recording_blocking(
                                 },
                             );
                             let mut st = session_transcript.lock().unwrap();
-                            if !st.is_empty() {
+                            if !st.is_empty() && transcript.starts_with(' ') {
                                 st.push(' ');
                             }
                             st.push_str(transcript.trim());
@@ -776,7 +793,7 @@ fn start_recording_blocking(
                     let mut gs = cohere.lock().unwrap();
                     if use_vad {
                         let mut t =
-                            |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                            |c: &[f32], sr| gs.transcribe_chunk(c, sr, None).map_err(|e| e.to_string());
                         vad_gated_transcribe(
                             &mut buffer,
                             sample_rate,
@@ -802,7 +819,7 @@ fn start_recording_blocking(
                             dg.as_mut(),
                         );
                         drop(dg);
-                        if let Ok(text) = gs.transcribe_chunk(&pcm16, 16000) {
+                        if let Ok(text) = gs.transcribe_chunk(&pcm16, 16000, None) {
                             let text = strip_whitelisted_sound_captions(&text);
                             if !text.trim().is_empty() {
                                 println!("[TRANSCRIPT] 🪨 (Tail) \"{}\"", text.trim());
@@ -868,7 +885,7 @@ fn start_recording_blocking(
                                 },
                             );
                             let mut st = session_transcript.lock().unwrap();
-                            if !st.is_empty() {
+                            if !st.is_empty() && transcript.starts_with(' ') {
                                 st.push(' ');
                             }
                             st.push_str(transcript.trim());

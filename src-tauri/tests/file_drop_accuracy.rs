@@ -124,7 +124,7 @@ fn transcribe_cohere(g: &mut CohereManager, pcm: &[f32]) -> Result<String, Strin
     let parts: Vec<String> = pcm
         .chunks(STREAM_CHUNK_SAMPLES)
         .filter_map(|chunk| {
-            g.transcribe_chunk(chunk, 16000)
+            g.transcribe_chunk(chunk, 16000, None)
                 .ok()
                 .filter(|t| !t.trim().is_empty())
                 .map(|t| t.trim().to_string())

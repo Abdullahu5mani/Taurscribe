@@ -23,6 +23,7 @@ interface UseHotkeyListenersParams {
     handleResumeRecordingRef: React.RefObject<() => Promise<void>>;
     handleCancelRecordingRef: React.RefObject<() => Promise<void>>;
     handleTranscriptionChunkRef: React.RefObject<(text: string) => void>;
+    handlePartialChunkRef: React.RefObject<(word: string) => void>;
     playErrorRef: React.RefObject<() => void>;
     setHeaderStatusRef: React.RefObject<(msg: string, dur?: number) => void>;
     triggerNoModelAttentionRef: React.RefObject<() => void>;
@@ -54,6 +55,7 @@ export function useHotkeyListeners({
     handleResumeRecordingRef,
     handleCancelRecordingRef,
     handleTranscriptionChunkRef,
+    handlePartialChunkRef,
     playErrorRef,
     setHeaderStatusRef,
     triggerNoModelAttentionRef,
@@ -80,6 +82,7 @@ export function useHotkeyListeners({
         let unlistenAudioDisconnect: (() => void) | undefined;
         let unlistenOverlayAction: (() => void) | undefined;
         let unlistenModelUnloaded: (() => void) | undefined;
+        let unlistenPartial: (() => void) | undefined;
         let unlistenAudioLevel: (() => void) | undefined;
 
         const SILENCE_THRESHOLD = 0.02;
@@ -192,6 +195,12 @@ export function useHotkeyListeners({
                 handleTranscriptionChunkRef.current?.(event.payload.text);
             });
 
+            // Cohere word-streaming: provisional partial words emitted during decode.
+            // The authoritative transcription-chunk that follows will replace them.
+            const unsub_partial = await listen<{ text: string }>("transcription-partial", (event) => {
+                handlePartialChunkRef.current?.(event.payload.text);
+            });
+
             // Re-check macOS permissions if the backend notices the hotkey listener
             // cannot receive events.
             const unsub4 = await listen("accessibility-missing", () => {
@@ -280,9 +289,11 @@ export function useHotkeyListeners({
                 unlistenOverlayAction = unsub7;
                 unlistenModelUnloaded = unsub8;
                 unlistenAudioLevel = unsub9;
+                unlistenPartial = unsub_partial;
             } else {
                 unsub1(); unsub2(); unsub3(); unsub4();
                 unsub5(); unsub6(); unsub7(); unsub8(); unsub9();
+                unsub_partial();
             }
         };
 
@@ -299,6 +310,7 @@ export function useHotkeyListeners({
             unlistenOverlayAction?.();
             unlistenModelUnloaded?.();
             unlistenAudioLevel?.();
+            unlistenPartial?.();
         };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 }
