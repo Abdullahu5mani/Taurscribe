@@ -169,7 +169,7 @@ fn jfk_audio_through_whisper_parakeet_and_granite() {
     // ── Cohere ───────────────────────────────────────────────────────────────
     let mut g = CohereManager::new();
     match g.initialize(None, true) {
-        Ok(_) => match g.transcribe_chunk(&pcm, 16000) {
+        Ok(_) => match g.transcribe_chunk(&pcm, 16000, None) {
             Ok(text) if text.trim().is_empty() => failures.push("Cohere: empty transcript".into()),
             Ok(_) => {}
             Err(e) => failures.push(format!("Cohere transcribe: {e}")),

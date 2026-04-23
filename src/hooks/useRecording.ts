@@ -102,6 +102,10 @@ export function useRecording({
     const hotkeySessionRef = useRef(false);
     const overlayHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const liveTranscriptRef = useRef("");
+    /** Base transcript snapshot taken when the first Cohere partial arrives for a chunk. */
+    const coherePartialBaseRef = useRef("");
+    /** True while streaming partials for the current Cohere VAD chunk. */
+    const coherePartialActiveRef = useRef(false);
     const pausedAtRef = useRef<number | null>(null);
     const totalPausedMsRef = useRef(0);
 
@@ -659,6 +663,26 @@ export function useRecording({
         }
     };
 
+    const handlePartialChunk = (word: string) => {
+        // Reject partials when not actively recording or when paused.
+        if ((!isRecordingRef.current && !isProcessingTranscript) || isPausedRef.current) return;
+        const trimmed = word.trim();
+        if (!trimmed) return;
+
+        if (!coherePartialActiveRef.current) {
+            // First partial for this VAD chunk — snapshot the committed transcript.
+            coherePartialBaseRef.current = liveTranscriptRef.current;
+            coherePartialActiveRef.current = true;
+        }
+        const base = coherePartialBaseRef.current;
+        const next = base ? `${base} ${trimmed}` : trimmed;
+        liveTranscriptRef.current = next;
+        setLiveTranscript(next);
+        if (hotkeySessionRef.current && enableOverlayRef.current) {
+            emitOverlayState("recording", next).catch(() => {});
+        }
+    };
+
     const handleTranscriptionChunk = (chunkText: string) => {
         // Accept chunks when actively recording OR during the processing window
         // (tail flush events arrive while stop_recording is awaited). Reject when
@@ -667,7 +691,22 @@ export function useRecording({
         const cleanChunk = chunkText.trim();
         if (!cleanChunk) return;
 
-        const nextTranscript = `${liveTranscriptRef.current} ${cleanChunk}`.replace(/\s+/g, " ").trim();
+        // If Cohere was streaming partials, reset live transcript to the snapshot
+        // taken before partials started so the authoritative decoded text can replace
+        // them without duplication.
+        if (coherePartialActiveRef.current) {
+            liveTranscriptRef.current = coherePartialBaseRef.current;
+            coherePartialActiveRef.current = false;
+            coherePartialBaseRef.current = "";
+        }
+
+        // Leading space in chunkText = SentencePiece ▁ word boundary marker.
+        // Only join with a space when the chunk starts a new word; a chunk that
+        // continues the previous word (e.g. "ed" after "nest") has no leading space
+        // and must be concatenated directly so "nested" doesn't become "nest ed".
+        const startsNewWord = !liveTranscriptRef.current || chunkText.startsWith(" ");
+        const sep = startsNewWord ? " " : "";
+        const nextTranscript = `${liveTranscriptRef.current}${sep}${cleanChunk}`.replace(/\s+/g, " ").trim();
         liveTranscriptRef.current = nextTranscript;
         setLiveTranscript(nextTranscript);
         setSessionTranscript?.(nextTranscript);
@@ -689,5 +728,6 @@ export function useRecording({
         handleStopRecording,
         handleCancelRecording,
         handleTranscriptionChunk,
+        handlePartialChunk,
     };
 }

@@ -480,11 +480,11 @@ fn run_cohere_cycle(pcm: &[f32], force_cpu: bool) -> Result<ScenarioReport, Stri
     g.initialize(None, force_cpu)?;
     snapshots.push(snapshot("cohere after initialize"));
 
-    let text1 = g.transcribe_chunk(pcm, 16000)?;
+    let text1 = g.transcribe_chunk(pcm, 16000, None)?;
     notes.push(format!("first transcript chars={}", text1.len()));
     snapshots.push(snapshot("cohere after first transcription"));
 
-    let text2 = g.transcribe_chunk(pcm, 16000)?;
+    let text2 = g.transcribe_chunk(pcm, 16000, None)?;
     notes.push(format!("second transcript chars={}", text2.len()));
     snapshots.push(snapshot("cohere after second transcription"));
 
@@ -544,7 +544,7 @@ fn run_switch_sequence(
                 snapshots.push(snapshot("after outgoing unloads before cohere init"));
                 g.initialize(None, force_cpu)?;
                 snapshots.push(snapshot("after cohere init"));
-                let text = g.transcribe_chunk(pcm, 16000)?;
+                let text = g.transcribe_chunk(pcm, 16000, None)?;
                 notes.push(format!("cohere transcript chars={}", text.len()));
                 snapshots.push(snapshot("after cohere transcription"));
             }
