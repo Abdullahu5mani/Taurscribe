@@ -60,6 +60,8 @@ ndarray = "0.17"
 rustfft = "6.2"
 # HuggingFace tokenizer for Cohere BPE token encoding/decoding
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+# True random dither for Cohere mel-spectrogram preprocessing
+rand = "0.9"
 
 
 # RNNoise noise suppression (pure Rust, no C deps, CPU-only, cross-platform)
@@ -78,7 +80,7 @@ symphonia = { version = "0.5", features = ["mp3", "aac", "flac", "ogg", "wav", "
 # -------------------------------------------------------------------------
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 parakeet-rs = { path = "vendor/parakeet-rs" }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "half"] }
+ort = { version = "2.0.0-rc.12", features = ["download-binaries", "half"] }
 # Downloader & Verification
 futures-util = "0.3.31"
 reqwest = { version = "0.13.1", default-features = false, features = [
@@ -105,7 +107,7 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "coreml",
 ] }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack", "half"] }
+ort = { version = "2.0.0-rc.12", features = ["download-binaries", "xnnpack", "half"] }
 # llama-cpp-2: Uses Metal automatically on macOS (no special feature needed)
 llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
     "dynamic-link",
@@ -150,7 +152,7 @@ whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = 
     "cuda",
 ] }
 parakeet-rs = { path = "vendor/parakeet-rs", features = ["cuda", "directml"] }
-ort = { version = "2.0.0-rc.11", features = [
+ort = { version = "2.0.0-rc.12", features = [
     "download-binaries",
     "cuda",
     "directml",
@@ -182,7 +184,7 @@ whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = 
 
 parakeet-rs = { path = "vendor/parakeet-rs", features = ["cuda"] }
 
-ort = { version = "2.0.0-rc.11", features = [
+ort = { version = "2.0.0-rc.12", features = [
     "download-binaries",
     "cuda",
     "tensorrt",
@@ -205,7 +207,7 @@ windows = { version = "0.58", features = [
     "Win32_Media_Audio_Endpoints",
     "Win32_System_Com",
 ] }
-ort = { version = "2.0.0-rc.11", features = [
+ort = { version = "2.0.0-rc.12", features = [
     "download-binaries",
     "directml",
     "xnnpack",
@@ -219,7 +221,7 @@ parakeet-rs = { path = "vendor/parakeet-rs", features = ["directml"] }
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 parakeet-rs = { path = "vendor/parakeet-rs" }
-ort = { version = "2.0.0-rc.11", features = ["download-binaries", "xnnpack", "half"] }
+ort = { version = "2.0.0-rc.12", features = ["download-binaries", "xnnpack", "half"] }
 
 [dev-dependencies]
 

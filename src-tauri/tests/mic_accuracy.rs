@@ -337,7 +337,7 @@ fn mic_accuracy() {
 
                 let vad_ref = Arc::clone(&vad);
                 let hyp = mic_sim_whisper_granite(&samples, rate, &vad_ref, |pcm| {
-                    g.transcribe_chunk(pcm, 16000)
+                    g.transcribe_chunk(pcm, 16000, None)
                 });
                 let w_val = wer(&row.ref_text, &hyp);
                 let snippet: String = hyp.chars().take(80).collect();

@@ -215,6 +215,9 @@ impl CohereManager {
             {
                 // Windows x86_64 workaround: ORT CUDA GQA currently conflicts with this decoder export.
                 // Run encoder on CUDA and decoder on CPU (hybrid) for stable inference.
+                // TODO: Remove this hybrid block once the ort crate ships ORT >= 1.25.0 binaries.
+                // ORT 1.25.0 (2026-04-22) fixes CUDA GQA (onnxruntime#27081). Current rc.12 bundles
+                // ORT 1.24. When fixed: replace both cfg blocks with create_session_cuda for both.
                 let enc = self
                     .create_session_cuda(&encoder_path)
                     .map_err(|e| format!("Cohere hybrid init (encoder CUDA) failed: {}", e))?;
@@ -295,6 +298,7 @@ impl CohereManager {
         &mut self,
         samples: &[f32],
         sample_rate: u32,
+        partial_cb: Option<&dyn Fn(&str)>,
     ) -> Result<String, String> {
         crate::memory::maybe_log_process_memory_with_sizes(
             "cohere before transcribe_chunk",
@@ -367,7 +371,8 @@ impl CohereManager {
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("Extract encoder hidden states: {}", e))?;
         let encoder_shape: Vec<usize> = enc_shape_i64.iter().map(|&d| d as usize).collect();
-        let encoder_data = enc_data.to_vec();
+        let encoder_hidden_dim = encoder_shape.get(2).copied().unwrap_or(1024);
+        let encoder_data_len = enc_data.len();
         let encoder_seq_len = enc_shape_i64
             .get(1)
             .copied()
@@ -377,10 +382,10 @@ impl CohereManager {
             &[
                 ("encoder_shape_dims", encoder_shape.len()),
                 ("encoder_seq_len", encoder_seq_len as usize),
-                ("encoder_data_len", encoder_data.len()),
+                ("encoder_data_len", encoder_data_len),
                 (
                     "encoder_data_bytes",
-                    encoder_data.len() * std::mem::size_of::<f32>(),
+                    encoder_data_len * std::mem::size_of::<f32>(),
                 ),
             ],
         );
@@ -389,7 +394,7 @@ impl CohereManager {
                 "[COHERE][TRACE] encoder out shape={:?} seq_len={} data_len={}",
                 encoder_shape,
                 encoder_seq_len,
-                encoder_data.len()
+                encoder_data_len
             );
         }
 
@@ -409,15 +414,21 @@ impl CohereManager {
 
         // Prefill: compute encoder cross-attention KV (fresh from encoder_hidden_states,
         // since past_encoder_sequence_length=0) and the first output token.
-        let (mut next_token, prefill_cache) = run_decoder_prefill(
-            decoder,
-            &encoder_shape,
-            &encoder_data,
-            encoder_seq_len,
-            &prompt,
-            self.pad_token_id,
-            self.debug_decode,
-        )?;
+        let (mut next_token, prefill_cache) = {
+            // Scope encoder_data so it is freed after prefill — the generate loop
+            // passes a zero stub instead, saving ~384MB of redundant copies per chunk.
+            let encoder_data = enc_data.to_vec();
+            run_decoder_prefill(
+                decoder,
+                &encoder_shape,
+                &encoder_data,
+                encoder_seq_len,
+                &prompt,
+                self.pad_token_id,
+                self.debug_decode,
+            )?
+        };
+        // encoder_data freed here — generate loop uses frozen encoder KV from past_key_values.
 
         // Freeze encoder KV after prefill — the merged decoder returns 0-sized
         // present.*.encoder.* on subsequent steps (it signals "cached, reuse yours").
@@ -462,6 +473,7 @@ impl CohereManager {
         }
 
         let mut generated: Vec<i64> = Vec::new();
+        let mut partial_text = String::new();
 
         for step in 0..self.max_new_tokens {
             if next_token == self.eos_token_id {
@@ -474,12 +486,23 @@ impl CohereManager {
             if self.debug_decode && step < 16 {
                 println!("[COHERE][DEBUG] step={} token={}", step, next_token);
             }
+            // BPE word-boundary streaming: a space-leading piece signals a new word.
+            // Emit the accumulated partial when the next word starts.
+            if let Some(cb) = partial_cb {
+                let piece = tokenizer
+                    .decode(&[next_token as u32], false)
+                    .unwrap_or_default();
+                if piece.starts_with(' ') && !partial_text.trim().is_empty() {
+                    cb(partial_text.trim());
+                    partial_text.clear();
+                }
+                partial_text.push_str(&piece);
+            }
             prompt.clear();
             prompt.push(next_token);
             let (t, new_decoder_kv) = run_decoder_step(
                 decoder,
-                &encoder_shape,
-                &encoder_data,
+                encoder_hidden_dim,
                 &decoder_kv,
                 &frozen_encoder_kv,
                 &prompt,
@@ -494,6 +517,12 @@ impl CohereManager {
                         step, dk.shape
                     );
                 }
+            }
+        }
+        // Flush remaining partial after EOS or max_tokens.
+        if let Some(cb) = partial_cb {
+            if !partial_text.trim().is_empty() {
+                cb(partial_text.trim());
             }
         }
 
@@ -643,8 +672,7 @@ fn run_decoder_prefill(
 /// decoder returns 0-sized present.*.encoder.* on step 2+ so we must keep our own copy.
 fn run_decoder_step(
     decoder: &mut Session,
-    encoder_shape: &[usize],
-    encoder_data: &[f32],
+    encoder_hidden_dim: usize,
     decoder_kv: &[(KvTensor, KvTensor)],
     frozen_encoder_kv: &[(KvTensor, KvTensor)],
     input_ids: &[i64],
@@ -698,9 +726,13 @@ fn run_decoder_step(
         "num_logits_to_keep".into(),
         make_tensor_i64(vec![], vec![1])?,
     ));
+    // Generate path: merged decoder uses frozen encoder KV from past_key_values.
+    // encoder_hidden_states is only consumed on prefill (past_encoder_sequence_length=0).
+    // Pass a minimal [1,1,hidden_dim] zero stub to satisfy the graph input signature,
+    // eliminating ~1.5MB × N_steps of redundant host-to-device copies per chunk.
     inputs.push((
         "encoder_hidden_states".into(),
-        make_tensor_f32_from_slice(encoder_shape, encoder_data)?,
+        make_tensor_f32(vec![1, 1, encoder_hidden_dim], vec![0.0_f32; encoder_hidden_dim])?,
     ));
 
     for layer in 0..NUM_LAYERS {
@@ -798,7 +830,7 @@ impl CohereManager {
             .map_err(|e| format!("ORT builder: {}", e))?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
             .map_err(|e| format!("CPU opt level: {}", e))?;
-        let builder = crate::ort_session::configure_low_ram_session_builder(builder, "cohere-cpu")?;
+        let mut builder = crate::ort_session::configure_low_ram_session_builder(builder, "cohere-cpu")?;
         builder
             .commit_from_file(path)
             .map_err(|e| format!("CPU session load {}: {}", path.display(), e))
@@ -812,7 +844,7 @@ impl CohereManager {
             .map_err(|e| format!("DirectML EP: {}", e))?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
             .map_err(|e| format!("DirectML opt level: {}", e))?;
-        let builder =
+        let mut builder =
             crate::ort_session::configure_low_ram_session_builder(builder, "cohere-directml")?;
         builder
             .commit_from_file(path)
@@ -832,7 +864,7 @@ impl CohereManager {
             .map_err(|e| format!("CUDA EP: {}", e))?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
             .map_err(|e| format!("CUDA opt level: {}", e))?;
-        let builder =
+        let mut builder =
             crate::ort_session::configure_low_ram_session_builder(builder, "cohere-cuda")?;
         builder
             .commit_from_file(path)
@@ -973,6 +1005,10 @@ fn extract_step_outputs(
     Ok((token, dec_layers))
 }
 
+// NOTE: KV tensors are extracted (ORT→CPU) and re-submitted (CPU→ORT) each step.
+// This double-copy is unavoidable without ORT IOBinding (keeps tensors in device memory).
+// TODO: Implement IOBinding once ORT >= 1.25.0 is bundled — at that point the decoder
+// runs on CUDA and GPU-local KV reuse eliminates the round-trip cost entirely.
 fn get_present(outputs: &ort::session::SessionOutputs, name: &str) -> Result<KvTensor, String> {
     let val = outputs
         .get(name)

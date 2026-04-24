@@ -85,7 +85,7 @@ version = "3.5"
 version = "0.17"
 
 [dependencies.ort]
-version = "2.0.0-rc.11"
+version = "2.0.0-rc.12"
 features = [
     "std",
     "ndarray",
