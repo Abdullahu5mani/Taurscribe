@@ -8,6 +8,7 @@
 // Output shape matches encoder input: (frames, 128).
 
 use ndarray::Array2;
+use rand::Rng;
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::sync::{Arc, OnceLock};
 
@@ -78,16 +79,16 @@ fn preemphasis_and_dither(signal: &[f32]) -> Vec<f32> {
     if signal.is_empty() {
         return Vec::new();
     }
+    // Use a true random noise source seeded from OS entropy, matching the
+    // numpy.random-based dither applied during training-time preprocessing.
+    // The previous LCG formula repeated the same noise pattern every 1024
+    // samples, which could leave faint spectral artifacts diverging from the
+    // training distribution (though the effect is tiny at DITHER = 1e-5).
+    let mut rng = rand::rng();
     let mut out = Vec::with_capacity(signal.len());
     for (i, &x) in signal.iter().enumerate() {
         let prev = if i == 0 { 0.0 } else { signal[i - 1] };
-        // Lightweight deterministic pseudo-random dither (closer to noise than
-        // alternating +/- pattern, while still deterministic for tests).
-        let noise = ((((i as u32).wrapping_mul(1664525).wrapping_add(1013904223)) & 1023) as f32
-            / 1023.0
-            - 0.5)
-            * 2.0
-            * DITHER;
+        let noise = (rng.random::<f32>() - 0.5) * 2.0 * DITHER;
         out.push((x - PREEMPHASIS * prev) + noise);
     }
     out

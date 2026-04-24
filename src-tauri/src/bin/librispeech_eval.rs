@@ -191,7 +191,7 @@ fn transcribe_parakeet(p: &mut ParakeetManager, pcm: &[f32]) -> Result<String, S
 fn transcribe_cohere(g: &mut CohereManager, pcm: &[f32]) -> Result<String, String> {
     let mut parts: Vec<String> = Vec::new();
     for chunk in pcm.chunks(COHERE_CHUNK_SAMPLES) {
-        let t = g.transcribe_chunk(chunk, 16000)?;
+        let t = g.transcribe_chunk(chunk, 16000, None)?;
         if !t.trim().is_empty() {
             parts.push(t.trim().to_string());
         }

@@ -39,6 +39,15 @@ impl From<ort::Error> for Error {
     }
 }
 
+// ort rc.12 changed several SessionBuilder methods to return
+// Result<SessionBuilder, ort::Error<SessionBuilder>> instead of Result<SessionBuilder, ort::Error>.
+// ort::Error<SessionBuilder> implements Into<ort::Error> so we can forward the conversion.
+impl From<ort::Error<ort::session::builder::SessionBuilder>> for Error {
+    fn from(e: ort::Error<ort::session::builder::SessionBuilder>) -> Self {
+        Error::Ort(e.into())
+    }
+}
+
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
         Error::Config(e.to_string())
