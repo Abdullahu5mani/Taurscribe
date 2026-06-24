@@ -42,7 +42,7 @@ export function useModelsWatcher({
 
             refreshInFlight = true;
             try {
-                // Refresh backend model lists (Whisper + Parakeet + Cohere)
+                // Refresh backend model lists (Whisper + Parakeet + Granite)
                 await refreshModels(false);
 
                 // Refresh AppMall status (downloaded / verified flags) so the UI

@@ -3,7 +3,8 @@ mod audio;
 pub mod audio_decode;
 pub mod audio_preprocess;
 pub mod cohere;
-mod cohere_features;
+pub mod granite;
+mod granite_features;
 mod commands;
 mod context;
 mod denoise;
@@ -101,8 +102,8 @@ pub fn run() {
     // NOTE: Parakeet is NOT lazy-loaded at startup anymore to save VRAM.
     // It will be loaded on demand when the user switches to it.
 
-    // 3b. Initialize Cohere Transcribe (lazy-loaded on demand)
-    println!("[INFO] Initializing Cohere Transcribe ASR manager...");
+    // 3b. Initialize Granite Speech (lazy-loaded on demand)
+    println!("[INFO] Initializing Granite Speech ASR manager...");
     let cohere = CohereManager::new();
 
     // 4. Build the Tauri App
@@ -250,6 +251,9 @@ pub fn run() {
             commands::factory_reset_app_data,
             commands::get_close_behavior,
             commands::set_close_behavior,
+            commands::init_granite,
+            commands::get_granite_status,
+            commands::list_granite_models,
             commands::init_cohere,
             commands::get_cohere_status,
             commands::list_cohere_models,

@@ -36,7 +36,9 @@ FEATURES.md
 feautures.md
 CODEBASE_GUIDE.md
 ARCHITECTURE.pdf
-GRANITE_SPEECH.md
+COHERE_SPEECH.md
+ENGINES.md
+Taurscribe Pure.html
 
 # Test audio fixtures (large binary, not for the repo)
 *.wav

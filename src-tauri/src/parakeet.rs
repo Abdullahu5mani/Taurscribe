@@ -2,7 +2,7 @@ use parakeet_rs::{Nemotron, Parakeet, ParakeetEOU, ParakeetTDT, TimestampMode, T
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::parakeet_loaders::{init_ctc, init_eou, init_nemotron, init_tdt, ParakeetLoadPath};
 use crate::parakeet_runtime::LoadedParakeetRuntime;
@@ -23,6 +23,55 @@ impl std::fmt::Display for GpuBackend {
             GpuBackend::DirectML => write!(f, "DirectML"),
             GpuBackend::Cpu => write!(f, "CPU"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ParakeetManager;
+    use std::{
+        fs,
+        path::Path,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn create_empty_file(path: &Path) {
+        fs::write(path, []).expect("create fixture file");
+    }
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}_{}_{}", prefix, std::process::id(), unique))
+    }
+
+    #[test]
+    fn tdt_layout_detection_accepts_registry_int8_bundle() {
+        let dir = unique_temp_dir("taurscribe_tdt_layout_int8");
+        fs::create_dir_all(&dir).expect("create temp fixture dir");
+
+        create_empty_file(&dir.join("encoder-model.int8.onnx"));
+        create_empty_file(&dir.join("decoder_joint-model.int8.onnx"));
+        create_empty_file(&dir.join("vocab.txt"));
+
+        assert!(ParakeetManager::has_tdt_layout(&dir));
+
+        fs::remove_dir_all(&dir).expect("remove temp fixture dir");
+    }
+
+    #[test]
+    fn tdt_layout_detection_rejects_partial_download() {
+        let dir = unique_temp_dir("taurscribe_tdt_layout_partial");
+        fs::create_dir_all(&dir).expect("create temp fixture dir");
+
+        create_empty_file(&dir.join("encoder-model.int8.onnx"));
+        create_empty_file(&dir.join("vocab.txt"));
+
+        assert!(!ParakeetManager::has_tdt_layout(&dir));
+
+        fs::remove_dir_all(&dir).expect("remove temp fixture dir");
     }
 }
 
@@ -81,6 +130,29 @@ impl ParakeetManager {
         crate::utils::get_models_dir()
     }
 
+    fn has_tdt_layout(path: &Path) -> bool {
+        // Keep this in sync with vendored parakeet-rs::ParakeetTDTModel file lookup.
+        // The Settings registry downloads INT8 TDT weights, while the upstream README
+        // documents FP32 names.
+        let has_tdt_encoder = [
+            "encoder-model.onnx",
+            "encoder.onnx",
+            "encoder-model.int8.onnx",
+        ]
+        .iter()
+        .any(|name| path.join(name).exists());
+        let has_tdt_decoder_joint = [
+            "decoder_joint-model.onnx",
+            "decoder_joint-model.int8.onnx",
+            "decoder_joint.onnx",
+            "decoder-model.onnx",
+        ]
+        .iter()
+        .any(|name| path.join(name).exists());
+
+        has_tdt_encoder && has_tdt_decoder_joint && path.join("vocab.txt").exists()
+    }
+
     /// List all the models found in the models folder
     pub fn list_available_models() -> Result<Vec<ParakeetModelInfo>, String> {
         let models_dir = Self::get_models_dir()?;
@@ -119,11 +191,7 @@ impl ParakeetManager {
                 }
             }
 
-            // Detect TDT (separate encoder / decoder / joint files)
-            if path.join("encoder.onnx").exists()
-                && path.join("decoder.onnx").exists()
-                && path.join("joint.onnx").exists()
-            {
+            if Self::has_tdt_layout(&path) {
                 models.push(ParakeetModelInfo {
                     id: format!("tdt:{}", dir_name),
                     display_name: format!("Parakeet TDT - {}", dir_name),

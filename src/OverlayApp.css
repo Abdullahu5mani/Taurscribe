@@ -22,9 +22,8 @@ html, body, #root {
   gap: 10px;
   padding: 0 12px 0 10px;
   border-radius: 10px;
-  background:
-    linear-gradient(135deg, rgba(22, 19, 14, 0.97) 0%, rgba(12, 10, 8, 0.97) 100%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(8, 8, 8, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
     0 8px 24px rgba(0, 0, 0, 0.45);
@@ -55,8 +54,8 @@ html, body, #root {
 }
 
 .overlay-pill__dot--paused {
-  background: #e09f3e;
-  box-shadow: 0 0 8px rgba(224, 159, 62, 0.45);
+  background: var(--processing, #eab308);
+  box-shadow: 0 0 8px rgba(234, 179, 8, 0.45);
   animation: none;
 }
 
@@ -69,7 +68,7 @@ html, body, #root {
 }
 
 .overlay-pill__icon--done {
-  color: #3ecfa5;
+  color: var(--success, #3ecfa5);
 }
 
 .overlay-pill__icon--error {
@@ -80,18 +79,18 @@ html, body, #root {
   width: 10px;
   height: 10px;
   border-radius: 999px;
-  border: 2px solid rgba(224, 159, 62, 0.22);
-  border-top-color: #e09f3e;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--processing, #eab308);
   animation: overlaySpin 0.9s linear infinite;
   flex-shrink: 0;
 }
 
 .overlay-pill__time {
-  font-family: "IBM Plex Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.03em;
-  color: #f0e9dd;
+  color: var(--ink-70, #ededef);
   white-space: nowrap;
 }
 
@@ -109,18 +108,18 @@ html, body, #root {
   width: 2px;
   min-height: 3px;
   border-radius: 999px;
-  background: linear-gradient(to top, #dc2626, #e09f3e);
+  background: rgba(255, 255, 255, 0.4);
   transition: height 0.1s ease-out;
 }
 
 .overlay-pill__wave--inactive .overlay-pill__bar {
   height: 3px !important;
   opacity: 0.22;
-  background: linear-gradient(to top, rgba(224, 159, 62, 0.45), rgba(224, 159, 62, 0.8));
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .overlay-pill--done .overlay-pill__wave--inactive .overlay-pill__bar {
-  background: linear-gradient(to top, rgba(62, 207, 165, 0.35), rgba(62, 207, 165, 0.85));
+  background: rgba(62, 207, 165, 0.6);
   opacity: 0.3;
 }
 

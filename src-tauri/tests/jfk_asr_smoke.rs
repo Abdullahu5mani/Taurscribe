@@ -4,10 +4,10 @@
 //! - `jfk.wav` at `tests/fixtures/jfk.wav`, repo root, or `JFK_WAV` env var
 //! - **Whisper**: at least one `ggml-*.bin` in `%LOCALAPPDATA%\Taurscribe\models`
 //! - **Parakeet**: a detected ONNX bundle under the same models dir
-//! - **Cohere**: Cohere Transcribe ONNX universal q4f16 bundle (`granite-speech-1b` directory)
+//! - **Cohere**: Cohere Transcribe ONNX universal q4f16 bundle (`cohere-speech-1b` directory)
 //!
 //! The smoke test is `#[ignore]` by default. Run with:
-//!   cargo test jfk_audio_through_whisper_parakeet_and_granite -- --ignored --nocapture
+//!   cargo test jfk_audio_through_whisper_parakeet_and_cohere -- --ignored --nocapture
 //!
 //! Set `TAURSCRIBE_ASR_SMOKE_SKIP=1` to no-op pass when models are absent.
 
@@ -107,7 +107,7 @@ fn jfk_pcm16_preprocessed_for_asr() -> Result<Vec<f32>, String> {
 
 #[test]
 #[ignore = "Needs jfk.wav + Whisper, Parakeet, Cohere in %LOCALAPPDATA%/Taurscribe/models. Run with --ignored."]
-fn jfk_audio_through_whisper_parakeet_and_granite() {
+fn jfk_audio_through_whisper_parakeet_and_cohere() {
     if std::env::var("TAURSCRIBE_ASR_SMOKE_SKIP").as_deref() == Ok("1") {
         eprintln!("SKIP jfk ASR smoke (TAURSCRIBE_ASR_SMOKE_SKIP=1)");
         return;
@@ -169,13 +169,13 @@ fn jfk_audio_through_whisper_parakeet_and_granite() {
     // ── Cohere ───────────────────────────────────────────────────────────────
     let mut g = CohereManager::new();
     match g.initialize(None, true) {
-        Ok(_) => match g.transcribe_chunk(&pcm, 16000, None) {
+        Ok(_) => match g.transcribe_chunk(&pcm, 16000) {
             Ok(text) if text.trim().is_empty() => failures.push("Cohere: empty transcript".into()),
             Ok(_) => {}
             Err(e) => failures.push(format!("Cohere transcribe: {e}")),
         },
         Err(e) => failures.push(format!(
-            "Cohere init: {e} (need Cohere q4f16 bundle in the granite-speech-1b directory)"
+            "Cohere init: {e} (need Cohere q4f16 bundle in the cohere-speech-1b directory)"
         )),
     }
     g.unload();

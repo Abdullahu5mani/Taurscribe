@@ -4,7 +4,7 @@
 //!
 //! Models: `%LOCALAPPDATA%\\Taurscribe\\models` (or platform equivalent). Optional env:
 //! `TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_PARAKEET_MODEL_ID`, `TAURSCRIBE_GRANITE_MODEL_ID`.
-//! The `cohere` engine label targets Cohere Transcribe ONNX.
+//! `TAURSCRIBE_COHERE_MODEL_ID` is still accepted as a legacy Granite alias.
 //!
 //! If manifest `flac_path` entries point at another machine (or a moved corpus), set
 //! `--audio-root` or `TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT` to the **`test-clean` directory**
@@ -12,7 +12,7 @@
 //!
 //! Usage:
 //!   cargo run --release --bin librispeech_eval -- --manifest eval_manifest.jsonl --out results.csv
-//!   cargo run --release --bin librispeech_eval -- --manifest m.jsonl --audio-root ../taurscribe-runtime/librispeech/LibriSpeech/test-clean --engines whisper,cohere --limit 50 --force-cpu
+//!   cargo run --release --bin librispeech_eval -- --manifest m.jsonl --audio-root ../taurscribe-runtime/librispeech/LibriSpeech/test-clean --engines whisper,granite --limit 50 --force-cpu
 
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -38,7 +38,7 @@ struct ManifestRow {
 enum Engine {
     Whisper,
     Parakeet,
-    Cohere,
+    Granite,
 }
 
 impl Engine {
@@ -46,7 +46,7 @@ impl Engine {
         match self {
             Engine::Whisper => "whisper",
             Engine::Parakeet => "parakeet",
-            Engine::Cohere => "cohere",
+            Engine::Granite => "granite",
         }
     }
 }
@@ -62,7 +62,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "librispeech_eval --manifest <path.jsonl> [--out results.csv] [--engines whisper,parakeet,cohere] [--limit N] [--audio-root <test-clean-dir>] [--force-cpu]"
+        "librispeech_eval --manifest <path.jsonl> [--out results.csv] [--engines whisper,parakeet,granite] [--limit N] [--audio-root <test-clean-dir>] [--force-cpu]"
     );
     eprintln!("Env: TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT (same as --audio-root if flag omitted)");
     std::process::exit(2);
@@ -105,7 +105,7 @@ fn parse_args() -> Args {
             let e = match p.as_str() {
                 "whisper" => Engine::Whisper,
                 "parakeet" => Engine::Parakeet,
-                "cohere" | "granite" => Engine::Cohere,
+                "granite" | "cohere" => Engine::Granite,
                 _ => usage(),
             };
             if seen.insert(e) {
@@ -117,7 +117,7 @@ fn parse_args() -> Args {
         }
         v
     } else {
-        vec![Engine::Whisper, Engine::Parakeet, Engine::Cohere]
+        vec![Engine::Whisper, Engine::Parakeet, Engine::Granite]
     };
     Args {
         manifest: manifest.unwrap_or_else(|| usage()),
@@ -191,7 +191,7 @@ fn transcribe_parakeet(p: &mut ParakeetManager, pcm: &[f32]) -> Result<String, S
 fn transcribe_cohere(g: &mut CohereManager, pcm: &[f32]) -> Result<String, String> {
     let mut parts: Vec<String> = Vec::new();
     for chunk in pcm.chunks(COHERE_CHUNK_SAMPLES) {
-        let t = g.transcribe_chunk(chunk, 16000, None)?;
+        let t = g.transcribe_chunk(chunk, 16000)?;
         if !t.trim().is_empty() {
             parts.push(t.trim().to_string());
         }
@@ -349,9 +349,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 p.unload();
             }
-            Engine::Cohere => {
-                let granite_id = std::env::var("TAURSCRIBE_GRANITE_MODEL_ID").ok();
-                let id = granite_id.as_deref();
+            Engine::Granite => {
+                let cohere_id = std::env::var("TAURSCRIBE_GRANITE_MODEL_ID")
+                    .or_else(|_| std::env::var("TAURSCRIBE_COHERE_MODEL_ID"))
+                    .ok();
+                let id = cohere_id.as_deref();
                 let mut g = CohereManager::new();
                 g.initialize(id, force)?;
                 for row in &rows {
@@ -370,7 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let hyp_raw = match transcribe_cohere(&mut g, &pcm) {
                         Ok(t) => t,
                         Err(e) => {
-                            eprintln!("[eval] {} cohere: {}", row.utt_id, e);
+                            eprintln!("[eval] {} granite: {}", row.utt_id, e);
                             continue;
                         }
                     };
@@ -388,7 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ref_t.len(),
                         csv_cell(&snippet)
                     )?;
-                    if let Some((_, v)) = summary.iter_mut().find(|(e, _)| *e == Engine::Cohere) {
+                    if let Some((_, v)) = summary.iter_mut().find(|(e, _)| *e == Engine::Granite) {
                         v.push(wer);
                     }
                 }

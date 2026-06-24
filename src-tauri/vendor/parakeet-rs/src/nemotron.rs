@@ -39,11 +39,10 @@ const CHUNK_SIZE: usize = 56;
 const PRE_ENCODE_CACHE: usize = 9;
 
 /// Minimum margin (in log-probability units) that the winning non-blank token
-/// must have over the blank token before it is emitted.  The joint network
+/// must have over the blank token before it is emitted. The joint network
 /// outputs values after log-softmax, so a margin of 0.0 means "any non-blank
-/// beats blank" (pure greedy).  A small positive threshold (0.3 ≈ 35 % relative
-/// confidence lead) suppresses weak emissions on noisy / transitional frames
-/// without silencing clear speech.
+/// beats blank" (pure greedy). A small positive threshold suppresses weak
+/// emissions on noisy or transitional frames without silencing clear speech.
 const RNNT_CONFIDENCE_THRESHOLD: f32 = 0.3;
 
 /// Minimal SentencePiece vocabulary loader.
@@ -206,9 +205,7 @@ pub struct Nemotron {
     last_token: i32,
     mel_basis: Array2<f32>,
     window: Vec<f32>,
-    /// Cached 512-pt forward FFT plan — planned once at construction, reused every chunk.
-    /// FftPlanner::plan_fft_forward takes 1–5 ms per call; recreating it each 560 ms
-    /// chunk wastes ≈1-2% of the whole streaming budget for no gain.
+    /// Cached 512-pt forward FFT plan reused every chunk.
     fft_plan: Arc<dyn Fft<f32>>,
     /// Raw audio sample buffer for proper mel computation
     audio_buffer: Vec<f32>,
@@ -217,10 +214,7 @@ pub struct Nemotron {
     chunk_idx: usize,
     accumulated_tokens: Vec<usize>,
     /// Last audio sample before the current audio_buffer start.
-    /// Used to ensure pre-emphasis continuity across buffer-trim boundaries.
-    /// Without this, audio_buffer[0] would always have no pre-emphasis applied
-    /// (treated as if the prior sample were 0), producing a small spectral
-    /// discontinuity every ~1.7 s that slightly distorts mel frames near the trim point.
+    /// Keeps pre-emphasis continuous across buffer-trim boundaries.
     last_preemph_sample: f32,
 }
 
@@ -256,7 +250,6 @@ impl Nemotron {
         let encoder_cache =
             NemotronEncoderCache::with_dims(NUM_ENCODER_LAYERS, LEFT_CONTEXT, HIDDEN_DIM, CONV_CONTEXT);
 
-        // Plan the FFT once at construction — reused for every mel chunk.
         let fft_plan = {
             let mut planner = FftPlanner::<f32>::new();
             planner.plan_fft_forward(N_FFT)
@@ -325,7 +318,6 @@ impl Nemotron {
     pub fn transcribe_audio(&mut self, audio: &[f32]) -> Result<String> {
         self.reset();
 
-        // Offline path: fresh start, no prior-sample context needed.
         let mel = self.compute_mel_spectrogram(audio, 0.0);
         let total_frames = mel.shape()[1];
 
@@ -399,11 +391,9 @@ impl Nemotron {
             return Ok(String::new());
         }
 
-        // Compute mel spectrogram over the ENTIRE audio buffer.
-        // last_preemph_sample provides the filter's initial condition so pre-emphasis
-        // is continuous across buffer-trim boundaries (no spectral discontinuity).
-        let prior = self.last_preemph_sample;
-        let full_mel = self.compute_mel_spectrogram(&self.audio_buffer, prior);
+        // Compute mel spectrogram over the entire audio buffer while preserving
+        // the pre-emphasis filter state across buffer-trim boundaries.
+        let full_mel = self.compute_mel_spectrogram(&self.audio_buffer, self.last_preemph_sample);
         let total_mel_frames = full_mel.shape()[1];
 
         // Calculate how many mel frames correspond to processed audio
@@ -469,17 +459,13 @@ impl Nemotron {
         self.chunk_idx += 1;
 
         // Trim audio buffer to keep memory bounded.
-        // Keep enough samples for the pre-encode cache context plus one chunk,
-        // plus a Hann window's worth of samples for the STFT boundary.
+        // Keep enough samples for pre-encode cache context plus STFT boundary.
         let keep_samples = (PRE_ENCODE_CACHE + CHUNK_SIZE) * HOP_LENGTH + WIN_LENGTH;
         if self.audio_buffer.len() > keep_samples * 2 {
             let remove = self.audio_buffer.len() - keep_samples;
             // Adjust processed counter since we're removing from the start.
             let actual_remove = remove.min(self.audio_processed);
             if actual_remove > 0 {
-                // Save the sample just before the new buffer start so the next
-                // compute_mel_spectrogram call can apply pre-emphasis correctly
-                // at audio_buffer[0] (instead of treating the prior sample as 0).
                 self.last_preemph_sample = self.audio_buffer[actual_remove - 1];
                 self.audio_buffer.drain(0..actual_remove);
                 self.audio_processed -= actual_remove;
@@ -498,7 +484,6 @@ impl Nemotron {
     fn decode_chunk(&mut self, encoder_out: &Array3<f32>, enc_frames: usize) -> Result<Vec<usize>> {
         let mut tokens = Vec::new();
         let hidden_dim = encoder_out.shape()[1];
-        // NeMo reference uses 10 symbols per encoder step for the 0.6B streaming model.
         const MAX_SYMBOLS_PER_STEP: usize = 10;
 
         for t in 0..enc_frames {
@@ -526,12 +511,6 @@ impl Nemotron {
                     break;
                 }
 
-                // Confidence gate: the winning non-blank token must lead the blank
-                // logit by at least RNNT_CONFIDENCE_THRESHOLD.  The joint network
-                // outputs log-softmax values, so this is a margin in log-prob space.
-                // Tokens that only barely beat blank are usually noise/hallucinations
-                // at frame boundaries — suppressing them improves WER without
-                // affecting clearly-spoken tokens which have large margins.
                 let blank_logit = logits[BLANK_ID];
                 if max_val - blank_logit < RNNT_CONFIDENCE_THRESHOLD {
                     break;
@@ -547,13 +526,8 @@ impl Nemotron {
         Ok(tokens)
     }
 
-    /// Compute log mel spectrogram WITHOUT normalization.
-    /// NeMo feeds raw log-mel values (in decibels) directly to the encoder — no CMVN.
-    ///
-    /// `prior_sample` is the audio sample immediately before `audio[0]` in the global
-    /// stream.  For fresh (non-streaming) calls pass `0.0`.  For streaming calls pass
-    /// `self.last_preemph_sample` so the first-order pre-emphasis filter is continuous
-    /// across buffer-trim boundaries (avoids a small spectral glitch every ~1.7 s).
+    /// Compute log mel spectrogram without normalization. NeMo feeds raw log-mel
+    /// values directly to the encoder.
     fn compute_mel_spectrogram(&self, audio: &[f32], prior_sample: f32) -> Array2<f32> {
         if audio.is_empty() {
             return Array2::zeros((N_MELS, 0));
@@ -566,18 +540,12 @@ impl Nemotron {
         mel.mapv(|x| (x.max(0.0) + LOG_ZERO_GUARD).ln())
     }
 
-    /// First-order high-pass pre-emphasis filter.
-    ///
-    /// `prior_sample` is the sample before `audio[0]`.  Pass `0.0` when starting
-    /// fresh; pass the saved last sample of the previous buffer segment to keep the
-    /// filter state continuous across buffer-trim boundaries.
     fn apply_preemphasis(audio: &[f32], prior_sample: f32) -> Vec<f32> {
         if audio.is_empty() {
             return Vec::new();
         }
 
         let mut result = Vec::with_capacity(audio.len());
-        // Use the caller-supplied prior so the filter has correct state at boundary.
         let first = audio[0] - PREEMPH * prior_sample;
         result.push(if first.is_finite() { first } else { 0.0 });
 
@@ -589,10 +557,6 @@ impl Nemotron {
         result
     }
 
-    /// Center-padded short-time Fourier transform → power spectrogram.
-    ///
-    /// Uses `self.fft_plan` which is planned once at construction — avoids
-    /// the 1–5 ms FftPlanner::plan_fft_forward cost on every 560 ms chunk.
     fn stft_center(&self, audio: &[f32]) -> Array2<f32> {
         let pad_amount = N_FFT / 2;
         let mut padded = vec![0.0f32; pad_amount];
@@ -607,7 +571,6 @@ impl Nemotron {
 
         let freq_bins = N_FFT / 2 + 1;
         let mut spec = Array2::zeros((freq_bins, num_frames));
-        // Reuse a single scratch buffer across frames to avoid per-frame allocation.
         let mut fft_buf: Vec<Complex<f32>> = vec![Complex::new(0.0, 0.0); N_FFT];
 
         for frame_idx in 0..num_frames {
@@ -616,7 +579,6 @@ impl Nemotron {
                 break;
             }
 
-            // Zero-fill the back half (N_FFT - WIN_LENGTH padding), apply window.
             for v in fft_buf.iter_mut() {
                 *v = Complex::new(0.0, 0.0);
             }

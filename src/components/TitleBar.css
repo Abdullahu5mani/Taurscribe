@@ -42,18 +42,69 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   min-width: 0;
 }
 
+/* H1 fix: invisible button wrapper for the logo — strips all button chrome
+ * while keeping keyboard accessibility and focus management. */
+.titlebar-logo-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 50%;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.titlebar-logo-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.titlebar-logo {
+  width: 1.05rem;
+  height: 1.05rem;
+  user-select: none;
+  cursor: pointer;
+  transition: transform 0.1s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.1s ease;
+}
+
+.titlebar-logo-btn:hover .titlebar-logo {
+  transform: scale(1.08);
+}
+
+.titlebar-logo-btn:active .titlebar-logo {
+  transform: scale(0.92);
+}
+
+.titlebar-logo--shutter {
+  transform: scale(0.8) rotate(5deg) !important;
+  opacity: 0.1;
+}
+
 .titlebar-title {
-  font-family: 'IBM Plex Sans Condensed', sans-serif;
-  font-size: var(--font-sm);
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--font-xs);
+  font-weight: 400;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--ink-20);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* System boot scramble — fires once on mount */
+.titlebar-title--boot {
+  animation: title-scramble 0.5s steps(5) forwards;
+}
+
+@keyframes title-scramble {
+  0%   { opacity: 0.5; filter: blur(2px); letter-spacing: 0.5em; }
+  40%  { opacity: 1;   filter: blur(0);   letter-spacing: 0.35em; }
+  100% { opacity: 1;   filter: blur(0);   letter-spacing: 0.3em; }
 }
 
 /* macOS traffic light buttons */
@@ -99,6 +150,7 @@
   flex: 1;
   display: flex;
   align-items: center;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -115,7 +167,7 @@
   padding: 0;
   cursor: pointer;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--ink-20);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -124,7 +176,7 @@
 
 .titlebar--win .titlebar-btn:hover {
   background: var(--bg-tertiary);
-  color: var(--text-primary);
+  color: var(--ink-70);
 }
 
 .titlebar--win .titlebar-btn--close:hover {

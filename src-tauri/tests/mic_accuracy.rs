@@ -75,7 +75,7 @@ fn load_native_mono(path: &Path) -> Result<(Vec<f32>, u32), String> {
 
 /// Whisper / Cohere live path: 6s chunks, VAD-gated, no clean_transcript.
 /// Mirrors `vad_gated_transcribe` inside `start_recording_blocking`.
-fn mic_sim_whisper_granite<F>(
+fn mic_sim_whisper_cohere<F>(
     samples: &[f32],
     sample_rate: u32,
     vad: &Arc<Mutex<VADManager>>,
@@ -254,7 +254,7 @@ fn mic_accuracy() {
                         }
 
                         let vad_ref = Arc::clone(&vad);
-                        let hyp = mic_sim_whisper_granite(&samples, rate, &vad_ref, |pcm| {
+                        let hyp = mic_sim_whisper_cohere(&samples, rate, &vad_ref, |pcm| {
                             w.transcribe_chunk(pcm, 16000)
                         });
                         let w_val = wer(&row.ref_text, &hyp);
@@ -317,7 +317,7 @@ fn mic_accuracy() {
     let mut g = CohereManager::new();
     match g.initialize(None, true) {
         Ok(_) => {
-            let wers = results.entry("granite").or_default();
+            let wers = results.entry("cohere").or_default();
             for row in &rows {
                 let flac = librispeech_wer::resolve_librispeech_flac(
                     &row.flac_path,
@@ -327,7 +327,7 @@ fn mic_accuracy() {
                 let (samples, rate) = match load_native_mono(&flac) {
                     Ok(v) => v,
                     Err(e) => {
-                        eprintln!("[granite] {} audio error: {e}", row.utt_id);
+                        eprintln!("[cohere] {} audio error: {e}", row.utt_id);
                         continue;
                     }
                 };
@@ -336,8 +336,8 @@ fn mic_accuracy() {
                 }
 
                 let vad_ref = Arc::clone(&vad);
-                let hyp = mic_sim_whisper_granite(&samples, rate, &vad_ref, |pcm| {
-                    g.transcribe_chunk(pcm, 16000, None)
+                let hyp = mic_sim_whisper_cohere(&samples, rate, &vad_ref, |pcm| {
+                    g.transcribe_chunk(pcm, 16000)
                 });
                 let w_val = wer(&row.ref_text, &hyp);
                 let snippet: String = hyp.chars().take(80).collect();
@@ -348,7 +348,7 @@ fn mic_accuracy() {
                 wers.push(w_val);
             }
         }
-        Err(e) => eprintln!("[SKIP] Cohere init: {e} (need q4f16 bundle in granite-speech-1b)"),
+        Err(e) => eprintln!("[SKIP] Cohere init: {e} (need q4f16 bundle in cohere-speech-1b)"),
     }
     g.unload();
 

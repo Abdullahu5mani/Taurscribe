@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 function isMac(): boolean {
@@ -7,13 +8,53 @@ function isMac(): boolean {
   return p.includes("Mac") || ua.includes("Mac");
 }
 
-export function TitleBar() {
+interface TitleBarProps {
+  logoSrc?: string;
+  isLogoShuttering?: boolean;
+  onLogoClick?: () => void;
+}
+
+const DEFAULT_LOGO = "/logos/animated_logo_breathe.svg";
+
+export function TitleBar({
+  logoSrc = DEFAULT_LOGO,
+  isLogoShuttering = false,
+  onLogoClick = () => {},
+}: TitleBarProps) {
   const appWindow = getCurrentWindow();
   const mac = isMac();
+
+  // Boot title scramble: 600ms, matches the prior in-app header's boot effect.
+  const [isBooting, setIsBooting] = useState(true);
+  useEffect(() => {
+    const titleTimer = setTimeout(() => setIsBooting(false), 600);
+    return () => clearTimeout(titleTimer);
+  }, []);
 
   const handleMinimize = () => appWindow.minimize();
   const handleMaximize = () => appWindow.toggleMaximize();
   const handleClose = () => appWindow.close();
+
+  const brand = (
+    <>
+      {/* H1 fix: wrapped in <button> so it's keyboard-reachable and
+          announced as interactive by screen readers */}
+      <button
+        type="button"
+        className="titlebar-logo-btn"
+        onClick={onLogoClick}
+        aria-label="Cycle logo animation"
+        title="Cycle Logo"
+      >
+        <img
+          src={logoSrc}
+          alt=""
+          className={`titlebar-logo ${isLogoShuttering ? "titlebar-logo--shutter" : ""}`}
+        />
+      </button>
+      <span className={`titlebar-title${isBooting ? " titlebar-title--boot" : ""}`}>Taurscribe</span>
+    </>
+  );
 
   return (
     <header className={`titlebar titlebar--${mac ? "mac" : "win"}`}>
@@ -25,13 +66,13 @@ export function TitleBar() {
             <button type="button" className="titlebar-btn titlebar-btn--maximize" onClick={handleMaximize} aria-label="Maximize" />
           </div>
           <div className="titlebar-drag titlebar-drag--mac" data-tauri-drag-region>
-            <span className="titlebar-title">Taurscribe</span>
+            {brand}
           </div>
         </>
       ) : (
         <>
           <div className="titlebar-drag titlebar-drag--win" data-tauri-drag-region>
-            <span className="titlebar-title">Taurscribe</span>
+            {brand}
           </div>
           <div className="titlebar-controls titlebar-controls--win">
             <button type="button" className="titlebar-btn titlebar-btn--minimize" onClick={handleMinimize} aria-label="Minimize">

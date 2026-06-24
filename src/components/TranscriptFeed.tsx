@@ -139,6 +139,13 @@ function TranscriptFeedComponent({
             {showLive && (
                 <div className={`feed-live-row ${liveClass}`}>
                     <span className="feed-live-dot" />
+                    {isRecording && !isPaused && (
+                        <div className="feed-live-waveform" aria-hidden="true">
+                            {['a', 'b', 'c', 'd', 'e', 'f'].map((c) => (
+                                <span key={c} className={`feed-live-bar feed-live-bar--${c}`} />
+                            ))}
+                        </div>
+                    )}
                     <span className="feed-live-label">{liveLabel}…</span>
                 </div>
             )}
@@ -164,6 +171,7 @@ function TranscriptFeedComponent({
                 const isNew = animatingId === item.id;
                 const isLatest = index === 0;
                 const displayLatency = item.processing_time_ms ?? (isLatest ? latestLatency : null);
+                const distance = Math.min(index, 3);
                 return (
                     // Outer wrapper: animates grid-template-rows 0fr→1fr (height: 0→auto)
                     // so the item EXPANDS smoothly instead of jumping into place.
@@ -171,7 +179,10 @@ function TranscriptFeedComponent({
                         key={item.id}
                         className={`feed-item-wrapper${isNew ? " feed-item-wrapper--entering" : ""}`}
                     >
-                        <div className={`feed-item${isLatest ? " feed-item--latest" : ""}${isNew ? " feed-item--entering feed-item--fading-in" : ""}`}>
+                        <div
+                            className={`feed-item${isLatest ? " feed-item--latest" : ""}${isNew ? " feed-item--entering feed-item--fading-in" : ""}`}
+                            data-distance={distance}
+                        >
                             <div className="feed-item-header">
                                 <span className="feed-timestamp">{formatTimestamp(item.created_at)}</span>
                                 <div className="feed-badges">
@@ -181,7 +192,7 @@ function TranscriptFeedComponent({
                                         </span>
                                     ) : null}
                                     <span className={`feed-badge feed-badge-engine--${item.engine}`}>
-                                        {item.engine === "parakeet" ? "Parakeet" : item.engine === "cohere" ? "Cohere" : "Whisper"}
+                                        {item.engine === "parakeet" ? "Parakeet" : item.engine === "granite" ? "Granite" : "Whisper"}
                                     </span>
                                     {item.grammar_llm_used && (
                                         <span className="feed-badge feed-badge-llm">LLM</span>
@@ -210,7 +221,7 @@ function TranscriptFeedComponent({
                                     </button>
                                 </div>
                             </div>
-                            <pre className="feed-text">{item.transcript}</pre>
+                            <pre className="feed-text">"{item.transcript}"</pre>
                         </div>
                     </div>
                 );

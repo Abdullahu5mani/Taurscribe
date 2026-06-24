@@ -3,6 +3,14 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconBolt, IconCpu, IconVolumeHigh, IconVolumeLow, IconVolumeMuted, InfoTooltip } from "./Icons";
 
+const STYLES: { value: string; label: string }[] = [
+    { value: 'Casual', label: 'Casual' },
+    { value: 'Verbatim', label: 'Verbatim' },
+    { value: 'Enthusiastic', label: 'Enthusiastic' },
+    { value: 'Software_Dev', label: 'Software Dev' },
+    { value: 'Professional', label: 'Professional' },
+];
+
 interface QuickSettingsProps {
     // Post-processing toggles
     enableGrammarLM: boolean;
@@ -14,6 +22,16 @@ interface QuickSettingsProps {
     setEnableOverlay: (val: boolean) => void;
     muteBackgroundAudio: boolean;
     setMuteBackgroundAudio: (val: boolean) => void;
+    // Tone / transcription style
+    transcriptionStyle: string;
+    setTranscriptionStyle: (val: string) => void;
+    // ASR hardware backend (Whisper/Parakeet/Cohere — GPU or CPU)
+    backendInfo: string;
+    asrBackend: "gpu" | "cpu";
+    onToggleAsrBackend: (backend: "gpu" | "cpu") => void;
+    asrBackendLoading: boolean;
+    cohereGpuOnlyLoaded: boolean;
+    activeEngine: string;
     // LLM backend
     llmBackend: "gpu" | "cpu";
     setLlmBackend: (val: "gpu" | "cpu") => void;
@@ -81,6 +99,8 @@ function QuickSettingsComponent({
     enableDenoise, setEnableDenoise,
     enableOverlay, setEnableOverlay,
     muteBackgroundAudio, setMuteBackgroundAudio,
+    transcriptionStyle, setTranscriptionStyle,
+    backendInfo, asrBackend, onToggleAsrBackend, asrBackendLoading, cohereGpuOnlyLoaded, activeEngine,
     llmBackend, setLlmBackend,
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
     dictionaryCount, snippetsCount,
@@ -177,7 +197,56 @@ function QuickSettingsComponent({
                     />
                 </Row>
 
-                {/* ── Hardware ────────────────────────────────── */}
+                {/* ── Tone ────────────────────────────────────── */}
+                <Section label="Tone" info="Transcription style applied by the grammar LLM." />
+                <div className="qs-style-pills">
+                    {STYLES.map(s => (
+                        <button
+                            key={s.value}
+                            type="button"
+                            className={`qs-style-pill${transcriptionStyle === s.value ? " qs-style-pill--active" : ""}`}
+                            disabled={!enableGrammarLM || llmStatus !== 'Loaded'}
+                            onClick={() => setTranscriptionStyle(s.value)}
+                        >
+                            {s.label}
+                        </button>
+                    ))}
+                </div>
+
+                {/* ── Hardware (ASR engine backend) ───────────── */}
+                {/* macOS fix: Hide the GPU/CPU backend toggle on macOS —
+                    Apple Silicon uses Metal automatically, no user choice needed. */}
+                {!isMac && (
+                  <>
+                    <Section label="Hardware" info="Run the active speech engine on GPU (faster) or CPU." />
+                    <div className="qs-row-hint" style={{ padding: "0 18px 4px" }}>{backendInfo}</div>
+                    <div className={`qs-backend-row${cohereGpuOnlyLoaded ? " qs-backend-row--locked" : ""}`}>
+                            <button
+                                type="button"
+                                className={`qs-backend-btn${asrBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
+                                onClick={() => onToggleAsrBackend("gpu")}
+                                disabled={asrBackendLoading || cohereGpuOnlyLoaded}
+                                aria-pressed={asrBackend === "gpu"}
+                                title="Run the active speech engine on GPU (faster, requires VRAM)"
+                            ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
+                            <button
+                                type="button"
+                                className={`qs-backend-btn${asrBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
+                                onClick={() => onToggleAsrBackend("cpu")}
+                                disabled={asrBackendLoading || cohereGpuOnlyLoaded}
+                                aria-pressed={asrBackend === "cpu"}
+                                title="Run the active speech engine on CPU (universal, slower)"
+                            ><IconCpu size={11} /> CPU</button>
+                        </div>
+                    {cohereGpuOnlyLoaded && activeEngine === "granite" && (
+                        <p className="qs-backend-hint" role="status">
+                            Granite is loaded on a GPU backend — unload it before switching to CPU.
+                        </p>
+                    )}
+                  </>
+                )}
+
+                {/* ── LLM Backend ──────────────────────────────── */}
                 {/* macOS fix: Hide the LLM GPU/CPU backend toggle on macOS —
                     Apple Silicon uses Metal automatically, no user choice needed. */}
                 {!isMac && (

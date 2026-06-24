@@ -48,7 +48,7 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
             const [modelList, pModels, gModels] = await Promise.all([
                 invoke<ModelInfo[]>("list_models"),
                 invoke<ParakeetModelInfo[]>("list_parakeet_models"),
-                invoke<CohereModelInfo[]>("list_cohere_models"),
+                invoke<CohereModelInfo[]>("list_granite_models"),
             ]);
 
             setModels(modelList);

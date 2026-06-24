@@ -124,7 +124,7 @@ fn transcribe_cohere(g: &mut CohereManager, pcm: &[f32]) -> Result<String, Strin
     let parts: Vec<String> = pcm
         .chunks(STREAM_CHUNK_SAMPLES)
         .filter_map(|chunk| {
-            g.transcribe_chunk(chunk, 16000, None)
+            g.transcribe_chunk(chunk, 16000)
                 .ok()
                 .filter(|t| !t.trim().is_empty())
                 .map(|t| t.trim().to_string())
@@ -267,7 +267,7 @@ fn file_drop_accuracy() {
     let mut g = CohereManager::new();
     match g.initialize(None, true) {
         Ok(_) => {
-            let wers = results.entry("granite").or_default();
+            let wers = results.entry("cohere").or_default();
             for row in &rows {
                 let flac = librispeech_wer::resolve_librispeech_flac(
                     &row.flac_path,
@@ -277,27 +277,27 @@ fn file_drop_accuracy() {
                 let pcm = match prepare_file_audio(&flac) {
                     Ok(p) => p,
                     Err(e) => {
-                        eprintln!("[granite] {} audio error: {e}", row.utt_id);
+                        eprintln!("[cohere] {} audio error: {e}", row.utt_id);
                         continue;
                     }
                 };
                 let hyp = match transcribe_cohere(&mut g, &pcm) {
                     Ok(t) => t,
                     Err(e) => {
-                        eprintln!("[granite] {} transcribe error: {e}", row.utt_id);
+                        eprintln!("[cohere] {} transcribe error: {e}", row.utt_id);
                         continue;
                     }
                 };
                 let w_val = wer(&row.ref_text, &hyp);
                 let snippet: String = hyp.chars().take(80).collect();
                 eprintln!(
-                    "[granite] {} | wer={:.3} | ref: {} | hyp: {}",
+                    "[cohere] {} | wer={:.3} | ref: {} | hyp: {}",
                     row.utt_id, w_val, &row.ref_text, snippet
                 );
                 wers.push(w_val);
             }
         }
-        Err(e) => eprintln!("[SKIP] Cohere init: {e} (need q4f16 bundle in granite-speech-1b)"),
+        Err(e) => eprintln!("[SKIP] Cohere init: {e} (need q4f16 bundle in cohere-speech-1b)"),
     }
     g.unload();
 

@@ -520,7 +520,7 @@ mod mac {
         let engine_label = match engine.unwrap_or_default() {
             "whisper" => "Whisper",
             "parakeet" => "Parakeet",
-            "cohere" | "granite_speech" => "Cohere",
+            "granite" | "granite_speech" | "cohere" | "cohere_speech" => "Granite",
             _ => "Taurscribe",
         };
         match phase {

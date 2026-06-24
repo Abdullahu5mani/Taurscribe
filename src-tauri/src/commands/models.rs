@@ -101,7 +101,7 @@ pub async fn switch_model(
             parakeet_arc.lock().unwrap().unload();
         }
         if cohere_loaded {
-            println!("[INFO] Unloading Cohere before switching to Whisper");
+            println!("[INFO] Unloading Granite before switching to Whisper");
             cohere_arc.lock().unwrap().unload();
         }
 
@@ -210,7 +210,7 @@ pub async fn init_parakeet(
             whisper_arc.lock().unwrap().unload();
         }
         if cohere_loaded {
-            println!("[INFO] Unloading Cohere before switching to Parakeet");
+            println!("[INFO] Unloading Granite before switching to Parakeet");
             cohere_arc.lock().unwrap().unload();
         }
 

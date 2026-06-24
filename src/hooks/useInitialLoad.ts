@@ -6,7 +6,6 @@ import type { DownloadableModel } from "../components/settings/types";
 import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import type { CommandResult, EngineSelectionState } from "../types/session";
-import { COHERE_FP16_MODEL_ID } from "../utils/engineUtils";
 
 interface UseInitialLoadParams {
     // Model state setters
@@ -32,9 +31,6 @@ interface UseInitialLoadParams {
     setShowSetupWizard: (v: boolean) => void;
     setIsInitialLoading: (v: boolean) => void;
     setCloseBehavior: (v: "tray" | "quit") => void;
-
-    /** Sync ASR toggle when FP16 Cohere forces GPU */
-    setAsrBackend: (v: "gpu" | "cpu") => void;
 
     // Store ref — populated by this hook so callers can use it later
     storeRef: React.MutableRefObject<Store | null>;
@@ -66,7 +62,6 @@ export function useInitialLoad({
     setShowSetupWizard,
     setIsInitialLoading,
     setCloseBehavior,
-    setAsrBackend,
     storeRef,
 }: UseInitialLoadParams) {
     useEffect(() => {
@@ -103,7 +98,7 @@ export function useInitialLoad({
                 if (cancelled) return;
                 setParakeetModels(pModels);
 
-                const gModels = (await invoke("list_cohere_models")) as CohereModelInfo[];
+                const gModels = (await invoke("list_granite_models")) as CohereModelInfo[];
                 if (cancelled) return;
                 setCohereModels(gModels);
 
@@ -116,7 +111,7 @@ export function useInitialLoad({
                 const validParakeetModel = engineState.active_engine === "parakeet" && engineState.selected_model_id && pModels.some((m) => m.id === engineState.selected_model_id)
                     ? engineState.selected_model_id
                     : pModels[0]?.id ?? null;
-                const validCohereModel = engineState.active_engine === "cohere" && engineState.selected_model_id && gModels.some((m) => m.id === engineState.selected_model_id)
+                const validCohereModel = engineState.active_engine === "granite" && engineState.selected_model_id && gModels.some((m) => m.id === engineState.selected_model_id)
                     ? engineState.selected_model_id
                     : gModels[0]?.id ?? null;
 
@@ -157,23 +152,26 @@ export function useInitialLoad({
                         invoke("set_close_behavior", { behaviour: savedCloseBehavior }).catch(() => {});
                     }
 
-                    savedEngine =
-                        (await loadedStore.get<ASREngine>("active_engine")) || null;
+                    const rawSavedEngine = (await loadedStore.get<string>("active_engine")) || null;
+                    savedEngine = rawSavedEngine === "cohere" ? "granite" : (rawSavedEngine as ASREngine | null);
                     if (savedEngine) {
                         setActiveEngine(savedEngine);
                         activeEngineRef.current = savedEngine;
                     }
 
                     const savedParakeet = await loadedStore.get<string>("parakeet_model");
-                    savedCohereModel = (await loadedStore.get<string>("granite_model")) ?? null;
+                    savedCohereModel =
+                        (await loadedStore.get<string>("granite_model")) ??
+                        (await loadedStore.get<string>("cohere_model")) ??
+                        null;
 
-                    const granitePick =
+                    const coherePick =
                         gModels.length > 0
                             ? savedCohereModel && gModels.some((m) => m.id === savedCohereModel)
                                 ? savedCohereModel
                                 : gModels[0].id
                             : "";
-                    if (granitePick) setCurrentCohereModel(granitePick);
+                    if (coherePick) setCurrentCohereModel(coherePick);
 
                     const savedAsrBackend = await loadedStore.get<"gpu" | "cpu">("asr_backend");
                     const useGpuPref = savedAsrBackend !== "cpu";
@@ -223,32 +221,25 @@ export function useInitialLoad({
                                 setLoadingMessage("");
                             }
                         }
-                    } else if (savedEngine === "cohere" && granitePick) {
+                    } else if (savedEngine === "granite" && coherePick) {
                         isLoadingRef.current = true;
                         setIsLoading(true);
-                        setLoadingMessage("Loading Cohere Speech...");
+                        setLoadingMessage("Loading Granite Speech...");
                         try {
                             if (cancelled) return;
-                            const result = await invoke<CommandResult<string>>("init_cohere", {
-                                modelId: granitePick,
-                                forceCpu:
-                                    savedAsrBackend === "cpu" &&
-                                    granitePick !== COHERE_FP16_MODEL_ID,
+                            const result = await invoke<CommandResult<string>>("init_granite", {
+                                modelId: coherePick,
+                                forceCpu: savedAsrBackend === "cpu",
                             });
                             if (!result.ok) {
-                                throw new Error(result.error?.message ?? "Failed to load Cohere Speech");
+                                throw new Error(result.error?.message ?? "Failed to load Granite Speech");
                             }
                             if (cancelled) return;
-                            setLoadedEngine("cohere");
-                            if (granitePick === COHERE_FP16_MODEL_ID) {
-                                setAsrBackend("gpu");
-                                await loadedStore.set("asr_backend", "gpu");
-                                await loadedStore.save();
-                            }
-                            setHeaderStatus("Cohere Speech model loaded");
+                            setLoadedEngine("granite");
+                            setHeaderStatus("Granite Speech model loaded");
                         } catch (e) {
                             if (cancelled) return;
-                            setHeaderStatus(`Failed to auto-load Cohere Speech: ${e}`, 5000);
+                            setHeaderStatus(`Failed to auto-load Granite Speech: ${e}`, 5000);
                         } finally {
                             if (!cancelled) {
                                 isLoadingRef.current = false;

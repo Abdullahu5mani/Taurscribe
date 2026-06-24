@@ -9,7 +9,7 @@
   bottom: 0;
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-end;
   z-index: 1000;
   transition: visibility 0s, opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -41,7 +41,7 @@
   background: rgba(220, 38, 38, 0.12);
   border: 1px solid rgba(220, 38, 38, 0.3);
   color: #f87171;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: var(--font-ui);
   font-size: 0.78rem;
   font-weight: 500;
   letter-spacing: 0.01em;
@@ -50,21 +50,22 @@
 }
 
 .settings-overlay--open .settings-modal {
-  animation: settingsScaleIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: settingsSheetUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .settings-modal {
   /* L3 fix: solid opaque fallback so the modal is visible even when
    * backdrop-filter is unavailable (e.g. some Linux WMs, reduced-motion). */
-  background: #000000;
+  background: #0d0d0d;
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 -8px 32px rgba(0, 0, 0, 0.4);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-bottom: none;
+  border-radius: var(--sheet-radius) var(--sheet-radius) 0 0;
   width: 90%;
   max-width: 800px;
-  height: 85vh;
+  max-height: var(--sheet-max-height);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -72,7 +73,7 @@
 }
 
 .settings-header {
-  padding: 24px 32px;
+  padding: 16px 24px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
   justify-content: space-between;
@@ -82,7 +83,7 @@
 
 .settings-header h2 {
   margin: 0;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-size: var(--font-md);
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -141,12 +142,12 @@
 .settings-tab-btn {
   padding: 0 18px;
   height: 44px;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 500;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(237, 237, 239, 0.38);
+  color: var(--ink-30);
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -186,11 +187,13 @@
 }
 
 .settings-section-title {
-  font-family: 'IBM Plex Sans Condensed', serif;
-  font-size: var(--font-md);
-  font-weight: 700;
-  margin-bottom: 24px;
-  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  margin-bottom: 14px;
+  color: var(--ink-20);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -239,7 +242,7 @@
 
 .model-info h3 {
   margin: 0 0 6px 0;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-size: var(--font-base);
   font-weight: 600;
   color: var(--text-primary);
@@ -253,7 +256,7 @@
   font-size: var(--font-sm);
   display: flex;
   gap: 12px;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
 }
 
 .model-tag {
@@ -261,7 +264,7 @@
   padding: 3px 8px;
   border-radius: 6px;
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   color: var(--text-secondary);
 }
 
@@ -271,7 +274,7 @@
   color: var(--accent-primary);
   padding: 8px 16px;
   border-radius: 8px;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-weight: 600;
   font-size: var(--font-base);
   cursor: pointer;
@@ -391,7 +394,7 @@
 
 .delete-confirm-label {
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-weight: 600;
   color: var(--error-light, #f87171);
 }
@@ -400,7 +403,7 @@
   padding: 6px 14px;
   border-radius: 6px;
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1),
@@ -442,7 +445,7 @@
   padding: 8px 16px;
   border-radius: 8px;
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-weight: 600;
   color: var(--error-light, #f87171);
   background: rgba(239, 68, 68, 0.08);
@@ -484,6 +487,18 @@
   }
 }
 
+@keyframes settingsSheetUp {
+  from {
+    opacity: 0.6;
+    transform: translateY(24px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* ---- Focus-visible inside modal ---- */
 .settings-modal :focus-visible {
   outline: none;
@@ -517,12 +532,12 @@
   background: rgba(255, 255, 255, 0.18);
 }
 
-/* Toggle switch (General settings) */
+/* Toggle switch (General settings) — Pure's thin pill-track style */
 .settings-content .switch {
   position: relative;
   display: inline-block;
-  width: 44px;
-  height: 24px;
+  width: 34px;
+  height: 19px;
 }
 
 .settings-content .switch input {
@@ -538,35 +553,35 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
   transition: 0.25s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .settings-content .slider.round {
-  border-radius: 24px;
+  border-radius: 19px;
 }
 
 .settings-content .slider::before {
   content: "";
   position: absolute;
-  height: 18px;
-  width: 18px;
+  height: 13px;
+  width: 13px;
   left: 2px;
   bottom: 2px;
-  background: var(--text-muted);
+  background: var(--ink-45);
   transition: 0.25s cubic-bezier(0.25, 1, 0.5, 1);
   border-radius: 50%;
 }
 
 .settings-content .switch input:checked+.slider {
-  background: rgba(var(--accent-primary-rgb), 0.25);
+  background: rgba(var(--accent-primary-rgb), 0.2);
   border-color: var(--accent-primary);
 }
 
 .settings-content .switch input:checked+.slider::before {
   background: var(--accent-primary);
-  transform: translateX(20px);
+  transform: translateX(15px);
 }
 
 .settings-content .switch input:focus-visible+.slider {
@@ -584,21 +599,22 @@
   cursor: not-allowed;
 }
 
-/* ── Shared setting card ───────────────────────────────────────────── */
+/* ── Shared setting card — flattened to Pure's hairline list-row aesthetic ── */
 
 .setting-card {
-  background: var(--bg-card);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 8px 32px rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 20px;
+  background: none;
+  box-shadow: none;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 0;
+  padding: 12px 0;
 }
 
 .setting-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 4px;
   gap: 12px;
 }
 
@@ -606,22 +622,22 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: 'IBM Plex Sans Condensed', serif;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-weight: 500;
   font-size: var(--font-base);
-  color: var(--text-primary);
+  color: var(--ink-70);
 }
 
 .setting-card-label-plain {
-  font-family: 'IBM Plex Sans Condensed', serif;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-weight: 500;
   font-size: var(--font-base);
-  color: var(--text-primary);
+  color: var(--ink-70);
 }
 
 .setting-card-meta {
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   color: var(--text-muted);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -660,7 +676,7 @@
 
 .status-badge {
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-weight: 600;
 }
 
@@ -685,7 +701,7 @@
   padding: 6px 10px;
   cursor: pointer;
   outline: none;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -725,7 +741,7 @@
   border-radius: 6px;
   padding: 5px 12px;
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   cursor: pointer;
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1),
               color 0.15s cubic-bezier(0.25, 1, 0.5, 1),
@@ -787,7 +803,7 @@
 .model-group-sub {
   font-size: var(--font-sm);
   color: var(--text-muted);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
 }
 
 .model-group-sub--whisper  { color: var(--whisper-color);  }
@@ -801,7 +817,7 @@
   color: var(--accent-primary);
   border-radius: 4px;
   padding: 2px 7px;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
 }
 
 .model-group-badge--warn {
@@ -844,7 +860,7 @@
   color: var(--accent-secondary, #a855f7);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
 }
 
 .coreml-divider {
@@ -871,7 +887,7 @@
   border: 1px solid rgba(255, 255, 255, 0.07);
   color: var(--text-secondary);
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1),
@@ -901,7 +917,7 @@
   font-size: var(--font-sm);
   color: var(--text-muted);
   margin: 0 0 16px;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
 }
 
 /* Recommended wrapper */
@@ -958,7 +974,7 @@
   left: 16px;
   transform: translateY(-50%);
   font-size: var(--font-xs);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -994,7 +1010,7 @@
   border: 1px solid rgba(255, 255, 255, 0.07);
   color: var(--text-secondary);
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   cursor: pointer;
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1),
               color 0.15s cubic-bezier(0.25, 1, 0.5, 1),
@@ -1042,7 +1058,7 @@
 .backend-toggle-btn {
   padding: 6px 14px;
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-weight: 500;
   color: var(--text-secondary);
   background: transparent;
@@ -1114,7 +1130,7 @@
   cursor: pointer;
   font: inherit;
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   transition: background 0.15s cubic-bezier(0.25, 1, 0.5, 1), color 0.15s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
@@ -1164,7 +1180,7 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--text-primary);
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   letter-spacing: 0.03em;
 }
 
@@ -1230,7 +1246,7 @@
 }
 
 .hotkey-step-num {
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-size: var(--font-sm);
   color: var(--text-muted);
   min-width: 20px;
@@ -1264,7 +1280,7 @@
   color: var(--text-secondary);
   min-width: 34px;
   text-align: right;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
 }
 
 .sound-events {
@@ -1288,7 +1304,7 @@
 .sound-event-file {
   font-size: var(--font-sm);
   color: var(--text-muted);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
 }
 
 /* ── About tab ─────────────────────────────────────────────────────── */
@@ -1306,7 +1322,7 @@
 }
 
 .about-app-name {
-  font-family: 'IBM Plex Sans Condensed', sans-serif;
+  font-family: var(--font-display);
   font-weight: 700;
   font-size: var(--font-md);
   color: var(--text-primary);
@@ -1316,7 +1332,7 @@
 
 .about-version {
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   color: var(--text-muted);
 }
 
@@ -1347,7 +1363,7 @@
 
 .about-path {
   font-size: var(--font-sm);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   color: var(--accent-primary);
   word-break: break-all;
   text-align: right;
@@ -1359,11 +1375,11 @@
 }
 
 .about-open-btn {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.6rem;
   letter-spacing: 0.06em;
   color: var(--accent-primary);
-  border: 1px solid rgba(224, 159, 62, 0.3);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.3);
   border-radius: 999px;
   padding: 2px 8px;
   background: transparent;
@@ -1374,7 +1390,7 @@
 }
 
 .about-open-btn:hover {
-  background: rgba(224, 159, 62, 0.08);
+  background: rgba(var(--accent-primary-rgb), 0.08);
 }
 
 .about-reset-actions {
@@ -1416,7 +1432,7 @@
 .dict-field-label {
   font-size: var(--font-sm);
   color: var(--text-secondary);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1429,7 +1445,7 @@
   font-size: var(--font-sm);
   padding: 9px 12px;
   outline: none;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   transition: border-color 0.15s cubic-bezier(0.25, 1, 0.5, 1);
   width: 100%;
   box-sizing: border-box;
@@ -1559,7 +1575,7 @@
   font-size: var(--font-sm);
   padding: 9px 12px;
   outline: none;
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   transition: border-color 0.15s cubic-bezier(0.25, 1, 0.5, 1);
   width: 100%;
   box-sizing: border-box;
@@ -1625,7 +1641,7 @@
 .snippet-label {
   font-size: var(--font-sm);
   color: var(--text-secondary);
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   text-transform: uppercase;
   flex-shrink: 0;
   min-width: 28px;
@@ -1679,7 +1695,7 @@
 }
 
 .close-behavior-option-title {
-  font-family: 'IBM Plex Sans Condensed', serif;
+  font-family: var(--font-display);
   font-weight: 600;
   font-size: var(--font-sm);
   color: var(--text-primary);

@@ -49,7 +49,7 @@ export function beautifyModelName(rawName: string): string {
  *   whisper-large-v3            → "Large V3"
  *   whisper-base-q5_1           → "Base"
  *   parakeet-tdt-0.6b-v2        → "TDT 0.6b V2"
- *   granite-speech-3b-a800m     → "3b A800m"
+ *   cohere-speech-3b-a800m     → "3b A800m"
  */
 export function formatModelDisplay(modelId: string | null | undefined): string | null {
     if (!modelId) return null;
@@ -57,7 +57,7 @@ export function formatModelDisplay(modelId: string | null | undefined): string |
     const m = modelId
         .replace(/^whisper-/, '')
         .replace(/^parakeet-/, '')
-        .replace(/^granite-speech-/, '')
+        .replace(/^cohere-speech-/, '')
         .replace(/-q\d[\w]*$/i, '')  // strip quantization: -q5_1, -q5_0, -q4_k_m
         .replace(/-coreml$/, '');    // strip CoreML encoder suffix
 

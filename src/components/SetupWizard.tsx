@@ -30,7 +30,7 @@ interface StepEntry {
   key: number;
 }
 
-type SetupEngineId = 'whisper' | 'parakeet' | 'cohere';
+type SetupEngineId = 'whisper' | 'parakeet' | 'granite';
 
 const ENGINE_CAROUSEL_SLIDES: Array<{
   id: SetupEngineId;
@@ -70,17 +70,17 @@ const ENGINE_CAROUSEL_SLIDES: Array<{
     ],
   },
   {
-    id: 'cohere',
-    title: 'Cohere Speech',
-    subtitle: 'English ONNX path for specific hardware workflows.',
+    id: 'granite',
+    title: 'Granite Speech',
+    subtitle: 'IBM Granite NAR through the ONNX runtime path.',
     goodAt: [
-      'English transcription with the Cohere runtime path.',
-      'Users validating ONNX backend behavior.',
+      'High-accuracy non-autoregressive transcription.',
+      'Users validating CUDA, DirectML, and CPU ONNX backends.',
       'Controlled comparisons against Whisper/Parakeet.',
     ],
     usage: [
       'Treat as a specialized option, not first choice.',
-      'Use when you specifically want Cohere engine output.',
+      'Use when you specifically want Granite Speech output.',
       'For general daily use, Whisper or Parakeet is usually better.',
     ],
   },
@@ -281,7 +281,7 @@ function StepWelcome({ onNext, logoSrc }: { onNext: () => void; logoSrc: string 
         </li>
         <li className="welcome-feature">
           <span className="welcome-feature-dot" />
-          Three local engines: Whisper, Parakeet, and Cohere Speech
+          Three local engines: Whisper, Parakeet, and Granite Speech
         </li>
         <li className="welcome-feature">
           <span className="welcome-feature-dot" />
@@ -451,7 +451,7 @@ function StepEngines({
         <div className={`setup-engine-carousel-card setup-engine-carousel-card--${slide.id}`}>
           <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--whisper${slide.id === 'whisper' ? ' is-active' : ''}`} />
           <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--parakeet${slide.id === 'parakeet' ? ' is-active' : ''}`} />
-          <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--cohere${slide.id === 'cohere' ? ' is-active' : ''}`} />
+          <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--cohere${slide.id === 'granite' ? ' is-active' : ''}`} />
 
           <div key={`${slide.id}-${activeSlide}`} className={`setup-engine-carousel-content setup-engine-carousel-content--${navDirection}`}>
             <div className="setup-engine-carousel-topline">

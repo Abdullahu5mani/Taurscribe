@@ -187,9 +187,7 @@ fn signed_mb(delta_bytes: i64) -> String {
 }
 
 fn summarize_report(report: &MemoryRegressionReport) {
-    eprintln!(
-        "\n[memory-test] ═══════════════════════════════════════════════════════"
-    );
+    eprintln!("\n[memory-test] ═══════════════════════════════════════════════════════");
     eprintln!("[memory-test]  MEMORY REGRESSION SUMMARY");
     eprintln!(
         "[memory-test]  fixture : {} ({} samples, {:.1}s @ 16 kHz)",
@@ -198,9 +196,7 @@ fn summarize_report(report: &MemoryRegressionReport) {
         report.sample_count_16k as f64 / 16_000.0,
     );
     eprintln!("[memory-test]  force_cpu: {}", report.force_cpu);
-    eprintln!(
-        "[memory-test] ═══════════════════════════════════════════════════════"
-    );
+    eprintln!("[memory-test] ═══════════════════════════════════════════════════════");
 
     let mut all_pass = true;
 
@@ -259,7 +255,13 @@ fn summarize_report(report: &MemoryRegressionReport) {
                 after_unload_private = snap.private_bytes.map(|b| b as i64);
             }
 
-            rows.push(RowData { label: snap.label.clone(), ws, delta_prev, delta_baseline, private_str });
+            rows.push(RowData {
+                label: snap.label.clone(),
+                ws,
+                delta_prev,
+                delta_baseline,
+                private_str,
+            });
             prev_ws = ws;
         }
 
@@ -276,7 +278,11 @@ fn summarize_report(report: &MemoryRegressionReport) {
 
         // Second pass: print table with spike marker only on the single spike row
         for (i, row) in rows.iter().enumerate() {
-            let spike_marker = if Some(i) == spike_idx { " ← SPIKE" } else { "" };
+            let spike_marker = if Some(i) == spike_idx {
+                " ← SPIKE"
+            } else {
+                ""
+            };
             eprintln!(
                 "  {:<48} {:>9.1}  {:>10}  {:>10}  {:>12}{}",
                 row.label,
@@ -325,7 +331,11 @@ fn summarize_report(report: &MemoryRegressionReport) {
                 bytes_to_mb(baseline_ws as u64),
                 bytes_to_mb(unload_ws as u64),
                 signed_mb(retained),
-                if pass { "✓ CLEAN" } else { "✗ POSSIBLE LEAK" },
+                if pass {
+                    "✓ CLEAN"
+                } else {
+                    "✗ POSSIBLE LEAK"
+                },
             );
             // Private bytes: expect them to stay elevated after CUDA init (ORT holds pages)
             if let (Some(unload_priv), Some(base_priv)) = (after_unload_private, baseline_private) {
@@ -341,7 +351,11 @@ fn summarize_report(report: &MemoryRegressionReport) {
                     bytes_to_mb(base_priv as u64),
                     bytes_to_mb(unload_priv as u64),
                     signed_mb(priv_retained),
-                    if priv_pass { "✓ expected" } else { "✗ EXCESSIVE" },
+                    if priv_pass {
+                        "✓ expected"
+                    } else {
+                        "✗ EXCESSIVE"
+                    },
                 );
             }
         }
@@ -354,16 +368,16 @@ fn summarize_report(report: &MemoryRegressionReport) {
     }
 
     // Roll-up
-    eprintln!(
-        "\n[memory-test] ═══════════════════════════════════════════════════════"
-    );
+    eprintln!("\n[memory-test] ═══════════════════════════════════════════════════════");
     eprintln!(
         "[memory-test]  OVERALL: {}",
-        if all_pass { "✓ PASS — no leaks detected" } else { "✗ FAIL — possible leak(s) above" }
+        if all_pass {
+            "✓ PASS — no leaks detected"
+        } else {
+            "✗ FAIL — possible leak(s) above"
+        }
     );
-    eprintln!(
-        "[memory-test] ═══════════════════════════════════════════════════════"
-    );
+    eprintln!("[memory-test] ═══════════════════════════════════════════════════════");
 }
 
 fn skipped_scenario(name: &str, reason: impl Into<String>) -> ScenarioReport {
@@ -480,11 +494,11 @@ fn run_cohere_cycle(pcm: &[f32], force_cpu: bool) -> Result<ScenarioReport, Stri
     g.initialize(None, force_cpu)?;
     snapshots.push(snapshot("cohere after initialize"));
 
-    let text1 = g.transcribe_chunk(pcm, 16000, None)?;
+    let text1 = g.transcribe_chunk(pcm, 16000)?;
     notes.push(format!("first transcript chars={}", text1.len()));
     snapshots.push(snapshot("cohere after first transcription"));
 
-    let text2 = g.transcribe_chunk(pcm, 16000, None)?;
+    let text2 = g.transcribe_chunk(pcm, 16000)?;
     notes.push(format!("second transcript chars={}", text2.len()));
     snapshots.push(snapshot("cohere after second transcription"));
 
@@ -544,7 +558,7 @@ fn run_switch_sequence(
                 snapshots.push(snapshot("after outgoing unloads before cohere init"));
                 g.initialize(None, force_cpu)?;
                 snapshots.push(snapshot("after cohere init"));
-                let text = g.transcribe_chunk(pcm, 16000, None)?;
+                let text = g.transcribe_chunk(pcm, 16000)?;
                 notes.push(format!("cohere transcript chars={}", text.len()));
                 snapshots.push(snapshot("after cohere transcription"));
             }
@@ -724,9 +738,11 @@ fn memory_engine_regression() {
             .first()
             .map(|s| s.working_set_bytes)
             .unwrap_or(0);
-        if let Some(unload_snap) = scenario.snapshots.iter().find(|s| {
-            s.label.contains("after unload") || s.label.contains("after final unload")
-        }) {
+        if let Some(unload_snap) = scenario
+            .snapshots
+            .iter()
+            .find(|s| s.label.contains("after unload") || s.label.contains("after final unload"))
+        {
             let after_unload_ws = unload_snap.working_set_bytes;
             let retained = after_unload_ws.saturating_sub(baseline_ws);
             assert!(
