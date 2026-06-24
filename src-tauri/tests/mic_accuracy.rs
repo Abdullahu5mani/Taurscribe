@@ -59,16 +59,7 @@ fn load_manifest(path: &str) -> Vec<ManifestRow> {
 /// The recording thread receives native-rate stereo and converts to mono;
 /// `preprocess_live_transcribe_chunk` then handles the resample to 16 kHz.
 fn load_native_mono(path: &Path) -> Result<(Vec<f32>, u32), String> {
-    let (raw, sample_rate, channels) = audio_decode::decode_audio_interleaved_f32(path)?;
-    let mono: Vec<f32> = if channels > 1 {
-        let ch = channels as usize;
-        raw.chunks(ch)
-            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
-            .collect()
-    } else {
-        raw
-    };
-    Ok((mono, sample_rate))
+    audio_decode::decode_audio_mono_f32(path)
 }
 
 // ── Mic simulation helpers ────────────────────────────────────────────────────

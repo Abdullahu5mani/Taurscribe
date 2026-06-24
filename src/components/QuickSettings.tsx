@@ -218,7 +218,7 @@ function QuickSettingsComponent({
                     Apple Silicon uses Metal automatically, no user choice needed. */}
                 {!isMac && (
                   <>
-                    <Section label="Hardware" info="Run the active speech engine on GPU (faster) or CPU." />
+                    <Section label="Speech Engine Backend" info="Run the active speech-recognition engine (Whisper/Parakeet/Granite) on GPU (faster) or CPU. This transcribes your voice." />
                     <div className="qs-row-hint" style={{ padding: "0 18px 4px" }}>{backendInfo}</div>
                     <div className={`qs-backend-row${cohereGpuOnlyLoaded ? " qs-backend-row--locked" : ""}`}>
                             <button
@@ -251,7 +251,7 @@ function QuickSettingsComponent({
                     Apple Silicon uses Metal automatically, no user choice needed. */}
                 {!isMac && (
                   <>
-                    <Section label="LLM Backend" info="Grammar LLM on GPU (faster, uses VRAM) or CPU." />
+                    <Section label="Grammar LLM Backend" info="Run the grammar/punctuation correction model (FlowScribe) on GPU (faster) or CPU. This cleans up the transcript after the speech engine produces it." />
                     <div className="qs-backend-row">
                         <button
                             type="button"

@@ -31,8 +31,9 @@ import { beautifyModelName } from "./utils/modelDisplay";
 import type { OnboardingUseCase } from "./modelRecommendations";
 import "./components/TitleBar.css";
 import "./App.css";
-import { IconFileText, IconBolt, IconDownload, IconMic, IconLightbulb, IconSettings } from "./components/Icons";
+import { IconFileText, IconBolt, IconEject, IconDownload, IconMic, IconLightbulb, IconSettings } from "./components/Icons";
 import { getEngineForModelId } from "./utils/engineUtils";
+import { OverlayScrollbarsComponent } from "overlayscrollbars-react";
 import type { CommandResult } from "./types/session";
 
 const ANIMATED_LOGOS = [
@@ -43,6 +44,15 @@ const ANIMATED_LOGOS = [
   "animated_logo_pulse_reveal.svg",
   "animated_logo_stomp.svg",
 ];
+
+type EngineSelectionState = {
+  active_engine: string;
+  selected_model_id: string | null;
+  loaded_engine: string | null;
+  loaded_model_id: string | null;
+  backend: string;
+  engine_loading: boolean;
+};
 
 
 
@@ -143,6 +153,7 @@ function App() {
   const pendingNoModelCtaPulseRef = useRef(false);
   const noModelCtaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [backendInfo, setBackendInfo] = useState("Loading...");
+  const [engineSelectionState, setEngineSelectionState] = useState<EngineSelectionState | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -389,7 +400,7 @@ function App() {
     loadedEngine, setLoadedEngine,
     isLoading, setIsLoading, isLoadingRef,
     loadingTargetEngine,
-    handleModelChange, handleSwitchToParakeet, handleSwitchToCohere,
+    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToCohere,
     handleToggleAsrBackend,
   } = useEngineSwitch({
     models, parakeetModels, cohereModels,
@@ -611,6 +622,39 @@ function App() {
     }
   };
 
+  const handleLoadActiveEngine = () => {
+    if (activeEngine === "whisper") void handleSwitchToWhisper();
+    else if (activeEngine === "parakeet") void handleSwitchToParakeet();
+    else void handleSwitchToCohere();
+  };
+
+  const refreshEngineSelectionState = useCallback(() => {
+    invoke<EngineSelectionState>("get_engine_selection_state")
+      .then(setEngineSelectionState)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshEngineSelectionState();
+    const timer = window.setInterval(refreshEngineSelectionState, 4000);
+    return () => window.clearInterval(timer);
+  }, [refreshEngineSelectionState]);
+
+  useEffect(() => {
+    refreshEngineSelectionState();
+  }, [
+    refreshEngineSelectionState,
+    activeEngine,
+    loadedEngine,
+    currentModel,
+    currentParakeetModel,
+    currentCohereModel,
+    backendInfo,
+    isLoading,
+    isRecording,
+    isProcessingTranscript,
+  ]);
+
   // Auto-load newly downloaded model if it matches the active engine.
   // Status refresh is delegated to makeDownloadStatusHandler to avoid duplication.
   useEffect(() => {
@@ -725,6 +769,69 @@ function App() {
     return { label, color, model: m.display_name };
   }, [activeEngine, isLoading, loadingTargetEngine, isWhisperDownloading, isParakeetDownloading, isCohereDownloading,
       models, currentModel, parakeetModels, currentParakeetModel, cohereModels, currentCohereModel]);
+
+  const recordReadinessMeta = useMemo(() => {
+    const loadedEngineName = engineSelectionState?.loaded_engine as ASREngine | null | undefined;
+    const activeModelLoaded = loadedEngineName === activeEngine && !!engineSelectionState?.loaded_model_id;
+    const selectedOrLoadedModelId =
+      activeModelLoaded
+        ? engineSelectionState?.loaded_model_id
+        : engineSelectionState?.selected_model_id;
+    const findModelName = () => {
+      if (activeEngine === "whisper") {
+        const m = models.find(x => x.id === selectedOrLoadedModelId) ?? models.find(x => x.id === currentModel);
+        return m ? beautifyModelName(m.display_name) : engineChipMeta.model;
+      }
+      if (activeEngine === "parakeet") {
+        const m = parakeetModels.find(x => x.id === selectedOrLoadedModelId) ?? parakeetModels.find(x => x.id === currentParakeetModel) ?? parakeetModels[0];
+        return m ? beautifyModelName(m.display_name) : engineChipMeta.model;
+      }
+      const m = cohereModels.find(x => x.id === selectedOrLoadedModelId) ?? cohereModels.find(x => x.id === currentCohereModel) ?? cohereModels[0];
+      return m ? beautifyModelName(m.display_name) : engineChipMeta.model;
+    };
+
+    const backend = activeModelLoaded
+      ? (engineSelectionState?.backend || backendInfo || "Unknown")
+      : asrBackend === "gpu"
+        ? "GPU pref"
+        : "CPU pref";
+    const backendKey = backend.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const phase = isLoading || engineSelectionState?.engine_loading
+      ? "LOADING"
+      : isRecording
+        ? "RECORDING"
+        : isProcessingTranscript
+          ? "PROCESSING"
+          : noModel
+            ? "NO MODEL"
+            : activeModelLoaded
+              ? "READY"
+              : "LOAD REQUIRED";
+
+    return {
+      phase,
+      backend,
+      backendKey,
+      model: findModelName(),
+      activeModelLoaded,
+    };
+  }, [
+    engineSelectionState,
+    activeEngine,
+    models,
+    currentModel,
+    parakeetModels,
+    currentParakeetModel,
+    cohereModels,
+    currentCohereModel,
+    engineChipMeta.model,
+    backendInfo,
+    asrBackend,
+    isLoading,
+    isRecording,
+    isProcessingTranscript,
+    noModel,
+  ]);
 
   const handleOpenSettingsTab = useCallback((tab?: string) => {
     setSettingsInitialTab(tab);
@@ -987,7 +1094,14 @@ function App() {
             </div>
           )}
 
-          <div className="output-area output-area--feed">
+          <OverlayScrollbarsComponent
+            className="output-area output-area--feed"
+            options={{
+              scrollbars: { theme: "os-theme-pure", autoHide: "move", autoHideDelay: 400 },
+              overflow: { x: "hidden" },
+            }}
+            defer
+          >
             <div style={fileMode ? undefined : { display: 'none' }}>
               <FileTranscriptionPanel
                 activeEngine={activeEngine}
@@ -1059,33 +1173,36 @@ function App() {
                 latestLatency={sessionState.latestLatency ?? latestLatency}
               />
             ))}
-          </div>
+          </OverlayScrollbarsComponent>
 
           <div className="bottom-bar">
             <div className="bottom-left">
               {/* Microphone selector — lists all available input devices;
                   selecting one persists the choice to settings.json. */}
-              <div className="mic-selector-bar">
-                <svg className="mic-selector-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" y1="19" x2="12" y2="23" />
-                  <line x1="8" y1="23" x2="16" y2="23" />
-                </svg>
-                {/* H5 fix: aria-label names the control for screen readers */}
-                <select
-                  className="mic-selector-dropdown"
-                  aria-label="Input device"
-                  value={activeMic ?? ''}
-                  onChange={(e) => handleMicChange(e.target.value)}
-                  onFocus={() => refreshInputDevices(false)}
-                  onMouseEnter={() => refreshInputDevices(false)}
-                >
-                  <option value="">System Default</option>
-                  {inputDevices.map((d) => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </select>
+              <div className="bottom-left-status-row">
+                <div className="mic-selector-bar">
+                  <svg className="mic-selector-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="23" />
+                    <line x1="8" y1="23" x2="16" y2="23" />
+                  </svg>
+                  {/* H5 fix: aria-label names the control for screen readers */}
+                  <select
+                    className="mic-selector-dropdown"
+                    aria-label="Input device"
+                    value={activeMic ?? ''}
+                    onChange={(e) => handleMicChange(e.target.value)}
+                    onFocus={() => refreshInputDevices(false)}
+                    onMouseEnter={() => refreshInputDevices(false)}
+                  >
+                    <option value="">System Default</option>
+                    {inputDevices.map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </div>
+
               </div>
 
               <button
@@ -1104,8 +1221,41 @@ function App() {
                   aria-hidden="true"
                 />
                 <span className="eng-chip-text">{engineChipMeta.label} · {engineChipMeta.model}</span>
+                <span className={`eng-chip-backend eng-chip-backend--${recordReadinessMeta.backendKey}`}>
+                  {recordReadinessMeta.backend}
+                </span>
                 <span className="eng-chip-caret" aria-hidden="true">▾</span>
               </button>
+
+              {/* Load / unload toggle — hidden while busy, or while the active
+                  engine has no installed model to load. */}
+              {!isLoading && !isRecording && !isProcessingTranscript && (
+                loadedEngine === activeEngine ? (
+                  <button
+                    type="button"
+                    className="load-eject-btn"
+                    onClick={handleEjectModel}
+                    title="Unload model (free VRAM)"
+                    aria-label="Unload model"
+                  >
+                    <IconEject size={14} />
+                  </button>
+                ) : (
+                  (activeEngine === "whisper" ? !noWhisperModel :
+                   activeEngine === "parakeet" ? !noParakeetModel :
+                   !noCohereModel) && (
+                    <button
+                      type="button"
+                      className="load-eject-btn load-eject-btn--load"
+                      onClick={handleLoadActiveEngine}
+                      title="Load model"
+                      aria-label="Load model"
+                    >
+                      <IconBolt size={14} />
+                    </button>
+                  )
+                )
+              )}
 
               {isEnginePickerOpen && (
                 <EnginePicker

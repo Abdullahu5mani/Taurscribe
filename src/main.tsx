@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import "overlayscrollbars/overlayscrollbars.css";
 import App from "./App";
 
 // Disable right-click context menu app-wide (native desktop app behaviour)

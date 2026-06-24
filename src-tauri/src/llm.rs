@@ -9,9 +9,11 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
+use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, OnceLock};
 
 const GGUF_FILENAME: &str = "model_q4_k_m.gguf";
+const GRAMMAR_CONTEXT_TOKENS: u32 = 2048;
 
 /// Global backend instance (initialized once)
 static BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
@@ -140,8 +142,10 @@ impl LLMEngine {
             eos_token_id, eos_im_end_id
         );
 
-        // Create context with default params
-        let context_params = llama_cpp_2::context::params::LlamaContextParams::default();
+        // Grammar correction prompts are short; cap KV cache instead of allocating
+        // the model's full train context.
+        let context_params = llama_cpp_2::context::params::LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(GRAMMAR_CONTEXT_TOKENS));
         let context = model
             .new_context(&backend, context_params)
             .map_err(|e| Error::msg(format!("Failed to create context: {}", e)))?;
@@ -184,6 +188,12 @@ impl LLMEngine {
         let prompt_tokens_len = prompt_tokens.len();
 
         println!("[LLM] Prompt tokens: {}", prompt_tokens_len);
+        let max_context_tokens = GRAMMAR_CONTEXT_TOKENS as usize;
+        if prompt_tokens_len + max_gen_tokens + 8 > max_context_tokens {
+            return Err(Error::msg(format!(
+                "Grammar prompt too long for {GRAMMAR_CONTEXT_TOKENS}-token context: prompt={prompt_tokens_len}, max_gen={max_gen_tokens}"
+            )));
+        }
 
         // Create sampler chain: temperature -> top_p -> greedy
         let mut sampler = LlamaSampler::chain_simple([

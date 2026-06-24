@@ -2,6 +2,7 @@ use parakeet_rs::{Nemotron, Parakeet, ParakeetEOU, ParakeetTDT, TimestampMode, T
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use crate::parakeet_loaders::{init_ctc, init_eou, init_nemotron, init_tdt, ParakeetLoadPath};
@@ -417,7 +418,7 @@ impl ParakeetManager {
             ],
         );
         // 1. Resample to 16 kHz if needed
-        let audio = if sample_rate != 16000 {
+        let audio: Cow<[f32]> = if sample_rate != 16000 {
             let needs_new_resampler = self
                 .resampler
                 .as_ref()
@@ -448,19 +449,18 @@ impl ParakeetManager {
             let waves = resampler
                 .process(&vec![samples.to_vec()], None)
                 .map_err(|e| e.to_string())?;
-            waves[0].clone()
+            Cow::Owned(waves[0].clone())
         } else {
-            samples.to_vec()
+            Cow::Borrowed(samples)
         };
+        let audio_samples = audio.len();
+        let audio_bytes = audio_samples * std::mem::size_of::<f32>();
         crate::memory::maybe_log_process_memory_with_sizes(
             "parakeet after resample",
             &[
                 ("input_samples", samples.len()),
-                ("resampled_samples", audio.len()),
-                (
-                    "resampled_audio_bytes",
-                    audio.len() * std::mem::size_of::<f32>(),
-                ),
+                ("resampled_samples", audio_samples),
+                ("resampled_audio_bytes", audio_bytes),
             ],
         );
 
@@ -470,8 +470,8 @@ impl ParakeetManager {
                 LoadedModel::Nemotron(m) => {
                     let mut transcript = String::new();
                     const CHUNK_SIZE: usize = 8960; // 560 ms at 16 kHz
-                    let total_subchunks = audio.chunks(CHUNK_SIZE).len();
-                    for (idx, chunk) in audio.chunks(CHUNK_SIZE).enumerate() {
+                    let total_subchunks = audio.as_ref().chunks(CHUNK_SIZE).len();
+                    for (idx, chunk) in audio.as_ref().chunks(CHUNK_SIZE).enumerate() {
                         crate::memory::maybe_log_process_memory_with_sizes(
                             &format!(
                                 "parakeet nemotron subchunk {}/{} start",
@@ -510,18 +510,23 @@ impl ParakeetManager {
                     crate::memory::maybe_log_process_memory_with_sizes(
                         "parakeet ctc before model run",
                         &[
-                            ("audio_samples", audio.len()),
-                            ("audio_bytes", audio.len() * std::mem::size_of::<f32>()),
+                            ("audio_samples", audio_samples),
+                            ("audio_bytes", audio_bytes),
                         ],
                     );
                     let result = m
-                        .transcribe_samples(audio.clone(), 16000, 1, Some(TimestampMode::Words))
+                        .transcribe_samples(
+                            audio.into_owned(),
+                            16000,
+                            1,
+                            Some(TimestampMode::Words),
+                        )
                         .map_err(|e| format!("CTC Error: {}", e))?;
                     println!("[PARAKEET CTC] {}", result.text.trim());
                     crate::memory::maybe_log_process_memory_with_sizes(
                         "parakeet ctc after model run",
                         &[
-                            ("audio_samples", audio.len()),
+                            ("audio_samples", audio_samples),
                             ("transcript_chars", result.text.len()),
                         ],
                     );
@@ -530,8 +535,8 @@ impl ParakeetManager {
                 LoadedModel::Eou(m) => {
                     let mut full_text = String::new();
                     const CHUNK_SIZE: usize = 2560; // 160 ms
-                    let total_subchunks = audio.chunks(CHUNK_SIZE).len();
-                    for (idx, chunk) in audio.chunks(CHUNK_SIZE).enumerate() {
+                    let total_subchunks = audio.as_ref().chunks(CHUNK_SIZE).len();
+                    for (idx, chunk) in audio.as_ref().chunks(CHUNK_SIZE).enumerate() {
                         crate::memory::maybe_log_process_memory_with_sizes(
                             &format!(
                                 "parakeet eou subchunk {}/{} start",
@@ -543,7 +548,7 @@ impl ParakeetManager {
                                 ("transcript_chars_so_far", full_text.len()),
                             ],
                         );
-                        let text = m.transcribe(&chunk.to_vec(), false).unwrap_or_default();
+                        let text = m.transcribe(chunk, false).unwrap_or_default();
                         full_text.push_str(&text);
                         crate::memory::maybe_log_process_memory_with_sizes(
                             &format!("parakeet eou subchunk {}/{} end", idx + 1, total_subchunks),
@@ -560,18 +565,23 @@ impl ParakeetManager {
                     crate::memory::maybe_log_process_memory_with_sizes(
                         "parakeet tdt before model run",
                         &[
-                            ("audio_samples", audio.len()),
-                            ("audio_bytes", audio.len() * std::mem::size_of::<f32>()),
+                            ("audio_samples", audio_samples),
+                            ("audio_bytes", audio_bytes),
                         ],
                     );
                     let result = m
-                        .transcribe_samples(audio.clone(), 16000, 1, Some(TimestampMode::Sentences))
+                        .transcribe_samples(
+                            audio.into_owned(),
+                            16000,
+                            1,
+                            Some(TimestampMode::Sentences),
+                        )
                         .map_err(|e| format!("TDT Error: {}", e))?;
                     println!("[PARAKEET TDT] {}", result.text.trim());
                     crate::memory::maybe_log_process_memory_with_sizes(
                         "parakeet tdt after model run",
                         &[
-                            ("audio_samples", audio.len()),
+                            ("audio_samples", audio_samples),
                             ("transcript_chars", result.text.len()),
                         ],
                     );
@@ -582,7 +592,7 @@ impl ParakeetManager {
                 crate::memory::maybe_log_process_memory_with_sizes(
                     "parakeet after transcribe_chunk",
                     &[
-                        ("resampled_samples", audio.len()),
+                        ("resampled_samples", audio_samples),
                         ("transcript_chars", transcript.len()),
                         ("runtime_generation", slot.generation as usize),
                     ],
@@ -591,16 +601,16 @@ impl ParakeetManager {
                 crate::memory::maybe_log_process_memory_with_sizes(
                     "parakeet after transcribe_chunk error",
                     &[
-                        ("resampled_samples", audio.len()),
+                        ("resampled_samples", audio_samples),
                         ("runtime_generation", slot.generation as usize),
                     ],
                 );
             }
-            // Release the 2.3 GB encoder mmap pages from the working set now that inference
-            // is done. The OS page cache keeps them warm for the next transcription, so the
-            // re-fault cost is ~50 ms (NVMe page-cache read) rather than a full cold load.
-            // Without this, Task Manager shows the process holding 2-3 GB between recordings.
-            crate::memory::trim_process_memory();
+            if audio_samples >= 16000 * 10
+                || std::env::var("TAURSCRIBE_TRIM_AFTER_CHUNK").as_deref() == Ok("1")
+            {
+                crate::memory::trim_process_memory();
+            }
             result
         } else {
             Err("No model loaded".to_string())

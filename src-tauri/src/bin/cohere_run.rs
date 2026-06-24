@@ -28,29 +28,21 @@ fn main() {
 
     println!("[cohere_run] Decoding: {}", path.display());
 
-    // Decode audio
-    let (raw, sample_rate, channels) =
-        audio_decode::decode_audio_interleaved_f32(&path).unwrap_or_else(|e| {
-            eprintln!("Decode error: {e}");
-            std::process::exit(1);
-        });
-
-    // Merge to mono
-    let mut mono = if channels > 1 {
-        let ch = channels as usize;
-        raw.chunks(ch)
-            .map(|f| f.iter().sum::<f32>() / ch as f32)
-            .collect::<Vec<f32>>()
-    } else {
-        raw
-    };
+    // Decode directly to mono to match the lower-memory file-drop pipeline.
+    let (mut mono, sample_rate) = audio_decode::decode_audio_mono_f32(&path).unwrap_or_else(|e| {
+        eprintln!("Decode error: {e}");
+        std::process::exit(1);
+    });
 
     // Resample to 16 kHz
     if sample_rate != 16000 {
-        mono = audio_preprocess::resample_mono_to_16k(&mono, sample_rate).unwrap_or_else(|e| {
-            eprintln!("Resample error: {e}");
-            std::process::exit(1);
-        });
+        let resampled =
+            audio_preprocess::resample_mono_to_16k(&mono, sample_rate).unwrap_or_else(|e| {
+                eprintln!("Resample error: {e}");
+                std::process::exit(1);
+            });
+        drop(mono);
+        mono = resampled;
     }
 
     audio_preprocess::trim_file_buffer_edges_16k(&mut mono);
@@ -72,12 +64,10 @@ fn main() {
     println!("[cohere_run] Model loaded. Transcribing...");
 
     let t0 = std::time::Instant::now();
-    let raw_text = cohere
-        .transcribe_chunk(&mono, 16000)
-        .unwrap_or_else(|e| {
-            eprintln!("Transcription error: {e}");
-            std::process::exit(1);
-        });
+    let raw_text = cohere.transcribe_chunk(&mono, 16000).unwrap_or_else(|e| {
+        eprintln!("Transcription error: {e}");
+        std::process::exit(1);
+    });
 
     let elapsed = t0.elapsed();
     let text = clean_transcript(&raw_text);

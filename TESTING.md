@@ -12,6 +12,7 @@ The testing suite has three purposes:
 2. **Memory regression test** — verify that engine load/transcribe/unload cycles and engine-switching sequences do not leak or unexpectedly retain RAM.
 3. **Integration accuracy tests** — run the same library code paths as the live app against a real speech dataset and compute Word Error Rate (WER).
 4. **Offline batch evaluation** — standalone CLI (`librispeech_eval`) for bulk WER benchmarking, outputting CSV for analysis.
+5. **Audio pipeline benchmark** — standalone CLI (`audio_pipeline_bench`) for decode/downmix/resample speed checks without ASR models.
 
 All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. Opt in with `cargo test -- --ignored`. Add `--nocapture` to print per-utterance WER lines and summaries in the terminal.
 
@@ -34,6 +35,7 @@ All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. 
 | --- | --- | --- |
 | `src-tauri/src/bin/librispeech_eval.rs` | CLI | Batch WER for Whisper / Parakeet / Cohere from a JSONL manifest |
 | `src-tauri/src/bin/librispeech_manifest.rs` | CLI | Builds JSONL manifest (`utt_id`, `flac_path`, `ref_text`) from LibriSpeech `test-clean` |
+| `src-tauri/src/bin/audio_pipeline_bench.rs` | CLI | Synthetic no-model benchmark for file decode/downmix/resample memory and speed |
 | `src-tauri/src/librispeech_wer.rs` | Library | Text normalization, token-level Levenshtein WER, LibriSpeech FLAC path resolution helpers |
 | `src-tauri/src/audio_decode.rs` | Library | Format-agnostic decode (FLAC, WAV, MP3, M4A, …) via Symphonia |
 | `src-tauri/src/audio_preprocess.rs` | Library | Resample, denoise, DC remove, HP filter, level assist, clamp |
@@ -506,6 +508,17 @@ Measure-Command {
     --out taurscribe-runtime/librispeech/wer_parakeet_tdt_5.csv
 }
 ```
+
+### 3d. No-model audio pipeline benchmark
+
+Use this when you are tuning file-drop RAM or decode speed and do not want to load ASR models. It creates a temporary 48 kHz stereo WAV, runs the legacy interleaved-decode/downmix path and the direct-mono path, then prints decode time, total preprocess time, and process memory snapshots.
+
+```powershell
+cd src-tauri
+cargo run --release --bin audio_pipeline_bench -- 120
+```
+
+Use a larger duration, for example `600`, to stress long-file behavior. The benchmark is synthetic, so treat it as a pipeline regression check, not an ASR accuracy result.
 
 ### 4. Integration tests (`cd src-tauri`)
 

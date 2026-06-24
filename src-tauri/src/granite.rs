@@ -40,7 +40,10 @@ fn preload_granite_cuda_dlls() {
 
     fn load_dll(path: &Path) {
         if !path.exists() {
-            println!("[GRANITE] CUDA preload skipped missing DLL: {}", path.display());
+            println!(
+                "[GRANITE] CUDA preload skipped missing DLL: {}",
+                path.display()
+            );
             return;
         }
         let wide_path: Vec<u16> = path
@@ -190,7 +193,11 @@ impl CohereManager {
         }
     }
 
-    pub fn initialize(&mut self, model_id: Option<&str>, force_cpu: bool) -> Result<String, String> {
+    pub fn initialize(
+        &mut self,
+        model_id: Option<&str>,
+        force_cpu: bool,
+    ) -> Result<String, String> {
         let models_dir = crate::utils::get_models_dir()?;
         let model_dir = resolve_cohere_model_dir(&models_dir, model_id)?;
         if !cohere_onnx_bundle_ready(&model_dir) {
@@ -214,10 +221,13 @@ impl CohereManager {
         let graph_paths = GraniteGraphPaths::new(&model_dir);
         let (backend, runtime) = match request {
             GraniteBackendRequest::Cpu => (GpuBackend::Cpu, self.create_runtime_cpu(&graph_paths)?),
-            GraniteBackendRequest::Cuda => (GpuBackend::Cuda, self.create_runtime_cuda(&graph_paths)?),
-            GraniteBackendRequest::DirectML => {
-                (GpuBackend::DirectML, self.create_runtime_directml(&graph_paths)?)
+            GraniteBackendRequest::Cuda => {
+                (GpuBackend::Cuda, self.create_runtime_cuda(&graph_paths)?)
             }
+            GraniteBackendRequest::DirectML => (
+                GpuBackend::DirectML,
+                self.create_runtime_directml(&graph_paths)?,
+            ),
             GraniteBackendRequest::Auto => match self.create_runtime_cuda(&graph_paths) {
                 Ok(rt) => {
                     println!(
@@ -254,13 +264,14 @@ impl CohereManager {
         self.backend = backend;
         self.model_name = Some(cohere_logical_model_id_for_dir(&model_dir));
         crate::memory::maybe_log_process_memory("granite after initialize");
-        Ok(format!(
-            "Granite Speech NAR loaded ({})",
-            self.backend
-        ))
+        Ok(format!("Granite Speech NAR loaded ({})", self.backend))
     }
 
-    pub fn transcribe_chunk(&mut self, samples: &[f32], sample_rate: u32) -> Result<String, String> {
+    pub fn transcribe_chunk(
+        &mut self,
+        samples: &[f32],
+        sample_rate: u32,
+    ) -> Result<String, String> {
         match self.transcribe_chunk_loaded(samples, sample_rate) {
             Ok(text) => Ok(text),
             Err(err) if matches!(self.backend, GpuBackend::DirectML) => {
@@ -296,86 +307,113 @@ impl CohereManager {
         }
 
         let runtime = self.runtime.as_mut().ok_or("Granite runtime not loaded")?;
-        let tokenizer = self.tokenizer.as_ref().ok_or("Granite tokenizer not loaded")?;
+        let tokenizer = self
+            .tokenizer
+            .as_ref()
+            .ok_or("Granite tokenizer not loaded")?;
 
         let feature_data = pad_features_to_export_bucket(&features, valid_frames)?;
         let input_features = make_tensor_f32(vec![1, EXPORT_FRAMES, 160], feature_data)?;
 
-        let enc_outputs = runtime
-            .encoder
-            .run(ort::inputs!["input_features" => input_features])
-            .map_err(|e| format!("Granite encoder run: {e}"))?;
+        let (encoder_token_ids, multilayer) = {
+            let enc_outputs = runtime
+                .encoder
+                .run(ort::inputs!["input_features" => input_features])
+                .map_err(|e| format!("Granite encoder run: {e}"))?;
 
-        let (bpe_shape, bpe_logits) = extract_named_f32(&enc_outputs, "bpe_logits")?;
-        let pooled_len = ceil_div(valid_frames, BPE_POOLING_WINDOW)
-            .min(*bpe_shape.get(1).ok_or("Bad bpe_logits shape")?);
-        let encoder_token_ids = ctc_collapse_from_logits(
-            &bpe_logits,
-            pooled_len,
-            VOCAB_SIZE,
-            BLANK_TOKEN_ID,
-        )?;
+            let (bpe_shape, bpe_logits) = extract_named_f32_ref(&enc_outputs, "bpe_logits")?;
+            let pooled_len = ceil_div(valid_frames, BPE_POOLING_WINDOW)
+                .min(*bpe_shape.get(1).ok_or("Bad bpe_logits shape")?);
+            let encoder_token_ids =
+                ctc_collapse_from_logits(bpe_logits, pooled_len, VOCAB_SIZE, BLANK_TOKEN_ID)?;
 
-        let (_, h4) = extract_named_f32(&enc_outputs, "hidden_4")?;
-        let (_, h8) = extract_named_f32(&enc_outputs, "hidden_8")?;
-        let (_, h12) = extract_named_f32(&enc_outputs, "hidden_12")?;
-        let (_, hlast) = extract_named_f32(&enc_outputs, "hidden_last")?;
-        let multilayer = concat_encoder_layers(EXPORT_FRAMES, [&h4, &h8, &h12, &hlast])?;
+            let (_, h4) = extract_named_f32_ref(&enc_outputs, "hidden_4")?;
+            let (_, h8) = extract_named_f32_ref(&enc_outputs, "hidden_8")?;
+            let (_, h12) = extract_named_f32_ref(&enc_outputs, "hidden_12")?;
+            let (_, hlast) = extract_named_f32_ref(&enc_outputs, "hidden_last")?;
+            let multilayer = concat_encoder_layers(EXPORT_FRAMES, [h4, h8, h12, hlast])?;
+
+            (encoder_token_ids, multilayer)
+        };
 
         let projector_input = make_tensor_f32(vec![1, EXPORT_FRAMES, 4096], multilayer)?;
-        let projector_outputs = runtime
-            .projector
-            .run(ort::inputs!["multilayer_features" => projector_input])
-            .map_err(|e| format!("Granite projector run: {e}"))?;
-        let (audio_shape, mut audio_embeds_all) =
-            extract_named_f32(&projector_outputs, "audio_embeds")?;
-        for value in &mut audio_embeds_all {
-            *value /= TEXT_EMBEDDING_MULTIPLIER;
-        }
-        let available_audio_tokens = *audio_shape.get(1).ok_or("Bad audio_embeds shape")?;
-        let audio_tokens = (valid_frames / PROJECTOR_DOWNSAMPLE_RATE).min(available_audio_tokens);
 
         let slotted = add_insertion_slots(&encoder_token_ids);
         let text_len = slotted.len();
         let token_tensor = make_tensor_i64(vec![text_len], slotted)?;
-        let embed_outputs = runtime
-            .embed_tokens
-            .run(ort::inputs!["token_ids" => token_tensor])
-            .map_err(|e| format!("Granite token embedding run: {e}"))?;
-        let (_text_shape, text_embeds) = extract_named_f32(&embed_outputs, "text_embeds")?;
 
-        let mut editor_input = Vec::with_capacity((audio_tokens + text_len) * HIDDEN_SIZE);
-        editor_input.extend_from_slice(&audio_embeds_all[..audio_tokens * HIDDEN_SIZE]);
-        editor_input.extend_from_slice(&text_embeds[..text_len * HIDDEN_SIZE]);
+        let (audio_tokens, mut editor_input) = {
+            let projector_outputs = runtime
+                .projector
+                .run(ort::inputs!["multilayer_features" => projector_input])
+                .map_err(|e| format!("Granite projector run: {e}"))?;
+            let (audio_shape, audio_embeds_all) =
+                extract_named_f32_ref(&projector_outputs, "audio_embeds")?;
+            let available_audio_tokens = *audio_shape.get(1).ok_or("Bad audio_embeds shape")?;
+            let audio_tokens =
+                (valid_frames / PROJECTOR_DOWNSAMPLE_RATE).min(available_audio_tokens);
+            let audio_values = audio_tokens * HIDDEN_SIZE;
+            if audio_values > audio_embeds_all.len() {
+                return Err(format!(
+                    "Granite audio embeddings too short: need {audio_values}, got {}",
+                    audio_embeds_all.len()
+                ));
+            }
+
+            let mut editor_input = Vec::with_capacity((audio_tokens + text_len) * HIDDEN_SIZE);
+            editor_input.extend(
+                audio_embeds_all[..audio_values]
+                    .iter()
+                    .map(|value| *value / TEXT_EMBEDDING_MULTIPLIER),
+            );
+            (audio_tokens, editor_input)
+        };
+
+        {
+            let embed_outputs = runtime
+                .embed_tokens
+                .run(ort::inputs!["token_ids" => token_tensor])
+                .map_err(|e| format!("Granite token embedding run: {e}"))?;
+            let (_text_shape, text_embeds) = extract_named_f32_ref(&embed_outputs, "text_embeds")?;
+            let text_values = text_len * HIDDEN_SIZE;
+            if text_values > text_embeds.len() {
+                return Err(format!(
+                    "Granite text embeddings too short: need {text_values}, got {}",
+                    text_embeds.len()
+                ));
+            }
+            editor_input.extend_from_slice(&text_embeds[..text_values]);
+        }
+
         let sequence = audio_tokens + text_len;
         let inputs_embeds = make_tensor_f32(vec![1, sequence, HIDDEN_SIZE], editor_input)?;
-        let position_ids = make_tensor_i64(
-            vec![1, sequence],
-            (0..sequence as i64).collect::<Vec<_>>(),
-        )?;
+        let position_ids =
+            make_tensor_i64(vec![1, sequence], (0..sequence as i64).collect::<Vec<_>>())?;
 
-        let editor_outputs = runtime
-            .editor
-            .run(ort::inputs![
-                "inputs_embeds" => inputs_embeds,
-                "position_ids" => position_ids,
-            ])
-            .map_err(|e| format!("Granite editor run: {e}"))?;
-        let (_logit_shape, logits) = extract_named_f32(&editor_outputs, "logits")?;
-        let text_logits_start = audio_tokens * VOCAB_SIZE;
-        let text_logits_end = text_logits_start + text_len * VOCAB_SIZE;
-        if text_logits_end > logits.len() {
-            return Err(format!(
-                "Granite editor logits too short: need {text_logits_end}, got {}",
-                logits.len()
-            ));
-        }
-        let final_ids = ctc_collapse_from_logits(
-            &logits[text_logits_start..text_logits_end],
-            text_len,
-            VOCAB_SIZE,
-            BLANK_TOKEN_ID,
-        )?;
+        let final_ids = {
+            let editor_outputs = runtime
+                .editor
+                .run(ort::inputs![
+                    "inputs_embeds" => inputs_embeds,
+                    "position_ids" => position_ids,
+                ])
+                .map_err(|e| format!("Granite editor run: {e}"))?;
+            let (_logit_shape, logits) = extract_named_f32_ref(&editor_outputs, "logits")?;
+            let text_logits_start = audio_tokens * VOCAB_SIZE;
+            let text_logits_end = text_logits_start + text_len * VOCAB_SIZE;
+            if text_logits_end > logits.len() {
+                return Err(format!(
+                    "Granite editor logits too short: need {text_logits_end}, got {}",
+                    logits.len()
+                ));
+            }
+            ctc_collapse_from_logits(
+                &logits[text_logits_start..text_logits_end],
+                text_len,
+                VOCAB_SIZE,
+                BLANK_TOKEN_ID,
+            )?
+        };
         let token_ids: Vec<u32> = final_ids
             .into_iter()
             .filter_map(|id| u32::try_from(id).ok())
@@ -579,9 +617,15 @@ fn add_insertion_slots(token_ids: &[i64]) -> Vec<i64> {
     out
 }
 
-fn pad_features_to_export_bucket(features: &Array2<f32>, valid_frames: usize) -> Result<Vec<f32>, String> {
+fn pad_features_to_export_bucket(
+    features: &Array2<f32>,
+    valid_frames: usize,
+) -> Result<Vec<f32>, String> {
     if features.ncols() != 160 {
-        return Err(format!("Granite features must have 160 columns, got {}", features.ncols()));
+        return Err(format!(
+            "Granite features must have 160 columns, got {}",
+            features.ncols()
+        ));
     }
     let mut out = vec![0.0_f32; EXPORT_FRAMES * 160];
     for t in 0..valid_frames {
@@ -613,17 +657,17 @@ fn concat_encoder_layers(frames: usize, layers: [&[f32]; 4]) -> Result<Vec<f32>,
     Ok(out)
 }
 
-fn extract_named_f32(
-    outputs: &ort::session::SessionOutputs,
+fn extract_named_f32_ref<'a>(
+    outputs: &'a ort::session::SessionOutputs,
     name: &str,
-) -> Result<(Vec<usize>, Vec<f32>), String> {
+) -> Result<(Vec<usize>, &'a [f32]), String> {
     let value = outputs
         .get(name)
         .ok_or_else(|| format!("Missing ONNX output: {name}"))?;
     let (shape, data) = value
         .try_extract_tensor::<f32>()
         .map_err(|e| format!("Extract {name}: {e}"))?;
-    Ok((shape.iter().map(|&d| d as usize).collect(), data.to_vec()))
+    Ok((shape.iter().map(|&d| d as usize).collect(), data))
 }
 
 fn make_tensor_f32(shape: Vec<usize>, data: Vec<f32>) -> Result<ort::value::DynValue, String> {

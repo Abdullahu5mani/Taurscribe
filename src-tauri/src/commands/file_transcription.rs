@@ -159,28 +159,28 @@ fn transcribe_file_blocking(
 
     emit_progress(app, path, 5, "decoding", None);
 
-    // Decode audio file to raw f32 samples
-    let (raw_samples, sample_rate, channels) =
-        crate::audio_decode::decode_audio_interleaved_f32(std::path::Path::new(path))?;
+    // Decode directly to mono so long stereo files don't materialize a full
+    // interleaved buffer before downmixing.
+    let (mut mono, sample_rate) =
+        crate::audio_decode::decode_audio_mono_f32(std::path::Path::new(path))?;
 
     ensure_not_cancelled(app, path, &cancel)?;
 
     emit_progress(app, path, 20, "decoding", None);
 
-    // Merge to mono
-    let mut mono = if channels > 1 {
-        let ch = channels as usize;
-        raw_samples
-            .chunks(ch)
-            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
-            .collect::<Vec<f32>>()
-    } else {
-        raw_samples
-    };
-
     // Resample to 16 kHz (all engines require this)
     if sample_rate != 16000 {
-        mono = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+        let decoded_samples = mono.len();
+        let resampled = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+        crate::memory::maybe_log_process_memory_with_sizes(
+            "file transcription after resample",
+            &[
+                ("decoded_mono_samples", decoded_samples),
+                ("resampled_samples", resampled.len()),
+            ],
+        );
+        drop(mono);
+        mono = resampled;
     }
 
     // Trim long edge silence before energy VAD.
@@ -195,6 +195,7 @@ fn transcribe_file_blocking(
 
     // ── Energy VAD: only feed detected speech to ASR (file drop) ───────────────
     // Adaptive RMS thresholding finds speech regions; silent gaps are dropped.
+    let mono_samples = mono.len();
     let mut speech_audio =
         crate::vad::assemble_speech_audio(&mono, Some(&cancel)).map_err(|e| {
             if e == "Transcription cancelled" {
@@ -208,6 +209,7 @@ fn transcribe_file_blocking(
             }
             e
         })?;
+    drop(mono);
 
     // Universal chain on speech-only buffer (HPF / RNNoise if noisy / level assist / clamp).
     audio_preprocess::preprocess_assembled_speech_16k(&mut speech_audio);
@@ -215,7 +217,7 @@ fn transcribe_file_blocking(
     if speech_audio.is_empty() {
         println!(
             "[FILE_TRANSCRIBE] No speech detected after VAD — skipping ASR ({}s audio)",
-            mono.len() as f32 / 16000.0
+            mono_samples as f32 / 16000.0
         );
         emit_progress(app, path, 100, "done", None);
         return Ok(FileTranscriptionResult {
@@ -228,9 +230,12 @@ fn transcribe_file_blocking(
     println!(
         "[FILE_TRANSCRIBE] Assembled {:.1}s of speech from {:.1}s of audio ({} silence dropped)",
         speech_audio.len() as f32 / 16000.0,
-        mono.len() as f32 / 16000.0,
-        if mono.len() > speech_audio.len() {
-            format!("{:.1}s", (mono.len() - speech_audio.len()) as f32 / 16000.0)
+        mono_samples as f32 / 16000.0,
+        if mono_samples > speech_audio.len() {
+            format!(
+                "{:.1}s",
+                (mono_samples - speech_audio.len()) as f32 / 16000.0
+            )
         } else {
             "none".to_string()
         }
@@ -252,23 +257,22 @@ fn transcribe_file_blocking(
                 let percent = 50 + ((i as f32 / total_w as f32) * 45.0) as u8;
                 emit_progress(app, path, percent, "transcribing", None);
 
-                let chunk = raw_chunk.to_vec();
                 crate::memory::maybe_log_process_memory_with_sizes(
                     "file transcription whisper chunk",
                     &[
                         ("chunk_index", i + 1),
                         ("total_chunks", total_w),
-                        ("chunk_samples", chunk.len()),
+                        ("chunk_samples", raw_chunk.len()),
                         (
                             "chunk_audio_bytes",
-                            chunk.len() * std::mem::size_of::<f32>(),
+                            raw_chunk.len() * std::mem::size_of::<f32>(),
                         ),
                     ],
                 );
                 let mut w = whisper
                     .lock()
                     .map_err(|_| "Whisper lock poisoned".to_string())?;
-                let t = w.transcribe_audio_data(&chunk, None)?;
+                let t = w.transcribe_audio_data(raw_chunk, None)?;
                 if !t.trim().is_empty() {
                     parts.push(t.trim().to_string());
                 }
@@ -295,16 +299,15 @@ fn transcribe_file_blocking(
                 let percent = 50 + ((i as f32 / total_chunks as f32) * 45.0) as u8;
                 emit_progress(app, path, percent, "transcribing", None);
 
-                let chunk = raw_chunk.to_vec();
                 crate::memory::maybe_log_process_memory_with_sizes(
                     "file transcription chunk",
                     &[
                         ("chunk_index", i + 1),
                         ("total_chunks", total_chunks),
-                        ("chunk_samples", chunk.len()),
+                        ("chunk_samples", raw_chunk.len()),
                         (
                             "chunk_audio_bytes",
-                            chunk.len() * std::mem::size_of::<f32>(),
+                            raw_chunk.len() * std::mem::size_of::<f32>(),
                         ),
                     ],
                 );
@@ -314,13 +317,13 @@ fn transcribe_file_blocking(
                         let mut p = parakeet
                             .lock()
                             .map_err(|_| "Parakeet lock poisoned".to_string())?;
-                        p.transcribe_chunk(&chunk, 16000)?
+                        p.transcribe_chunk(raw_chunk, 16000)?
                     }
                     ASREngine::Granite => {
                         let mut g = cohere
                             .lock()
                             .map_err(|_| "Granite lock poisoned".to_string())?;
-                        g.transcribe_chunk(&chunk, 16000)?
+                        g.transcribe_chunk(raw_chunk, 16000)?
                     }
                     _ => unreachable!(),
                 };

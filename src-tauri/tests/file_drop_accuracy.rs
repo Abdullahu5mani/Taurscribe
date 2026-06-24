@@ -50,21 +50,13 @@ fn load_manifest(path: &str) -> Vec<ManifestRow> {
 // ── Audio pipeline (mirrors transcribe_file_blocking exactly) ─────────────────
 
 fn prepare_file_audio(path: &Path) -> Result<Vec<f32>, String> {
-    let (raw, sample_rate, channels) = audio_decode::decode_audio_interleaved_f32(path)?;
-
-    // Merge to mono
-    let mut mono: Vec<f32> = if channels > 1 {
-        let ch = channels as usize;
-        raw.chunks(ch)
-            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
-            .collect()
-    } else {
-        raw
-    };
+    let (mut mono, sample_rate) = audio_decode::decode_audio_mono_f32(path)?;
 
     // Resample to 16 kHz
     if sample_rate != 16000 {
-        mono = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+        let resampled = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+        drop(mono);
+        mono = resampled;
     }
 
     // Trim long edge silence

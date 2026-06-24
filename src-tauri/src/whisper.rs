@@ -2,6 +2,7 @@ use crate::utils::strip_whitelisted_sound_captions;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 }; // Import tools for resampling audio (changing sample rate)
+use std::borrow::Cow;
 use std::ffi::c_void; // Import raw pointer types for interacting with C code
 use std::os::raw::c_char; // Import C-style character types
 use whisper_rs::{
@@ -527,7 +528,7 @@ impl WhisperManager {
             .ok_or("Whisper context not initialized")?;
 
         // 🔧 STEP 1: Resample Audio
-        let audio_data = if input_sample_rate != 16000 {
+        let audio_data: Cow<[f32]> = if input_sample_rate != 16000 {
             // Check if we need to (re)create the resampler
             let needs_new = match &self.resampler {
                 Some((rate, size, _)) => *rate != input_sample_rate || *size != samples.len(),
@@ -560,9 +561,9 @@ impl WhisperManager {
             let mut waves_out = resampler
                 .process(&waves_in, None)
                 .map_err(|e| format!("Resampling failed: {:?}", e))?;
-            waves_out.swap_remove(0)
+            Cow::Owned(waves_out.swap_remove(0))
         } else {
-            samples.to_vec()
+            Cow::Borrowed(samples)
         };
         crate::memory::maybe_log_process_memory_with_sizes(
             "whisper after resample",
@@ -635,7 +636,7 @@ impl WhisperManager {
 
         // 🚀 STEP 5: Run the AI!
         state
-            .full(params, &audio_data)
+            .full(params, audio_data.as_ref())
             .map_err(|e| format!("Transcription failed: {:?}", e))?;
 
         // 📝 STEP 6: Extract the text from the result
@@ -776,74 +777,13 @@ impl WhisperManager {
     pub fn load_audio(&self, file_path: &str) -> Result<Vec<f32>, String> {
         println!("[I/O] Loading audio file: {}", file_path);
 
-        // Open
-        let mut reader = hound::WavReader::open(file_path)
-            .map_err(|e| format!("Failed to open WAV file: {}", e))?;
-        let spec = reader.spec();
-
-        // Read
-        let sample_count = reader.len() as usize;
-        let mut samples: Vec<f32> = Vec::with_capacity(sample_count);
-
-        if spec.sample_format == hound::SampleFormat::Float {
-            samples.extend(reader.samples::<f32>().map(|s| s.unwrap_or(0.0)));
-        } else {
-            samples.extend(
-                reader
-                    .samples::<i16>()
-                    .map(|s| s.unwrap_or(0) as f32 / 32768.0),
-            );
+        let (mut mono, sample_rate) =
+            crate::audio_decode::decode_audio_mono_f32(std::path::Path::new(file_path))?;
+        if sample_rate != 16000 {
+            let resampled = crate::audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+            drop(mono);
+            mono = resampled;
         }
-
-        // Mono
-        let mono_samples = if spec.channels == 2 {
-            samples
-                .chunks(2)
-                .map(|chunk| (chunk[0] + chunk[1]) / 2.0)
-                .collect::<Vec<f32>>()
-        } else {
-            samples
-        };
-
-        // Resample
-        if spec.sample_rate != 16000 {
-            let params = SincInterpolationParameters {
-                sinc_len: 64,
-                f_cutoff: 0.95,
-                interpolation: SincInterpolationType::Linear,
-                window: WindowFunction::BlackmanHarris2,
-                oversampling_factor: 32,
-            };
-
-            let chunk_size = 1024 * 10;
-            let mut resampler = SincFixedIn::<f32>::new(
-                16000_f64 / spec.sample_rate as f64,
-                2.0,
-                params,
-                chunk_size,
-                1,
-            )
-            .map_err(|e| format!("Failed to create resampler: {:?}", e))?;
-
-            let mut resampled_audio = Vec::new();
-
-            // Padding
-            let mut padding = mono_samples.len() % chunk_size;
-            if padding > 0 {
-                padding = chunk_size - padding;
-            }
-            let mut padded_samples = mono_samples; // move — no clone needed, owned by value
-            padded_samples.extend(std::iter::repeat(0.0).take(padding));
-
-            for chunk in padded_samples.chunks(chunk_size) {
-                let waves_in = vec![chunk.to_vec()];
-                if let Ok(waves_out) = resampler.process(&waves_in, None) {
-                    resampled_audio.extend(&waves_out[0]);
-                }
-            }
-            Ok(resampled_audio)
-        } else {
-            Ok(mono_samples)
-        }
+        Ok(mono)
     }
 }

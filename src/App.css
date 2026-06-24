@@ -22,6 +22,18 @@
   initial-value: rgba(255, 255, 255, 0.16);
 }
 
+@property --feed-text-size {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 1rem;
+}
+
+@property --feed-text-line-height {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 1.7rem;
+}
+
 
 :root {
   /* =========================================================================
@@ -198,8 +210,8 @@
 
 /* ---- Sleek scrollbar ---- */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -207,17 +219,21 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
-  transition: background 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+  /* Border + padding-box clip insets the visible thumb from the track edges,
+   * giving a thin floating pill instead of an edge-to-edge bar. */
+  background-color: rgba(255, 255, 255, 0.1);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  transition: background-color 0.2s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background-color: rgba(255, 255, 255, 0.22);
 }
 
 ::-webkit-scrollbar-thumb:active {
-  background: rgba(255, 255, 255, 0.24);
+  background-color: rgba(255, 255, 255, 0.32);
 }
 
 ::-webkit-scrollbar-corner {
@@ -252,13 +268,12 @@ body {
   overflow: hidden;
 }
 
-/* During live window resize, temporarily disable expensive motion/compositing.
-   This keeps drag-resize responsive on dense screens and lower-power GPUs. */
-body.is-resizing *,
+/* During live window resize, pause decorative loops but keep intentional layout
+   transitions alive. This avoids the old snap-cut feeling while still removing
+   the expensive glow/breath animations that make drag-resize janky. */
 body.is-resizing *::before,
 body.is-resizing *::after {
-  transition-duration: 0s !important;
-  animation: none !important;
+  animation-play-state: paused !important;
 }
 
 body.is-resizing {
@@ -823,7 +838,6 @@ body.is-resizing .model-item {
     inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
-
 .record-btn {
   position: relative;
   width: 5.5rem;
@@ -999,6 +1013,9 @@ body.is-resizing .model-item {
   gap: 0.75rem;
   margin-top: 0.75rem;
   contain: layout;
+  transition:
+    gap 0.24s var(--ease-smooth),
+    margin-top 0.24s var(--ease-smooth);
 }
 
 .bottom-bar .record-btn-wrap {
@@ -1006,16 +1023,34 @@ body.is-resizing .model-item {
   justify-self: center;
 }
 
-/* Left zone: mic selector + engine chip, side by side */
+/* Left zone: mic selector, engine chip, and load/eject button stacked.
+ * A fixed width + align-items:stretch makes the mic chip and engine chip
+ * exactly equal size (text ellipsizes inside); the load/eject button keeps
+ * its own explicit width so it isn't stretched. */
 .bottom-left {
   grid-column: 1;
   justify-self: start;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  width: min(29rem, 100%);
   min-width: 0;
   max-width: 100%;
   position: relative;
+  transition:
+    width 0.24s var(--ease-smooth),
+    gap 0.2s var(--ease-smooth);
+}
+
+.bottom-left-status-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  transition:
+    gap 0.2s var(--ease-smooth);
 }
 
 .bottom-left .mic-selector-bar {
@@ -1023,13 +1058,15 @@ body.is-resizing .model-item {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  max-width: 110px;
   min-width: 0;
   padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
   background: var(--bg-card);
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    padding 0.22s var(--ease-smooth);
 }
 
 .bottom-left .mic-selector-bar:hover {
@@ -1117,14 +1154,96 @@ body.is-resizing .model-item {
 }
 
 .eng-chip-text {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.eng-chip-backend {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--ink-60);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+}
+
+.eng-chip-backend--cuda {
+  color: #76b900;
+  border-color: rgba(118, 185, 0, 0.38);
+  background: rgba(118, 185, 0, 0.09);
+}
+
+.eng-chip-backend--directml {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.38);
+  background: rgba(56, 189, 248, 0.09);
+}
+
+.eng-chip-backend--gpu-pref {
+  color: var(--success-light);
+  border-color: rgba(110, 231, 183, 0.28);
+  background: rgba(110, 231, 183, 0.07);
+}
+
+.eng-chip-backend--cpu,
+.eng-chip-backend--cpu-pref {
+  color: var(--ink-60);
+}
+
 .eng-chip-caret {
   opacity: 0.5;
   font-size: 9px;
+}
+
+/* Load / unload toggle — small clean circular icon button beside the engine chip */
+button.load-eject-btn {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ink-45);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  outline: none;
+  box-shadow: none;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+button.load-eject-btn:hover {
+  border-color: rgba(220, 38, 38, 0.4);
+  color: var(--error);
+  background: rgba(220, 38, 38, 0.08);
+}
+
+button.load-eject-btn:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+button.load-eject-btn.load-eject-btn--load {
+  color: var(--accent-primary);
+}
+
+button.load-eject-btn.load-eject-btn--load:hover {
+  border-color: rgba(var(--accent-primary-rgb), 0.4);
+  color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb), 0.08);
 }
 
 .bottom-bar .settings-btn {
@@ -1426,7 +1545,6 @@ body.is-resizing .model-item {
   flex: 1;
   /* take ALL remaining vertical space, but never collapse below ~2 history rows */
   min-height: 8rem;
-  overflow-y: auto;
   box-shadow: none;
   /* L1 fix: restore text selection in the transcript output area */
   user-select: text;
@@ -1437,6 +1555,26 @@ body.is-resizing .model-item {
 /* When containing the unified feed, let the feed control all internal spacing */
 .output-area--feed {
   padding: 0;
+}
+
+/* Transcript scrollbar (OverlayScrollbars custom theme) — a barely-there
+ * floating pill that only appears while the pointer is moving over the area
+ * or while actively scrolling, so it never competes with the transcript. */
+.os-theme-pure {
+  --os-size: 5px;
+  --os-padding-perpendicular: 1px;
+  --os-padding-axis: 2px;
+  --os-track-bg: none;
+  --os-track-bg-hover: none;
+  --os-track-bg-active: none;
+  --os-track-border: none;
+  --os-handle-border-radius: 999px;
+  --os-handle-bg: rgba(255, 255, 255, 0.12);
+  --os-handle-bg-hover: rgba(255, 255, 255, 0.22);
+  --os-handle-bg-active: rgba(255, 255, 255, 0.32);
+  --os-handle-border: none;
+  --os-handle-min-size: 24px;
+  --os-handle-interactive-area-offset: 6px;
 }
 
 .output-area-empty {
@@ -1452,23 +1590,6 @@ body.is-resizing .model-item {
   color: var(--text-primary);
   white-space: pre-wrap;
   word-wrap: break-word;
-}
-
-.output-area::-webkit-scrollbar {
-  width: 6px;
-}
-
-.output-area::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.output-area::-webkit-scrollbar-thumb {
-  background: var(--bg-card);
-  border-radius: 99px;
-}
-
-.output-area::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
 }
 
 /* Live transcript */
@@ -1844,7 +1965,9 @@ body.is-resizing .model-item {
   /* required for grid-row trick */
   padding: 12px 20px;
   border-bottom: 1px solid var(--border-color);
-  transition: background 0.15s ease;
+  transition:
+    background 0.15s ease,
+    padding 0.22s var(--ease-smooth);
   position: relative;
 }
 
@@ -1860,22 +1983,20 @@ body.is-resizing .model-item {
 
 /* (Removed old feedFadeIn classes to avoid conflict) */
 
+/* Pure keeps the latest item flat — recency is conveyed by opacity-by-distance
+ * below, not a filled/bordered highlight box. */
 .feed-item--latest {
-
   border-bottom: none;
-}
-
-.feed-item--latest {
-  background: rgba(var(--accent-primary-rgb), 0.04);
-  border-left: 2px solid var(--accent-primary);
-  padding-left: 18px;
   position: relative;
   overflow: hidden;
 }
 
 /* Opacity fades by distance from the most recent capture — Pure's recency cue */
 .feed-item {
-  transition: opacity 0.25s ease, background 0.15s ease;
+  transition:
+    opacity 0.25s ease,
+    background 0.15s ease,
+    padding 0.22s var(--ease-smooth);
 }
 
 .feed-item[data-distance="1"] { opacity: 0.62; }
@@ -2035,11 +2156,18 @@ body.is-resizing .model-item {
 .feed-text {
   margin: 0;
   font-family: var(--font-display);
-  font-size: var(--font-base);
+  font-size: var(--feed-text-size, var(--font-base));
   color: var(--ink-70);
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.7;
+  line-height: var(--feed-text-line-height, 1.7);
+  transform-origin: left top;
+  transition:
+    font-size 0.22s var(--ease-smooth),
+    line-height 0.22s var(--ease-smooth),
+    color 0.16s ease,
+    opacity 0.16s ease;
+  will-change: font-size, line-height;
 }
 
 

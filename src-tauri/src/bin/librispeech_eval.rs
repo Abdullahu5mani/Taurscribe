@@ -139,17 +139,11 @@ fn csv_cell(s: &str) -> String {
 
 /// Eval contract: matches `jfk_pcm16_preprocessed_for_asr` (no VAD).
 fn pcm_for_eval(flac_path: &Path) -> Result<Vec<f32>, String> {
-    let (raw, sample_rate, channels) = audio_decode::decode_audio_interleaved_f32(flac_path)?;
-    let mut mono = if channels > 1 {
-        let ch = channels as usize;
-        raw.chunks(ch)
-            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
-            .collect::<Vec<f32>>()
-    } else {
-        raw
-    };
+    let (mut mono, sample_rate) = audio_decode::decode_audio_mono_f32(flac_path)?;
     if sample_rate != 16000 {
-        mono = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+        let resampled = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+        drop(mono);
+        mono = resampled;
     }
     audio_preprocess::trim_file_buffer_edges_16k(&mut mono);
     if mono.is_empty() {
