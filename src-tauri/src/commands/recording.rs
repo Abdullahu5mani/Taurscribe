@@ -1,7 +1,8 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::bounded;
+use std::path::Path;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use tauri::{AppHandle, Emitter, State};
@@ -20,6 +21,9 @@ const PARAKEET_BUFFERED_CHUNK_SECS: f32 = 4.0;
 const PARAKEET_NEMOTRON_CHUNK_SAMPLES_16K: usize = 8_960; // 560 ms @ 16 kHz
 const PARAKEET_EOU_CHUNK_SAMPLES_16K: usize = 2_560; // 160 ms @ 16 kHz
 const PARAKEET_BUFFERED_CHUNK_SAMPLES_16K: usize = 16_000 * 4;
+const PARAKEET_FINAL_FULL_MAX_SAMPLES: usize = 16_000 * 240; // 4 minutes
+const PARAKEET_FINAL_CHUNK_SAMPLES: usize = 16_000 * 180; // 3 minutes
+const PARAKEET_FINAL_OVERLAP_SAMPLES: usize = 16_000 * 2;
 
 #[derive(Clone, Copy)]
 struct ParakeetLiveConfig {
@@ -68,12 +72,134 @@ fn parakeet_preprocess_for_transcribe(
     );
     drop(guard);
     // Always produce exactly min_len_16k samples: pad short buffers with silence,
-    // and truncate any resampler overrun (rubato SincFixedIn can produce ±1-2 extra
-    // samples at non-48 kHz rates).  An extra chunk caused by overrun would call
-    // Nemotron::transcribe_chunk with near-silence, advancing audio_processed by 8960
-    // samples over nothing and permanently skipping a 560 ms window.
+    // and truncate any resampler overrun (rubato SincFixedIn can produce +/-1-2 extra
+    // samples at non-48 kHz rates). An extra chunk caused by overrun would call
+    // Nemotron::transcribe_chunk with near-silence, advancing audio_processed over
+    // nothing and permanently skipping a later real window.
     pcm16.resize(min_len_16k, 0.0);
     pcm16
+}
+
+fn needs_parakeet_final_pass(model_type: Option<&str>) -> bool {
+    matches!(model_type, Some("CTC") | Some("TDT"))
+}
+
+fn load_recording_for_parakeet_final(path: &str) -> Result<Vec<f32>, String> {
+    let (raw_samples, sample_rate, channels) =
+        crate::audio_decode::decode_audio_interleaved_f32(Path::new(path))?;
+    let mut mono = if channels > 1 {
+        let ch = channels as usize;
+        raw_samples
+            .chunks(ch)
+            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+            .collect::<Vec<f32>>()
+    } else {
+        raw_samples
+    };
+
+    if sample_rate != 16000 {
+        mono = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+    }
+
+    // Give offline Parakeet models a clean trailing boundary without asking VAD
+    // to remove anything.
+    mono.extend(std::iter::repeat(0.0_f32).take(16000 * 400 / 1000));
+    audio_preprocess::preprocess_assembled_speech_16k(&mut mono);
+
+    if mono.is_empty() {
+        Err("Saved recording contained no audio samples".to_string())
+    } else {
+        Ok(mono)
+    }
+}
+
+fn normalize_merge_word(word: &str) -> String {
+    word.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+fn append_transcript_with_word_overlap(base: &mut String, next: &str) {
+    let next = next.trim();
+    if next.is_empty() {
+        return;
+    }
+    if base.trim().is_empty() {
+        base.push_str(next);
+        return;
+    }
+
+    let base_words: Vec<&str> = base.split_whitespace().collect();
+    let next_words: Vec<&str> = next.split_whitespace().collect();
+    let max_overlap = base_words.len().min(next_words.len()).min(12);
+    let mut overlap = 0usize;
+
+    for n in (1..=max_overlap).rev() {
+        let base_tail = &base_words[base_words.len() - n..];
+        let next_head = &next_words[..n];
+        if base_tail
+            .iter()
+            .zip(next_head.iter())
+            .all(|(a, b)| normalize_merge_word(a) == normalize_merge_word(b))
+        {
+            overlap = n;
+            break;
+        }
+    }
+
+    let remainder = next_words[overlap..].join(" ");
+    if !remainder.is_empty() {
+        if !base.ends_with(char::is_whitespace) {
+            base.push(' ');
+        }
+        base.push_str(&remainder);
+    }
+}
+
+fn transcribe_parakeet_final(
+    parakeet_arc: &Arc<std::sync::Mutex<crate::parakeet::ParakeetManager>>,
+    audio: Vec<f32>,
+) -> Result<String, String> {
+    println!(
+        "[PARAKEET] Running final saved-recording pass ({:.2}s)...",
+        audio.len() as f32 / 16000.0
+    );
+
+    let mut parakeet = parakeet_arc
+        .lock()
+        .map_err(|_| "Parakeet lock poisoned".to_string())?;
+
+    if audio.len() <= PARAKEET_FINAL_FULL_MAX_SAMPLES {
+        return parakeet.transcribe_chunk(&audio, 16000);
+    }
+
+    let mut merged = String::new();
+    let mut start = 0usize;
+    let total_chunks =
+        (audio.len() + PARAKEET_FINAL_CHUNK_SAMPLES - 1) / PARAKEET_FINAL_CHUNK_SAMPLES;
+    let mut chunk_idx = 1usize;
+
+    while start < audio.len() {
+        let end = (start + PARAKEET_FINAL_CHUNK_SAMPLES).min(audio.len());
+        println!(
+            "[PARAKEET] Final chunk {}/{} ({:.2}s..{:.2}s)",
+            chunk_idx,
+            total_chunks,
+            start as f32 / 16000.0,
+            end as f32 / 16000.0
+        );
+        let text = parakeet.transcribe_chunk(&audio[start..end], 16000)?;
+        append_transcript_with_word_overlap(&mut merged, &text);
+
+        if end == audio.len() {
+            break;
+        }
+        start = end.saturating_sub(PARAKEET_FINAL_OVERLAP_SAMPLES);
+        chunk_idx += 1;
+    }
+
+    Ok(merged)
 }
 
 /// COMMAND: START RECORDING
@@ -204,7 +330,7 @@ fn start_recording_blocking(
     match active_engine {
         ASREngine::Whisper => state.whisper.lock().unwrap().clear_context(),
         ASREngine::Parakeet => state.parakeet.lock().unwrap().clear_context(),
-        ASREngine::Cohere => { /* Cohere is stateless per chunk */ }
+        ASREngine::Granite => { /* Granite is stateless per chunk */ }
     }
     // Reset Silero VAD LSTM state so prior session context doesn't bleed in
     state.vad.lock().unwrap().reset_state();
@@ -234,24 +360,30 @@ fn start_recording_blocking(
     // Bounded: prevents unbounded memory growth if file writer or transcriber falls behind.
     // Audio callback uses try_send so it never blocks the real-time capture thread.
     //
-    // Cohere encoder can take 8+ seconds per 15-second chunk. At 48 kHz / 1024-sample
+    // Granite encoder can take 8+ seconds per 15-second chunk. At 48 kHz / 1024-sample
     // callbacks (~21 ms each) that's ~380 callbacks during one encode pass. A 32-message
     // bound fills in ~672 ms and then try_send silently drops audio — causing the "whole
     // last sentence disappeared" symptom. 512 messages ≈ 10.7 s of headroom, enough for
-    // even the slowest Cohere runs on CPU. Parakeet uses the same bound (see below).
+    // even the slowest Granite runs on CPU. Parakeet uses the same bound because
+    // Nemotron is stateful and dropped audio corrupts its streaming position.
     let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5s headroom at 48kHz/1024
     // Nemotron is stateful — any audio dropped by try_send() corrupts the streaming
     // position permanently (audio_processed advances over a silent gap).  Give Parakeet
     // the same generous headroom as Cohere so inference spikes on CPU never fill the
     // channel.  512 msgs × 1024 samples × (1/48 kHz) ≈ 10.9 s of headroom.
     let transcriber_channel_bound = match active_engine {
-        ASREngine::Cohere | ASREngine::Parakeet => 512,
+        ASREngine::Granite => 512,
+        ASREngine::Parakeet => 512,
         ASREngine::Whisper => 32,
     };
     let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(transcriber_channel_bound);
 
     let file_tx_clone = file_tx.clone();
     let whisper_tx_clone = whisper_tx.clone();
+    let transcriber_dropped_callbacks = Arc::new(AtomicU64::new(0));
+    let transcriber_dropped_samples = Arc::new(AtomicU64::new(0));
+    let transcriber_dropped_callbacks_writer = transcriber_dropped_callbacks.clone();
+    let transcriber_dropped_samples_writer = transcriber_dropped_samples.clone();
 
     let sample_rate = config.sample_rate.0;
 
@@ -306,8 +438,10 @@ fn start_recording_blocking(
     let denoiser_arc = state.denoiser.clone();
     let recording_handle_arc = state.recording_handle.clone();
     let denoise_enabled_thread = denoise_enabled;
+    let transcriber_dropped_callbacks_reader = transcriber_dropped_callbacks.clone();
+    let transcriber_dropped_samples_reader = transcriber_dropped_samples.clone();
 
-    /// VAD-gated transcription — shared logic for Whisper and Cohere.
+    /// VAD-gated transcription — shared logic for Whisper and Granite.
     /// Both managers expose the same `transcribe_chunk(&[f32], u32) -> Result<String, _>` API,
     /// so the entire accumulate → normalize → VAD-check → transcribe → emit pipeline
     /// lives here once instead of being copy-pasted per engine.
@@ -358,7 +492,7 @@ fn start_recording_blocking(
             let start = std::time::Instant::now();
             match transcribe(&pcm16, 16000) {
                 Ok(text) if !text.trim().is_empty() => {
-                    let text = if matches!(method, "Whisper" | "Cohere") {
+                    let text = if matches!(method, "Whisper" | "Granite") {
                         strip_whitelisted_sound_captions(&text)
                     } else {
                         text
@@ -422,7 +556,7 @@ fn start_recording_blocking(
             None
         };
         let chunk_size = match active_engine {
-            ASREngine::Cohere => (sample_rate * 15) as usize,
+            ASREngine::Granite => (sample_rate * 15) as usize,
             _ => (sample_rate * 6) as usize,
         };
         let max_buffer_size = chunk_size * 2;
@@ -441,7 +575,7 @@ fn start_recording_blocking(
             };
 
             match active_engine {
-                ASREngine::Whisper | ASREngine::Cohere => {
+                ASREngine::Whisper | ASREngine::Granite => {
                     buffer.extend(samples);
                     while buffer.len() >= chunk_size {
                         if buffer.len() > max_buffer_size {
@@ -481,7 +615,7 @@ fn start_recording_blocking(
                             );
                         } else {
                             crate::memory::maybe_log_process_memory_with_sizes(
-                                "recording cohere live chunk start",
+                                "recording granite live chunk start",
                                 &[
                                     ("buffer_len_samples", buffer.len()),
                                     ("chunk_samples", chunk.len()),
@@ -492,27 +626,15 @@ fn start_recording_blocking(
                                 ],
                             );
                             let mut gs = cohere.lock().unwrap();
-                            let app_for_partial = app_clone.clone();
-                            let partial_cb = move |word: &str| {
-                                let _ = app_for_partial.emit(
-                                    "transcription-partial",
-                                    crate::types::TranscriptionChunk {
-                                        text: word.to_string(),
-                                        processing_time_ms: 0,
-                                        method: "Cohere".to_string(),
-                                    },
-                                );
-                            };
                             let mut transcribe = |c: &[f32], sr| {
-                                gs.transcribe_chunk(c, sr, Some(&partial_cb))
-                                    .map_err(|e| e.to_string())
+                                gs.transcribe_chunk(c, sr).map_err(|e| e.to_string())
                             };
                             vad_gated_transcribe(
                                 &mut chunk,
                                 sample_rate,
                                 &vad,
                                 &mut transcribe,
-                                "Cohere",
+                                "Granite",
                                 "🪨",
                                 &app_clone,
                                 &session_transcript,
@@ -582,10 +704,8 @@ fn start_recording_blocking(
                                 );
                                 {
                                     let mut st = session_transcript.lock().unwrap();
-                                    // Leading space = SentencePiece ▁ word boundary.
-                                    // Only insert a space when the chunk starts a new word.
-                                    // A chunk that continues the previous word (e.g. "ed" after
-                                    // "nest") carries no leading space and must be joined directly.
+                                    // Leading space = SentencePiece word boundary. Chunks that
+                                    // continue the previous word must be joined directly.
                                     if !st.is_empty() && transcript.starts_with(' ') {
                                         st.push(' ');
                                     }
@@ -617,7 +737,7 @@ fn start_recording_blocking(
         // actually runs for Parakeet with its selected live cadence instead of the old 6 s default.
         let flush_chunk_size = match active_engine {
             ASREngine::Parakeet => parakeet_live_chunk_samples(sample_rate, parakeet_live.unwrap()),
-            ASREngine::Cohere => (sample_rate * 15) as usize,
+            ASREngine::Granite => (sample_rate * 15) as usize,
             _ => (sample_rate * 6) as usize,
         };
         while buffer.len() >= flush_chunk_size {
@@ -649,9 +769,9 @@ fn start_recording_blocking(
                         &denoiser_arc,
                     );
                 }
-                ASREngine::Cohere => {
+                ASREngine::Granite => {
                     crate::memory::maybe_log_process_memory_with_sizes(
-                        "recording cohere final flush chunk",
+                        "recording granite final flush chunk",
                         &[
                             ("remaining_buffer_samples", buffer.len()),
                             ("chunk_samples", chunk.len()),
@@ -659,13 +779,13 @@ fn start_recording_blocking(
                     );
                     let mut gs = cohere.lock().unwrap();
                     let mut t =
-                        |c: &[f32], sr| gs.transcribe_chunk(c, sr, None).map_err(|e| e.to_string());
+                        |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
                     vad_gated_transcribe(
                         &mut chunk,
                         sample_rate,
                         &vad,
                         &mut t,
-                        "Cohere",
+                        "Granite",
                         "🪨",
                         &app_clone,
                         &session_transcript,
@@ -789,17 +909,17 @@ fn start_recording_blocking(
                         }
                     }
                 }
-                ASREngine::Cohere => {
+                ASREngine::Granite => {
                     let mut gs = cohere.lock().unwrap();
                     if use_vad {
                         let mut t =
-                            |c: &[f32], sr| gs.transcribe_chunk(c, sr, None).map_err(|e| e.to_string());
+                            |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
                         vad_gated_transcribe(
                             &mut buffer,
                             sample_rate,
                             &vad,
                             &mut t,
-                            "Cohere",
+                            "Granite",
                             "🪨",
                             &app_clone,
                             &session_transcript,
@@ -808,7 +928,7 @@ fn start_recording_blocking(
                         );
                     } else {
                         println!(
-                            "[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for Cohere",
+                            "[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for Granite",
                             tail_secs
                         );
                         let mut dg = denoiser_arc.lock().unwrap();
@@ -819,7 +939,7 @@ fn start_recording_blocking(
                             dg.as_mut(),
                         );
                         drop(dg);
-                        if let Ok(text) = gs.transcribe_chunk(&pcm16, 16000, None) {
+                        if let Ok(text) = gs.transcribe_chunk(&pcm16, 16000) {
                             let text = strip_whitelisted_sound_captions(&text);
                             if !text.trim().is_empty() {
                                 println!("[TRANSCRIPT] 🪨 (Tail) \"{}\"", text.trim());
@@ -828,7 +948,7 @@ fn start_recording_blocking(
                                     crate::types::TranscriptionChunk {
                                         text: text.clone(),
                                         processing_time_ms: 0,
-                                        method: "Cohere".to_string(),
+                                        method: "Granite".to_string(),
                                     },
                                 );
                                 let mut st = session_transcript.lock().unwrap();
@@ -895,6 +1015,15 @@ fn start_recording_blocking(
             }
         }
 
+        let dropped_callbacks = transcriber_dropped_callbacks_reader.load(Ordering::Relaxed);
+        if dropped_callbacks > 0 {
+            let dropped_samples = transcriber_dropped_samples_reader.load(Ordering::Relaxed);
+            println!(
+                "[AUDIO_DROP] Transcriber queue dropped {} callback(s), {} sample(s) total",
+                dropped_callbacks, dropped_samples
+            );
+        }
+
         println!("[INFO] Transcriber thread finished");
     });
 
@@ -947,7 +1076,19 @@ fn start_recording_blocking(
                     audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
                 }
 
-                whisper_tx_clone.try_send(mono_data).ok();
+                let mono_len = mono_data.len();
+                if whisper_tx_clone.try_send(mono_data).is_err() {
+                    let dropped_callbacks =
+                        transcriber_dropped_callbacks_writer.fetch_add(1, Ordering::Relaxed) + 1;
+                    transcriber_dropped_samples_writer
+                        .fetch_add(mono_len as u64, Ordering::Relaxed);
+                    if dropped_callbacks == 1 || dropped_callbacks % 100 == 0 {
+                        eprintln!(
+                            "[AUDIO_DROP] Transcriber queue dropped {} callback(s); latest={} samples",
+                            dropped_callbacks, mono_len
+                        );
+                    }
+                }
             },
             move |err| {
                 eprintln!("[ERROR] Audio input stream error: {}", err);
@@ -1565,17 +1706,60 @@ fn stop_recording_blocking(
     session_transcript: Arc<std::sync::Mutex<String>>,
     last_recording_path: Option<String>,
     whisper_arc: Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
+    parakeet_arc: Arc<std::sync::Mutex<crate::parakeet::ParakeetManager>>,
     vad_arc: Arc<std::sync::Mutex<crate::vad::VADManager>>,
 ) -> Result<String, String> {
     // Brief tail capture for OS audio scheduling; silence padding in the
     // transcriber thread handles the actual word-boundary safety margin.
     teardown_recording(recording, 80);
 
-    if active_engine == ASREngine::Parakeet || active_engine == ASREngine::Cohere {
+    if active_engine == ASREngine::Parakeet {
+        let final_pass_model_type = {
+            let status = parakeet_arc
+                .lock()
+                .map_err(|_| "Parakeet lock poisoned".to_string())?
+                .get_status();
+            if needs_parakeet_final_pass(status.model_type.as_deref()) {
+                status.model_type
+            } else {
+                None
+            }
+        };
+        if let Some(model_type) = final_pass_model_type {
+            if let Some(path) = last_recording_path.as_ref() {
+                match load_recording_for_parakeet_final(path)
+                    .and_then(|audio| transcribe_parakeet_final(&parakeet_arc, audio))
+                {
+                    Ok(raw_text) => {
+                        let final_text = clean_transcript(&raw_text);
+                        println!(
+                            "[FINAL_TRANSCRIPT] (Parakeet {} final)\n{}",
+                            model_type, final_text
+                        );
+                        let _ = std::fs::remove_file(path);
+                        return Ok(final_text);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[ERROR] Parakeet {} final pass failed; falling back to live transcript: {}",
+                            model_type, e
+                        );
+                    }
+                }
+            } else {
+                eprintln!(
+                    "[ERROR] Parakeet {} final pass requested but no recording path was available",
+                    model_type
+                );
+            }
+        }
+    }
+
+    if active_engine == ASREngine::Parakeet || active_engine == ASREngine::Granite {
         let engine_name = if active_engine == ASREngine::Parakeet {
             "Parakeet"
         } else {
-            "Cohere"
+            "Granite"
         };
         println!(
             "[PROCESSING] Skipping final pass ({} streaming is sufficient)",
@@ -1699,6 +1883,7 @@ pub async fn stop_recording(state: State<'_, AudioState>) -> Result<CommandResul
     let session_transcript = state.session_transcript.clone();
     let last_recording_path = state.last_recording_path.lock().unwrap().clone();
     let whisper_arc = state.whisper.clone();
+    let parakeet_arc = state.parakeet.clone();
     let vad_arc = state.vad.clone();
 
     // --- Heavy work: dispatched off the main thread via spawn_blocking so the
@@ -1710,6 +1895,7 @@ pub async fn stop_recording(state: State<'_, AudioState>) -> Result<CommandResul
             session_transcript,
             last_recording_path,
             whisper_arc,
+            parakeet_arc,
             vad_arc,
         )
     })
@@ -1719,4 +1905,42 @@ pub async fn stop_recording(state: State<'_, AudioState>) -> Result<CommandResul
         Err(message) => CommandResult::err("recording_stop_failed", message),
     })
     .map_err(|e| format!("stop_recording task failed: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_transcript_with_word_overlap_removes_duplicate_boundary_words() {
+        let mut transcript = "this is a final chunk boundary".to_string();
+
+        append_transcript_with_word_overlap(
+            &mut transcript,
+            "chunk, boundary with punctuation handled",
+        );
+
+        assert_eq!(
+            transcript,
+            "this is a final chunk boundary with punctuation handled"
+        );
+    }
+
+    #[test]
+    fn append_transcript_with_word_overlap_keeps_non_overlapping_text() {
+        let mut transcript = "first sentence".to_string();
+
+        append_transcript_with_word_overlap(&mut transcript, "second sentence");
+
+        assert_eq!(transcript, "first sentence second sentence");
+    }
+
+    #[test]
+    fn parakeet_final_pass_is_used_for_offline_variants_only() {
+        assert!(needs_parakeet_final_pass(Some("CTC")));
+        assert!(needs_parakeet_final_pass(Some("TDT")));
+        assert!(!needs_parakeet_final_pass(Some("Nemotron Streaming")));
+        assert!(!needs_parakeet_final_pass(Some("EOU")));
+        assert!(!needs_parakeet_final_pass(None));
+    }
 }

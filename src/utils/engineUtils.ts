@@ -1,7 +1,8 @@
 import type { ASREngine } from "../hooks/useEngineSwitch";
 
-/** Legacy Cohere FP16 id kept for backward-compatible settings migration. */
-export const COHERE_FP16_MODEL_ID = "granite-speech-1b-fp16";
+/** Legacy constant name kept for compatibility with existing engine-slot code. */
+export const GRANITE_MODEL_ID = "granite-speech-4.1-2b-nar";
+export const COHERE_FP16_MODEL_ID = GRANITE_MODEL_ID;
 
 /**
  * Maps a model ID to the engine that owns it, by prefix convention.
@@ -10,7 +11,8 @@ export const COHERE_FP16_MODEL_ID = "granite-speech-1b-fp16";
  */
 export function getEngineForModelId(id: string): ASREngine | null {
     if (id.startsWith("parakeet")) return "parakeet";
-    if (id.startsWith("granite")) return "cohere";
+    if (id.startsWith("cohere")) return "granite";
+    if (id.startsWith("granite")) return "granite";
     if (id.startsWith("whisper")) return "whisper";
     return null;
 }

@@ -308,6 +308,42 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             subdirectory: Some("parakeet-nemotron"),
         }),
 
+        // Parakeet TDT v3 — multilingual (25 languages), NVIDIA's checkpoint
+        // exported to ONNX by community user `istupakov`. Top of HuggingFace
+        // Open ASR Leaderboard for English; supports auto language detection.
+        // Shipping the INT8 variant (~670 MB) — accuracy delta vs FP is small,
+        // download is ~4x smaller, and parakeet-rs `find_encoder` falls through
+        // to `encoder-model.int8.onnx` when no FP file is present.
+        // SHA-256 left empty pending HuggingFace LFS oid retrieval; downloader
+        // skips verification for blank entries.
+        "parakeet-tdt" => Some(ModelConfig {
+            repo: "istupakov/parakeet-tdt-0.6b-v3-onnx",
+            branch: "main",
+            files: vec![
+                ModelFile {
+                    filename: "encoder-model.int8.onnx",
+                    remote_path: "encoder-model.int8.onnx",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "decoder_joint-model.int8.onnx",
+                    remote_path: "decoder_joint-model.int8.onnx",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "vocab.txt",
+                    remote_path: "vocab.txt",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "config.json",
+                    remote_path: "config.json",
+                    sha1: "",
+                },
+            ],
+            subdirectory: Some("parakeet-tdt"),
+        }),
+
         // ── LLM ───────────────────────────────────────────────────────────────
         // SHA-256 sourced from HuggingFace LFS metadata (lfs.oid).
         "flowscribe-qwen2.5-0.5b-v2" => Some(ModelConfig {
@@ -321,34 +357,92 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             subdirectory: Some("qwen_finetuned_gguf"),
         }),
 
-        // ── Cohere slot (single universal ONNX bundle) ───────────────────────
-        // Source: Hugging Face `onnx-community/cohere-transcribe-03-2026-ONNX`.
-        // Both model IDs are backward-compatible aliases for the same bundle and
-        // install to the same local directory (`granite-speech-1b`).
-        "granite-speech-1b-cpu" | "granite-speech-1b-fp16-cuda" => Some(ModelConfig {
-            repo: "onnx-community/cohere-transcribe-03-2026-ONNX",
+        // ── Granite Speech NAR ONNX slot ─────────────────────────────────────
+        // Local/exported ONNX bundle. The runtime uses this through the legacy
+        // Legacy Cohere model ids route into the Granite engine slot.
+        "granite-speech-4.1-2b-nar"
+        | "cohere-speech-1b-cpu"
+        | "cohere-speech-1b-fp16-cuda" => Some(ModelConfig {
+            repo: "ibm-granite/granite-speech-4.1-2b-nar",
             branch: "main",
-            files: granite_speech_files(),
-            subdirectory: Some("granite-speech-1b"),
+            files: granite_speech_nar_onnx_files(),
+            subdirectory: Some("granite-speech-4.1-2b-nar"),
         }),
         _ => None,
     }
 }
 
-/// Returns the 11-file bundle for the Cohere/Granite-Speech-1B ONNX model.
-/// Shared by both the "granite-speech-1b-cpu" and "granite-speech-1b-fp16-cuda" aliases.
-fn granite_speech_files() -> Vec<ModelFile> {
+/// Core files for the locally exported Granite Speech NAR ONNX bundle.
+///
+/// The full fp32 bundle also contains hundreds of external tensor data files.
+/// This list is intentionally the compact readiness/deletion surface; publishing
+/// a real downloadable bundle should use one zip artifact instead.
+fn granite_speech_nar_onnx_files() -> Vec<ModelFile> {
     vec![
-        ModelFile { filename: "encoder_model_fp16.onnx",       remote_path: "onnx/encoder_model_fp16.onnx",       sha1: "" },
-        ModelFile { filename: "encoder_model_fp16.onnx_data",   remote_path: "onnx/encoder_model_fp16.onnx_data",   sha1: "" },
-        ModelFile { filename: "encoder_model_fp16.onnx_data_1", remote_path: "onnx/encoder_model_fp16.onnx_data_1", sha1: "" },
-        ModelFile { filename: "decoder_model_merged_fp16.onnx",      remote_path: "onnx/decoder_model_merged_fp16.onnx",      sha1: "" },
-        ModelFile { filename: "decoder_model_merged_fp16.onnx_data", remote_path: "onnx/decoder_model_merged_fp16.onnx_data", sha1: "" },
-        ModelFile { filename: "tokenizer.json",          remote_path: "tokenizer.json",          sha1: "" },
-        ModelFile { filename: "tokenizer_config.json",   remote_path: "tokenizer_config.json",   sha1: "" },
-        ModelFile { filename: "preprocessor_config.json", remote_path: "preprocessor_config.json", sha1: "" },
-        ModelFile { filename: "processor_config.json",   remote_path: "processor_config.json",   sha1: "" },
-        ModelFile { filename: "generation_config.json",  remote_path: "generation_config.json",  sha1: "" },
-        ModelFile { filename: "config.json",             remote_path: "config.json",             sha1: "" },
+        ModelFile {
+            filename: "encoder.onnx",
+            remote_path: "encoder.onnx",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "projector.onnx",
+            remote_path: "projector.onnx",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "embed_tokens.onnx",
+            remote_path: "embed_tokens.onnx",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "editor.onnx",
+            remote_path: "editor.onnx",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "taurscribe_granite_nar_manifest.json",
+            remote_path: "taurscribe_granite_nar_manifest.json",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "tokenizer.json",
+            remote_path: "tokenizer.json",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "tokenizer_config.json",
+            remote_path: "tokenizer_config.json",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "preprocessor_config.json",
+            remote_path: "preprocessor_config.json",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "processor_config.json",
+            remote_path: "processor_config.json",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "generation_config.json",
+            remote_path: "generation_config.json",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "config.json",
+            remote_path: "config.json",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "vocab.json",
+            remote_path: "vocab.json",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "special_tokens_map.json",
+            remote_path: "special_tokens_map.json",
+            sha1: "",
+        },
     ]
 }

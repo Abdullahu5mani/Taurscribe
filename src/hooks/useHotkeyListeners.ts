@@ -13,7 +13,7 @@ interface UseHotkeyListenersParams {
     asrModelCountsRef: MutableRefObject<{
         whisper: number;
         parakeet: number;
-        cohere: number;
+        granite: number;
     }>;
 
     // Stable handler refs (always point to latest closure)
@@ -148,7 +148,7 @@ export function useHotkeyListeners({
                 const noModelsForEngine =
                     (eng === "whisper" && counts.whisper === 0) ||
                     (eng === "parakeet" && counts.parakeet === 0) ||
-                    (eng === "cohere" && counts.cohere === 0);
+                    (eng === "granite" && counts.granite === 0);
                 if (noModelsForEngine) {
                     playErrorRef.current?.();
                     triggerNoModelAttentionRef.current?.();

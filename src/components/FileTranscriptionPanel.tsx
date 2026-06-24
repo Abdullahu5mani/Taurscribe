@@ -301,7 +301,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
 
     const engineLabel = (engine: string, modelId?: string | null) => {
         const base = engine === "parakeet" ? "Parakeet"
-            : engine === "cohere" ? "Cohere"
+            : engine === "granite" ? "Granite"
             : "Whisper";
         const variant = formatModelDisplay(modelId ?? null);
         return variant ? `${base} · ${variant}` : base;
@@ -390,7 +390,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                             </svg>
                         </div>
                         <p className="file-drop-title" style={{ opacity: 0.35 }}>File transcription unavailable</p>
-                        <p className="file-drop-hint">Parakeet is a streaming engine · switch to Whisper or Cohere for file transcription</p>
+                        <p className="file-drop-hint">Parakeet is a streaming engine · switch to Whisper or Granite for file transcription</p>
                     </>
                 ) : isModelLoading ? (
                     <>

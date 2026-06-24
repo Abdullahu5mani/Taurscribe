@@ -1,4 +1,4 @@
-//! File drag-and-drop transcription (Whisper / Parakeet / Cohere).
+//! File drag-and-drop transcription (Whisper / Parakeet / Granite).
 //!
 //! **Speaker diarization (planned):** VAD segments are concatenated into one mono buffer
 //! before ASR, so speakers cannot be labeled yet. A future pipeline should keep
@@ -65,7 +65,7 @@ pub async fn cancel_file_transcription(path: String) -> Result<(), String> {
 
 /// Transcribe an audio file using the currently active ASR engine.
 ///
-/// macOS: wrapped in spawn_blocking because Whisper/Parakeet/Cohere inference
+/// macOS: wrapped in spawn_blocking because Whisper/Parakeet/Granite inference
 /// is synchronous and would block the AppKit main thread in Tauri 2.
 #[tauri::command]
 pub async fn transcribe_file(
@@ -277,11 +277,11 @@ fn transcribe_file_blocking(
             parts.join(" ")
         }
 
-        // Parakeet and Cohere are chunk-based engines - feed in engine-sized windows.
-        ASREngine::Parakeet | ASREngine::Cohere => {
+        // Parakeet and Granite are chunk-based engines - feed in engine-sized windows.
+        ASREngine::Parakeet | ASREngine::Granite => {
             const PARAKEET_CHUNK_SAMPLES: usize = 16000 * 15;
             const COHERE_CHUNK_SAMPLES: usize = 16000 * 35;
-            let chunk_samples = if matches!(active_engine, ASREngine::Cohere) {
+            let chunk_samples = if matches!(active_engine, ASREngine::Granite) {
                 COHERE_CHUNK_SAMPLES
             } else {
                 PARAKEET_CHUNK_SAMPLES
@@ -316,11 +316,11 @@ fn transcribe_file_blocking(
                             .map_err(|_| "Parakeet lock poisoned".to_string())?;
                         p.transcribe_chunk(&chunk, 16000)?
                     }
-                    ASREngine::Cohere => {
+                    ASREngine::Granite => {
                         let mut g = cohere
                             .lock()
-                            .map_err(|_| "Cohere lock poisoned".to_string())?;
-                        g.transcribe_chunk(&chunk, 16000, None)?
+                            .map_err(|_| "Granite lock poisoned".to_string())?;
+                        g.transcribe_chunk(&chunk, 16000)?
                     }
                     _ => unreachable!(),
                 };

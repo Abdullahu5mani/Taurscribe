@@ -101,7 +101,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
 
     const parakeetModels = models.filter(m => m.type === 'Parakeet');
     const cohereModels = models.filter(
-        m => m.type === 'Cohere'
+        m => m.type === 'Granite'
             && (!m.macosOnly || isMac)
             && (!m.windowsOnly || isWindows),
     );
@@ -142,9 +142,9 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
         } else if (scrollTarget === 'parakeet') {
             groupRef = parakeetGroupRef;
             targetModelId = models.find(m => m.type === 'Parakeet' && !m.downloaded)?.id;
-        } else if (scrollTarget === 'cohere') {
+        } else if (scrollTarget === 'granite') {
             groupRef = cohereGroupRef;
-            targetModelId = models.find(m => m.type === 'Cohere' && !m.downloaded)?.id;
+            targetModelId = models.find(m => m.type === 'Granite' && !m.downloaded)?.id;
         } else {
             return;
         }
@@ -273,7 +273,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             <div className="model-group" ref={parakeetGroupRef}>
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Parakeet</h3>
-                    <span className="model-group-sub model-group-sub--parakeet">by NVIDIA Nemotron · English only</span>
+                    <span className="model-group-sub model-group-sub--parakeet">by NVIDIA · streaming &amp; high-accuracy variants</span>
                 </div>
                 <div className="model-list">
                     {parakeetModels.map(m => (
@@ -284,12 +284,12 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                 </div>
             </div>
 
-            {/* ── Cohere ──────────────────────────────────────────── */}
+            {/* ── Granite ─────────────────────────────────────────── */}
             <div className="model-group" ref={cohereGroupRef}>
                 <div className="model-group-header">
-                    <h3 className="settings-section-title">Cohere</h3>
-                    <span className="model-group-badge model-group-badge--warn">Not Recommended</span>
-                    <span className="model-group-sub model-group-sub--cohere">by Cohere · English · ONNX</span>
+                    <h3 className="settings-section-title">Granite</h3>
+                    <span className="model-group-badge model-group-badge--warn">Experimental</span>
+                    <span className="model-group-sub model-group-sub--cohere">by IBM Granite · Multilingual · ONNX</span>
                 </div>
                 <div className="model-list">
                     {cohereModels.map(m => (

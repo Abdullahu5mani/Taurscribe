@@ -1,6 +1,6 @@
-// Tauri commands for the Cohere Transcribe ONNX engine.
+// Tauri commands for the Granite Speech ONNX engine.
 
-use crate::cohere::{granite_logical_model_id_for_dir, resolve_granite_model_dir};
+use crate::cohere::{cohere_logical_model_id_for_dir, resolve_cohere_model_dir};
 use crate::state::AudioState;
 use crate::tray;
 use crate::types::CommandResult;
@@ -12,46 +12,46 @@ pub struct CohereModelInfo {
     pub id: String,
     pub display_name: String,
     pub size_mb: f32,
-    /// Cohere is CUDA-only in the current implementation.
+    /// Granite can fall back to CPU, but prefers GPU when available.
     pub requires_gpu: bool,
 }
 
-/// List available (downloaded) Cohere engine bundles.
+/// List available (downloaded) Granite engine bundles.
 #[tauri::command]
-pub fn list_cohere_models() -> Vec<CohereModelInfo> {
+pub fn list_granite_models() -> Vec<CohereModelInfo> {
     let models_dir = match crate::utils::get_models_dir() {
         Ok(d) => d,
         Err(_) => return vec![],
     };
     let mut out = Vec::new();
-    let d_int4 = models_dir.join("granite-speech-1b");
-    if crate::cohere::granite_int4_bundle_ready(&d_int4) {
+    let granite_dir = models_dir.join("granite-speech-4.1-2b-nar");
+    if crate::cohere::cohere_onnx_bundle_ready(&granite_dir) {
         out.push(CohereModelInfo {
-            id: "granite-speech-1b-cpu".to_string(),
-            display_name: "Cohere Transcribe 03-2026 (q4f16)".to_string(),
-            size_mb: 1600.0,
-            requires_gpu: true,
+            id: "granite-speech-4.1-2b-nar".to_string(),
+            display_name: "Granite Speech 4.1 2B NAR".to_string(),
+            size_mb: 9844.0,
+            requires_gpu: false,
         });
     }
     out
 }
 
-/// Initialize the Cohere Transcribe engine (load ONNX models + tokenizer).
+/// Legacy IPC alias retained for older frontend builds.
 #[tauri::command]
-pub async fn init_cohere(
+pub fn list_cohere_models() -> Vec<CohereModelInfo> {
+    list_granite_models()
+}
+
+/// Initialize the Granite Speech engine (load ONNX models + tokenizer).
+#[tauri::command]
+pub async fn init_granite(
     state: State<'_, AudioState>,
     app: tauri::AppHandle,
     model_id: Option<String>,
     force_cpu: Option<bool>,
 ) -> Result<CommandResult<String>, String> {
     use crate::types::ASREngine;
-    crate::memory::log_process_memory("init_cohere command start");
-    if force_cpu.unwrap_or(false) {
-        return Ok(CommandResult::err(
-            "model_load_failed",
-            "Cohere is CUDA-only in this build. Disable CPU mode and retry.",
-        ));
-    }
+    crate::memory::log_process_memory("init_granite command start");
 
     // 1. Atomically claim the loading slot — bail if another load is already in flight.
     if state
@@ -85,36 +85,36 @@ pub async fn init_cohere(
         let cohere_on_cpu = cohere_status.backend == "CPU";
         let target_logical = crate::utils::get_models_dir()
             .ok()
-            .and_then(|d| resolve_granite_model_dir(&d, model_id.as_deref()).ok())
-            .map(|dir| granite_logical_model_id_for_dir(&dir));
+            .and_then(|d| resolve_cohere_model_dir(&d, model_id.as_deref()).ok())
+            .map(|dir| cohere_logical_model_id_for_dir(&dir));
         if cohere_status.loaded
-            && active == ASREngine::Cohere
+            && active == ASREngine::Granite
             && !whisper_loaded
             && !parakeet_loaded
             && cohere_on_cpu == want_cpu
             && target_logical.is_some()
             && cohere_status.model_id.as_deref() == target_logical.as_deref()
         {
-            println!("[COHERE] Model is already loaded — skipping reload");
+            println!("[GRANITE] Model is already loaded — skipping reload");
             return Ok::<String, String>("Already loaded".to_string());
         }
 
         // 4. Unload any competing engines before loading.
         if whisper_loaded {
-            println!("[COHERE] Unloading Whisper before switching to Cohere");
+            println!("[GRANITE] Unloading Whisper before switching to Granite");
             whisper_arc.lock().unwrap().unload();
         }
         if parakeet_loaded {
-            println!("[COHERE] Unloading Parakeet before switching to Cohere");
+            println!("[GRANITE] Unloading Parakeet before switching to Granite");
             parakeet_arc.lock().unwrap().unload();
         }
 
-        // 5. Load Cohere Transcribe.
+        // 5. Load Granite Speech.
         let mut gs = cohere_arc
             .lock()
             .map_err(|e| format!("Lock error: {}", e))?;
         let msg = gs.initialize(model_id.as_deref(), force_cpu.unwrap_or(false))?;
-        *active_engine_arc.lock().unwrap() = ASREngine::Cohere;
+        *active_engine_arc.lock().unwrap() = ASREngine::Granite;
         Ok(msg)
     })
     .await
@@ -125,7 +125,7 @@ pub async fn init_cohere(
         Ok(Ok(msg)) => {
             state.model_loaded.store(true, Ordering::Relaxed);
             tray::update_tray_model_item(&app, true);
-            crate::memory::log_process_memory("init_cohere command success");
+            crate::memory::log_process_memory("init_granite command success");
             Ok(CommandResult::ok(msg))
         }
         Ok(Err(e)) => {
@@ -138,20 +138,31 @@ pub async fn init_cohere(
             } else {
                 "model_load_failed"
             };
-            crate::memory::log_process_memory("init_cohere command error");
+            crate::memory::log_process_memory("init_granite command error");
             Ok(CommandResult::err(code, e))
         }
         Err(join_err) => {
             tray::reconcile_model_loaded_tray(&app, &state);
-            crate::memory::log_process_memory("init_cohere command join_error");
+            crate::memory::log_process_memory("init_granite command join_error");
             Ok(CommandResult::err("model_load_failed", join_err))
         }
     }
 }
 
-/// Get the current status of the Cohere Transcribe engine.
+/// Legacy IPC alias retained for older frontend builds.
 #[tauri::command]
-pub fn get_cohere_status(
+pub async fn init_cohere(
+    state: State<'_, AudioState>,
+    app: tauri::AppHandle,
+    model_id: Option<String>,
+    force_cpu: Option<bool>,
+) -> Result<CommandResult<String>, String> {
+    init_granite(state, app, model_id, force_cpu).await
+}
+
+/// Get the current status of the Granite Speech engine.
+#[tauri::command]
+pub fn get_granite_status(
     state: State<'_, AudioState>,
 ) -> Result<crate::cohere::CohereStatus, String> {
     let gs = state
@@ -159,4 +170,12 @@ pub fn get_cohere_status(
         .lock()
         .map_err(|e| format!("Lock error: {}", e))?;
     Ok(gs.get_status())
+}
+
+/// Legacy IPC alias retained for older frontend builds.
+#[tauri::command]
+pub fn get_cohere_status(
+    state: State<'_, AudioState>,
+) -> Result<crate::cohere::CohereStatus, String> {
+    get_granite_status(state)
 }

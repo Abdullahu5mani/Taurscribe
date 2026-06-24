@@ -1,7 +1,6 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "./useModels";
-import { COHERE_FP16_MODEL_ID } from "../utils/engineUtils";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
@@ -16,8 +15,6 @@ interface UseRecordingParams {
     currentParakeetModel: string | null;
     currentCohereModel: string | null;
     asrBackend: "gpu" | "cpu";
-    /** When lazy-loading FP16 Cohere, sync toggle + store to GPU */
-    setAsrBackend?: (b: "gpu" | "cpu") => void;
     setCurrentModel: (id: string) => void;
     setLoadedEngine: (engine: ASREngine) => void;
     enableGrammarLMRef: React.RefObject<boolean>;
@@ -68,7 +65,6 @@ export function useRecording({
     currentParakeetModel,
     currentCohereModel,
     asrBackend,
-    setAsrBackend,
     setCurrentModel,
     setLoadedEngine,
     enableGrammarLMRef,
@@ -237,18 +233,18 @@ export function useRecording({
                     level: "warning",
                     code: "model_missing",
                     title: "Parakeet is not installed",
-                    message: "Download Parakeet from Settings or switch to Whisper/Cohere before recording.",
+                    message: "Download Parakeet from Settings or switch to Whisper/Granite before recording.",
                     sticky: true,
                 });
                 setIsSettingsOpen(true);
                 return;
             }
             try {
-                const pStatus = await invoke("get_parakeet_status") as { loaded: boolean };
-                if (!pStatus.loaded) {
+                const targetModel = currentParakeetModel || parakeetModels[0].id;
+                const pStatus = await invoke("get_parakeet_status") as { loaded: boolean; model_id?: string | null };
+                if (!pStatus.loaded || pStatus.model_id !== targetModel) {
                     setHeaderStatus("Loading Parakeet...", 60_000);
                     setSessionPhase?.("loading_model");
-                    const targetModel = currentParakeetModel || parakeetModels[0].id;
                     const result = await invoke<CommandResult<string>>("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
                     if (!result.ok) throw result.error ?? new Error("Failed to initialize Parakeet");
                     setLoadedEngine("parakeet");
@@ -264,42 +260,39 @@ export function useRecording({
             }
         }
 
-        if (currentEngine === "cohere") {
+        if (currentEngine === "granite") {
             if (cohereModels.length === 0) {
-                setHeaderStatus("No Cohere Speech model installed! Download it from Settings.", 5000);
+                setHeaderStatus("No Granite Speech model installed! Download it from Settings.", 5000);
                 showNotice({
                     level: "warning",
                     code: "model_missing",
-                    title: "Cohere Speech is not installed",
-                    message: "Download the Cohere Speech bundle from Settings or switch to another engine.",
+                    title: "Granite Speech is not installed",
+                    message: "Download the Granite Speech bundle from Settings or switch to another engine.",
                     sticky: true,
                 });
                 setIsSettingsOpen(true);
                 return;
             }
             try {
-                const gStatus = await invoke("get_cohere_status") as { loaded: boolean };
+                const gStatus = await invoke("get_granite_status") as { loaded: boolean };
                 if (!gStatus.loaded) {
-                    setHeaderStatus("Loading Cohere Speech...", 60_000);
+                    setHeaderStatus("Loading Granite Speech...", 60_000);
                     setSessionPhase?.("loading_model");
                     const gid = currentCohereModel || cohereModels[0]?.id;
-                    const result = await invoke<CommandResult<string>>("init_cohere", {
+                    const result = await invoke<CommandResult<string>>("init_granite", {
                         modelId: gid,
-                        forceCpu: asrBackend === "cpu" && gid !== COHERE_FP16_MODEL_ID,
+                        forceCpu: asrBackend === "cpu",
                     });
-                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Cohere Speech");
-                    setLoadedEngine("cohere");
-                    if (gid === COHERE_FP16_MODEL_ID) {
-                        setAsrBackend?.("gpu");
-                    }
-                    setHeaderStatus("Cohere Speech loaded");
+                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Granite Speech");
+                    setLoadedEngine("granite");
+                    setHeaderStatus("Granite Speech loaded");
                     showNotice(null);
                 }
             } catch (e) {
                 const error = e as { code?: string; message?: string };
-                setHeaderStatus("Failed to initialize Cohere Speech: " + error.message, 5000);
+                setHeaderStatus("Failed to initialize Granite Speech: " + error.message, 5000);
                 setSessionPhase?.("error");
-                showNotice(commandErrorToNotice(error, "Cohere Speech failed to load"));
+                showNotice(commandErrorToNotice(error, "Granite Speech failed to load"));
                 return;
             }
         }
@@ -527,7 +520,7 @@ export function useRecording({
                 const activeModelId =
                     currentEngine === "whisper" ? currentModel :
                     currentEngine === "parakeet" ? currentParakeetModel :
-                    currentEngine === "cohere" ? currentCohereModel : null;
+                    currentEngine === "granite" ? currentCohereModel : null;
                 await invoke("save_transcript_history", {
                     transcript: finalTrans,
                     engine: currentEngine,
@@ -691,7 +684,7 @@ export function useRecording({
         const cleanChunk = chunkText.trim();
         if (!cleanChunk) return;
 
-        // If Cohere was streaming partials, reset live transcript to the snapshot
+        // If provisional partials were streaming, reset live transcript to the snapshot
         // taken before partials started so the authoritative decoded text can replace
         // them without duplication.
         if (coherePartialActiveRef.current) {
@@ -700,7 +693,7 @@ export function useRecording({
             coherePartialBaseRef.current = "";
         }
 
-        // Leading space in chunkText = SentencePiece ▁ word boundary marker.
+        // Leading space in chunkText = SentencePiece word boundary marker.
         // Only join with a space when the chunk starts a new word; a chunk that
         // continues the previous word (e.g. "ed" after "nest") has no leading space
         // and must be concatenated directly so "nested" doesn't become "nest ed".

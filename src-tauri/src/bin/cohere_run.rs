@@ -73,7 +73,7 @@ fn main() {
 
     let t0 = std::time::Instant::now();
     let raw_text = cohere
-        .transcribe_chunk(&mono, 16000, None)
+        .transcribe_chunk(&mono, 16000)
         .unwrap_or_else(|e| {
             eprintln!("Transcription error: {e}");
             std::process::exit(1);

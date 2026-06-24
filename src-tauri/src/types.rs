@@ -9,10 +9,12 @@ pub enum AppState {
 
 /// The possible ASR engines we support
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum ASREngine {
     Whisper,
     Parakeet,
-    Cohere,
+    #[serde(alias = "cohere")]
+    Granite,
 }
 
 /// Recording mode: hold keys down the whole time, or press once to start / again to stop.

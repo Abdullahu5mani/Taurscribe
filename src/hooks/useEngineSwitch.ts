@@ -4,9 +4,9 @@ import { Store } from "@tauri-apps/plugin-store";
 import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "./useModels";
 import type { DownloadProgress } from "../components/settings/types";
 import type { CommandResult, SessionNotice } from "../types/session";
-import { COHERE_FP16_MODEL_ID } from "../utils/engineUtils";
+import { GRANITE_MODEL_ID } from "../utils/engineUtils";
 
-export type ASREngine = "whisper" | "parakeet" | "cohere";
+export type ASREngine = "whisper" | "parakeet" | "granite";
 
 interface UseEngineSwitchParams {
     models: ModelInfo[];
@@ -24,7 +24,7 @@ interface UseEngineSwitchParams {
     setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
     asrBackend: "gpu" | "cpu";
     setAsrBackend: (backend: "gpu" | "cpu") => void;
-    /** True when FP16 Cohere is loaded — ASR CPU/GPU toggle must stay on GPU. */
+    /** True when Granite is loaded on a GPU backend — ASR CPU/GPU toggle must stay on GPU. */
     cohereGpuOnlyLocked: boolean;
     isRecordingRef: React.RefObject<boolean>;
     downloadProgressRef: React.RefObject<Record<string, DownloadProgress>>;
@@ -33,7 +33,7 @@ interface UseEngineSwitchParams {
 }
 
 /**
- * Manages the active ASR engine (Whisper / Parakeet / Cohere Speech),
+ * Manages the active ASR engine (Whisper / Parakeet / Granite Speech),
  * loading state, and engine-switch handlers.
  */
 export function useEngineSwitch({
@@ -166,7 +166,7 @@ export function useEngineSwitch({
             console.log("[LOADING] Skipping handleSwitchToWhisper — already loading");
             return;
         }
-        // After unload, active tab is still Whisper — must reload, not return (Parakeet/Cohere already check `loaded`).
+        // After unload, active tab is still Whisper — must reload, not return (Parakeet/Granite already check `loaded`).
         if (activeEngine === "whisper") {
             try {
                 const loadedId = (await invoke("get_current_model")) as string | null;
@@ -205,18 +205,19 @@ export function useEngineSwitch({
             return;
         }
 
+        const targetModel = targetModelOverride || currentParakeetModel || parakeetModels[0].id;
+        const displayName = parakeetModels.find(m => m.id === targetModel)?.display_name || targetModel;
+
         if (activeEngine === "parakeet") {
             try {
-                const pStatus = await invoke("get_parakeet_status") as { loaded: boolean };
-                if (pStatus.loaded) return;
+                const pStatus = await invoke("get_parakeet_status") as { loaded: boolean; model_id?: string | null };
+                if (pStatus.loaded && pStatus.model_id === targetModel) return;
             } catch {
                 // proceed with loading attempt
             }
         }
 
-        const targetModel = targetModelOverride || currentParakeetModel || parakeetModels[0].id;
-
-        await withEngineLoad("parakeet", `Loading Parakeet (${targetModel})...`, async () => {
+        await withEngineLoad("parakeet", `Loading ${displayName}...`, async () => {
             const result = await invoke<CommandResult<string>>("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
             if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Parakeet");
 
@@ -232,7 +233,7 @@ export function useEngineSwitch({
                 await storeRef.current.save();
             }
 
-            setHeaderStatus("Switched to Parakeet");
+            setHeaderStatus(`Switched to ${displayName}`);
             const backend = await invoke("get_backend_info");
             setBackendInfo(backend as string);
         }).catch(e => {
@@ -248,18 +249,18 @@ export function useEngineSwitch({
         });
     };
 
-    // ── Cohere Speech ────────────────────────────────────────────────────
+    // ── Granite Speech ───────────────────────────────────────────────────
     const handleSwitchToCohere = async (targetModelOverride?: string) => {
         const progress = downloadProgressRef.current ?? {};
-        const graniteDownloading = cohereModels.some(m => progress[m.id]) ||
-            Object.keys(progress).some(k => k.startsWith("granite"));
-        if (graniteDownloading) {
-            setHeaderStatus("Cohere Speech is still downloading — please wait", 3000);
+        const cohereDownloading = cohereModels.some(m => progress[m.id]) ||
+            Object.keys(progress).some(k => k.startsWith("granite") || k.startsWith("cohere"));
+        if (cohereDownloading) {
+            setHeaderStatus("Granite Speech is still downloading — please wait", 3000);
             return;
         }
         if (cohereModels.length === 0) {
-            setActiveEngine("cohere");
-            activeEngineRef.current = "cohere";
+            setActiveEngine("granite");
+            activeEngineRef.current = "granite";
             return;
         }
         if (isLoading || isLoadingRef.current) {
@@ -267,9 +268,9 @@ export function useEngineSwitch({
             return;
         }
 
-        if (activeEngine === "cohere") {
+        if (activeEngine === "granite") {
             try {
-                const gStatus = await invoke("get_cohere_status") as { loaded: boolean };
+                const gStatus = await invoke("get_granite_status") as { loaded: boolean };
                 if (gStatus.loaded) return;
             } catch {
                 // proceed with loading attempt
@@ -278,18 +279,18 @@ export function useEngineSwitch({
 
         const targetModel = targetModelOverride || currentCohereModel || cohereModels[0].id;
 
-        await withEngineLoad("cohere", "Loading Cohere Speech...", async () => {
-            const fp16 = targetModel === COHERE_FP16_MODEL_ID;
-            const result = await invoke<CommandResult<string>>("init_cohere", {
+        await withEngineLoad("granite", "Loading Granite Speech...", async () => {
+            const fp16 = targetModel === GRANITE_MODEL_ID;
+            const result = await invoke<CommandResult<string>>("init_granite", {
                 modelId: targetModel,
                 forceCpu: asrBackend === "cpu" && !fp16,
             });
-            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Cohere Speech");
+            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Granite Speech");
 
             setCurrentCohereModel(targetModel);
-            setActiveEngine("cohere");
-            activeEngineRef.current = "cohere";
-            setLoadedEngine("cohere");
+            setActiveEngine("granite");
+            activeEngineRef.current = "granite";
+            setLoadedEngine("granite");
             setSessionNotice?.(null);
 
             if (fp16) {
@@ -298,23 +299,23 @@ export function useEngineSwitch({
 
             if (storeRef.current) {
                 await storeRef.current.set("granite_model", targetModel);
-                await storeRef.current.set("active_engine", "cohere");
+                await storeRef.current.set("active_engine", "granite");
                 if (fp16) {
                     await storeRef.current.set("asr_backend", "gpu");
                 }
                 await storeRef.current.save();
             }
 
-            setHeaderStatus("Switched to Cohere Speech");
+            setHeaderStatus("Switched to Granite Speech");
             const backend = await invoke("get_backend_info");
             setBackendInfo(backend as string);
         }).catch(e => {
-            setHeaderStatus(`Error switching to Cohere Speech: ${e}`, 5000);
+            setHeaderStatus(`Error switching to Granite Speech: ${e}`, 5000);
             setSessionPhase?.("error");
             setSessionNotice?.({
                 level: "error",
                 code: "model_load_failed",
-                title: "Cohere Speech failed to load",
+                title: "Granite Speech failed to load",
                 message: String(e),
                 sticky: true,
             });
@@ -338,7 +339,7 @@ export function useEngineSwitch({
         const hasModel =
             (engine === "whisper" && !!currentModel) ||
             (engine === "parakeet" && !!(currentParakeetModel || parakeetModels.length > 0)) ||
-            (engine === "cohere" && cohereModels.length > 0);
+            (engine === "granite" && cohereModels.length > 0);
 
         if (!hasModel) {
             setHeaderStatus(`ASR backend set to ${label}`);
@@ -366,17 +367,17 @@ export function useEngineSwitch({
                 setBackendInfo(info as string);
                 setHeaderStatus(`Parakeet running on ${label}`);
                 setSessionNotice?.(null);
-            } else if (engine === "cohere") {
+            } else if (engine === "granite") {
                 const gid = currentCohereModel || cohereModels[0]?.id;
-                const result = await invoke<CommandResult<string>>("init_cohere", {
+                const result = await invoke<CommandResult<string>>("init_granite", {
                     modelId: gid,
                     forceCpu: !useGpu,
                 });
-                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Cohere Speech to ${label}`);
-                setLoadedEngine("cohere");
+                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Granite Speech to ${label}`);
+                setLoadedEngine("granite");
                 const info = await invoke("get_backend_info");
                 setBackendInfo(info as string);
-                setHeaderStatus(`Cohere Speech running on ${label}`);
+                setHeaderStatus(`Granite Speech running on ${label}`);
                 setSessionNotice?.(null);
             }
         }).catch(e => {

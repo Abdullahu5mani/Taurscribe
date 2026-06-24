@@ -19,7 +19,7 @@ pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
             let whisper = state.whisper.lock().unwrap();
             Ok(format!("{}", whisper.get_backend()))
         }
-        ASREngine::Cohere => {
+        ASREngine::Granite => {
             let gs = state.cohere.lock().unwrap();
             let status = gs.get_status();
             Ok(status.backend)
@@ -35,7 +35,7 @@ pub fn get_engine_selection_state(
     let active_engine = match active {
         ASREngine::Whisper => "whisper",
         ASREngine::Parakeet => "parakeet",
-        ASREngine::Cohere => "cohere",
+        ASREngine::Granite => "granite",
     }
     .to_string();
 
@@ -70,7 +70,7 @@ pub fn get_engine_selection_state(
                 parakeet_status.backend,
             )
         }
-        ASREngine::Cohere => {
+        ASREngine::Granite => {
             let loaded = if cohere_status.loaded {
                 cohere_status.model_id.clone()
             } else {
@@ -78,7 +78,7 @@ pub fn get_engine_selection_state(
             };
             (
                 cohere_status.model_id.clone(),
-                loaded.as_ref().map(|_| "cohere".to_string()),
+                loaded.as_ref().map(|_| "granite".to_string()),
                 loaded,
                 cohere_status.backend,
             )
@@ -105,7 +105,10 @@ pub fn set_active_engine(
     let new_engine = match engine.to_lowercase().as_str() {
         "whisper" => ASREngine::Whisper,
         "parakeet" => ASREngine::Parakeet,
-        "granitespeech" | "granite_speech" | "granite-speech" => ASREngine::Cohere,
+        "granite" | "granitespeech" | "granite_speech" | "granite-speech" => {
+            ASREngine::Granite
+        }
+        "cohere" | "coherespeech" | "cohere_speech" | "cohere-speech" => ASREngine::Granite,
         _ => return Err(format!("Unknown engine: {}", engine)),
     };
 

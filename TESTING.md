@@ -39,6 +39,8 @@ All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. 
 | `src-tauri/src/audio_preprocess.rs` | Library | Resample, denoise, DC remove, HP filter, level assist, clamp |
 | `src-tauri/src/memory.rs` | Library | Process memory snapshots (`working_set`, `private_bytes`, `peak`) via Windows PSAPI / sysinfo; `trim_process_memory()` |
 | `src-tauri/src/ort_session.rs` | Library | Low-RAM ORT session builder helpers: disabled CPU arena, `SameAsRequested` CUDA arena, heuristic cuDNN search |
+| `src-tauri/src/parakeet.rs` | Library | Parakeet/Nemotron/TDT model discovery, backend loading, and transcription dispatch |
+| `src-tauri/src/commands/recording.rs` | Library / command | Live mic capture orchestration, Parakeet live chunking, and CTC/TDT saved-recording final pass |
 | `src-tauri/tests/jfk_asr_smoke.rs` | Integration | JFK WAV → all three engines must return non-empty text |
 | `src-tauri/tests/memory_engine_regression.rs` | Integration | Load/transcribe/unload cycles + cross-engine switch sequences; snapshots RAM at each step |
 | `src-tauri/tests/parakeet_context_reset.rs` | Integration | Verifies `clear_context()` restores Parakeet to a fresh-session baseline (same audio → same transcript) |
@@ -58,11 +60,34 @@ Runs preprocessed JFK audio (`resample → trim → preprocess_assembled_speech_
 
 ```bash
 cd src-tauri
-cargo test jfk_audio_through_whisper_parakeet_and_granite -- --ignored --nocapture
+cargo test jfk_audio_through_whisper_parakeet_and_cohere -- --ignored --nocapture
 ```
 
 **Requires:** `jfk.wav` + all three model bundles installed.
 **Skip without failing:** `TAURSCRIBE_ASR_SMOKE_SKIP=1`
+
+---
+
+### TDT setup regression — model discovery + final-pass routing
+
+Plain `cargo test --lib` includes TDT-specific unit coverage:
+
+- `tdt_layout_detection_accepts_registry_int8_bundle` confirms the app recognizes the Settings-downloaded TDT bundle: `encoder-model.int8.onnx`, `decoder_joint-model.int8.onnx`, and `vocab.txt`.
+- `tdt_layout_detection_rejects_partial_download` prevents a half-downloaded TDT folder from appearing in the Parakeet selector.
+- `parakeet_final_pass_is_used_for_offline_variants_only` confirms CTC and TDT use the saved-recording final pass, while Nemotron Streaming and EOU keep the live transcript path.
+
+```bash
+cd src-tauri
+cargo test --lib tdt -- --nocapture
+cargo test --lib parakeet_final_pass -- --nocapture
+```
+
+Manual UI smoke path:
+
+1. Install **Parakeet TDT v3 (Multilingual)** from Settings.
+2. Switch the main engine to **Parakeet**.
+3. Select **Parakeet TDT - parakeet-tdt** in the Parakeet model dropdown.
+4. Record a short phrase and stop. Logs should include `Parakeet TDT final`, not only live chunk output.
 
 ---
 
@@ -275,7 +300,7 @@ If you do not use the scripts:
 | `memory_engine_regression` | Engine manager lifecycle | No | Full JFK clip per scenario |
 | `parakeet_context_reset` | `stop_recording` → `clear_context()` | No | Full JFK clip |
 | `file_drop_accuracy` | `commands/file_transcription.rs` | Yes — **adaptive energy (RMS)** segment assembly | Same as eval binary for engines |
-| `mic_accuracy` | `commands/recording.rs` | Yes — energy gate on 6 s windows | Parakeet: 4 s chunks, no gate, padded to ≥64k samples |
+| `mic_accuracy` | `commands/recording.rs` | Yes — energy gate on 6 s windows | Parakeet: Nemotron 560 ms, EOU 160 ms, CTC/TDT 4 s live preview plus saved-recording final pass |
 
 ### File drop path (step by step)
 
@@ -294,7 +319,10 @@ decode → mono → resample 16 kHz → trim edge silence
 cpal capture → preprocess_live_transcribe_chunk → 6 s rolling chunks
   → energy VAD gate (~0.25) → Whisper / Cohere
 
-Parakeet: 4 s chunks, no VAD gate, padded to ≥64k samples
+Parakeet:
+- Nemotron Streaming: 560 ms chunks, no VAD gate
+- EOU: 160 ms chunks, no VAD gate
+- CTC / TDT: 4 s live preview chunks, then a saved-recording final pass at stop
 ```
 
 ### Eval binary path (`librispeech_eval`)
@@ -405,7 +433,7 @@ cargo run --release --manifest-path src-tauri/Cargo.toml --bin librispeech_eval 
 
 Other flags: `--engines whisper,parakeet,cohere`, `--limit 50`, `--force-cpu`.
 
-Model IDs (optional env): `TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_PARAKEET_MODEL_ID`, `TAURSCRIBE_GRANITE_MODEL_ID`.
+Model IDs (optional env): `TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_PARAKEET_MODEL_ID`, `TAURSCRIBE_COHERE_MODEL_ID`.
 
 CSV columns: `utt_id, engine, wer, ref_word_count, hyp_snippet`. Mean / median WER print to stderr at the end.
 
@@ -413,7 +441,7 @@ CSV columns: `utt_id, engine, wer, ref_word_count, hyp_snippet`. Mean / median W
 
 ### 3b. WER on every installed model
 
-`librispeech_eval` loads **one** checkpoint per engine **per process**: either the first one the app discovers, or the one you select with env vars (`TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_PARAKEET_MODEL_ID`, `TAURSCRIBE_GRANITE_MODEL_ID`). There is no single flag that loops over all local models automatically.
+`librispeech_eval` loads **one** checkpoint per engine **per process**: either the first one the app discovers, or the one you select with env vars (`TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_PARAKEET_MODEL_ID`, `TAURSCRIBE_COHERE_MODEL_ID`). There is no single flag that loops over all local models automatically.
 
 **Approach:** run the binary multiple times — change the env var(s), keep the same manifest, and write to a new CSV each time (or use `--engines whisper` only while sweeping Whisper so Parakeet/Cohere are not repeated unnecessarily).
 
@@ -439,17 +467,51 @@ for bin in "$MODELS"/ggml-*.bin; do
 done
 ```
 
-**Parakeet IDs** look like `nemotron:folder_name` (directory under the models folder that contains Nemotron ONNX files). Get exact strings from the app's model list or from folder names under `models/`. Loop the same way with `TAURSCRIBE_PARAKEET_MODEL_ID` and `--engines parakeet`.
+**Parakeet IDs** include the model family prefix plus the folder name. Examples: `nemotron:parakeet-nemotron`, `ctc:parakeet-ctc`, `eou:parakeet-eou`, `tdt:parakeet-tdt`. Get exact strings from the app's model list or from folder names under `models/`. Loop the same way with `TAURSCRIBE_PARAKEET_MODEL_ID` and `--engines parakeet`.
 
-**Cohere engine:** this uses a single q4f16 universal bundle under `granite-speech-1b`. Set `TAURSCRIBE_GRANITE_MODEL_ID=granite-speech-1b` (or `granite-speech-1b-cpu`) and run with `--engines cohere`.
+**Cohere engine:** this uses a single q4f16 universal bundle stored in the legacy `cohere-speech-1b` folder. Set `TAURSCRIBE_COHERE_MODEL_ID=cohere-speech-1b` (or `cohere-speech-1b-cpu`) and run with `--engines cohere`. `TAURSCRIBE_COHERE_MODEL_ID` is still accepted only as a backward-compatible alias.
 
 **All engines × all Whisper variants:** run one full `--engines whisper,parakeet,cohere` job per Whisper ID (Parakeet/Cohere stay the same unless you also change those env vars). That quickly multiplies runtime and VRAM use — use `--limit` while iterating.
+
+### 3c. Quick Parakeet TDT benchmark
+
+Use a small reproducible LibriSpeech subset while iterating. This validates TDT loading, ONNX runtime configuration, transcript output, elapsed runtime, and WER without running the full 2,620-utterance corpus.
+
+```powershell
+$env:TAURSCRIBE_PARAKEET_MODEL_ID = 'tdt:parakeet-tdt'
+$env:TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT = 'taurscribe-runtime/librispeech/LibriSpeech/test-clean'
+Measure-Command {
+  cargo run --release --manifest-path src-tauri/Cargo.toml --bin librispeech_eval -- `
+    --manifest taurscribe-runtime/librispeech/eval_manifest_5.jsonl `
+    --audio-root taurscribe-runtime/librispeech/LibriSpeech/test-clean `
+    --engines parakeet `
+    --limit 5 `
+    --out taurscribe-runtime/librispeech/wer_parakeet_tdt_5.csv
+}
+```
+
+For a larger comparison, switch to `eval_manifest_30.jsonl` and `--limit 30`, or remove `--limit` after the model behavior is stable. Keep a separate CSV per Parakeet model, for example `wer_parakeet_nemotron_30.csv` and `wer_parakeet_tdt_30.csv`.
+
+If a local Windows release build hits GGML duplicate-symbol linker errors, build and run the debug eval binary instead. Treat debug timing as relative only:
+
+```powershell
+cargo build --manifest-path src-tauri/Cargo.toml --bin librispeech_eval
+$env:TAURSCRIBE_PARAKEET_MODEL_ID = 'tdt:parakeet-tdt'
+Measure-Command {
+  .\src-tauri\target\debug\librispeech_eval.exe `
+    --manifest taurscribe-runtime/librispeech/eval_manifest_5.jsonl `
+    --audio-root taurscribe-runtime/librispeech/LibriSpeech/test-clean `
+    --engines parakeet `
+    --limit 5 `
+    --out taurscribe-runtime/librispeech/wer_parakeet_tdt_5.csv
+}
+```
 
 ### 4. Integration tests (`cd src-tauri`)
 
 ```bash
 # JFK smoke — needs jfk.wav + all three models installed
-cargo test jfk_audio_through_whisper_parakeet_and_granite -- --ignored --nocapture
+cargo test jfk_audio_through_whisper_parakeet_and_cohere -- --ignored --nocapture
 
 # Memory regression — needs jfk.wav + Whisper + Parakeet (Cohere optional)
 TAURSCRIBE_LOG_MEMORY=1 \
@@ -501,7 +563,8 @@ TAURSCRIBE_LOG_MEMORY=1 \
 | `TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT=path` | `librispeech_eval`, accuracy tests | Override stale FLAC paths in manifest |
 | `TAURSCRIBE_WHISPER_MODEL_ID=id` | `librispeech_eval`, smoke | Pin specific Whisper model (e.g. `base.en`) |
 | `TAURSCRIBE_PARAKEET_MODEL_ID=id` | `librispeech_eval`, smoke | Pin specific Parakeet model (e.g. `nemotron:folder`) |
-| `TAURSCRIBE_GRANITE_MODEL_ID=id` | `librispeech_eval`, smoke | Pin Cohere model dir name |
+| `TAURSCRIBE_COHERE_MODEL_ID=id` | `librispeech_eval`, smoke | Pin Cohere model dir name |
+| `TAURSCRIBE_COHERE_MODEL_ID=id` | `librispeech_eval`, smoke | Legacy alias for `TAURSCRIBE_COHERE_MODEL_ID` |
 | `LIBRISPEECH_ROOT=path` | Download scripts | Override where test-clean is downloaded |
 | `JFK_WAV=path` | Smoke + memory tests | Path to `jfk.wav` if not in `tests/fixtures/` |
 

@@ -57,7 +57,8 @@ pub struct AudioState {
     // "quit"  → exit the process
     pub close_behavior: Arc<Mutex<String>>,
 
-    // The Cohere Transcribe ONNX engine (alternative to Whisper/Parakeet)
+    // The Granite Speech ONNX engine (alternative to Whisper/Parakeet).
+    // Field name remains `cohere` temporarily for compatibility with the old manager shim.
     pub cohere: Arc<Mutex<CohereManager>>,
 
     // When true the global hotkey listener ignores all key events.
@@ -118,11 +119,13 @@ impl AudioState {
             ASREngine::Parakeet => crate::parakeet::ParakeetManager::list_available_models()
                 .map(|v| !v.is_empty())
                 .unwrap_or(false),
-            ASREngine::Cohere => {
+            ASREngine::Granite => {
                 let Ok(models_dir) = crate::utils::get_models_dir() else {
                     return false;
                 };
-                crate::cohere::granite_int4_bundle_ready(&models_dir.join("granite-speech-1b"))
+                crate::cohere::cohere_onnx_bundle_ready(
+                    &models_dir.join("granite-speech-4.1-2b-nar"),
+                )
             }
         }
     }
@@ -150,7 +153,7 @@ impl AudioState {
             let mut g = self.cohere.lock().map_err(|e| e.to_string())?;
             if g.get_status().loaded {
                 g.unload();
-                unloaded.push("cohere");
+                unloaded.push("granite");
             }
         }
 
