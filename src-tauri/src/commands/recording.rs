@@ -1,5 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::bounded;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -54,6 +55,19 @@ fn parakeet_live_chunk_samples(sample_rate: u32, config: ParakeetLiveConfig) -> 
     ((sample_rate as f32 * config.feed_secs).round() as usize).max(1)
 }
 
+fn pop_audio_chunk(buffer: &mut VecDeque<f32>, chunk_size: usize, scratch: &mut Vec<f32>) {
+    scratch.clear();
+    if scratch.capacity() < chunk_size {
+        scratch.reserve(chunk_size - scratch.capacity());
+    }
+    scratch.extend(buffer.drain(..chunk_size));
+}
+
+fn discard_audio_front(buffer: &mut VecDeque<f32>, samples: usize) {
+    let drop_samples = samples.min(buffer.len());
+    buffer.drain(..drop_samples).for_each(drop);
+}
+
 /// Universal preprocess → 16 kHz, then pad to the current Parakeet model's minimum
 /// streaming window so short utterances still get one full decode step.
 fn parakeet_preprocess_for_transcribe(
@@ -85,20 +99,12 @@ fn needs_parakeet_final_pass(model_type: Option<&str>) -> bool {
 }
 
 fn load_recording_for_parakeet_final(path: &str) -> Result<Vec<f32>, String> {
-    let (raw_samples, sample_rate, channels) =
-        crate::audio_decode::decode_audio_interleaved_f32(Path::new(path))?;
-    let mut mono = if channels > 1 {
-        let ch = channels as usize;
-        raw_samples
-            .chunks(ch)
-            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
-            .collect::<Vec<f32>>()
-    } else {
-        raw_samples
-    };
+    let (mut mono, sample_rate) = crate::audio_decode::decode_audio_mono_f32(Path::new(path))?;
 
     if sample_rate != 16000 {
-        mono = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+        let resampled = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
+        drop(mono);
+        mono = resampled;
     }
 
     // Give offline Parakeet models a clean trailing boundary without asking VAD
@@ -367,10 +373,10 @@ fn start_recording_blocking(
     // even the slowest Granite runs on CPU. Parakeet uses the same bound because
     // Nemotron is stateful and dropped audio corrupts its streaming position.
     let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5s headroom at 48kHz/1024
-    // Nemotron is stateful — any audio dropped by try_send() corrupts the streaming
-    // position permanently (audio_processed advances over a silent gap).  Give Parakeet
-    // the same generous headroom as Cohere so inference spikes on CPU never fill the
-    // channel.  512 msgs × 1024 samples × (1/48 kHz) ≈ 10.9 s of headroom.
+                                                       // Nemotron is stateful — any audio dropped by try_send() corrupts the streaming
+                                                       // position permanently (audio_processed advances over a silent gap).  Give Parakeet
+                                                       // the same generous headroom as Cohere so inference spikes on CPU never fill the
+                                                       // channel.  512 msgs × 1024 samples × (1/48 kHz) ≈ 10.9 s of headroom.
     let transcriber_channel_bound = match active_engine {
         ASREngine::Granite => 512,
         ASREngine::Parakeet => 512,
@@ -543,7 +549,7 @@ fn start_recording_blocking(
     // 7. SPAWN THREAD 2: THE REAL-TIME TRANSCRIBER
     let app_clone = app_handle.clone();
     let transcriber_thread = std::thread::spawn(move || {
-        let mut buffer = Vec::new();
+        let mut buffer: VecDeque<f32> = VecDeque::new();
         let parakeet_live = if active_engine == ASREngine::Parakeet {
             let status = parakeet_manager.lock().unwrap().get_status();
             let config = parakeet_live_config(status.model_type.as_deref());
@@ -580,11 +586,9 @@ fn start_recording_blocking(
                     while buffer.len() >= chunk_size {
                         if buffer.len() > max_buffer_size {
                             println!("[WARNING] Buffer full, dropping old audio to catch up");
-                            buffer.drain(..chunk_size);
+                            discard_audio_front(&mut buffer, chunk_size);
                         }
-                        chunk.clear();
-                        chunk.extend_from_slice(&buffer[..chunk_size]);
-                        buffer.drain(..chunk_size);
+                        pop_audio_chunk(&mut buffer, chunk_size, &mut chunk);
                         if active_engine == ASREngine::Whisper {
                             crate::memory::maybe_log_process_memory_with_sizes(
                                 "recording whisper live chunk start",
@@ -649,9 +653,7 @@ fn start_recording_blocking(
                     let parakeet_chunk_size =
                         parakeet_live_chunk_samples(sample_rate, parakeet_live.unwrap());
                     while buffer.len() >= parakeet_chunk_size {
-                        chunk.clear();
-                        chunk.extend_from_slice(&buffer[..parakeet_chunk_size]);
-                        buffer.drain(..parakeet_chunk_size);
+                        pop_audio_chunk(&mut buffer, parakeet_chunk_size, &mut chunk);
                         crate::memory::maybe_log_process_memory_with_sizes(
                             "recording parakeet live chunk before preprocess",
                             &[
@@ -741,9 +743,7 @@ fn start_recording_blocking(
             _ => (sample_rate * 6) as usize,
         };
         while buffer.len() >= flush_chunk_size {
-            chunk.clear();
-            chunk.extend_from_slice(&buffer[..flush_chunk_size]);
-            buffer.drain(..flush_chunk_size);
+            pop_audio_chunk(&mut buffer, flush_chunk_size, &mut chunk);
             match active_engine {
                 ASREngine::Whisper => {
                     crate::memory::maybe_log_process_memory_with_sizes(
@@ -855,7 +855,8 @@ fn start_recording_blocking(
         // VAD is designed for filtering silence in long streams, not for
         // gating short utterances where every sample matters.
         if !buffer.is_empty() && buffer.len() as f32 / sample_rate as f32 > 0.1 {
-            let tail_secs = buffer.len() as f32 / sample_rate as f32;
+            let mut tail: Vec<f32> = buffer.drain(..).collect();
+            let tail_secs = tail.len() as f32 / sample_rate as f32;
             let use_vad = tail_secs >= 3.0;
             match active_engine {
                 ASREngine::Whisper => {
@@ -864,7 +865,7 @@ fn start_recording_blocking(
                         let mut t =
                             |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
                         vad_gated_transcribe(
-                            &mut buffer,
+                            &mut tail,
                             sample_rate,
                             &vad,
                             &mut t,
@@ -882,7 +883,7 @@ fn start_recording_blocking(
                         );
                         let mut dg = denoiser_arc.lock().unwrap();
                         let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
-                            &buffer,
+                            &tail,
                             sample_rate,
                             denoise_enabled_thread,
                             dg.as_mut(),
@@ -915,7 +916,7 @@ fn start_recording_blocking(
                         let mut t =
                             |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
                         vad_gated_transcribe(
-                            &mut buffer,
+                            &mut tail,
                             sample_rate,
                             &vad,
                             &mut t,
@@ -933,7 +934,7 @@ fn start_recording_blocking(
                         );
                         let mut dg = denoiser_arc.lock().unwrap();
                         let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
-                            &buffer,
+                            &tail,
                             sample_rate,
                             denoise_enabled_thread,
                             dg.as_mut(),
@@ -963,10 +964,10 @@ fn start_recording_blocking(
                 ASREngine::Parakeet => {
                     crate::memory::maybe_log_process_memory_with_sizes(
                         "recording parakeet tail before preprocess",
-                        &[("tail_buffer_samples", buffer.len())],
+                        &[("tail_buffer_samples", tail.len())],
                     );
                     let buf16 = parakeet_preprocess_for_transcribe(
-                        &buffer,
+                        &tail,
                         sample_rate,
                         denoise_enabled_thread,
                         &denoiser_arc,
@@ -975,7 +976,7 @@ fn start_recording_blocking(
                     crate::memory::maybe_log_process_memory_with_sizes(
                         "recording parakeet tail after preprocess",
                         &[
-                            ("tail_buffer_samples", buffer.len()),
+                            ("tail_buffer_samples", tail.len()),
                             ("buf16_samples", buf16.len()),
                             (
                                 "buf16_audio_bytes",

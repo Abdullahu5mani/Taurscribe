@@ -10,6 +10,7 @@ use crate::denoise::Denoiser;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
+use std::borrow::Cow;
 
 // ── Policy thresholds (tunable) ─────────────────────────────────────────────
 
@@ -59,17 +60,19 @@ fn resample_mono_ratio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<
     )
     .map_err(|e| format!("Resampler init failed: {:?}", e))?;
 
-    let pad = samples.len() % RESAMPLE_CHUNK;
-    let mut padded: Vec<f32> = samples.to_vec();
-    if pad > 0 {
-        padded.extend(std::iter::repeat(0.0_f32).take(RESAMPLE_CHUNK - pad));
-    }
-
-    let mut resampled = Vec::new();
-    for chunk in padded.chunks(RESAMPLE_CHUNK) {
-        let waves_in = vec![chunk.to_vec()];
+    let estimated_len = ((samples.len() as f64 * to_rate as f64 / from_rate as f64).ceil()
+        as usize)
+        .saturating_add(RESAMPLE_CHUNK);
+    let mut resampled = Vec::with_capacity(estimated_len);
+    let mut input = vec![Vec::with_capacity(RESAMPLE_CHUNK)];
+    for chunk in samples.chunks(RESAMPLE_CHUNK) {
+        input[0].clear();
+        input[0].extend_from_slice(chunk);
+        if input[0].len() < RESAMPLE_CHUNK {
+            input[0].resize(RESAMPLE_CHUNK, 0.0);
+        }
         let waves_out = resampler
-            .process(&waves_in, None)
+            .process(&input, None)
             .map_err(|e| format!("Resample failed: {:?}", e))?;
         resampled.extend_from_slice(&waves_out[0]);
     }
@@ -208,15 +211,22 @@ fn clamp_unit(samples: &mut [f32]) {
 
 /// Trim long leading/trailing silence from a **16 kHz** mono buffer (file import).
 pub fn trim_file_edges_16k(samples: &[f32]) -> Vec<f32> {
-    if samples.is_empty() {
+    let Some((start, end)) = trim_file_edge_bounds_16k(samples) else {
         return Vec::new();
+    };
+    samples[start..end].to_vec()
+}
+
+fn trim_file_edge_bounds_16k(samples: &[f32]) -> Option<(usize, usize)> {
+    if samples.is_empty() {
+        return None;
     }
     let frame = (16000 * FRAME_MS_16K / 1000).max(1);
     let floor = estimate_noise_floor_rms(samples, 16000);
     let thresh = (floor * EDGE_RMS_GATE_FACTOR).max(1.5e-4);
     let fr = frame_rms_list(samples, frame);
     if fr.is_empty() {
-        return samples.to_vec();
+        return Some((0, samples.len()));
     }
 
     let min_frames = (EDGE_MIN_SILENCE_MS / FRAME_MS_16K).max(1);
@@ -239,9 +249,9 @@ pub fn trim_file_edges_16k(samples: &[f32]) -> Vec<f32> {
     let start = (start_f * frame).min(samples.len());
     let end = (end_f * frame).min(samples.len());
     if start >= end {
-        return samples.to_vec();
+        return Some((0, samples.len()));
     }
-    samples[start..end].to_vec()
+    Some((start, end))
 }
 
 fn should_apply_denoise(samples: &[f32], sample_rate: u32) -> bool {
@@ -309,19 +319,23 @@ pub fn preprocess_live_transcribe_chunk(
         return Vec::new();
     }
 
-    let mut working = chunk.to_vec();
-    if user_wants_denoise && sample_rate == 48000 && should_apply_denoise(chunk, sample_rate) {
-        if let Some(d) = denoiser {
-            working = d.process(chunk);
-        }
-    }
+    let working: Cow<[f32]> =
+        if user_wants_denoise && sample_rate == 48000 && should_apply_denoise(chunk, sample_rate) {
+            if let Some(d) = denoiser {
+                Cow::Owned(d.process(chunk))
+            } else {
+                Cow::Borrowed(chunk)
+            }
+        } else {
+            Cow::Borrowed(chunk)
+        };
 
     let mut pcm16 = match resample_mono_to_16k(&working, sample_rate) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("[AUDIO_PRE] Live chunk resample failed: {}", e);
             if sample_rate == 16000 {
-                working
+                working.into_owned()
             } else {
                 return Vec::new();
             }
@@ -337,7 +351,14 @@ pub fn trim_file_buffer_edges_16k(mono_16k: &mut Vec<f32>) {
     if mono_16k.is_empty() {
         return;
     }
-    *mono_16k = trim_file_edges_16k(mono_16k);
+    let Some((start, end)) = trim_file_edge_bounds_16k(mono_16k) else {
+        mono_16k.clear();
+        return;
+    };
+    mono_16k.truncate(end);
+    if start > 0 {
+        mono_16k.drain(..start);
+    }
 }
 
 /// After VAD assembly: high-pass / optional RNNoise / level assist / clamp on speech-only buffer.

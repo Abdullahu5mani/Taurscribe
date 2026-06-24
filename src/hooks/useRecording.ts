@@ -89,7 +89,6 @@ export function useRecording({
     const [isRecording, setIsRecording] = useState(false);
     const [isPaused, setIsPaused] = useState(false);
     const [isProcessingTranscript, setIsProcessingTranscript] = useState(false);
-    const [, setLiveTranscript] = useState("");
     const [latestLatency, setLatestLatency] = useState<number | null>(null);
 
     const isRecordingRef = useRef(false);
@@ -144,7 +143,6 @@ export function useRecording({
 
     const resetRecordingSession = () => {
         liveTranscriptRef.current = "";
-        setLiveTranscript("");
         setLatestLatency(null);
         setSessionTranscript?.("");
         setSessionLatency?.(null);
@@ -491,7 +489,6 @@ export function useRecording({
 
             const totalMs = Date.now() - processingStartMs;
             setLatestLatency(totalMs);
-            setLiveTranscript(finalTrans);
             liveTranscriptRef.current = finalTrans;
             setSessionTranscript?.(finalTrans);
             setSessionLatency?.(totalMs);
@@ -670,7 +667,6 @@ export function useRecording({
         const base = coherePartialBaseRef.current;
         const next = base ? `${base} ${trimmed}` : trimmed;
         liveTranscriptRef.current = next;
-        setLiveTranscript(next);
         if (hotkeySessionRef.current && enableOverlayRef.current) {
             emitOverlayState("recording", next).catch(() => {});
         }
@@ -701,7 +697,6 @@ export function useRecording({
         const sep = startsNewWord ? " " : "";
         const nextTranscript = `${liveTranscriptRef.current}${sep}${cleanChunk}`.replace(/\s+/g, " ").trim();
         liveTranscriptRef.current = nextTranscript;
-        setLiveTranscript(nextTranscript);
         setSessionTranscript?.(nextTranscript);
 
         if (hotkeySessionRef.current && enableOverlayRef.current) {

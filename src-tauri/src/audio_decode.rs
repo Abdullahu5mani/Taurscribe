@@ -2,19 +2,50 @@
 
 use std::path::Path;
 
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::errors::Error as SymphError;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
+
 /// Decode an audio file to interleaved f32 samples.
 /// Returns `(samples, sample_rate_hz, channel_count)`.
 pub fn decode_audio_interleaved_f32(path: &Path) -> Result<(Vec<f32>, u32, u32), String> {
-    use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::DecoderOptions;
-    use symphonia::core::errors::Error as SymphError;
-    use symphonia::core::formats::FormatOptions;
-    use symphonia::core::io::MediaSourceStream;
-    use symphonia::core::meta::MetadataOptions;
-    use symphonia::core::probe::Hint;
+    decode_audio_with(path, |acc, samples, channels| {
+        let _ = channels;
+        acc.extend_from_slice(samples);
+    })
+}
 
+/// Decode an audio file directly to mono f32 samples.
+///
+/// This avoids materializing the full interleaved buffer before immediately
+/// downmixing it, which is the common path for ASR.
+pub fn decode_audio_mono_f32(path: &Path) -> Result<(Vec<f32>, u32), String> {
+    let (samples, sample_rate, _channels) = decode_audio_with(path, |acc, samples, channels| {
+        if channels <= 1 {
+            acc.extend_from_slice(samples);
+            return;
+        }
+
+        for frame in samples.chunks(channels) {
+            if frame.is_empty() {
+                continue;
+            }
+            acc.push(frame.iter().copied().sum::<f32>() / frame.len() as f32);
+        }
+    })?;
+
+    Ok((samples, sample_rate))
+}
+
+fn decode_audio_with<F>(path: &Path, mut push_samples: F) -> Result<(Vec<f32>, u32, u32), String>
+where
+    F: FnMut(&mut Vec<f32>, &[f32], usize),
+{
     let file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {}", e))?;
-
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -54,7 +85,7 @@ pub fn decode_audio_interleaved_f32(path: &Path) -> Result<(Vec<f32>, u32, u32),
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| format!("Cannot create audio decoder: {}", e))?;
 
-    let mut all_samples: Vec<f32> = Vec::new();
+    let mut all_samples = Vec::new();
     let mut actual_channels: u32 = hint_channels;
 
     loop {
@@ -80,7 +111,11 @@ pub fn decode_audio_interleaved_f32(path: &Path) -> Result<(Vec<f32>, u32, u32),
                 }
                 let mut buf = SampleBuffer::<f32>::new(capacity, spec);
                 buf.copy_interleaved_ref(decoded);
-                all_samples.extend_from_slice(buf.samples());
+                push_samples(
+                    &mut all_samples,
+                    buf.samples(),
+                    actual_channels.max(1) as usize,
+                );
             }
             Err(SymphError::IoError(_)) => continue,
             Err(SymphError::DecodeError(_)) => continue,

@@ -130,6 +130,7 @@ pub fn unload_llm(state: State<'_, AudioState>) -> Result<String, String> {
         return Ok("LLM was not loaded".to_string());
     }
     *llm_guard = None;
+    crate::memory::trim_process_memory();
     println!("[INFO] Qwen LLM unloaded.");
     Ok("LLM unloaded successfully".to_string())
 }

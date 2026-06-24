@@ -9,7 +9,7 @@
   bottom: 0;
   display: flex;
   justify-content: center;
-  align-items: flex-end;
+  align-items: center;
   z-index: 1000;
   transition: visibility 0s, opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -50,7 +50,7 @@
 }
 
 .settings-overlay--open .settings-modal {
-  animation: settingsSheetUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: settingsScaleIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .settings-modal {
@@ -59,12 +59,12 @@
   background: #0d0d0d;
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 -8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05), 0 16px 48px rgba(0, 0, 0, 0.55);
   border: 1px solid var(--border-color);
-  border-bottom: none;
-  border-radius: var(--sheet-radius) var(--sheet-radius) 0 0;
+  border-radius: var(--sheet-radius);
   width: 90%;
   max-width: 800px;
+  height: 85vh;
   max-height: var(--sheet-max-height);
   display: flex;
   flex-direction: column;
@@ -487,18 +487,6 @@
   }
 }
 
-@keyframes settingsSheetUp {
-  from {
-    opacity: 0.6;
-    transform: translateY(24px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 /* ---- Focus-visible inside modal ---- */
 .settings-modal :focus-visible {
   outline: none;
@@ -513,23 +501,6 @@
 
 .settings-modal .switch input:focus-visible+.slider {
   box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 0 4px var(--accent-primary);
-}
-
-.settings-content::-webkit-scrollbar {
-  width: 8px;
-}
-
-.settings-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.settings-content::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
-}
-
-.settings-content::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.18);
 }
 
 /* Toggle switch (General settings) — Pure's thin pill-track style */
