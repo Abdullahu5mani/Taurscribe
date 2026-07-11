@@ -52,6 +52,15 @@ type OverlayPhase =
     | "cancelled"
     | "hidden";
 
+const TERMINAL_OVERLAY_PHASES = new Set<OverlayPhase>([
+    "done",
+    "too_short",
+    "nothing_heard",
+    "paste_failed",
+    "cancelled",
+    "hidden",
+]);
+
 /**
  * Manages recording state and the start/stop recording handlers,
  * including post-processing (grammar LM).
@@ -92,10 +101,14 @@ export function useRecording({
     const [latestLatency, setLatestLatency] = useState<number | null>(null);
 
     const isRecordingRef = useRef(false);
+    const isProcessingTranscriptRef = useRef(false);
     const isPausedRef = useRef(false);
     const recordingStartTimeRef = useRef(0);
     const hotkeySessionRef = useRef(false);
     const overlayHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const overlaySessionIdRef = useRef(0);
+    const overlayTerminalRef = useRef(false);
+    const overlayCommandChainRef = useRef<Promise<void>>(Promise.resolve());
     const liveTranscriptRef = useRef("");
     /** Base transcript snapshot taken when the first Cohere partial arrives for a chunk. */
     const coherePartialBaseRef = useRef("");
@@ -125,20 +138,41 @@ export function useRecording({
         }
     };
 
+    const setProcessingTranscript = (processing: boolean) => {
+        isProcessingTranscriptRef.current = processing;
+        setIsProcessingTranscript(processing);
+    };
+
+    const queueOverlayCommand = (sessionId: number, command: () => Promise<void>) => {
+        const queued = overlayCommandChainRef.current
+            .catch(() => { })
+            .then(async () => {
+                if (sessionId !== overlaySessionIdRef.current) return;
+                await command();
+            });
+        overlayCommandChainRef.current = queued.catch(() => { });
+        return queued;
+    };
+
     const emitOverlayState = async (phase: OverlayPhase, text?: string, ms?: number) => {
         if (!hotkeySessionRef.current || !enableOverlayRef.current) return;
-        invoke("show_overlay").catch(() => { });
-        await invoke("set_overlay_state", {
-            phase,
-            text,
-            ms,
-            engine: activeEngineRef.current,
-        }).catch(() => { });
+        const isTerminal = TERMINAL_OVERLAY_PHASES.has(phase);
+        if (overlayTerminalRef.current && !isTerminal) return;
+        const sessionId = overlaySessionIdRef.current;
+        const engine = activeEngineRef.current;
+        return queueOverlayCommand(sessionId, async () => {
+            await invoke("show_overlay").catch(() => { });
+            await invoke("set_overlay_state", { phase, text, ms, engine }).catch(() => { });
+        });
     };
 
     const hideOverlay = () => {
-        invoke("hide_overlay").catch(() => { });
-        invoke("set_overlay_state", { phase: "hidden", engine: activeEngineRef.current }).catch(() => { });
+        const sessionId = overlaySessionIdRef.current;
+        const engine = activeEngineRef.current;
+        return queueOverlayCommand(sessionId, async () => {
+            await invoke("hide_overlay").catch(() => { });
+            await invoke("set_overlay_state", { phase: "hidden", engine }).catch(() => { });
+        });
     };
 
     const resetRecordingSession = () => {
@@ -166,6 +200,10 @@ export function useRecording({
 
     const handleStartRecording = async (fromHotkey = false) => {
         hotkeySessionRef.current = fromHotkey; // tracks hotkey session independent of overlay toggle
+        if (fromHotkey) {
+            overlaySessionIdRef.current += 1;
+            overlayTerminalRef.current = false;
+        }
         const currentEngine = activeEngineRef.current;
 
         if (currentEngine === "whisper") {
@@ -349,7 +387,7 @@ export function useRecording({
     };
 
     const handlePauseRecording = async () => {
-        if (!isRecordingRef.current || isPausedRef.current || isProcessingTranscript) return;
+        if (!isRecordingRef.current || isPausedRef.current || isProcessingTranscriptRef.current) return;
         try {
             await invoke("pause_recording");
             setIsPaused(true);
@@ -364,7 +402,7 @@ export function useRecording({
     };
 
     const handleResumeRecording = async () => {
-        if (!isRecordingRef.current || !isPausedRef.current || isProcessingTranscript) return;
+        if (!isRecordingRef.current || !isPausedRef.current || isProcessingTranscriptRef.current) return;
         try {
             await invoke("resume_recording");
             settlePauseWindow();
@@ -389,7 +427,7 @@ export function useRecording({
         settlePauseWindow();
         setIsPaused(false);
         isPausedRef.current = false;
-        setIsProcessingTranscript(true);
+        setProcessingTranscript(true);
         setSessionPhase?.("processing");
         if (showOverlay) {
             emitOverlayState("transcribing", liveTranscriptRef.current).catch(() => { });
@@ -416,7 +454,7 @@ export function useRecording({
                 }
                 playError?.();
                 resetRecordingSession();
-                setIsProcessingTranscript(false);
+                setProcessingTranscript(false);
                 await setTrayState("ready");
                 setSessionPhase?.("warning");
                 showNotice({
@@ -427,6 +465,7 @@ export function useRecording({
                     sticky: true,
                 });
                 if (showOverlay) {
+                    overlayTerminalRef.current = true;
                     await emitOverlayState("too_short");
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
@@ -443,7 +482,7 @@ export function useRecording({
                 }
                 playError?.();
                 resetRecordingSession();
-                setIsProcessingTranscript(false);
+                setProcessingTranscript(false);
                 await setTrayState("ready");
                 setSessionPhase?.("warning");
                 showNotice({
@@ -454,6 +493,7 @@ export function useRecording({
                     sticky: true,
                 });
                 if (showOverlay) {
+                    overlayTerminalRef.current = true;
                     await emitOverlayState("nothing_heard");
                     await new Promise(resolve => setTimeout(resolve, 1100));
                 }
@@ -552,6 +592,7 @@ export function useRecording({
                     sticky: true,
                 });
                 if (showOverlay) {
+                    overlayTerminalRef.current = true;
                     await emitOverlayState("paste_failed", finalTrans);
                 }
                 if (isOverlay) {
@@ -572,6 +613,7 @@ export function useRecording({
                 showNotice(null);
                 if (showOverlay) {
                     const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
+                    overlayTerminalRef.current = true;
                     await emitOverlayState("done", preview, totalMs);
                 }
                 if (isOverlay) {
@@ -583,7 +625,7 @@ export function useRecording({
                 }
             }
 
-            setIsProcessingTranscript(false);
+            setProcessingTranscript(false);
             await setTrayState("ready");
         } catch (e) {
             console.error("Stop recording failed:", e);
@@ -599,9 +641,10 @@ export function useRecording({
                 showNotice(commandErrorToNotice(error, "Recording failed to stop cleanly"));
             }
             isRecordingRef.current = false;
-            setIsProcessingTranscript(false);
+            setProcessingTranscript(false);
             await setTrayState("ready");
             if (isOverlay) {
+                overlayTerminalRef.current = true;
                 hideOverlay();
             }
         } finally {
@@ -625,7 +668,7 @@ export function useRecording({
             }
             setIsRecording(false);
             isRecordingRef.current = false;
-            setIsProcessingTranscript(false);
+            setProcessingTranscript(false);
             await setTrayState("ready");
             resetRecordingSession();
             setHeaderStatus("Recording discarded", 1800);
@@ -640,6 +683,7 @@ export function useRecording({
             });
 
             if (showOverlay) {
+                overlayTerminalRef.current = true;
                 await emitOverlayState("cancelled");
                 await new Promise((resolve) => setTimeout(resolve, 900));
             }
@@ -655,7 +699,7 @@ export function useRecording({
 
     const handlePartialChunk = (word: string) => {
         // Reject partials when not actively recording or when paused.
-        if ((!isRecordingRef.current && !isProcessingTranscript) || isPausedRef.current) return;
+        if ((!isRecordingRef.current && !isProcessingTranscriptRef.current) || isPausedRef.current) return;
         const trimmed = word.trim();
         if (!trimmed) return;
 
@@ -667,8 +711,9 @@ export function useRecording({
         const base = coherePartialBaseRef.current;
         const next = base ? `${base} ${trimmed}` : trimmed;
         liveTranscriptRef.current = next;
-        if (hotkeySessionRef.current && enableOverlayRef.current) {
-            emitOverlayState("recording", next).catch(() => {});
+        if (hotkeySessionRef.current && enableOverlayRef.current && !overlayTerminalRef.current) {
+            const phase = isRecordingRef.current ? "recording" : "transcribing";
+            emitOverlayState(phase, next)?.catch(() => {});
         }
     };
 
@@ -676,7 +721,7 @@ export function useRecording({
         // Accept chunks when actively recording OR during the processing window
         // (tail flush events arrive while stop_recording is awaited). Reject when
         // the session is fully idle or paused — that would be stale/cross-session audio.
-        if ((!isRecordingRef.current && !isProcessingTranscript) || isPausedRef.current) return;
+        if ((!isRecordingRef.current && !isProcessingTranscriptRef.current) || isPausedRef.current) return;
         const cleanChunk = chunkText.trim();
         if (!cleanChunk) return;
 
@@ -699,8 +744,9 @@ export function useRecording({
         liveTranscriptRef.current = nextTranscript;
         setSessionTranscript?.(nextTranscript);
 
-        if (hotkeySessionRef.current && enableOverlayRef.current) {
-            emitOverlayState("recording", nextTranscript).catch(() => { });
+        if (hotkeySessionRef.current && enableOverlayRef.current && !overlayTerminalRef.current) {
+            const phase = isRecordingRef.current ? "recording" : "transcribing";
+            emitOverlayState(phase, nextTranscript)?.catch(() => { });
         }
     };
 
