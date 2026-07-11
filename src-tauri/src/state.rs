@@ -124,7 +124,9 @@ impl AudioState {
                     return false;
                 };
                 crate::cohere::cohere_onnx_bundle_ready(
-                    &models_dir.join("granite-speech-4.1-2b-nar"),
+                    &models_dir.join("granite-speech-4.1-2b-nar-cuda"),
+                ) || crate::cohere::cohere_onnx_bundle_ready(
+                    &models_dir.join("granite-speech-4.1-2b-nar-portable"),
                 )
             }
         }

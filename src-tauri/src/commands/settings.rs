@@ -105,9 +105,7 @@ pub fn set_active_engine(
     let new_engine = match engine.to_lowercase().as_str() {
         "whisper" => ASREngine::Whisper,
         "parakeet" => ASREngine::Parakeet,
-        "granite" | "granitespeech" | "granite_speech" | "granite-speech" => {
-            ASREngine::Granite
-        }
+        "granite" | "granitespeech" | "granite_speech" | "granite-speech" => ASREngine::Granite,
         "cohere" | "coherespeech" | "cohere_speech" | "cohere-speech" => ASREngine::Granite,
         _ => return Err(format!("Unknown engine: {}", engine)),
     };

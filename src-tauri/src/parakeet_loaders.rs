@@ -29,6 +29,25 @@ impl std::fmt::Display for ParakeetLoadPath {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParakeetBackendRequest {
+    Auto,
+    Cuda,
+    DirectML,
+}
+
+fn parakeet_backend_request() -> ParakeetBackendRequest {
+    match std::env::var("TAURSCRIBE_PARAKEET_BACKEND")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("cuda") | Some("gpu") => ParakeetBackendRequest::Cuda,
+        Some("directml") | Some("dml") => ParakeetBackendRequest::DirectML,
+        _ => ParakeetBackendRequest::Auto,
+    }
+}
+
 // ─── Session config helpers ───────────────────────────────────────────────────
 
 /// Number of intra-op threads: half the physical cores, clamped to [2, 6].
@@ -128,23 +147,39 @@ pub fn init_nemotron(
             let m = try_cpu_nemotron(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        let gpu_try = match load_path {
-            ParakeetLoadPath::StrictGpu => try_gpu_nemotron_strict(path.to_str().unwrap()),
-            ParakeetLoadPath::FallbackGpu => try_gpu_nemotron(path.to_str().unwrap()),
-            ParakeetLoadPath::Cpu => unreachable!(),
-        };
-        match gpu_try {
-            Ok(m) => return Ok((m, GpuBackend::Cuda)),
-            Err(e) => eprintln!("[PARAKEET] CUDA failed for Nemotron: {e}"),
+        if matches!(
+            parakeet_backend_request(),
+            ParakeetBackendRequest::Auto | ParakeetBackendRequest::Cuda
+        ) {
+            let gpu_try = match load_path {
+                ParakeetLoadPath::StrictGpu => try_gpu_nemotron_strict(path.to_str().unwrap()),
+                ParakeetLoadPath::FallbackGpu => try_gpu_nemotron(path.to_str().unwrap()),
+                ParakeetLoadPath::Cpu => unreachable!(),
+            };
+            match gpu_try {
+                Ok(m) => return Ok((m, GpuBackend::Cuda)),
+                Err(e) => eprintln!("[PARAKEET] CUDA failed for Nemotron: {e}"),
+            }
+            if matches!(parakeet_backend_request(), ParakeetBackendRequest::Cuda) {
+                return Err("Requested CUDA Parakeet load failed".to_string());
+            }
         }
-        let dml_try = match load_path {
-            ParakeetLoadPath::StrictGpu => try_directml_nemotron_strict(path.to_str().unwrap()),
-            ParakeetLoadPath::FallbackGpu => try_directml_nemotron(path.to_str().unwrap()),
-            ParakeetLoadPath::Cpu => unreachable!(),
-        };
-        match dml_try {
-            Ok(m) => return Ok((m, GpuBackend::DirectML)),
-            Err(e) => eprintln!("[PARAKEET] DirectML failed for Nemotron: {e}"),
+        if matches!(
+            parakeet_backend_request(),
+            ParakeetBackendRequest::Auto | ParakeetBackendRequest::DirectML
+        ) {
+            let dml_try = match load_path {
+                ParakeetLoadPath::StrictGpu => try_directml_nemotron_strict(path.to_str().unwrap()),
+                ParakeetLoadPath::FallbackGpu => try_directml_nemotron(path.to_str().unwrap()),
+                ParakeetLoadPath::Cpu => unreachable!(),
+            };
+            match dml_try {
+                Ok(m) => return Ok((m, GpuBackend::DirectML)),
+                Err(e) => eprintln!("[PARAKEET] DirectML failed for Nemotron: {e}"),
+            }
+            if matches!(parakeet_backend_request(), ParakeetBackendRequest::DirectML) {
+                return Err("Requested DirectML Parakeet load failed".to_string());
+            }
         }
         if load_path == ParakeetLoadPath::StrictGpu {
             return Err(
@@ -242,23 +277,39 @@ pub fn init_ctc(
             let m = try_cpu_ctc(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        let gpu_try = match load_path {
-            ParakeetLoadPath::StrictGpu => try_gpu_ctc_strict(path.to_str().unwrap()),
-            ParakeetLoadPath::FallbackGpu => try_gpu_ctc(path.to_str().unwrap()),
-            ParakeetLoadPath::Cpu => unreachable!(),
-        };
-        match gpu_try {
-            Ok(m) => return Ok((m, GpuBackend::Cuda)),
-            Err(e) => eprintln!("[PARAKEET] CUDA failed for CTC: {e}"),
+        if matches!(
+            parakeet_backend_request(),
+            ParakeetBackendRequest::Auto | ParakeetBackendRequest::Cuda
+        ) {
+            let gpu_try = match load_path {
+                ParakeetLoadPath::StrictGpu => try_gpu_ctc_strict(path.to_str().unwrap()),
+                ParakeetLoadPath::FallbackGpu => try_gpu_ctc(path.to_str().unwrap()),
+                ParakeetLoadPath::Cpu => unreachable!(),
+            };
+            match gpu_try {
+                Ok(m) => return Ok((m, GpuBackend::Cuda)),
+                Err(e) => eprintln!("[PARAKEET] CUDA failed for CTC: {e}"),
+            }
+            if matches!(parakeet_backend_request(), ParakeetBackendRequest::Cuda) {
+                return Err("Requested CUDA Parakeet load failed".to_string());
+            }
         }
-        let dml_try = match load_path {
-            ParakeetLoadPath::StrictGpu => try_directml_ctc_strict(path.to_str().unwrap()),
-            ParakeetLoadPath::FallbackGpu => try_directml_ctc(path.to_str().unwrap()),
-            ParakeetLoadPath::Cpu => unreachable!(),
-        };
-        match dml_try {
-            Ok(m) => return Ok((m, GpuBackend::DirectML)),
-            Err(e) => eprintln!("[PARAKEET] DirectML failed for CTC: {e}"),
+        if matches!(
+            parakeet_backend_request(),
+            ParakeetBackendRequest::Auto | ParakeetBackendRequest::DirectML
+        ) {
+            let dml_try = match load_path {
+                ParakeetLoadPath::StrictGpu => try_directml_ctc_strict(path.to_str().unwrap()),
+                ParakeetLoadPath::FallbackGpu => try_directml_ctc(path.to_str().unwrap()),
+                ParakeetLoadPath::Cpu => unreachable!(),
+            };
+            match dml_try {
+                Ok(m) => return Ok((m, GpuBackend::DirectML)),
+                Err(e) => eprintln!("[PARAKEET] DirectML failed for CTC: {e}"),
+            }
+            if matches!(parakeet_backend_request(), ParakeetBackendRequest::DirectML) {
+                return Err("Requested DirectML Parakeet load failed".to_string());
+            }
         }
         if load_path == ParakeetLoadPath::StrictGpu {
             return Err(
@@ -355,23 +406,39 @@ pub fn init_eou(
             let m = try_cpu_eou(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        let gpu_try = match load_path {
-            ParakeetLoadPath::StrictGpu => try_gpu_eou_strict(path.to_str().unwrap()),
-            ParakeetLoadPath::FallbackGpu => try_gpu_eou(path.to_str().unwrap()),
-            ParakeetLoadPath::Cpu => unreachable!(),
-        };
-        match gpu_try {
-            Ok(m) => return Ok((m, GpuBackend::Cuda)),
-            Err(e) => eprintln!("[PARAKEET] CUDA failed for EOU: {e}"),
+        if matches!(
+            parakeet_backend_request(),
+            ParakeetBackendRequest::Auto | ParakeetBackendRequest::Cuda
+        ) {
+            let gpu_try = match load_path {
+                ParakeetLoadPath::StrictGpu => try_gpu_eou_strict(path.to_str().unwrap()),
+                ParakeetLoadPath::FallbackGpu => try_gpu_eou(path.to_str().unwrap()),
+                ParakeetLoadPath::Cpu => unreachable!(),
+            };
+            match gpu_try {
+                Ok(m) => return Ok((m, GpuBackend::Cuda)),
+                Err(e) => eprintln!("[PARAKEET] CUDA failed for EOU: {e}"),
+            }
+            if matches!(parakeet_backend_request(), ParakeetBackendRequest::Cuda) {
+                return Err("Requested CUDA Parakeet load failed".to_string());
+            }
         }
-        let dml_try = match load_path {
-            ParakeetLoadPath::StrictGpu => try_directml_eou_strict(path.to_str().unwrap()),
-            ParakeetLoadPath::FallbackGpu => try_directml_eou(path.to_str().unwrap()),
-            ParakeetLoadPath::Cpu => unreachable!(),
-        };
-        match dml_try {
-            Ok(m) => return Ok((m, GpuBackend::DirectML)),
-            Err(e) => eprintln!("[PARAKEET] DirectML failed for EOU: {e}"),
+        if matches!(
+            parakeet_backend_request(),
+            ParakeetBackendRequest::Auto | ParakeetBackendRequest::DirectML
+        ) {
+            let dml_try = match load_path {
+                ParakeetLoadPath::StrictGpu => try_directml_eou_strict(path.to_str().unwrap()),
+                ParakeetLoadPath::FallbackGpu => try_directml_eou(path.to_str().unwrap()),
+                ParakeetLoadPath::Cpu => unreachable!(),
+            };
+            match dml_try {
+                Ok(m) => return Ok((m, GpuBackend::DirectML)),
+                Err(e) => eprintln!("[PARAKEET] DirectML failed for EOU: {e}"),
+            }
+            if matches!(parakeet_backend_request(), ParakeetBackendRequest::DirectML) {
+                return Err("Requested DirectML Parakeet load failed".to_string());
+            }
         }
         if load_path == ParakeetLoadPath::StrictGpu {
             return Err(
@@ -469,23 +536,39 @@ pub fn init_tdt(
             let m = try_cpu_tdt(path.to_str().unwrap())?;
             return Ok((m, GpuBackend::Cpu));
         }
-        let gpu_try = match load_path {
-            ParakeetLoadPath::StrictGpu => try_gpu_tdt_strict(path.to_str().unwrap()),
-            ParakeetLoadPath::FallbackGpu => try_gpu_tdt(path.to_str().unwrap()),
-            ParakeetLoadPath::Cpu => unreachable!(),
-        };
-        match gpu_try {
-            Ok(m) => return Ok((m, GpuBackend::Cuda)),
-            Err(e) => eprintln!("[PARAKEET] CUDA failed for TDT: {e}"),
+        if matches!(
+            parakeet_backend_request(),
+            ParakeetBackendRequest::Auto | ParakeetBackendRequest::Cuda
+        ) {
+            let gpu_try = match load_path {
+                ParakeetLoadPath::StrictGpu => try_gpu_tdt_strict(path.to_str().unwrap()),
+                ParakeetLoadPath::FallbackGpu => try_gpu_tdt(path.to_str().unwrap()),
+                ParakeetLoadPath::Cpu => unreachable!(),
+            };
+            match gpu_try {
+                Ok(m) => return Ok((m, GpuBackend::Cuda)),
+                Err(e) => eprintln!("[PARAKEET] CUDA failed for TDT: {e}"),
+            }
+            if matches!(parakeet_backend_request(), ParakeetBackendRequest::Cuda) {
+                return Err("Requested CUDA Parakeet load failed".to_string());
+            }
         }
-        let dml_try = match load_path {
-            ParakeetLoadPath::StrictGpu => try_directml_tdt_strict(path.to_str().unwrap()),
-            ParakeetLoadPath::FallbackGpu => try_directml_tdt(path.to_str().unwrap()),
-            ParakeetLoadPath::Cpu => unreachable!(),
-        };
-        match dml_try {
-            Ok(m) => return Ok((m, GpuBackend::DirectML)),
-            Err(e) => eprintln!("[PARAKEET] DirectML failed for TDT: {e}"),
+        if matches!(
+            parakeet_backend_request(),
+            ParakeetBackendRequest::Auto | ParakeetBackendRequest::DirectML
+        ) {
+            let dml_try = match load_path {
+                ParakeetLoadPath::StrictGpu => try_directml_tdt_strict(path.to_str().unwrap()),
+                ParakeetLoadPath::FallbackGpu => try_directml_tdt(path.to_str().unwrap()),
+                ParakeetLoadPath::Cpu => unreachable!(),
+            };
+            match dml_try {
+                Ok(m) => return Ok((m, GpuBackend::DirectML)),
+                Err(e) => eprintln!("[PARAKEET] DirectML failed for TDT: {e}"),
+            }
+            if matches!(parakeet_backend_request(), ParakeetBackendRequest::DirectML) {
+                return Err("Requested DirectML Parakeet load failed".to_string());
+            }
         }
         if load_path == ParakeetLoadPath::StrictGpu {
             return Err(

@@ -369,24 +369,29 @@ body.is-resizing .model-item {
   height: 14px !important;
 }
 
-/* ---- Header ---- */
-.app-header {
+/* ---- In-frame status rail ---- */
+.app-status-rail {
+  min-height: 1.25rem;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
-}
-
-.header-status {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
   justify-content: center;
-  align-items: center;
-  gap: 2px;
   min-width: 0;
   overflow: hidden;
-  padding: 0 12px;
+  padding: 0 1rem;
+  margin-top: -0.35rem;
+  margin-bottom: -0.15rem;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s var(--ease-smooth),
+    min-height 0.18s var(--ease-smooth),
+    margin 0.18s var(--ease-smooth);
+}
+
+.app-status-rail--visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* Notification message: fade in when shown */
@@ -397,6 +402,7 @@ body.is-resizing .model-item {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+  line-height: 1.35;
   animation: header-message-fade-in 0.4s ease-out;
 }
 
@@ -1442,6 +1448,30 @@ button.load-eject-btn.load-eject-btn--load:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ep-model-hardware-badge {
+  flex-shrink: 0;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+.ep-model-hardware-badge--cuda {
+  color: #a3e635;
+  border-color: rgba(163, 230, 53, 0.5);
+  background: rgba(132, 204, 22, 0.12);
+}
+
+.ep-model-hardware-badge--portable {
+  color: var(--ink-35);
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .ep-model-size {

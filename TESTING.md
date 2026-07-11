@@ -471,6 +471,8 @@ done
 
 **Parakeet IDs** include the model family prefix plus the folder name. Examples: `nemotron:parakeet-nemotron`, `ctc:parakeet-ctc`, `eou:parakeet-eou`, `tdt:parakeet-tdt`. Get exact strings from the app's model list or from folder names under `models/`. Loop the same way with `TAURSCRIBE_PARAKEET_MODEL_ID` and `--engines parakeet`.
 
+**Parakeet backend selection:** by default, GPU mode tries CUDA first, then DirectML, then CPU. For backend-specific validation, set `TAURSCRIBE_PARAKEET_BACKEND=directml` or `TAURSCRIBE_PARAKEET_BACKEND=cuda`. Add `TAURSCRIBE_PARAKEET_STRICT_GPU=1` to disable CPU fallback and prove the requested GPU execution provider actually loads.
+
 **Cohere engine:** this uses a single q4f16 universal bundle stored in the legacy `cohere-speech-1b` folder. Set `TAURSCRIBE_COHERE_MODEL_ID=cohere-speech-1b` (or `cohere-speech-1b-cpu`) and run with `--engines cohere`. `TAURSCRIBE_COHERE_MODEL_ID` is still accepted only as a backward-compatible alias.
 
 **All engines × all Whisper variants:** run one full `--engines whisper,parakeet,cohere` job per Whisper ID (Parakeet/Cohere stay the same unless you also change those env vars). That quickly multiplies runtime and VRAM use — use `--limit` while iterating.
@@ -494,7 +496,105 @@ Measure-Command {
 
 For a larger comparison, switch to `eval_manifest_30.jsonl` and `--limit 30`, or remove `--limit` after the model behavior is stable. Keep a separate CSV per Parakeet model, for example `wer_parakeet_nemotron_30.csv` and `wer_parakeet_tdt_30.csv`.
 
-If a local Windows release build hits GGML duplicate-symbol linker errors, build and run the debug eval binary instead. Treat debug timing as relative only:
+To specifically validate DirectML, force the DirectML backend and strict GPU loading. This should print `DirectML EP loaded` and `without CPU EP fallback` before inference starts:
+
+```powershell
+$env:TAURSCRIBE_PARAKEET_MODEL_ID = 'tdt:parakeet-tdt'
+$env:TAURSCRIBE_PARAKEET_BACKEND = 'directml'
+$env:TAURSCRIBE_PARAKEET_STRICT_GPU = '1'
+cargo run --release --manifest-path src-tauri/Cargo.toml --bin librispeech_eval -- `
+  --manifest taurscribe-runtime/librispeech/eval_manifest_all.jsonl `
+  --engines parakeet `
+  --limit 30 `
+  --out taurscribe-runtime/librispeech/wer_parakeet_tdt_directml_30.csv
+```
+
+Current Windows DirectML smoke results on this machine:
+
+| Model | Backend | Strict GPU | Limit | Mean WER |
+| --- | --- | --- | ---: | ---: |
+| `tdt:parakeet-tdt` | DirectML | Yes | 30 | `0.0318` |
+| `nemotron:parakeet-nemotron` | DirectML | Yes | 10 | `0.0198` |
+
+Granite ships as two app-visible artifacts:
+
+| Product model ID | Intended platform | Runtime route |
+| --- | --- | --- |
+| `granite-speech-4.1-2b-nar-cuda` | NVIDIA CUDA | INT4 argmax ONNX on CUDA |
+| `granite-speech-4.1-2b-nar-portable` | AMD / Intel / CPU | INT4 argmax ONNX with a DirectML-safe encoder; tries full DirectML first on Windows, then multi-threaded CPU |
+
+The portable bundle is built by `scripts/make_granite_portable_dml.py`. Its encoder graph differs from the CUDA bundle in three DirectML-compatibility rewrites: rank-5 attention MatMuls are flattened to rank 3, shape chains are baked for the fixed 800-frame bucket, and GLU Split nodes are replaced with Slice pairs. Output parity vs. the CUDA encoder is float noise (max rel diff ~4e-5). Its manifest sets `"encoder_dml_safe": true`, which lets the app run the full encoder on DirectML.
+
+On Windows, the portable bundle now attempts full DirectML first and falls back to multi-threaded CPU if session creation or inference fails. The explicit backend override remains useful for validation:
+
+```powershell
+$env:TAURSCRIBE_GRANITE_BACKEND = 'directml'
+$env:TAURSCRIBE_GRANITE_DML_DEVICE_ID = '0'  # DXGI adapter order; 0 was the AMD iGPU on the reference laptop
+cargo run --release --manifest-path src-tauri/Cargo.toml --bin granite_latency_bench -- `
+  --manifest taurscribe-runtime/librispeech/eval_manifest_all.jsonl `
+  --audio-root taurscribe-runtime/librispeech/LibriSpeech/test-clean `
+  --model-dir "$env:LOCALAPPDATA\Taurscribe\models\granite-speech-4.1-2b-nar-portable" `
+  --limit 10 `
+  --out taurscribe-runtime/librispeech/granite_portable_directml_10.csv
+```
+
+Current Windows Granite findings on this machine (AMD Ryzen 7 8845HS, Radeon 780M iGPU, RTX 4070 Laptop). Per-graph steady-state timings for one 8-second encoder bucket, isolated ONNX Runtime 1.24 probes:
+
+| Graph (INT4) | CPU 1 thread (old default) | CPU 8 threads | DirectML on Radeon 780M | DirectML on RTX 4070 |
+| --- | ---: | ---: | ---: | ---: |
+| encoder (stock graph) | 7.8s | 1.9s | fails (`E_INVALIDARG`, rank-5 MatMul) | fails (same) |
+| encoder (DML-static rewrite) | — | 1.9–2.6s | `2.0–2.5s` | `0.28s` |
+| editor | 15.0s | 3.3s | 4.4s | — |
+| projector | — | 0.12s | ok | — |
+| embed_tokens | — | ~0s | ok | — |
+
+End-to-end bench results (`granite_latency_bench`, LibriSpeech, this machine):
+
+| Model | Route | Limit | Mean WER | Mean transcribe |
+| --- | --- | ---: | ---: | ---: |
+| `granite-speech-4.1-2b-nar-cuda` | CUDA performance mode (RTX 4070) | 30 | `0.0431` | `0.250s` (RTF 0.040) |
+| portable (DML-static) | Full DirectML on Radeon 780M, fallback disabled | 30 | `0.0431` | `4.045s` (RTF 0.643) |
+| portable (DML-static) | All CPU, 8 intra-op threads | 30 | `0.0431` | `8.823s` (RTF 1.415) |
+| portable (DML-static) | CPU encoder (1 thread) + DML projector/embed/editor | 30 | `0.0431` | `13.135s` (RTF 2.194) |
+
+All four routes above used the same 30 LibriSpeech utterances with a mean
+processed duration of 8.47 seconds. CUDA load time included a 5.594-second
+warmup. DirectML's first inference previously incurred a 10–17 second kernel
+compilation cost; the app now performs that warmup during model loading so the
+first user recording receives steady-state latency. Set
+`TAURSCRIBE_GRANITE_WARMUP=0` only when measuring cold inference. The 1-thread
+hybrid row reproduces the historical portable route.
+
+Automatic-route smoke after moving DirectML compilation into model loading:
+the portable model selected `request=Auto`, loaded all four graphs on DirectML,
+completed a 9.586-second warmup during the loading state, then transcribed the
+first 7.78-second user utterance in 3.494 seconds (RTF 0.449, WER 0.0000).
+
+Key takeaways:
+
+- The historical DirectML encoder failure had three graph-level causes fixed offline in the portable bundle: rank-5 attention MatMuls rejected with `E_INVALIDARG`, runtime Shape chains that could access-violate during DML compilation, and GLU Split nodes that silently produced incorrect values in fused partitions.
+- The one-thread CPU encoder was a separate host configuration problem. Raising CPU threads improved fallback performance, but the end-to-end Radeon DirectML route is still about 2.18x faster than eight-thread CPU on this machine.
+- Full DirectML completed all 30 utterances with fallback disabled and identical WER to the CPU and CUDA routes on that subset.
+
+Product-shape smoke results from `taurscribe-runtime/librispeech/product_shape_smoke/`:
+
+| Engine slot | Artifact tested | Backend proof | Limit | Mean WER |
+| --- | --- | --- | ---: | ---: |
+| Whisper | `ggml-base.en-q5_1.bin` | Whisper loaded with CUDA offload | 1 | `0.1667` |
+| Parakeet | `tdt:parakeet-tdt` | `DirectML EP loaded` with strict GPU/no CPU fallback | 1 | `0.0000` |
+| Granite CUDA | `granite-speech-4.1-2b-nar-cuda` | model ID resolved to CUDA folder; CUDA/cuDNN preload succeeded | 1 | `0.0000` |
+| Granite Portable | `granite-speech-4.1-2b-nar-portable` | model ID resolved to portable folder; DirectML hybrid loaded | 1 | `0.0000` |
+
+The app download registry currently mixes hosted and staged sources while the remaining artifacts are finalized:
+
+| Download ID | Source |
+| --- | --- |
+| `whisper-base-en-q5_1` | `local:whisper-base-en-q5_1` |
+| `parakeet-tdt` | `local:parakeet-tdt` |
+| `granite-speech-4.1-2b-nar-cuda` | `Abdullahu5mani/granite-speech-4.1-2b-nar-cuda` |
+| `granite-speech-4.1-2b-nar-portable` | `Abdullahu5mani/granite-speech-4.1-2b-nar-portable` |
+
+If a local Windows build hits GGML duplicate-symbol linker errors (`LNK2005: ggml_* already defined` — whisper-rs embeds a static ggml while llama-cpp-2's `dynamic-link` feature links `ggml-base.dll`, and both export into every executable), first try `cargo clean -p llama-cpp-sys-2 -p whisper-rs-sys` and rebuild. If the collision persists it affects debug builds and `cargo test` link steps too; previously-built binaries in `target/release` keep working, and `cargo check` still validates code changes. Historically a debug build sometimes still linked — treat debug timing as relative only:
 
 ```powershell
 cargo build --manifest-path src-tauri/Cargo.toml --bin librispeech_eval
@@ -576,8 +676,16 @@ TAURSCRIBE_LOG_MEMORY=1 \
 | `TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT=path` | `librispeech_eval`, accuracy tests | Override stale FLAC paths in manifest |
 | `TAURSCRIBE_WHISPER_MODEL_ID=id` | `librispeech_eval`, smoke | Pin specific Whisper model (e.g. `base.en`) |
 | `TAURSCRIBE_PARAKEET_MODEL_ID=id` | `librispeech_eval`, smoke | Pin specific Parakeet model (e.g. `nemotron:folder`) |
-| `TAURSCRIBE_COHERE_MODEL_ID=id` | `librispeech_eval`, smoke | Pin Cohere model dir name |
-| `TAURSCRIBE_COHERE_MODEL_ID=id` | `librispeech_eval`, smoke | Legacy alias for `TAURSCRIBE_COHERE_MODEL_ID` |
+| `TAURSCRIBE_PARAKEET_BACKEND=cuda\|directml` | App + `librispeech_eval` | Request a specific Parakeet GPU execution provider instead of auto CUDA → DirectML |
+| `TAURSCRIBE_PARAKEET_STRICT_GPU=1` | App + `librispeech_eval` | Disable Parakeet CPU fallback while validating a GPU provider |
+| `TAURSCRIBE_GRANITE_BACKEND=cuda\|directml\|cpu` | App + Granite benches | Override Granite backend selection (portable Windows default is DirectML then CPU fallback) |
+| `TAURSCRIBE_GRANITE_CPU_THREADS=N` | App + Granite benches | Override Granite CPU intra-op threads (default `clamp(logical/2, 2, 8)`) |
+| `TAURSCRIBE_GRANITE_DML_DEVICE_ID=N` | App + Granite benches | Select the DirectML adapter index (DXGI order) |
+| `TAURSCRIBE_GRANITE_DML_CPU_ENCODER=0\|1` | App + Granite benches | Force the Granite encoder onto DirectML (`0`) or CPU (`1`). Unset: follows the bundle manifest's `encoder_dml_safe` flag |
+| `TAURSCRIBE_GRANITE_DML_CPU_EDITOR=1` | App + Granite benches | Run the Granite editor on CPU while projector/embed_tokens stay on DirectML |
+| `TAURSCRIBE_GRANITE_WARMUP=0` | App + Granite benches | Disable CUDA performance-mode and DirectML warmup to measure cold first inference |
+| `TAURSCRIBE_GRANITE_MODEL_ID=id` | `librispeech_eval`, smoke | Pin Granite model dir name |
+| `TAURSCRIBE_COHERE_MODEL_ID=id` | `librispeech_eval`, smoke | Legacy alias for `TAURSCRIBE_GRANITE_MODEL_ID` |
 | `LIBRISPEECH_ROOT=path` | Download scripts | Override where test-clean is downloaded |
 | `JFK_WAV=path` | Smoke + memory tests | Path to `jfk.wav` if not in `tests/fixtures/` |
 

@@ -24,12 +24,21 @@ pub fn list_granite_models() -> Vec<CohereModelInfo> {
         Err(_) => return vec![],
     };
     let mut out = Vec::new();
-    let granite_dir = models_dir.join("granite-speech-4.1-2b-nar");
-    if crate::cohere::cohere_onnx_bundle_ready(&granite_dir) {
+    let granite_cuda_dir = models_dir.join("granite-speech-4.1-2b-nar-cuda");
+    if crate::cohere::cohere_onnx_bundle_ready(&granite_cuda_dir) {
         out.push(CohereModelInfo {
-            id: "granite-speech-4.1-2b-nar".to_string(),
-            display_name: "Granite Speech 4.1 2B NAR".to_string(),
-            size_mb: 9844.0,
+            id: "granite-speech-4.1-2b-nar-cuda".to_string(),
+            display_name: "CUDA".to_string(),
+            size_mb: 2280.0,
+            requires_gpu: true,
+        });
+    }
+    let granite_portable_dir = models_dir.join("granite-speech-4.1-2b-nar-portable");
+    if crate::cohere::cohere_onnx_bundle_ready(&granite_portable_dir) {
+        out.push(CohereModelInfo {
+            id: "granite-speech-4.1-2b-nar-portable".to_string(),
+            display_name: "AMD / Intel / CPU".to_string(),
+            size_mb: 2280.0,
             requires_gpu: false,
         });
     }

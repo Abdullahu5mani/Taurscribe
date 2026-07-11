@@ -33,6 +33,159 @@ fn single_file_whisper(filename: &'static str, sha256: &'static str) -> ModelCon
     }
 }
 
+/// Build a single-file model config from a staged local source directory.
+fn local_single_file(
+    local_source: &'static str,
+    filename: &'static str,
+    sha256: &'static str,
+) -> ModelConfig {
+    ModelConfig {
+        repo: local_source,
+        branch: "main",
+        files: vec![ModelFile {
+            filename,
+            remote_path: filename,
+            sha1: sha256,
+        }],
+        subdirectory: None,
+    }
+}
+
+fn granite_cuda_files() -> Vec<ModelFile> {
+    vec![
+        ModelFile {
+            filename: "encoder.onnx",
+            remote_path: "encoder.onnx",
+            sha1: "580b6314367feee1f1b9d0ecb22131d46d61544f20775b4c95c7c650e15e9b64",
+        },
+        ModelFile {
+            filename: "encoder.onnx.data",
+            remote_path: "encoder.onnx.data",
+            sha1: "038e259276a1119ad03afcd8fce16ff50cd3a98db535cd68be0b5a71bbcf3318",
+        },
+        ModelFile {
+            filename: "projector.onnx",
+            remote_path: "projector.onnx",
+            sha1: "0641d423a5700d6b16c0d8a47a25b58e750b1e2d065f26a670b72a78930968b2",
+        },
+        ModelFile {
+            filename: "projector.onnx.data",
+            remote_path: "projector.onnx.data",
+            sha1: "d660a66a75178c1b111d154de6b6cfe6a8183111c68ada33948e42ba0acefc19",
+        },
+        ModelFile {
+            filename: "embed_tokens.onnx",
+            remote_path: "embed_tokens.onnx",
+            sha1: "10f33a9646ea843d65c761c5295d8487e1091bf66de587f395ccec5b44c71ad3",
+        },
+        ModelFile {
+            filename: "editor.onnx",
+            remote_path: "editor.onnx",
+            sha1: "40dc0e1eafa152fd6fdcb0ca8030128469906501a63ea4d4ae83df195d23d792",
+        },
+        ModelFile {
+            filename: "editor.onnx.data",
+            remote_path: "editor.onnx.data",
+            sha1: "72704971b72bf00c281a859825cb72b25b7768239d009abe52fb4fbc6ddc009b",
+        },
+        ModelFile {
+            filename: "tokenizer.json",
+            remote_path: "tokenizer.json",
+            sha1: "64c10a88b2495872bd7da5a885861a1757d9c23590c40fd378546ae176d280f6",
+        },
+        ModelFile {
+            filename: "preprocessor_config.json",
+            remote_path: "preprocessor_config.json",
+            sha1: "e12be1e9d4ec5c459741328f28d9d8c00c3c688e8fe4230a6ec28df5470db8b3",
+        },
+        ModelFile {
+            filename: "processor_config.json",
+            remote_path: "processor_config.json",
+            sha1: "74d21364b507dcbe465420152d48edd9276f94a84d22a78d0da371e716a79374",
+        },
+        ModelFile {
+            filename: "tokenizer_config.json",
+            remote_path: "tokenizer_config.json",
+            sha1: "c7e48adce9bdf6cfe3524759067b5dfa2428de9ccba2fd257502bf0246161c2f",
+        },
+        ModelFile {
+            filename: "generation_config.json",
+            remote_path: "generation_config.json",
+            sha1: "af7cd9bbb214dea4f6a37756c2c133d002f6325ed4f497efc991f02b4d486dad",
+        },
+    ]
+}
+
+fn granite_portable_files() -> Vec<ModelFile> {
+    vec![
+        ModelFile {
+            filename: "encoder.onnx",
+            remote_path: "encoder.onnx",
+            sha1: "e4e34584c2de0ebbf95d318a386bb6f150ae62eb9505837dae3e82190a72859a",
+        },
+        ModelFile {
+            filename: "encoder.onnx.data",
+            remote_path: "encoder.onnx.data",
+            sha1: "038e259276a1119ad03afcd8fce16ff50cd3a98db535cd68be0b5a71bbcf3318",
+        },
+        ModelFile {
+            filename: "projector.onnx",
+            remote_path: "projector.onnx",
+            sha1: "0641d423a5700d6b16c0d8a47a25b58e750b1e2d065f26a670b72a78930968b2",
+        },
+        ModelFile {
+            filename: "projector.onnx.data",
+            remote_path: "projector.onnx.data",
+            sha1: "d660a66a75178c1b111d154de6b6cfe6a8183111c68ada33948e42ba0acefc19",
+        },
+        ModelFile {
+            filename: "embed_tokens.onnx",
+            remote_path: "embed_tokens.onnx",
+            sha1: "10f33a9646ea843d65c761c5295d8487e1091bf66de587f395ccec5b44c71ad3",
+        },
+        ModelFile {
+            filename: "editor.onnx",
+            remote_path: "editor.onnx",
+            sha1: "40dc0e1eafa152fd6fdcb0ca8030128469906501a63ea4d4ae83df195d23d792",
+        },
+        ModelFile {
+            filename: "editor.onnx.data",
+            remote_path: "editor.onnx.data",
+            sha1: "72704971b72bf00c281a859825cb72b25b7768239d009abe52fb4fbc6ddc009b",
+        },
+        ModelFile {
+            filename: "tokenizer.json",
+            remote_path: "tokenizer.json",
+            sha1: "64c10a88b2495872bd7da5a885861a1757d9c23590c40fd378546ae176d280f6",
+        },
+        ModelFile {
+            filename: "preprocessor_config.json",
+            remote_path: "preprocessor_config.json",
+            sha1: "e12be1e9d4ec5c459741328f28d9d8c00c3c688e8fe4230a6ec28df5470db8b3",
+        },
+        ModelFile {
+            filename: "processor_config.json",
+            remote_path: "processor_config.json",
+            sha1: "74d21364b507dcbe465420152d48edd9276f94a84d22a78d0da371e716a79374",
+        },
+        ModelFile {
+            filename: "tokenizer_config.json",
+            remote_path: "tokenizer_config.json",
+            sha1: "c7e48adce9bdf6cfe3524759067b5dfa2428de9ccba2fd257502bf0246161c2f",
+        },
+        ModelFile {
+            filename: "generation_config.json",
+            remote_path: "generation_config.json",
+            sha1: "af7cd9bbb214dea4f6a37756c2c133d002f6325ed4f497efc991f02b4d486dad",
+        },
+        ModelFile {
+            filename: "taurscribe_granite_nar_manifest.json",
+            remote_path: "taurscribe_granite_nar_manifest.json",
+            sha1: "bb59c18cdfa4297ff42d7f76d27911030fb118e04f2291b15e488e32dc92a47e",
+        },
+    ]
+}
+
 /// Look up the download configuration for a model by its ID.
 /// Returns `None` if the model ID is not recognised.
 pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
@@ -80,7 +233,8 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             "ggml-base.en.bin",
             "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
         )),
-        "whisper-base-en-q5_1" => Some(single_file_whisper(
+        "whisper-base-en-q5_1" => Some(local_single_file(
+            "local:whisper-base-en-q5_1",
             "ggml-base.en-q5_1.bin",
             "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f",
         )),
@@ -317,7 +471,7 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
         // SHA-256 left empty pending HuggingFace LFS oid retrieval; downloader
         // skips verification for blank entries.
         "parakeet-tdt" => Some(ModelConfig {
-            repo: "istupakov/parakeet-tdt-0.6b-v3-onnx",
+            repo: "local:parakeet-tdt",
             branch: "main",
             files: vec![
                 ModelFile {
@@ -357,92 +511,53 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             subdirectory: Some("qwen_finetuned_gguf"),
         }),
 
-        // ── Granite Speech NAR ONNX slot ─────────────────────────────────────
-        // Local/exported ONNX bundle. The runtime uses this through the legacy
-        // Legacy Cohere model ids route into the Granite engine slot.
-        "granite-speech-4.1-2b-nar"
+        // ── Granite Speech NAR ONNX slots ────────────────────────────────────
+        // Both product artifacts are published on Hugging Face. The CUDA
+        // bundle targets NVIDIA; portable targets DirectML with CPU fallback.
+        "granite-speech-4.1-2b-nar-cuda"
+        | "granite-speech-4.1-2b-nar"
         | "cohere-speech-1b-cpu"
         | "cohere-speech-1b-fp16-cuda" => Some(ModelConfig {
-            repo: "ibm-granite/granite-speech-4.1-2b-nar",
+            repo: "Abdullahu5mani/granite-speech-4.1-2b-nar-cuda",
             branch: "main",
-            files: granite_speech_nar_onnx_files(),
-            subdirectory: Some("granite-speech-4.1-2b-nar"),
+            files: granite_cuda_files(),
+            subdirectory: Some("granite-speech-4.1-2b-nar-cuda"),
+        }),
+        // Portable = INT4 argmax bundle with a DirectML-static encoder
+        // (rank-3 attention MatMuls, baked shape chains); built by
+        // scripts/make_granite_portable_dml.py. DirectML is attempted first on
+        // Windows, with multi-threaded CPU fallback.
+        "granite-speech-4.1-2b-nar-portable" => Some(ModelConfig {
+            repo: "Abdullahu5mani/granite-speech-4.1-2b-nar-portable",
+            branch: "main",
+            files: granite_portable_files(),
+            subdirectory: Some("granite-speech-4.1-2b-nar-portable"),
         }),
         _ => None,
     }
 }
 
-/// Core files for the locally exported Granite Speech NAR ONNX bundle.
-///
-/// The full fp32 bundle also contains hundreds of external tensor data files.
-/// This list is intentionally the compact readiness/deletion surface; publishing
-/// a real downloadable bundle should use one zip artifact instead.
-fn granite_speech_nar_onnx_files() -> Vec<ModelFile> {
-    vec![
-        ModelFile {
-            filename: "encoder.onnx",
-            remote_path: "encoder.onnx",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "projector.onnx",
-            remote_path: "projector.onnx",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "embed_tokens.onnx",
-            remote_path: "embed_tokens.onnx",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "editor.onnx",
-            remote_path: "editor.onnx",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "taurscribe_granite_nar_manifest.json",
-            remote_path: "taurscribe_granite_nar_manifest.json",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "tokenizer.json",
-            remote_path: "tokenizer.json",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "tokenizer_config.json",
-            remote_path: "tokenizer_config.json",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "preprocessor_config.json",
-            remote_path: "preprocessor_config.json",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "processor_config.json",
-            remote_path: "processor_config.json",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "generation_config.json",
-            remote_path: "generation_config.json",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "config.json",
-            remote_path: "config.json",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "vocab.json",
-            remote_path: "vocab.json",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "special_tokens_map.json",
-            remote_path: "special_tokens_map.json",
-            sha1: "",
-        },
-    ]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn granite_portable_uses_hosted_verified_payload() {
+        let config = get_model_config("granite-speech-4.1-2b-nar-portable")
+            .expect("portable Granite registry entry");
+        assert_eq!(
+            config.repo,
+            "Abdullahu5mani/granite-speech-4.1-2b-nar-portable"
+        );
+        assert_eq!(
+            config.subdirectory,
+            Some("granite-speech-4.1-2b-nar-portable")
+        );
+        assert_eq!(config.files.len(), 13);
+        assert!(config
+            .files
+            .iter()
+            .any(|file| file.filename == "taurscribe_granite_nar_manifest.json"));
+        assert!(config.files.iter().all(|file| file.sha1.len() == 64));
+    }
 }

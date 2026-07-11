@@ -215,7 +215,7 @@ fn granite_cpu_jfk_eval_once() {
     let pcm = jfk_pcm16_preprocessed_for_asr().unwrap_or_else(|e| panic!("{e}"));
     let mut manager = CohereManager::new();
     manager
-        .initialize(Some("granite-speech-4.1-2b-nar"), true)
+        .initialize(Some("granite-speech-4.1-2b-nar-portable"), true)
         .unwrap_or_else(|e| panic!("granite initialize failed: {e}"));
     let started = Instant::now();
     let hyp_raw = manager
@@ -224,12 +224,13 @@ fn granite_cpu_jfk_eval_once() {
     let elapsed = started.elapsed().as_secs_f64();
     let hyp = clean_transcript(&hyp_raw);
     let score = wer(JFK_REF, &hyp);
-    eprintln!(
-        "[granite-cpu-jfk] seconds={elapsed:.3} wer={score:.3} hyp={hyp:?}"
-    );
+    eprintln!("[granite-cpu-jfk] seconds={elapsed:.3} wer={score:.3} hyp={hyp:?}");
     manager.unload();
     std::env::remove_var("TAURSCRIBE_COHERE_BACKEND");
-    assert!(score <= 0.15, "Granite WER too high: {score:.3}; hyp={hyp:?}");
+    assert!(
+        score <= 0.15,
+        "Granite WER too high: {score:.3}; hyp={hyp:?}"
+    );
 }
 
 #[test]
@@ -241,7 +242,7 @@ fn granite_cuda_jfk_eval_once() {
     let pcm = jfk_pcm16_preprocessed_for_asr().unwrap_or_else(|e| panic!("{e}"));
     let mut manager = CohereManager::new();
     manager
-        .initialize(Some("granite-speech-4.1-2b-nar"), false)
+        .initialize(Some("granite-speech-4.1-2b-nar-cuda"), false)
         .unwrap_or_else(|e| panic!("granite initialize failed: {e}"));
     let status = manager.get_status();
     assert_eq!(status.backend, "CUDA", "expected CUDA backend");
@@ -252,27 +253,34 @@ fn granite_cuda_jfk_eval_once() {
     let elapsed = started.elapsed().as_secs_f64();
     let hyp = clean_transcript(&hyp_raw);
     let score = wer(JFK_REF, &hyp);
-    eprintln!(
-        "[granite-cuda-jfk] seconds={elapsed:.3} wer={score:.3} hyp={hyp:?}"
-    );
+    eprintln!("[granite-cuda-jfk] seconds={elapsed:.3} wer={score:.3} hyp={hyp:?}");
     manager.unload();
     std::env::remove_var("TAURSCRIBE_COHERE_BACKEND");
-    assert!(score <= 0.15, "Granite WER too high: {score:.3}; hyp={hyp:?}");
+    assert!(
+        score <= 0.15,
+        "Granite WER too high: {score:.3}; hyp={hyp:?}"
+    );
 }
 
 #[test]
 #[ignore = "Needs JFK fixture, installed Granite bundle, and Windows DirectML."]
 fn granite_directml_jfk_eval_once() {
+    // With a portable bundle whose manifest sets `encoder_dml_safe` (built by
+    // scripts/make_granite_portable_dml.py), this runs all four graphs on
+    // DirectML; older bundles fall back to the CPU-encoder hybrid.
     let _guard = env_lock().lock().expect("env lock poisoned");
     std::env::set_var("TAURSCRIBE_COHERE_BACKEND", "directml");
 
     let pcm = jfk_pcm16_preprocessed_for_asr().unwrap_or_else(|e| panic!("{e}"));
     let mut manager = CohereManager::new();
     manager
-        .initialize(Some("granite-speech-4.1-2b-nar"), false)
+        .initialize(Some("granite-speech-4.1-2b-nar-portable"), false)
         .unwrap_or_else(|e| panic!("granite initialize failed: {e}"));
     let status = manager.get_status();
-    assert_eq!(status.backend, "DirectML", "expected initial DirectML backend");
+    assert_eq!(
+        status.backend, "DirectML",
+        "expected initial DirectML backend"
+    );
     let started = Instant::now();
     let hyp_raw = manager
         .transcribe_chunk(&pcm, 16000)
@@ -288,5 +296,8 @@ fn granite_directml_jfk_eval_once() {
     );
     manager.unload();
     std::env::remove_var("TAURSCRIBE_COHERE_BACKEND");
-    assert!(score <= 0.15, "Granite WER too high: {score:.3}; hyp={hyp:?}");
+    assert!(
+        score <= 0.15,
+        "Granite WER too high: {score:.3}; hyp={hyp:?}"
+    );
 }
