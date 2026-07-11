@@ -15,6 +15,9 @@ type DeletePhase = 'idle' | 'confirm' | 'deleting' | 'deleted';
 
 export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCancelDownload }: ModelRowProps) {
     const progress = downloadProgress[model.id];
+    const graniteBadge = model.type === 'Granite'
+        ? model.id.includes('cuda') ? 'CUDA' : 'PORTABLE'
+        : null;
     const [deletePhase, setDeletePhase] = useState<DeletePhase>('idle');
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -64,7 +67,14 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
     return (
         <div className="model-item">
             <div className="model-info">
-                <h3>{model.name}</h3>
+                <div className="model-title-row">
+                    <h3>{model.name}</h3>
+                    {graniteBadge && (
+                        <span className={`model-hardware-badge${graniteBadge === 'CUDA' ? ' model-hardware-badge--cuda' : ' model-hardware-badge--portable'}`}>
+                            {graniteBadge}
+                        </span>
+                    )}
+                </div>
                 <div className="model-meta">
                     <span className={`model-tag ${tagClass}`}>{model.type}</span>
                     <span>{model.size}</span>

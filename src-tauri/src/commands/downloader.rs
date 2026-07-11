@@ -138,6 +138,76 @@ pub fn cancel_all_downloads() {
 
 use super::model_registry::{get_model_config, ModelConfig, ModelFile};
 
+enum ModelSource<'a> {
+    HuggingFace,
+    GitHub(&'a str),
+    Local(std::path::PathBuf),
+}
+
+fn model_source(config: &ModelConfig) -> Result<ModelSource<'_>, String> {
+    if let Some(repo_path) = config.repo.strip_prefix("github:") {
+        return Ok(ModelSource::GitHub(repo_path));
+    }
+    if let Some(local_name) = config.repo.strip_prefix("local:") {
+        let root = match std::env::var("TAURSCRIBE_LOCAL_MODEL_SOURCE_DIR") {
+            Ok(path) if !path.trim().is_empty() => std::path::PathBuf::from(path),
+            _ => {
+                let appdata = std::env::var("LOCALAPPDATA")
+                    .map_err(|_| "LOCALAPPDATA is not set; set TAURSCRIBE_LOCAL_MODEL_SOURCE_DIR for local model downloads".to_string())?;
+                std::path::PathBuf::from(appdata)
+                    .join("Taurscribe")
+                    .join("local-model-sources")
+            }
+        };
+        let source = root.join(local_name);
+        if source.exists() {
+            return Ok(ModelSource::Local(source));
+        }
+        if let Ok(models_dir) = crate::utils::get_models_dir() {
+            let existing_model_dir = models_dir.join(local_name);
+            if existing_model_dir.exists() {
+                return Ok(ModelSource::Local(existing_model_dir));
+            }
+        }
+        return Ok(ModelSource::Local(source));
+    }
+    Ok(ModelSource::HuggingFace)
+}
+
+fn copy_local_model_file(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<u64, String> {
+    if source.is_dir() {
+        if destination.exists() {
+            std::fs::remove_dir_all(destination)
+                .map_err(|e| format!("Failed to replace local model directory: {}", e))?;
+        }
+        std::fs::create_dir_all(destination)
+            .map_err(|e| format!("Failed to create local model directory: {}", e))?;
+        let mut copied = 0u64;
+        for entry in std::fs::read_dir(source)
+            .map_err(|e| format!("Failed to read local model directory: {}", e))?
+        {
+            let entry = entry.map_err(|e| format!("Failed to read local model entry: {}", e))?;
+            copied += copy_local_model_file(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        return Ok(copied);
+    }
+
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create local model parent directory: {}", e))?;
+    }
+    std::fs::copy(source, destination).map_err(|e| {
+        format!(
+            "Failed to copy local model file {}: {}",
+            source.display(),
+            e
+        )
+    })
+}
+
 // ── Verification store ────────────────────────────────────────────────────────
 
 /// One entry in verified.json per model.
@@ -286,7 +356,7 @@ pub async fn get_download_status(
             // Non-HF models: compare stored fingerprint against registry hashes as before.
             let verified = if !downloaded {
                 false
-            } else if !config.repo.starts_with("github:") {
+            } else if matches!(model_source(&config), Ok(ModelSource::HuggingFace)) {
                 store.contains_key(&id)
             } else {
                 let expected_fp = registry_fingerprint(&config.files);
@@ -385,7 +455,8 @@ async fn download_model_inner(
     }
 
     let files_count = config.files.len();
-    let is_hf_repo = !config.repo.starts_with("github:");
+    let source = model_source(&config)?;
+    let is_hf_repo = matches!(source, ModelSource::HuggingFace);
 
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(15))
@@ -395,33 +466,12 @@ async fn download_model_inner(
 
     // ── Download phase ────────────────────────────────────────────────────────
     for (i, file_spec) in config.files.iter().enumerate() {
-        let url = if config.repo.starts_with("github:") {
-            let repo_path = config.repo.trim_start_matches("github:");
-            format!(
-                "https://raw.githubusercontent.com/{}/{}/{}",
-                repo_path, config.branch, file_spec.remote_path
-            )
-        } else {
-            format!(
-                "https://huggingface.co/{}/resolve/{}/{}",
-                config.repo, config.branch, file_spec.remote_path
-            )
-        };
-
         let is_zip = file_spec.remote_path.ends_with(".zip");
         let download_path = if is_zip {
             base_dir.join(format!("{}.zip", file_spec.filename))
         } else {
             base_dir.join(file_spec.filename)
         };
-
-        println!(
-            "[DOWNLOAD] {} ({}/{}) from {}",
-            model_id,
-            i + 1,
-            files_count,
-            url
-        );
 
         let emit_error =
             |app: &AppHandle, model_id: &str, i: usize, files_count: usize, msg: &str| {
@@ -436,101 +486,169 @@ async fn download_model_inner(
                 )
             };
 
-        let res = client.get(&url).send().await.map_err(|e| {
-            let reason = if e.is_connect() || e.is_timeout() {
-                "No internet connection — check your network and try again."
-            } else {
-                "Failed to connect to download server."
-            };
-            emit_error(app, model_id, i, files_count, reason)
-        })?;
-
-        if !res.status().is_success() {
-            return Err(emit_error(
-                app,
+        if let ModelSource::Local(local_dir) = &source {
+            let source_path = local_dir.join(file_spec.remote_path);
+            println!(
+                "[DOWNLOAD] {} ({}/{}) from local {}",
                 model_id,
-                i,
+                i + 1,
                 files_count,
-                &format!("Download server returned HTTP {}", res.status()),
-            ));
-        }
-
-        let total_size = res.content_length().unwrap_or(0);
-        let mut file =
-            File::create(&download_path).map_err(|e| format!("Failed to create file: {}", e))?;
-
-        let mut downloaded: u64 = 0;
-        let mut stream = res.bytes_stream();
-        let mut last_emit: u64 = 0;
-        let emit_threshold = 1024 * 1024; // 1 MB
-
-        while let Some(item) = stream.next().await {
-            let chunk = match item {
-                Ok(c) => c,
-                Err(e) => {
-                    drop(file);
-                    let _ = std::fs::remove_file(&download_path);
-                    let reason = if e.is_timeout() {
-                        "Connection lost — no data received for 30 seconds. Check your internet and try again."
-                    } else if e.is_connect()
-                        || e.to_string().contains("reset")
-                        || e.to_string().contains("connection")
-                    {
-                        "Connection lost during download. Check your internet and try again."
-                    } else {
-                        "Download interrupted — a network error occurred."
-                    };
-                    return Err(emit_error(app, model_id, i, files_count, reason));
-                }
-            };
-            if let Err(e) = file.write_all(&chunk) {
-                drop(file);
-                let _ = std::fs::remove_file(&download_path);
+                source_path.display()
+            );
+            if !source_path.exists() {
                 return Err(emit_error(
                     app,
                     model_id,
                     i,
                     files_count,
-                    &format!("Download failed — could not write file ({})", e),
+                    &format!("Local model file not found: {}", source_path.display()),
                 ));
             }
-            downloaded += chunk.len() as u64;
-
-            if downloaded - last_emit > emit_threshold || downloaded == total_size {
-                last_emit = downloaded;
+            let copied = copy_local_model_file(&source_path, &download_path)
+                .map_err(|e| emit_error(app, model_id, i, files_count, &e))?;
+            let _ = app.emit(
+                "download-progress",
+                DownloadProgressPayload {
+                    model_id: model_id.to_string(),
+                    total_bytes: copied,
+                    downloaded_bytes: copied,
+                    status: "downloading".to_string(),
+                    current_file: (i + 1) as u32,
+                    total_files: files_count as u32,
+                },
+            );
+            if cancel_flag.load(Ordering::Relaxed) {
+                delete_model_files(&config, &base_dir);
                 let _ = app.emit(
                     "download-progress",
                     DownloadProgressPayload {
                         model_id: model_id.to_string(),
-                        total_bytes: total_size,
-                        downloaded_bytes: downloaded,
-                        status: "downloading".to_string(),
+                        total_bytes: 0,
+                        downloaded_bytes: 0,
+                        status: "cancelled".to_string(),
                         current_file: (i + 1) as u32,
                         total_files: files_count as u32,
                     },
                 );
+                return Err("Download cancelled by user".to_string());
+            }
+        } else {
+            let url = match &source {
+                ModelSource::GitHub(repo_path) => format!(
+                    "https://raw.githubusercontent.com/{}/{}/{}",
+                    repo_path, config.branch, file_spec.remote_path
+                ),
+                ModelSource::HuggingFace => format!(
+                    "https://huggingface.co/{}/resolve/{}/{}",
+                    config.repo, config.branch, file_spec.remote_path
+                ),
+                ModelSource::Local(_) => unreachable!(),
+            };
 
-                // Check for user cancellation at each progress emit.
-                if cancel_flag.load(Ordering::Relaxed) {
+            println!(
+                "[DOWNLOAD] {} ({}/{}) from {}",
+                model_id,
+                i + 1,
+                files_count,
+                url
+            );
+
+            let res = client.get(&url).send().await.map_err(|e| {
+                let reason = if e.is_connect() || e.is_timeout() {
+                    "No internet connection — check your network and try again."
+                } else {
+                    "Failed to connect to download server."
+                };
+                emit_error(app, model_id, i, files_count, reason)
+            })?;
+
+            if !res.status().is_success() {
+                return Err(emit_error(
+                    app,
+                    model_id,
+                    i,
+                    files_count,
+                    &format!("Download server returned HTTP {}", res.status()),
+                ));
+            }
+
+            let total_size = res.content_length().unwrap_or(0);
+            let mut file = File::create(&download_path)
+                .map_err(|e| format!("Failed to create file: {}", e))?;
+
+            let mut downloaded: u64 = 0;
+            let mut stream = res.bytes_stream();
+            let mut last_emit: u64 = 0;
+            let emit_threshold = 1024 * 1024; // 1 MB
+
+            while let Some(item) = stream.next().await {
+                let chunk = match item {
+                    Ok(c) => c,
+                    Err(e) => {
+                        drop(file);
+                        let _ = std::fs::remove_file(&download_path);
+                        let reason = if e.is_timeout() {
+                            "Connection lost — no data received for 30 seconds. Check your internet and try again."
+                        } else if e.is_connect()
+                            || e.to_string().contains("reset")
+                            || e.to_string().contains("connection")
+                        {
+                            "Connection lost during download. Check your internet and try again."
+                        } else {
+                            "Download interrupted — a network error occurred."
+                        };
+                        return Err(emit_error(app, model_id, i, files_count, reason));
+                    }
+                };
+                if let Err(e) = file.write_all(&chunk) {
                     drop(file);
                     let _ = std::fs::remove_file(&download_path);
-                    delete_model_files(&config, &base_dir);
+                    return Err(emit_error(
+                        app,
+                        model_id,
+                        i,
+                        files_count,
+                        &format!("Download failed — could not write file ({})", e),
+                    ));
+                }
+                downloaded += chunk.len() as u64;
+
+                if downloaded - last_emit > emit_threshold || downloaded == total_size {
+                    last_emit = downloaded;
                     let _ = app.emit(
                         "download-progress",
                         DownloadProgressPayload {
                             model_id: model_id.to_string(),
-                            total_bytes: 0,
-                            downloaded_bytes: 0,
-                            status: "cancelled".to_string(),
+                            total_bytes: total_size,
+                            downloaded_bytes: downloaded,
+                            status: "downloading".to_string(),
                             current_file: (i + 1) as u32,
                             total_files: files_count as u32,
                         },
                     );
-                    return Err("Download cancelled by user".to_string());
+
+                    // Check for user cancellation at each progress emit.
+                    if cancel_flag.load(Ordering::Relaxed) {
+                        drop(file);
+                        let _ = std::fs::remove_file(&download_path);
+                        delete_model_files(&config, &base_dir);
+                        let _ = app.emit(
+                            "download-progress",
+                            DownloadProgressPayload {
+                                model_id: model_id.to_string(),
+                                total_bytes: 0,
+                                downloaded_bytes: 0,
+                                status: "cancelled".to_string(),
+                                current_file: (i + 1) as u32,
+                                total_files: files_count as u32,
+                            },
+                        );
+                        return Err("Download cancelled by user".to_string());
+                    }
                 }
             }
+            drop(file);
         }
-        drop(file);
 
         if is_zip {
             // Emit extraction-start event so the UI can show the purple bar.

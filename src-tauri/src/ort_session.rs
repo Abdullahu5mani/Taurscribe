@@ -42,6 +42,21 @@ pub fn build_low_ram_cuda_execution_provider() -> CUDAExecutionProvider {
     ep
 }
 
+/// Build a CUDA EP configured for latency benchmarking on NVIDIA GPUs.
+pub fn build_perf_cuda_execution_provider() -> CUDAExecutionProvider {
+    let mut ep = CUDAExecutionProvider::default()
+        .with_conv_algorithm_search(ConvAlgorithmSearch::Heuristic)
+        .with_conv_max_workspace(true)
+        .with_conv1d_pad_to_nc1d(true)
+        .with_tf32(true);
+
+    if let Some(limit_mb) = parse_usize_env("TAURSCRIBE_ORT_CUDA_MEM_LIMIT_MB") {
+        ep = ep.with_memory_limit(limit_mb.saturating_mul(1024 * 1024));
+    }
+
+    ep
+}
+
 /// Apply memory-conservative ONNX Runtime session settings for large ASR models.
 pub fn configure_low_ram_session_builder(
     mut builder: SessionBuilder,
@@ -70,4 +85,22 @@ pub fn configure_low_ram_session_builder(
     .map_err(|e| format!("[{label}] Disable CPU mem arena: {e}"))?;
 
     Ok(builder)
+}
+
+/// Apply speed-oriented ONNX Runtime session settings for benchmark experiments.
+pub fn configure_perf_session_builder(
+    builder: SessionBuilder,
+    label: &str,
+) -> Result<SessionBuilder, String> {
+    builder
+        .with_parallel_execution(true)
+        .map_err(|e| format!("[{label}] Set parallel execution: {e}"))?
+        .with_memory_pattern(true)
+        .map_err(|e| format!("[{label}] Enable memory pattern: {e}"))?
+        .with_prepacking(true)
+        .map_err(|e| format!("[{label}] Enable prepacking: {e}"))?
+        .with_inter_op_spinning(true)
+        .map_err(|e| format!("[{label}] Enable inter-op spinning: {e}"))?
+        .with_intra_op_spinning(true)
+        .map_err(|e| format!("[{label}] Enable intra-op spinning: {e}"))
 }

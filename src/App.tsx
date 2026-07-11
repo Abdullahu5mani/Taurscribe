@@ -915,18 +915,6 @@ function App() {
       <div className={`app-body ${isRecording ? "app-body--recording" : ""} theme-${activeEngine}`}>
         <main className={`container${containerBooting ? " container--booting" : ""}`}>
           <div>
-            <div className="app-header">
-              <div className="header-status">
-                {headerStatusMessage !== null && (
-                  <span
-                    className={`header-status-message ${headerStatusIsProcessing ? "header-status-message--processing" : ""}`}
-                    key={headerStatusMessage}
-                  >
-                    {colorizedStatus}
-                  </span>
-                )}
-              </div>
-            </div>
             {/* macOS fix: Show a warning banner when the hotkey pipeline is missing
                 Input Monitoring and/or Accessibility permission. */}
             {isMac && (accessibilityMissing || inputMonitoringMissing) && (
@@ -1079,6 +1067,17 @@ function App() {
             >
               <IconFileText size={13} /> Files
             </button>
+          </div>
+
+          <div className={`app-status-rail${headerStatusMessage ? " app-status-rail--visible" : ""}`}>
+            {headerStatusMessage !== null && (
+              <span
+                className={`header-status-message ${headerStatusIsProcessing ? "header-status-message--processing" : ""}`}
+                key={headerStatusMessage}
+              >
+                {colorizedStatus}
+              </span>
+            )}
           </div>
 
           {sessionState.notice && (

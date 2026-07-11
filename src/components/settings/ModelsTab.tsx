@@ -11,8 +11,18 @@ import {
 } from '../../modelRecommendations';
 
 type WhisperTier = 'Tiny' | 'Base' | 'Small' | 'Medium' | 'Large';
+type WhisperLanguage = 'english' | 'multilingual';
+type WhisperOptimization = 'quantized' | 'full';
 
 const TIERS: WhisperTier[] = ['Tiny', 'Base', 'Small', 'Medium', 'Large'];
+const WHISPER_LANGUAGES: { value: WhisperLanguage; label: string; description: string }[] = [
+    { value: 'english', label: 'English', description: 'Best if you only dictate English.' },
+    { value: 'multilingual', label: 'Multilingual', description: 'Use this for non-English or mixed-language speech.' },
+];
+const WHISPER_OPTIMIZATIONS: { value: WhisperOptimization; label: string; description: string }[] = [
+    { value: 'quantized', label: 'Quantized', description: 'Smaller download and lower RAM. Slightly less accurate.' },
+    { value: 'full', label: 'Full precision', description: 'Largest file. Best quality and best CoreML pairing on Mac.' },
+];
 
 const TIER_DESCRIPTIONS: Record<WhisperTier, string> = {
     Tiny: 'Fastest · lowest accuracy · great for quick dictation on any hardware',
@@ -28,6 +38,28 @@ const TIER_MODEL_IDS: Record<WhisperTier, string[]> = {
     Small: ['whisper-small-en-q5_1', 'whisper-small-en', 'whisper-small-q5_1', 'whisper-small'],
     Medium: ['whisper-medium-en-q5_0', 'whisper-medium-en', 'whisper-medium-q5_0', 'whisper-medium'],
     Large: ['whisper-large-v3-turbo-q5_0', 'whisper-large-v3-turbo', 'whisper-large-v3-q5_0', 'whisper-large-v3'],
+};
+
+const WHISPER_MODEL_MATRIX: Record<WhisperTier, Partial<Record<WhisperLanguage, Record<WhisperOptimization, string>>>> = {
+    Tiny: {
+        english: { quantized: 'whisper-tiny-en-q5_1', full: 'whisper-tiny-en' },
+        multilingual: { quantized: 'whisper-tiny-q5_1', full: 'whisper-tiny' },
+    },
+    Base: {
+        english: { quantized: 'whisper-base-en-q5_1', full: 'whisper-base-en' },
+        multilingual: { quantized: 'whisper-base-q5_1', full: 'whisper-base' },
+    },
+    Small: {
+        english: { quantized: 'whisper-small-en-q5_1', full: 'whisper-small-en' },
+        multilingual: { quantized: 'whisper-small-q5_1', full: 'whisper-small' },
+    },
+    Medium: {
+        english: { quantized: 'whisper-medium-en-q5_0', full: 'whisper-medium-en' },
+        multilingual: { quantized: 'whisper-medium-q5_0', full: 'whisper-medium' },
+    },
+    Large: {
+        multilingual: { quantized: 'whisper-large-v3-turbo-q5_0', full: 'whisper-large-v3-turbo' },
+    },
 };
 
 const TIER_RECOMMENDED: Record<WhisperTier, string> = {
@@ -67,6 +99,8 @@ interface ModelsTabProps {
 
 export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCancelDownload, scrollTarget, onScrollHandled }: ModelsTabProps) {
     const [activeTier, setActiveTier] = useState<WhisperTier>('Small');
+    const [whisperLanguage, setWhisperLanguage] = useState<WhisperLanguage>('english');
+    const [whisperOptimization, setWhisperOptimization] = useState<WhisperOptimization>('quantized');
     const [platform, setPlatform] = useState('');
     const [isAppleSilicon, setIsAppleSilicon] = useState(false);
     const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
@@ -107,6 +141,12 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     );
     const llmModels = models.filter(m => m.type === 'LLM');
     const coremlModels = models.filter(m => m.type === 'CoreML');
+
+    useEffect(() => {
+        if (!WHISPER_MODEL_MATRIX[activeTier][whisperLanguage]) {
+            setWhisperLanguage('multilingual');
+        }
+    }, [activeTier, whisperLanguage]);
 
     useEffect(() => {
         if (hydratedTierRef.current) return;
@@ -204,6 +244,17 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const tierCoremlModels = TIER_COREML_IDS[activeTier]
         .map(id => coremlModels.find(m => m.id === id))
         .filter((m): m is DownloadableModel => m !== undefined);
+    const selectedLanguage = WHISPER_MODEL_MATRIX[activeTier][whisperLanguage] ? whisperLanguage : 'multilingual';
+    const selectedWhisperModelId =
+        WHISPER_MODEL_MATRIX[activeTier][selectedLanguage]?.[whisperOptimization] ??
+        TIER_RECOMMENDED[activeTier];
+    const selectedWhisperModel =
+        models.find(m => m.id === selectedWhisperModelId) ??
+        tierModels[0];
+    const selectedCoremlModel = isMac && whisperOptimization === 'full'
+        ? tierCoremlModels.find(m => selectedLanguage === 'english' ? m.id.includes('-en-coreml') : !m.id.includes('-en-coreml')) ?? tierCoremlModels[0]
+        : undefined;
+    const availableLanguages = WHISPER_LANGUAGES.filter(({ value }) => WHISPER_MODEL_MATRIX[activeTier][value]);
 
     return (
         <div className="models-tab">
@@ -214,60 +265,87 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     <span className="model-group-sub model-group-sub--whisper">by OpenAI · multilingual · any hardware</span>
                 </div>
 
-                <div className="tier-tabs">
-                    {TIERS.map(tier => {
-                        const hasDownloaded = TIER_MODEL_IDS[tier].some(
-                            id => models.find(m => m.id === id)?.downloaded
-                        );
-                        return (
-                            <button
-                                key={tier}
-                                className={`tier-tab ${activeTier === tier ? 'active' : ''}`}
-                                onClick={() => setActiveTier(tier)}
+                <div className="whisper-picker-card">
+                    <div className="whisper-picker-grid">
+                        <label className="whisper-picker-field">
+                            <span>Size</span>
+                            <select value={activeTier} onChange={(e) => setActiveTier(e.target.value as WhisperTier)}>
+                                {TIERS.map(tier => {
+                                    const hasDownloaded = TIER_MODEL_IDS[tier].some(
+                                        id => models.find(m => m.id === id)?.downloaded
+                                    );
+                                    return (
+                                        <option key={tier} value={tier}>
+                                            {tier}{hasDownloaded ? ' - installed' : ''}
+                                        </option>
+                                    );
+                                })}
+                            </select>
+                        </label>
+
+                        <label className="whisper-picker-field">
+                            <span>Language</span>
+                            <select
+                                value={selectedLanguage}
+                                onChange={(e) => setWhisperLanguage(e.target.value as WhisperLanguage)}
                             >
-                                {tier}
-                                {hasDownloaded && <span className="tier-dot" />}
-                            </button>
-                        );
-                    })}
-                </div>
+                                {availableLanguages.map(({ value, label }) => (
+                                    <option key={value} value={value}>{label}</option>
+                                ))}
+                            </select>
+                        </label>
 
-                <p className="tier-description">
-                    {isMac ? TIER_DESCRIPTIONS[activeTier].replace('RAM/VRAM', 'RAM') : TIER_DESCRIPTIONS[activeTier]}
-                </p>
+                        <label className="whisper-picker-field">
+                            <span>
+                                Quantization
+                                <button
+                                    type="button"
+                                    className="whisper-help-dot"
+                                    title="Quantization stores the model in fewer bits. It usually saves RAM, disk, and battery, with a small accuracy tradeoff."
+                                >
+                                    ?
+                                </button>
+                            </span>
+                            <select
+                                value={whisperOptimization}
+                                onChange={(e) => setWhisperOptimization(e.target.value as WhisperOptimization)}
+                            >
+                                {WHISPER_OPTIMIZATIONS.map(({ value, label }) => (
+                                    <option key={value} value={value}>{label}</option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
 
-                <div className="model-list">
-                    {tierModels.map(m => (
-                        <div
-                            key={m.id}
-                            className={`model-item-wrapper${pulseModelIds.has(m.id) ? ' model-item-wrapper--pulse' : ''}`}
-                        >
-                            <ModelRow model={m} {...rowProps} />
+                    <div className="whisper-picker-summary">
+                        <p>{isMac ? TIER_DESCRIPTIONS[activeTier].replace('RAM/VRAM', 'RAM') : TIER_DESCRIPTIONS[activeTier]}</p>
+                        <p>
+                            {WHISPER_LANGUAGES.find(l => l.value === selectedLanguage)?.description}
+                            {' '}
+                            {WHISPER_OPTIMIZATIONS.find(o => o.value === whisperOptimization)?.description}
+                        </p>
+                    </div>
+
+                    {selectedWhisperModel && (
+                        <div className={`model-item-wrapper${pulseModelIds.has(selectedWhisperModel.id) ? ' model-item-wrapper--pulse' : ''}`}>
+                            <ModelRow model={selectedWhisperModel} {...rowProps} />
                         </div>
-                    ))}
+                    )}
+
+                    {selectedCoremlModel && (
+                        <div className="whisper-coreml-match">
+                            <div className="coreml-inline-header">
+                                <h4 className="settings-section-subtitle">Matching CoreML Encoder</h4>
+                                <span className="model-group-badge">Apple Silicon</span>
+                            </div>
+                            <p className="model-group-desc">
+                                Optional Apple Neural Engine encoder for this full-precision Whisper selection.
+                            </p>
+                            <ModelRow model={selectedCoremlModel} {...rowProps} />
+                        </div>
+                    )}
                 </div>
             </div>
-
-            {/* ── CoreML Encoders — Apple Silicon only, always visible ── */}
-            {isMac && tierCoremlModels.length > 0 && (
-                <div className="model-group">
-                    <div className="model-group-header">
-                        <h3 className="settings-section-title">CoreML Encoders</h3>
-                        <span className="model-group-badge">Apple Silicon</span>
-                    </div>
-                    <p className="model-group-desc">
-                        Offloads the {activeTier} encoder to the Apple Neural Engine for faster, lower-power transcription.
-                        Download the encoder that matches your Whisper model, then select the model as usual.
-                    </p>
-                    <div className="model-list">
-                        {tierCoremlModels.map(m => (
-                            <div key={m.id} className="model-item-wrapper">
-                                <ModelRow model={m} {...rowProps} />
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
 
             {/* ── Parakeet ─────────────────────────────────────────── */}
             <div className="model-group" ref={parakeetGroupRef}>

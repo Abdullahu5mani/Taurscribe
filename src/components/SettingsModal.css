@@ -240,6 +240,14 @@
   min-width: 0;
 }
 
+.model-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 0 6px 0;
+}
+
 .model-info h3 {
   margin: 0 0 6px 0;
   font-family: var(--font-display);
@@ -249,6 +257,36 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.model-title-row .model-info h3,
+.model-title-row h3 {
+  margin-bottom: 0;
+}
+
+.model-hardware-badge {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-family: var(--font-display);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+.model-hardware-badge--cuda {
+  color: #a3e635;
+  border-color: rgba(163, 230, 53, 0.45);
+  background: rgba(132, 204, 22, 0.12);
+  box-shadow: 0 0 14px rgba(132, 204, 22, 0.12);
+}
+
+.model-hardware-badge--portable {
+  color: var(--text-secondary);
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.08);
 }
 
 .model-meta {
@@ -889,6 +927,113 @@
   color: var(--text-muted);
   margin: 0 0 16px;
   font-family: var(--font-display);
+}
+
+.whisper-picker-card {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(20, 184, 166, 0.18);
+  background:
+    radial-gradient(circle at 0% 0%, rgba(20, 184, 166, 0.09), transparent 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012));
+}
+
+.whisper-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.whisper-picker-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.whisper-picker-field > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-size: var(--font-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.whisper-picker-field select {
+  min-width: 0;
+  width: 100%;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02)),
+    var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: var(--font-sm);
+  padding: 0 34px 0 12px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+.whisper-picker-field select:hover {
+  border-color: rgba(20, 184, 166, 0.32);
+}
+
+.whisper-picker-field select:focus {
+  border-color: rgba(20, 184, 166, 0.62);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.1);
+}
+
+.whisper-help-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid rgba(20, 184, 166, 0.38);
+  background: rgba(20, 184, 166, 0.1);
+  color: var(--whisper-color);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: help;
+}
+
+.whisper-picker-summary {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.whisper-picker-summary p {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-size: var(--font-sm);
+  line-height: 1.45;
+}
+
+.whisper-coreml-match {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@media (max-width: 760px) {
+  .whisper-picker-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Recommended wrapper */

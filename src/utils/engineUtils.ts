@@ -1,7 +1,7 @@
 import type { ASREngine } from "../hooks/useEngineSwitch";
 
 /** Legacy constant name kept for compatibility with existing engine-slot code. */
-export const GRANITE_MODEL_ID = "granite-speech-4.1-2b-nar";
+export const GRANITE_MODEL_ID = "granite-speech-4.1-2b-nar-cuda";
 export const COHERE_FP16_MODEL_ID = GRANITE_MODEL_ID;
 
 /**

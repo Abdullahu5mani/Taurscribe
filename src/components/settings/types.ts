@@ -54,11 +54,12 @@ export const MODELS: DownloadableModel[] = [
     { id: 'whisper-large-v3-turbo-q5_0', name: 'Large V3 Turbo (Q5_0)', type: 'Whisper', size: '547 MB', description: 'Quantized Turbo. 99+ languages.', downloaded: false },
 
     // --- Parakeet ---
-    { id: 'parakeet-nemotron', name: 'Nemotron Streaming (INT4)', type: 'Parakeet', size: '663 MB', description: 'Ultra-low latency streaming. English only. INT4 quantized — fits entirely in GPU VRAM. Best for live dictation.', downloaded: true },
-    { id: 'parakeet-tdt', name: 'TDT v3 (Multilingual)', type: 'Parakeet', size: '~2.4 GB', description: 'Highest accuracy on the HuggingFace ASR leaderboard. Auto-detects 25 languages. Token-and-Duration Transducer — best for file transcription, not streaming.', downloaded: false },
+    { id: 'parakeet-nemotron', name: 'Nemotron Streaming (INT4)', type: 'Parakeet', size: '663 MB', description: 'Ultra-low latency streaming. English only. Runs on CUDA, DirectML, or CPU through ONNX Runtime. Best for live dictation.', downloaded: true },
+    { id: 'parakeet-tdt', name: 'TDT v3 (Multilingual)', type: 'Parakeet', size: '~2.4 GB', description: 'High-accuracy multilingual TDT model. Runs on CUDA, DirectML, or CPU through ONNX Runtime. Best for file transcription, not streaming.', downloaded: false },
 
-    // --- Granite engine slot ---
-    { id: 'granite-speech-4.1-2b-nar', name: 'Granite Speech 4.1 2B NAR', type: 'Granite', size: '~9.8 GB', description: 'IBM Granite Speech NAR ONNX bundle with CUDA → DirectML → CPU provider fallback.', downloaded: false },
+    // --- Granite engine slots ---
+    { id: 'granite-speech-4.1-2b-nar-cuda', name: 'NVIDIA CUDA', type: 'Granite', size: '~2.2 GB', description: 'Fastest Granite INT4 ONNX bundle for NVIDIA CUDA GPUs. All four model graphs run on CUDA.', downloaded: false },
+    { id: 'granite-speech-4.1-2b-nar-portable', name: 'AMD / Intel / CPU', type: 'Granite', size: '~2.2 GB', description: 'Portable Granite INT4 ONNX bundle. Uses DirectML first on Windows AMD or Intel GPUs, then falls back to multi-threaded CPU.', downloaded: false },
 
     // --- LLM ---
     { id: 'flowscribe-qwen2.5-0.5b-v2', name: 'FlowScribe Qwen 2.5 0.5B V2', type: 'LLM', size: '398 MB', description: 'Fine-tuned Q4_K_M GGUF for speech-to-text grammar correction.', downloaded: false },

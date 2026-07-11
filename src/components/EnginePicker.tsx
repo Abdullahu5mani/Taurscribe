@@ -46,6 +46,7 @@ export function EnginePicker(props: EnginePickerProps) {
   } = props;
 
   const [drilled, setDrilled] = useState<ASREngine | null>(null);
+  const graniteBadgeForId = (id: string) => id.includes("cuda") ? "CUDA" : id.includes("portable") ? "PORTABLE" : null;
 
   const content = drilled ? (() => {
     const meta = ENGINE_META[drilled];
@@ -85,6 +86,11 @@ export function EnginePicker(props: EnginePickerProps) {
               }}
             >
               <span className="ep-model-name">{r.name}</span>
+              {drilled === "granite" && graniteBadgeForId(r.id) && (
+                <span className={`ep-model-hardware-badge${graniteBadgeForId(r.id) === "CUDA" ? " ep-model-hardware-badge--cuda" : " ep-model-hardware-badge--portable"}`}>
+                  {graniteBadgeForId(r.id)}
+                </span>
+              )}
               <span className="ep-model-size">{r.size}</span>
               {isLoadingThis && r.selected && <span className="ep-model-spinner" aria-hidden="true" />}
               {r.selected && loadedEngine === drilled && !isLoadingThis && <span className="ep-model-check" style={{ background: meta.color }} />}

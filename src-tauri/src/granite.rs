@@ -6,6 +6,7 @@
 
 use ndarray::Array2;
 use ort::session::builder::GraphOptimizationLevel;
+use ort::session::builder::SessionBuilder;
 use ort::session::Session;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -16,8 +17,10 @@ use std::path::{Path, PathBuf};
 
 use crate::utils::strip_whitelisted_sound_captions;
 
-const DEFAULT_MODEL_DIR: &str = "granite-speech-4.1-2b-nar";
-const MODEL_ID_UNIVERSAL: &str = "granite-speech-4.1-2b-nar";
+const MODEL_ID_CUDA: &str = "granite-speech-4.1-2b-nar-cuda";
+const DEFAULT_MODEL_DIR: &str = MODEL_ID_CUDA;
+const MODEL_ID_UNIVERSAL: &str = MODEL_ID_CUDA;
+const MODEL_ID_PORTABLE: &str = "granite-speech-4.1-2b-nar-portable";
 const BLANK_TOKEN_ID: i64 = 100_257;
 const BPE_POOLING_WINDOW: usize = 4;
 const PROJECTOR_DOWNSAMPLE_RATE: usize = 5;
@@ -104,7 +107,7 @@ enum GraniteBackendRequest {
     DirectML,
 }
 
-fn granite_backend_request(force_cpu: bool) -> GraniteBackendRequest {
+fn granite_backend_request(force_cpu: bool, model_dir: &Path) -> GraniteBackendRequest {
     if force_cpu {
         return GraniteBackendRequest::Cpu;
     }
@@ -117,7 +120,63 @@ fn granite_backend_request(force_cpu: bool) -> GraniteBackendRequest {
         Some("cpu") => GraniteBackendRequest::Cpu,
         Some("cuda") | Some("gpu") => GraniteBackendRequest::Cuda,
         Some("directml") | Some("dml") => GraniteBackendRequest::DirectML,
+        // The portable Windows bundle uses an automatic DirectML -> CPU route.
+        // Other platforms currently use the portable CPU path.
+        _ if is_portable_granite_dir(model_dir) => portable_default_backend_request(),
         _ => GraniteBackendRequest::Auto,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn portable_default_backend_request() -> GraniteBackendRequest {
+    GraniteBackendRequest::Auto
+}
+
+#[cfg(not(target_os = "windows"))]
+fn portable_default_backend_request() -> GraniteBackendRequest {
+    GraniteBackendRequest::Cpu
+}
+
+/// Intra-op thread count for Granite CPU sessions. The low-RAM defaults pin
+/// every ORT session to one thread, which starves the 2B editor/encoder on
+/// multi-core machines (measured 15s -> 3.3s per chunk at 8 threads on a
+/// Ryzen 7 8845HS). Threads cost only stack memory, not weight memory.
+fn granite_cpu_intra_threads() -> usize {
+    if let Some(n) = std::env::var("TAURSCRIBE_GRANITE_CPU_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
+        if n >= 1 {
+            return n.min(16);
+        }
+    }
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    (logical / 2).clamp(2, 8)
+}
+
+fn is_portable_granite_dir(model_dir: &Path) -> bool {
+    model_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == MODEL_ID_PORTABLE)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GraniteOrtMode {
+    LowRam,
+    Perf,
+}
+
+fn granite_ort_mode() -> GraniteOrtMode {
+    match std::env::var("TAURSCRIBE_GRANITE_ORT_MODE")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("perf") | Some("performance") | Some("speed") => GraniteOrtMode::Perf,
+        _ => GraniteOrtMode::LowRam,
     }
 }
 
@@ -184,6 +243,9 @@ impl CohereManager {
     pub fn unload(&mut self) {
         if self.runtime.is_some() {
             println!("[GRANITE] Unloading model...");
+            if let Some(runtime) = self.runtime.as_mut() {
+                end_granite_profiling(runtime);
+            }
             self.runtime = None;
             self.tokenizer = None;
             self.model_name = None;
@@ -210,11 +272,13 @@ impl CohereManager {
             self.unload();
         }
 
-        let request = granite_backend_request(force_cpu);
+        let request = granite_backend_request(force_cpu, &model_dir);
+        let ort_mode = granite_ort_mode();
         println!(
-            "[GRANITE] initialize: model_dir={} request={:?}",
+            "[GRANITE] initialize: model_dir={} request={:?} ort_mode={:?}",
             model_dir.display(),
-            request
+            request,
+            ort_mode
         );
         crate::memory::maybe_log_process_memory("granite before initialize");
 
@@ -228,6 +292,22 @@ impl CohereManager {
                 GpuBackend::DirectML,
                 self.create_runtime_directml(&graph_paths)?,
             ),
+            GraniteBackendRequest::Auto if is_portable_granite_dir(&model_dir) => {
+                match self.create_runtime_directml(&graph_paths) {
+                    Ok(rt) => {
+                        println!(
+                            "[GRANITE] Portable DirectML mode active: encoder, projector, token embedder, and editor loaded on DirectML"
+                        );
+                        (GpuBackend::DirectML, rt)
+                    }
+                    Err(dml_err) => {
+                        eprintln!(
+                            "[GRANITE] Portable DirectML init failed; falling back to multi-threaded CPU. {dml_err}"
+                        );
+                        (GpuBackend::Cpu, self.create_runtime_cpu(&graph_paths)?)
+                    }
+                }
+            }
             GraniteBackendRequest::Auto => match self.create_runtime_cuda(&graph_paths) {
                 Ok(rt) => {
                     println!(
@@ -263,6 +343,7 @@ impl CohereManager {
         self.tokenizer = Some(tokenizer);
         self.backend = backend;
         self.model_name = Some(cohere_logical_model_id_for_dir(&model_dir));
+        self.warm_up_if_needed();
         crate::memory::maybe_log_process_memory("granite after initialize");
         Ok(format!("Granite Speech NAR loaded ({})", self.backend))
     }
@@ -274,7 +355,13 @@ impl CohereManager {
     ) -> Result<String, String> {
         match self.transcribe_chunk_loaded(samples, sample_rate) {
             Ok(text) => Ok(text),
-            Err(err) if matches!(self.backend, GpuBackend::DirectML) => {
+            Err(err)
+                if matches!(self.backend, GpuBackend::DirectML)
+                    && std::env::var("TAURSCRIBE_GRANITE_DISABLE_DML_FALLBACK")
+                        .ok()
+                        .as_deref()
+                        != Some("1") =>
+            {
                 eprintln!(
                     "[GRANITE] DirectML inference failed; falling back to CPU and retrying. {err}"
                 );
@@ -398,21 +485,35 @@ impl CohereManager {
                     "position_ids" => position_ids,
                 ])
                 .map_err(|e| format!("Granite editor run: {e}"))?;
-            let (_logit_shape, logits) = extract_named_f32_ref(&editor_outputs, "logits")?;
-            let text_logits_start = audio_tokens * VOCAB_SIZE;
-            let text_logits_end = text_logits_start + text_len * VOCAB_SIZE;
-            if text_logits_end > logits.len() {
-                return Err(format!(
-                    "Granite editor logits too short: need {text_logits_end}, got {}",
-                    logits.len()
-                ));
+            if let Some((_ids_shape, token_ids)) =
+                try_extract_named_i64_ref(&editor_outputs, "token_ids")?
+            {
+                let text_ids_start = audio_tokens;
+                let text_ids_end = text_ids_start + text_len;
+                if text_ids_end > token_ids.len() {
+                    return Err(format!(
+                        "Granite editor token_ids too short: need {text_ids_end}, got {}",
+                        token_ids.len()
+                    ));
+                }
+                ctc_collapse_from_ids(&token_ids[text_ids_start..text_ids_end], BLANK_TOKEN_ID)
+            } else {
+                let (_logit_shape, logits) = extract_named_f32_ref(&editor_outputs, "logits")?;
+                let text_logits_start = audio_tokens * VOCAB_SIZE;
+                let text_logits_end = text_logits_start + text_len * VOCAB_SIZE;
+                if text_logits_end > logits.len() {
+                    return Err(format!(
+                        "Granite editor logits too short: need {text_logits_end}, got {}",
+                        logits.len()
+                    ));
+                }
+                ctc_collapse_from_logits(
+                    &logits[text_logits_start..text_logits_end],
+                    text_len,
+                    VOCAB_SIZE,
+                    BLANK_TOKEN_ID,
+                )?
             }
-            ctc_collapse_from_logits(
-                &logits[text_logits_start..text_logits_end],
-                text_len,
-                VOCAB_SIZE,
-                BLANK_TOKEN_ID,
-            )?
         };
         let token_ids: Vec<u32> = final_ids
             .into_iter()
@@ -422,6 +523,26 @@ impl CohereManager {
             .decode(&token_ids, true)
             .map_err(|e| format!("Granite tokenizer decode: {e}"))?;
         Ok(strip_whitelisted_sound_captions(&text).trim().to_string())
+    }
+
+    fn warm_up_if_needed(&mut self) {
+        let label = match self.backend {
+            GpuBackend::DirectML => "DirectML",
+            GpuBackend::Cuda if granite_ort_mode() == GraniteOrtMode::Perf => "CUDA perf",
+            _ => return,
+        };
+        if std::env::var("TAURSCRIBE_GRANITE_WARMUP").ok().as_deref() == Some("0") {
+            return;
+        }
+        let silence = vec![0.0_f32; 16_000 * 4];
+        let start = std::time::Instant::now();
+        match self.transcribe_chunk_loaded(&silence, 16_000) {
+            Ok(_) => println!(
+                "[GRANITE] {label} warmup completed in {:.3}s",
+                start.elapsed().as_secs_f32()
+            ),
+            Err(err) => eprintln!("[GRANITE] {label} warmup failed: {err}"),
+        }
     }
 
     fn resample(&mut self, samples: &[f32], sample_rate: u32) -> Result<Vec<f32>, String> {
@@ -467,11 +588,54 @@ impl CohereManager {
     fn create_runtime_directml(&self, paths: &GraniteGraphPaths) -> Result<GraniteRuntime, String> {
         #[cfg(target_os = "windows")]
         {
+            // Bundles whose manifest declares `encoder_dml_safe` carry the
+            // DML-static encoder (rank-3 attention MatMuls + baked shape
+            // chains) and run fully on DirectML. Older bundles keep the
+            // CPU-encoder hybrid because their encoder graph crashes the
+            // DirectML provider. Env var wins in both directions.
+            let encoder_dml_safe = paths.encoder_dml_safe();
+            let cpu_encoder = match std::env::var("TAURSCRIBE_GRANITE_DML_CPU_ENCODER")
+                .ok()
+                .as_deref()
+            {
+                Some("0") => false,
+                Some(_) => true,
+                None => !encoder_dml_safe,
+            };
+            let cpu_editor = std::env::var("TAURSCRIBE_GRANITE_DML_CPU_EDITOR")
+                .ok()
+                .as_deref()
+                == Some("1");
+            if cpu_encoder {
+                eprintln!(
+                    "[GRANITE] DirectML hybrid mode: encoder on CPU, projector/embed_tokens on DirectML"
+                );
+            } else if encoder_dml_safe {
+                eprintln!("[GRANITE] DirectML full mode: bundle declares a DML-safe encoder");
+            } else {
+                eprintln!(
+                    "[GRANITE] DirectML full-encoder mode requested; this may crash on bundles without a DML-safe encoder"
+                );
+            }
+            if cpu_editor {
+                let encoder_label = if cpu_encoder { "CPU" } else { "DirectML" };
+                eprintln!(
+                    "[GRANITE] DirectML hybrid mode: encoder on {encoder_label}, projector/embed_tokens on DirectML, editor on CPU"
+                );
+            }
             Ok(GraniteRuntime {
-                encoder: self.create_session_directml(&paths.encoder)?,
+                encoder: if cpu_encoder {
+                    self.create_session_cpu(&paths.encoder)?
+                } else {
+                    self.create_session_directml(&paths.encoder)?
+                },
                 projector: self.create_session_directml(&paths.projector)?,
                 embed_tokens: self.create_session_directml(&paths.embed_tokens)?,
-                editor: self.create_session_directml(&paths.editor)?,
+                editor: if cpu_editor {
+                    self.create_session_cpu(&paths.editor)?
+                } else {
+                    self.create_session_directml(&paths.editor)?
+                },
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -506,8 +670,20 @@ impl CohereManager {
             .map_err(|e| format!("ORT builder: {e}"))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| format!("CPU opt level: {e}"))?;
-        let mut builder =
+        let builder = maybe_enable_granite_profiling(builder, "cpu", path)?;
+        let builder =
             crate::ort_session::configure_low_ram_session_builder(builder, "granite-cpu")?;
+        // Re-raise the intra-op thread count after the low-RAM defaults: Granite's
+        // 2B graphs are matmul-bound and unusable single-threaded on CPU.
+        let threads = granite_cpu_intra_threads();
+        let mut builder = builder
+            .with_intra_threads(threads)
+            .map_err(|e| format!("CPU intra threads: {e}"))?;
+        println!(
+            "[GRANITE] CPU session {} with {} intra-op threads",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("graph"),
+            threads
+        );
         builder
             .commit_from_file(path)
             .map_err(|e| format!("CPU session load {}: {e}", path.display()))
@@ -515,12 +691,49 @@ impl CohereManager {
 
     #[cfg(target_os = "windows")]
     fn create_session_directml(&self, path: &Path) -> Result<Session, String> {
-        let builder = Session::builder()
+        let mut dml = ort::ep::DirectML::default();
+        if let Ok(raw_device_id) = std::env::var("TAURSCRIBE_GRANITE_DML_DEVICE_ID") {
+            let device_id = raw_device_id.trim().parse::<i32>().map_err(|e| {
+                format!("DirectML device id must be an integer, got {raw_device_id}: {e}")
+            })?;
+            dml = dml.with_device_id(device_id);
+        }
+        let dml_optimization_level =
+            if std::env::var("TAURSCRIBE_GRANITE_DML_OPT").ok().as_deref() == Some("all") {
+                GraphOptimizationLevel::Level3
+            } else {
+                GraphOptimizationLevel::Disable
+            };
+        let mut builder = Session::builder()
             .map_err(|e| format!("ORT builder: {e}"))?
-            .with_execution_providers([ort::ep::DirectML::default().build()])
+            .with_execution_providers([dml.build()])
             .map_err(|e| format!("DirectML EP: {e}"))?
-            .with_optimization_level(GraphOptimizationLevel::Disable)
+            .with_optimization_level(dml_optimization_level)
             .map_err(|e| format!("DirectML opt level: {e}"))?;
+        if std::env::var("TAURSCRIBE_GRANITE_DML_STATIC_DIMS")
+            .ok()
+            .as_deref()
+            == Some("1")
+            && path.file_name().and_then(|name| name.to_str()) == Some("encoder.onnx")
+        {
+            for (name, size) in [
+                ("Addbpe_logits_dim_0", 1),
+                ("Addbpe_logits_dim_1", 200),
+                ("LayerNormalizationhidden_4_dim_0", 1),
+                ("LayerNormalizationhidden_4_dim_1", 800),
+                ("Addhidden_8_dim_0", 1),
+                ("Addhidden_8_dim_1", 800),
+                ("LayerNormalizationhidden_12_dim_0", 1),
+                ("LayerNormalizationhidden_12_dim_1", 800),
+                ("Casthidden_last_dim_0", 1),
+                ("Casthidden_last_dim_1", 800),
+            ] {
+                builder = builder
+                    .with_dimension_override(name, size)
+                    .map_err(|e| format!("DirectML dimension override {name}: {e}"))?;
+            }
+        }
+        let builder = maybe_enable_granite_profiling(builder, "directml", path)?;
         let mut builder =
             crate::ort_session::configure_low_ram_session_builder(builder, "granite-directml")?;
         builder
@@ -538,17 +751,73 @@ impl CohereManager {
 
         let builder = Session::builder()
             .map_err(|e| format!("ORT builder: {e}"))?
-            .with_execution_providers([crate::ort_session::build_low_ram_cuda_execution_provider()
-                .build()
-                .error_on_failure()])
+            .with_execution_providers([match granite_ort_mode() {
+                GraniteOrtMode::LowRam => {
+                    crate::ort_session::build_low_ram_cuda_execution_provider()
+                        .build()
+                        .error_on_failure()
+                }
+                GraniteOrtMode::Perf => crate::ort_session::build_perf_cuda_execution_provider()
+                    .build()
+                    .error_on_failure(),
+            }])
             .map_err(|e| format!("CUDA EP: {e}"))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| format!("CUDA opt level: {e}"))?;
-        let mut builder =
-            crate::ort_session::configure_low_ram_session_builder(builder, "granite-cuda")?;
+        let builder = maybe_enable_granite_profiling(builder, "cuda", path)?;
+        let mut builder = match granite_ort_mode() {
+            GraniteOrtMode::LowRam => {
+                crate::ort_session::configure_low_ram_session_builder(builder, "granite-cuda")?
+            }
+            GraniteOrtMode::Perf => {
+                crate::ort_session::configure_perf_session_builder(builder, "granite-cuda")?
+            }
+        };
         builder
             .commit_from_file(path)
             .map_err(|e| format!("CUDA session load {}: {e}", path.display()))
+    }
+}
+
+fn maybe_enable_granite_profiling(
+    builder: SessionBuilder,
+    backend: &str,
+    model_path: &Path,
+) -> Result<SessionBuilder, String> {
+    let profile_dir = match std::env::var_os("TAURSCRIBE_GRANITE_PROFILE_DIR") {
+        Some(dir) => PathBuf::from(dir),
+        None => return Ok(builder),
+    };
+    std::fs::create_dir_all(&profile_dir).map_err(|e| {
+        format!(
+            "Create Granite ORT profile dir {}: {e}",
+            profile_dir.display()
+        )
+    })?;
+    let stem = model_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("graph");
+    let prefix = profile_dir.join(format!("granite_{backend}_{stem}"));
+    builder
+        .with_profiling(&prefix)
+        .map_err(|e| format!("Enable Granite ORT profiling {}: {e}", prefix.display()))
+}
+
+fn end_granite_profiling(runtime: &mut GraniteRuntime) {
+    if std::env::var_os("TAURSCRIBE_GRANITE_PROFILE_DIR").is_none() {
+        return;
+    }
+    for (label, session) in [
+        ("encoder", &mut runtime.encoder),
+        ("projector", &mut runtime.projector),
+        ("embed_tokens", &mut runtime.embed_tokens),
+        ("editor", &mut runtime.editor),
+    ] {
+        match session.end_profiling() {
+            Ok(path) => println!("[GRANITE] ORT profile {label}: {path}"),
+            Err(err) => eprintln!("[GRANITE] ORT profile end failed for {label}: {err}"),
+        }
     }
 }
 
@@ -557,6 +826,7 @@ struct GraniteGraphPaths {
     projector: PathBuf,
     embed_tokens: PathBuf,
     editor: PathBuf,
+    manifest: PathBuf,
 }
 
 impl GraniteGraphPaths {
@@ -566,7 +836,18 @@ impl GraniteGraphPaths {
             projector: dir.join("projector.onnx"),
             embed_tokens: dir.join("embed_tokens.onnx"),
             editor: dir.join("editor.onnx"),
+            manifest: dir.join("taurscribe_granite_nar_manifest.json"),
         }
+    }
+
+    /// Whether the bundle manifest marks the encoder graph as safe to run
+    /// fully on DirectML (see scripts/make_granite_portable_dml.py).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    fn encoder_dml_safe(&self) -> bool {
+        std::fs::read_to_string(&self.manifest)
+            .ok()
+            .and_then(|text| serde_json::from_str::<BundleManifest>(&text).ok())
+            .is_some_and(|manifest| manifest.encoder_dml_safe)
     }
 }
 
@@ -606,6 +887,18 @@ fn ctc_collapse_from_logits(
         prev = Some(id);
     }
     Ok(out)
+}
+
+fn ctc_collapse_from_ids(token_ids: &[i64], blank_id: i64) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut prev: Option<i64> = None;
+    for &id in token_ids {
+        if Some(id) != prev && id != blank_id {
+            out.push(id);
+        }
+        prev = Some(id);
+    }
+    out
 }
 
 fn add_insertion_slots(token_ids: &[i64]) -> Vec<i64> {
@@ -670,6 +963,19 @@ fn extract_named_f32_ref<'a>(
     Ok((shape.iter().map(|&d| d as usize).collect(), data))
 }
 
+fn try_extract_named_i64_ref<'a>(
+    outputs: &'a ort::session::SessionOutputs,
+    name: &str,
+) -> Result<Option<(Vec<usize>, &'a [i64])>, String> {
+    let Some(value) = outputs.get(name) else {
+        return Ok(None);
+    };
+    let (shape, data) = value
+        .try_extract_tensor::<i64>()
+        .map_err(|e| format!("Extract {name}: {e}"))?;
+    Ok(Some((shape.iter().map(|&d| d as usize).collect(), data)))
+}
+
 fn make_tensor_f32(shape: Vec<usize>, data: Vec<f32>) -> Result<ort::value::DynValue, String> {
     ort::value::Value::from_array((shape, data))
         .map(|t| t.into_dyn())
@@ -698,8 +1004,10 @@ pub(crate) fn resolve_cohere_model_dir(
                     | "cohere-speech-1b-cpu"
                     | "cohere-speech-1b-fp16"
                     | "cohere-speech-1b-fp16-cuda"
+                    | "granite-speech-4.1-2b-nar-cuda"
                     | "granite-speech-4.1-2b-nar"
                     | "granite-speech-4.1-2b-nar-onnx" => models_dir.join(DEFAULT_MODEL_DIR),
+                    "granite-speech-4.1-2b-nar-portable" => models_dir.join(MODEL_ID_PORTABLE),
                     other => {
                         if other.contains('/') || other.contains('\\') {
                             return Err(format!("Invalid model id: {other}"));
@@ -719,8 +1027,12 @@ pub(crate) fn resolve_cohere_model_dir(
     Ok(dir)
 }
 
-pub(crate) fn cohere_logical_model_id_for_dir(_model_dir: &Path) -> String {
-    MODEL_ID_UNIVERSAL.to_string()
+pub(crate) fn cohere_logical_model_id_for_dir(model_dir: &Path) -> String {
+    if is_portable_granite_dir(model_dir) {
+        MODEL_ID_PORTABLE.to_string()
+    } else {
+        MODEL_ID_UNIVERSAL.to_string()
+    }
 }
 
 pub(crate) fn cohere_onnx_bundle_ready(dir: &Path) -> bool {
@@ -738,4 +1050,73 @@ pub(crate) fn cohere_onnx_bundle_ready(dir: &Path) -> bool {
 struct BundleManifest {
     format: Option<String>,
     source_model: Option<String>,
+    variant: Option<String>,
+    #[serde(default)]
+    encoder_dml_safe: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn force_cpu_always_wins_backend_selection() {
+        let portable = Path::new("models").join(MODEL_ID_PORTABLE);
+        assert_eq!(
+            granite_backend_request(true, &portable),
+            GraniteBackendRequest::Cpu
+        );
+        let cuda = Path::new("models").join(MODEL_ID_CUDA);
+        assert_eq!(
+            granite_backend_request(true, &cuda),
+            GraniteBackendRequest::Cpu
+        );
+    }
+
+    #[test]
+    fn portable_dir_detection_uses_folder_name() {
+        assert!(is_portable_granite_dir(
+            &Path::new("any").join(MODEL_ID_PORTABLE)
+        ));
+        assert!(!is_portable_granite_dir(
+            &Path::new("any").join(MODEL_ID_CUDA)
+        ));
+    }
+
+    #[test]
+    fn portable_default_uses_platform_acceleration_policy() {
+        let portable = Path::new("models").join(MODEL_ID_PORTABLE);
+        let expected = if cfg!(target_os = "windows") {
+            GraniteBackendRequest::Auto
+        } else {
+            GraniteBackendRequest::Cpu
+        };
+        assert_eq!(granite_backend_request(false, &portable), expected);
+    }
+
+    #[test]
+    fn granite_cpu_threads_stay_in_sane_bounds() {
+        let threads = granite_cpu_intra_threads();
+        assert!((1..=16).contains(&threads), "got {threads}");
+    }
+
+    #[test]
+    fn bundle_manifest_parses_encoder_dml_safe() {
+        let with_flag: BundleManifest = serde_json::from_str(
+            r#"{"format":"taurscribe-granite-nar-onnx-bundle","variant":"int4-argmax-dml-static","encoder_dml_safe":true}"#,
+        )
+        .expect("manifest with flag");
+        assert!(with_flag.encoder_dml_safe);
+
+        let without_flag: BundleManifest =
+            serde_json::from_str(r#"{"format":"taurscribe-granite-nar-onnx-bundle"}"#)
+                .expect("manifest without flag");
+        assert!(!without_flag.encoder_dml_safe);
+    }
+
+    #[test]
+    fn missing_manifest_means_encoder_not_dml_safe() {
+        let paths = GraniteGraphPaths::new(Path::new("definitely-missing-granite-dir"));
+        assert!(!paths.encoder_dml_safe());
+    }
 }

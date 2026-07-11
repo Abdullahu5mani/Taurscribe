@@ -53,6 +53,11 @@ taurscribe-runtime/samples/*
 !taurscribe-runtime/samples/jfk.wav
 !taurscribe-runtime/samples/otherjack.wav
 
+# Local ONNX Runtime diagnostics and disposable conversion environments
+.tmp_*/
+.tmp_*.onnx
+probe_*.json
+
 # Build logs & misc artifacts
 build_log.txt
 src-tauri/build_log.txt

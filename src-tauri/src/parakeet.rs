@@ -300,7 +300,17 @@ impl ParakeetManager {
         model_id: Option<&str>,
         force_cpu: bool,
     ) -> Result<String, String> {
-        self.initialize_with_load_path(model_id, force_cpu, ParakeetLoadPath::FallbackGpu)
+        let load_path = if std::env::var("TAURSCRIBE_PARAKEET_STRICT_GPU")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
+            ParakeetLoadPath::StrictGpu
+        } else {
+            ParakeetLoadPath::FallbackGpu
+        };
+
+        self.initialize_with_load_path(model_id, force_cpu, load_path)
     }
 
     pub fn initialize_with_load_path(
