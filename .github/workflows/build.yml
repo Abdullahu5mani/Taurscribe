@@ -359,7 +359,7 @@ jobs:
           cd %TEMP%
           echo // > empty.c
           cl /c empty.c
-          lib /out:"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\lib\x64\m.lib" /machine:x64 empty.obj
+          lib /out:"%VCToolsInstallDir%lib\x64\m.lib" /machine:x64 empty.obj
 
       - name: Create dummy m.lib (Windows ARM64)
         if: contains(matrix.platform, 'windows') && matrix.arch == 'ARM64'
@@ -369,7 +369,7 @@ jobs:
           cd %TEMP%
           echo // > empty.c
           cl /c empty.c
-          lib /out:"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\lib\arm64\m.lib" /machine:ARM64 empty.obj
+          lib /out:"%VCToolsInstallDir%lib\arm64\m.lib" /machine:ARM64 empty.obj
 
       # Clean build artifacts so MSBuild does not see stale Ninja/CMake output
       - name: Clean Build Artifacts
