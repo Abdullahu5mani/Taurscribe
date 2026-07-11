@@ -262,6 +262,55 @@ fn fingerprint_is_empty(fp: &str) -> bool {
     fp.split('+').all(|h| h.is_empty())
 }
 
+/// Verify an existing installation against the registry without downloading it
+/// again. This migrates models installed before verified.json receipts existed.
+fn verify_installed_model_files(
+    config: &ModelConfig,
+    base_dir: &std::path::Path,
+) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+
+    let mut fingerprint_parts = Vec::with_capacity(config.files.len());
+    let mut buffer = [0u8; 65536];
+
+    for file_spec in &config.files {
+        let expected_hash = file_spec.sha1;
+        if expected_hash.is_empty() {
+            fingerprint_parts.push(String::new());
+            continue;
+        }
+
+        let file_path = base_dir.join(file_spec.filename);
+        if file_path.is_dir() {
+            fingerprint_parts.push(expected_hash.to_string());
+            continue;
+        }
+
+        let mut file = File::open(&file_path)
+            .map_err(|e| format!("Could not open {}: {e}", file_path.display()))?;
+        let mut hasher = Sha256::new();
+        loop {
+            let count = file
+                .read(&mut buffer)
+                .map_err(|e| format!("Could not read {}: {e}", file_path.display()))?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        let actual_hash = hex::encode(hasher.finalize());
+        if actual_hash != expected_hash {
+            return Err(format!(
+                "SHA-256 mismatch for {}: expected {}, got {}",
+                file_spec.filename, expected_hash, actual_hash
+            ));
+        }
+        fingerprint_parts.push(actual_hash);
+    }
+
+    Ok(fingerprint_parts.join("+"))
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -317,7 +366,8 @@ pub async fn get_download_status(
 ) -> Result<Vec<ModelStatus>, String> {
     let models_dir =
         crate::utils::get_models_dir().map_err(|e| format!("Failed to get models dir: {}", e))?;
-    let store = load_verified_store();
+    let mut store = load_verified_store();
+    let mut store_changed = false;
 
     let mut statuses = Vec::new();
 
@@ -350,22 +400,38 @@ pub async fn get_download_status(
 
             let downloaded = all_exist && total_size > 0;
 
-            // Verification check.
-            // HuggingFace models: verified = has a verified.json entry (fingerprint was
-            // computed from live LFS hashes at download time, not static registry values).
-            // Non-HF models: compare stored fingerprint against registry hashes as before.
+            // Trust a current receipt. Older installs and stale receipts are
+            // rehashed once against the pinned registry values, then migrated.
             let verified = if !downloaded {
                 false
-            } else if matches!(model_source(&config), Ok(ModelSource::HuggingFace)) {
-                store.contains_key(&id)
             } else {
                 let expected_fp = registry_fingerprint(&config.files);
                 if fingerprint_is_empty(&expected_fp) {
                     true
+                } else if store
+                    .get(&id)
+                    .is_some_and(|entry| entry.fingerprint == expected_fp)
+                {
+                    true
                 } else {
-                    match store.get(&id) {
-                        Some(entry) => entry.fingerprint == expected_fp,
-                        None => false,
+                    match verify_installed_model_files(&config, &base_dir) {
+                        Ok(computed_fp) if computed_fp == expected_fp => {
+                            println!("[VERIFY] Migrated existing verified model: {id}");
+                            store.insert(
+                                id.clone(),
+                                VerifiedEntry {
+                                    fingerprint: computed_fp,
+                                    verified_at: chrono::Utc::now().to_rfc3339(),
+                                },
+                            );
+                            store_changed = true;
+                            true
+                        }
+                        Ok(_) => false,
+                        Err(err) => {
+                            eprintln!("[VERIFY] Existing model {id} is unverified: {err}");
+                            false
+                        }
                     }
                 }
             };
@@ -377,6 +443,10 @@ pub async fn get_download_status(
                 size_on_disk: total_size,
             });
         }
+    }
+
+    if store_changed {
+        save_verified_store(&store);
     }
 
     Ok(statuses)
@@ -742,7 +812,7 @@ async fn download_model_inner(
     let expected_fp = registry_fingerprint(&config.files);
 
     // Only skip verification entirely for non-HuggingFace repos with no hashes.
-    // HuggingFace repos always verify via live LFS pointer fetch.
+    // HuggingFace entries without pinned hashes use live LFS pointer metadata.
     if fingerprint_is_empty(&expected_fp) && !is_hf_repo {
         let _ = app.emit(
             "download-progress",
@@ -776,17 +846,19 @@ async fn download_model_inner(
     let emit_threshold: u64 = 512 * 1024; // emit every 512 KiB
 
     for (i, file_spec) in config.files.iter().enumerate() {
-        // For HuggingFace repos, fetch the current expected hash from the LFS pointer.
-        // Fall back to the registry sha1 if the fetch fails (e.g. brief network blip).
-        let expected_hash: String = if is_hf_repo {
+        // Pinned registry hashes are authoritative. Only unpinned HuggingFace
+        // files fall back to live LFS metadata.
+        let expected_hash: String = if !file_spec.sha1.is_empty() {
+            file_spec.sha1.to_string()
+        } else if is_hf_repo {
             match fetch_hf_lfs_sha256(&client, config.repo, config.branch, file_spec.remote_path)
                 .await
             {
                 Some(h) => h,
-                None => file_spec.sha1.to_string(),
+                None => String::new(),
             }
         } else {
-            file_spec.sha1.to_string()
+            String::new()
         };
 
         if expected_hash.is_empty() {
@@ -1057,4 +1129,47 @@ pub async fn delete_model(
     );
 
     Ok(CommandResult::ok(format!("Deleted model {}", model_id)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::model_registry::ModelFile;
+
+    #[test]
+    fn existing_install_verification_accepts_match_and_rejects_mismatch() {
+        let dir =
+            std::env::temp_dir().join(format!("taurscribe-verify-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create verification test dir");
+        std::fs::write(dir.join("model.bin"), b"hello").expect("write verification fixture");
+
+        let valid = ModelConfig {
+            repo: "test/repo",
+            branch: "main",
+            files: vec![ModelFile {
+                filename: "model.bin",
+                remote_path: "model.bin",
+                sha1: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+            }],
+            subdirectory: Some("test"),
+        };
+        assert_eq!(
+            verify_installed_model_files(&valid, &dir).expect("matching SHA-256"),
+            valid.files[0].sha1
+        );
+
+        let invalid = ModelConfig {
+            repo: valid.repo,
+            branch: valid.branch,
+            files: vec![ModelFile {
+                filename: "model.bin",
+                remote_path: "model.bin",
+                sha1: "0000000000000000000000000000000000000000000000000000000000000000",
+            }],
+            subdirectory: valid.subdirectory,
+        };
+        assert!(verify_installed_model_files(&invalid, &dir).is_err());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
