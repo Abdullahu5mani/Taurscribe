@@ -113,6 +113,11 @@ fn granite_cuda_files() -> Vec<ModelFile> {
             remote_path: "generation_config.json",
             sha1: "af7cd9bbb214dea4f6a37756c2c133d002f6325ed4f497efc991f02b4d486dad",
         },
+        ModelFile {
+            filename: "taurscribe_granite_nar_manifest.json",
+            remote_path: "taurscribe_granite_nar_manifest.json",
+            sha1: "94bbb6fcc6e4c0aa0f544a5c76c0fed92c27692efa049719a98455dfb81d59f4",
+        },
     ]
 }
 
@@ -541,23 +546,39 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn granite_portable_uses_hosted_verified_payload() {
-        let config = get_model_config("granite-speech-4.1-2b-nar-portable")
-            .expect("portable Granite registry entry");
-        assert_eq!(
-            config.repo,
-            "Abdullahu5mani/granite-speech-4.1-2b-nar-portable"
-        );
-        assert_eq!(
-            config.subdirectory,
-            Some("granite-speech-4.1-2b-nar-portable")
-        );
+    fn assert_hosted_granite_payload(
+        model_id: &str,
+        expected_repo: &str,
+        expected_subdirectory: &str,
+    ) {
+        let config = get_model_config(model_id).expect("Granite registry entry");
+        assert_eq!(config.repo, expected_repo);
+        assert_eq!(config.subdirectory, Some(expected_subdirectory));
         assert_eq!(config.files.len(), 13);
         assert!(config
             .files
             .iter()
             .any(|file| file.filename == "taurscribe_granite_nar_manifest.json"));
-        assert!(config.files.iter().all(|file| file.sha1.len() == 64));
+        assert!(config.files.iter().all(|file| {
+            file.sha1.len() == 64 && file.sha1.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }));
+    }
+
+    #[test]
+    fn granite_cuda_uses_hosted_verified_payload() {
+        assert_hosted_granite_payload(
+            "granite-speech-4.1-2b-nar-cuda",
+            "Abdullahu5mani/granite-speech-4.1-2b-nar-cuda",
+            "granite-speech-4.1-2b-nar-cuda",
+        );
+    }
+
+    #[test]
+    fn granite_portable_cpu_uses_hosted_verified_payload() {
+        assert_hosted_granite_payload(
+            "granite-speech-4.1-2b-nar-portable",
+            "Abdullahu5mani/granite-speech-4.1-2b-nar-portable",
+            "granite-speech-4.1-2b-nar-portable",
+        );
     }
 }
