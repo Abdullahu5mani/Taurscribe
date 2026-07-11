@@ -597,7 +597,9 @@ The app download registry currently mixes hosted and staged sources while the re
 Both Granite registry entries list 13 runtime files with pinned SHA-256 values,
 including `taurscribe_granite_nar_manifest.json`. The downloader hashes every
 downloaded file before marking the model ready; a mismatch deletes the invalid
-file and reports verification failure.
+file and reports verification failure. Existing installations without a
+`verified.json` receipt are hashed once during status refresh and receive a
+receipt only when every pinned hash matches.
 
 If a local Windows build hits GGML duplicate-symbol linker errors (`LNK2005: ggml_* already defined` — whisper-rs embeds a static ggml while llama-cpp-2's `dynamic-link` feature links `ggml-base.dll`, and both export into every executable), first try `cargo clean -p llama-cpp-sys-2 -p whisper-rs-sys` and rebuild. If the collision persists it affects debug builds and `cargo test` link steps too; previously-built binaries in `target/release` keep working, and `cargo check` still validates code changes. Historically a debug build sometimes still linked — treat debug timing as relative only:
 
