@@ -443,6 +443,8 @@ jobs:
           # Only target desktop-relevant GPUs to keep CUDA compile times reasonable:
           # 75 = Turing (RTX 2000), 86 = Ampere (RTX 3000), 89 = Ada (RTX 4000)
           CMAKE_CUDA_ARCHITECTURES: "75;86;89"
+          # windows-latest can use a newer MSVC toolchain than nvcc's allowlist.
+          CMAKE_CUDA_FLAGS: ${{ contains(matrix.platform, 'windows') && matrix.cuda == true && '--allow-unsupported-compiler' || '' }}
 
           # macOS: Set minimum deployment target for ONNX Runtime/CoreML support.
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
