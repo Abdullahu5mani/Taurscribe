@@ -70,10 +70,10 @@ jobs:
 
       - name: Install CUDA Toolkit (Windows)
         if: contains(matrix.platform, 'windows') && matrix.cuda == true
-        uses: Jimver/cuda-toolkit@v0.2.21
+        uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
-          cuda: '12.5.1'
+          cuda: '12.9.1'
           method: 'network'
           use-github-cache: false
           use-local-cache: false
