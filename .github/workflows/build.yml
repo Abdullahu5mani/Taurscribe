@@ -98,10 +98,10 @@ jobs:
           
       - name: Install CUDA Toolkit (Windows)
         if: contains(matrix.platform, 'windows') && matrix.cuda == true
-        uses: Jimver/cuda-toolkit@v0.2.21
+        uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
-          cuda: '12.5.1'          # Version compatible with common drivers
+          cuda: '12.9.1'          # Lowest release that accepts the runner's MSVC 14.44
           method: 'network'       # Download dynamically
           use-github-cache: false # Disable caching to prevent stale artifacts
           use-local-cache: false
