@@ -104,6 +104,11 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # XNNPACK: Cross-platform CPU optimization (fallback for Intel Macs)
 # -------------------------------------------------------------------------
 [target.'cfg(target_os = "macos")'.dependencies]
+# MLX: Apple-silicon inference for the Granite NAR engine. The pure-ONNX path
+# runs this model on CPU (RTF 1.218); the MLX pipeline measured ~11x faster at
+# better WER, so the Apple build talks to MLX directly instead of ORT.
+mlx-rs = "0.25.3"
+
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "coreml",
 ] }
