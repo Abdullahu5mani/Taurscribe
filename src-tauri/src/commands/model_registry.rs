@@ -51,6 +51,39 @@ fn local_single_file(
     }
 }
 
+/// Apple-silicon MLX bundle. These are IBM's own weights, unmodified — the MLX
+/// runtime remaps the layout while loading, so there is nothing for us to
+/// re-host and the download comes straight from the upstream repository.
+fn granite_mlx_files() -> Vec<ModelFile> {
+    vec![
+        ModelFile {
+            filename: "model.safetensors",
+            remote_path: "model.safetensors",
+            sha1: "a187681b05e9598028b6177bba4588a27a76b97ab6840870877d69e1770a5094",
+        },
+        ModelFile {
+            filename: "config.json",
+            remote_path: "config.json",
+            sha1: "d6c760e672df122eedd873adb77a318b785221b06f9fbe9db08c51a1f8302936",
+        },
+        ModelFile {
+            filename: "tokenizer.json",
+            remote_path: "tokenizer.json",
+            sha1: "64c10a88b2495872bd7da5a885861a1757d9c23590c40fd378546ae176d280f6",
+        },
+        ModelFile {
+            filename: "tokenizer_config.json",
+            remote_path: "tokenizer_config.json",
+            sha1: "c7e48adce9bdf6cfe3524759067b5dfa2428de9ccba2fd257502bf0246161c2f",
+        },
+        ModelFile {
+            filename: "preprocessor_config.json",
+            remote_path: "preprocessor_config.json",
+            sha1: "e12be1e9d4ec5c459741328f28d9d8c00c3c688e8fe4230a6ec28df5470db8b3",
+        },
+    ]
+}
+
 fn granite_cuda_files() -> Vec<ModelFile> {
     vec![
         ModelFile {
@@ -528,6 +561,16 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             files: granite_cuda_files(),
             subdirectory: Some("granite-speech-4.1-2b-nar-cuda"),
         }),
+        // Apple silicon runs Granite on MLX rather than ONNX, which needs the
+        // raw checkpoint instead of the exported graphs. Served from IBM's
+        // repository directly: the weights are unchanged, so re-hosting them
+        // would only add a copy to keep in sync.
+        "granite-speech-4.1-2b-nar-mlx" => Some(ModelConfig {
+            repo: "ibm-granite/granite-speech-4.1-2b-nar",
+            branch: "main",
+            files: granite_mlx_files(),
+            subdirectory: Some("granite-speech-4.1-2b-nar-mlx"),
+        }),
         // Portable = INT4 argmax bundle with a DirectML-static encoder
         // (rank-3 attention MatMuls, baked shape chains); built by
         // scripts/make_granite_portable_dml.py. DirectML is attempted first on
@@ -580,5 +623,29 @@ mod tests {
             "Abdullahu5mani/granite-speech-4.1-2b-nar-portable",
             "granite-speech-4.1-2b-nar-portable",
         );
+    }
+}
+
+#[cfg(test)]
+mod mlx_tests {
+    use super::*;
+
+    #[test]
+    fn granite_mlx_pulls_unmodified_upstream_weights() {
+        let config = get_model_config("granite-speech-4.1-2b-nar-mlx")
+            .expect("MLX registry entry");
+        // Served from IBM directly; re-hosting an unmodified copy buys nothing.
+        assert_eq!(config.repo, "ibm-granite/granite-speech-4.1-2b-nar");
+        assert_eq!(config.subdirectory, Some("granite-speech-4.1-2b-nar-mlx"));
+        // The Rust MLX loader needs these two present to engage at all.
+        for required in ["model.safetensors", "config.json"] {
+            assert!(
+                config.files.iter().any(|f| f.filename == required),
+                "missing {required}"
+            );
+        }
+        // Every file must be checksum-verified, or a truncated download would
+        // surface as garbled audio rather than a clear failure.
+        assert!(config.files.iter().all(|f| f.sha1.len() == 64));
     }
 }

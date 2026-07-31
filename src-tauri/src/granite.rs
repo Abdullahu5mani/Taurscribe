@@ -21,6 +21,7 @@ const MODEL_ID_CUDA: &str = "granite-speech-4.1-2b-nar-cuda";
 const DEFAULT_MODEL_DIR: &str = MODEL_ID_CUDA;
 const MODEL_ID_UNIVERSAL: &str = MODEL_ID_CUDA;
 const MODEL_ID_PORTABLE: &str = "granite-speech-4.1-2b-nar-portable";
+const MODEL_ID_MLX: &str = "granite-speech-4.1-2b-nar-mlx";
 const BLANK_TOKEN_ID: i64 = 100_257;
 const BPE_POOLING_WINDOW: usize = 4;
 const PROJECTOR_DOWNSAMPLE_RATE: usize = 5;
@@ -1200,7 +1201,23 @@ pub(crate) fn resolve_cohere_model_dir(
     model_id: Option<&str>,
 ) -> Result<PathBuf, String> {
     let dir = match model_id {
-        None => models_dir.join(DEFAULT_MODEL_DIR),
+        // With no explicit choice, Apple silicon takes the MLX bundle when it is
+        // installed; it is an order of magnitude faster than the ONNX graphs.
+        None => {
+            #[cfg(target_os = "macos")]
+            {
+                let mlx = models_dir.join(MODEL_ID_MLX);
+                if mlx.join("model.safetensors").exists() {
+                    mlx
+                } else {
+                    models_dir.join(DEFAULT_MODEL_DIR)
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                models_dir.join(DEFAULT_MODEL_DIR)
+            }
+        }
         Some(id) => {
             let pb = PathBuf::from(id);
             if pb.is_absolute() {
@@ -1215,6 +1232,7 @@ pub(crate) fn resolve_cohere_model_dir(
                     | "granite-speech-4.1-2b-nar"
                     | "granite-speech-4.1-2b-nar-onnx" => models_dir.join(DEFAULT_MODEL_DIR),
                     "granite-speech-4.1-2b-nar-portable" => models_dir.join(MODEL_ID_PORTABLE),
+                    "granite-speech-4.1-2b-nar-mlx" => models_dir.join(MODEL_ID_MLX),
                     other => {
                         if other.contains('/') || other.contains('\\') {
                             return Err(format!("Invalid model id: {other}"));
