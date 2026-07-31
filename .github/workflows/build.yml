@@ -506,7 +506,14 @@ jobs:
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
             bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm,appimage
           else
-            bun run tauri build --target ${{ matrix.target }}
+            # bundle_dmg.sh drives hdiutil, which intermittently fails on hosted
+            # runners even with CI=true. The .app is already built by this point,
+            # so a single retry costs seconds and clears the flake.
+            bun run tauri build --target ${{ matrix.target }} || {
+              echo "::warning::DMG bundling failed, retrying once (hdiutil flake)"
+              sleep 15
+              bun run tauri build --target ${{ matrix.target }}
+            }
           fi
         shell: bash
         # NO_STRIP: Preserves __TAURI_BUNDLE_TYPE symbol needed by the updater plugin.

@@ -397,7 +397,14 @@ jobs:
             # install scenarios. Re-add rpm/appimage if the binary size is reduced.
             bun run tauri build --target ${{ matrix.target }} --bundles deb
           else
-            bun run tauri build --target ${{ matrix.target }}
+            # bundle_dmg.sh drives hdiutil, which intermittently fails on hosted
+            # runners even with CI=true. The .app is already built by this point,
+            # so a single retry costs seconds and clears the flake.
+            bun run tauri build --target ${{ matrix.target }} || {
+              echo "::warning::DMG bundling failed, retrying once (hdiutil flake)"
+              sleep 15
+              bun run tauri build --target ${{ matrix.target }}
+            }
           fi
         shell: bash
         env:
