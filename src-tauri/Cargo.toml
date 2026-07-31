@@ -107,7 +107,12 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "coreml",
 ] }
-ort = { version = "2.0.0-rc.12", features = ["download-binaries", "xnnpack", "half"] }
+ort = { version = "2.0.0-rc.12", features = [
+    "download-binaries",
+    "coreml",
+    "xnnpack",
+    "half",
+] }
 # llama-cpp-2: Uses Metal automatically on macOS (no special feature needed)
 llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
     "dynamic-link",

@@ -133,9 +133,13 @@ pub fn init_nemotron(
     force_cpu: bool,
     load_path: ParakeetLoadPath,
 ) -> Result<(Nemotron, GpuBackend), String> {
+    // CPU is not a placeholder here. CoreML cannot run this model: the vendored
+    // parakeet-rs documents "CoreML currently fails with this model due to
+    // unsupported operations" (vendor/parakeet-rs/src/execution.rs). Trying it
+    // and falling back would only cost a failed session build on every load.
     #[cfg(target_os = "macos")]
     {
-        println!("[PARAKEET] macOS detected - explicitly forcing CPU for Nemotron");
+        println!("[PARAKEET] macOS: CPU (CoreML unsupported for this model)");
         let m = try_cpu_nemotron(path.to_str().unwrap())?;
         return Ok((m, GpuBackend::Cpu));
     }
@@ -263,9 +267,11 @@ pub fn init_ctc(
     force_cpu: bool,
     load_path: ParakeetLoadPath,
 ) -> Result<(Parakeet, GpuBackend), String> {
+    // See init_nemotron: CoreML cannot execute these graphs, so CPU is the
+    // correct terminal choice on macOS rather than a missing optimisation.
     #[cfg(target_os = "macos")]
     {
-        println!("[PARAKEET] macOS detected - explicitly forcing CPU for CTC");
+        println!("[PARAKEET] macOS: CPU (CoreML unsupported for this model)");
         let m = try_cpu_ctc(path.to_str().unwrap())?;
         return Ok((m, GpuBackend::Cpu));
     }

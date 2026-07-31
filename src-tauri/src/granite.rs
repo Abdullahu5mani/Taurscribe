@@ -105,6 +105,7 @@ enum GraniteBackendRequest {
     Cpu,
     Cuda,
     DirectML,
+    CoreML,
 }
 
 fn granite_backend_request(force_cpu: bool, model_dir: &Path) -> GraniteBackendRequest {
@@ -120,6 +121,7 @@ fn granite_backend_request(force_cpu: bool, model_dir: &Path) -> GraniteBackendR
         Some("cpu") => GraniteBackendRequest::Cpu,
         Some("cuda") | Some("gpu") => GraniteBackendRequest::Cuda,
         Some("directml") | Some("dml") => GraniteBackendRequest::DirectML,
+        Some("coreml") | Some("metal") | Some("apple") => GraniteBackendRequest::CoreML,
         // The portable Windows bundle uses an automatic DirectML -> CPU route.
         // Other platforms currently use the portable CPU path.
         _ if is_portable_granite_dir(model_dir) => portable_default_backend_request(),
@@ -132,7 +134,19 @@ fn portable_default_backend_request() -> GraniteBackendRequest {
     GraniteBackendRequest::Auto
 }
 
-#[cfg(not(target_os = "windows"))]
+// macOS defaults to CPU on purpose. The CoreML execution provider is wired up
+// below and selectable with TAURSCRIBE_GRANITE_BACKEND=coreml, but it measured
+// *slower* than multi-threaded CPU on an M3 over a matched 50-utterance
+// LibriSpeech subset: mean 11.98s vs 8.50s (RTF 1.715 vs 1.218), identical WER.
+// Granite's dynamic editor cannot stay on CoreML, so the hybrid pays a
+// CoreML<->CPU transfer on every chunk that outweighs the GPU win on the fixed
+// encoder. The real Apple speedup is the MLX port in scripts/granite_mlx.
+#[cfg(target_os = "macos")]
+fn portable_default_backend_request() -> GraniteBackendRequest {
+    GraniteBackendRequest::Cpu
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn portable_default_backend_request() -> GraniteBackendRequest {
     GraniteBackendRequest::Cpu
 }
@@ -184,6 +198,7 @@ fn granite_ort_mode() -> GraniteOrtMode {
 pub enum GpuBackend {
     Cuda,
     DirectML,
+    CoreML,
     Cpu,
 }
 
@@ -192,6 +207,7 @@ impl std::fmt::Display for GpuBackend {
         match self {
             GpuBackend::Cuda => write!(f, "CUDA"),
             GpuBackend::DirectML => write!(f, "DirectML"),
+            GpuBackend::CoreML => write!(f, "CoreML (Apple GPU/Neural Engine)"),
             GpuBackend::Cpu => write!(f, "CPU"),
         }
     }
@@ -236,7 +252,10 @@ impl CohereManager {
             loaded: self.runtime.is_some(),
             model_id: self.model_name.clone(),
             backend: self.backend.to_string(),
-            gpu_only: matches!(self.backend, GpuBackend::Cuda | GpuBackend::DirectML),
+            gpu_only: matches!(
+                self.backend,
+                GpuBackend::Cuda | GpuBackend::DirectML | GpuBackend::CoreML
+            ),
         }
     }
 
@@ -292,6 +311,16 @@ impl CohereManager {
                 GpuBackend::DirectML,
                 self.create_runtime_directml(&graph_paths)?,
             ),
+            GraniteBackendRequest::CoreML => match self.create_runtime_coreml(&graph_paths) {
+                Ok(rt) => (GpuBackend::CoreML, rt),
+                Err(coreml_err) if !force_cpu => {
+                    eprintln!(
+                        "[GRANITE] CoreML init failed; falling back to multi-threaded CPU. {coreml_err}"
+                    );
+                    (GpuBackend::Cpu, self.create_runtime_cpu(&graph_paths)?)
+                }
+                Err(coreml_err) => return Err(coreml_err),
+            },
             GraniteBackendRequest::Auto if is_portable_granite_dir(&model_dir) => {
                 match self.create_runtime_directml(&graph_paths) {
                     Ok(rt) => {
@@ -308,6 +337,13 @@ impl CohereManager {
                     }
                 }
             }
+            // No CUDA on macOS, and CoreML benchmarked slower than CPU for this
+            // graph, so an unqualified Auto stays on multi-threaded CPU here.
+            #[cfg(target_os = "macos")]
+            GraniteBackendRequest::Auto => {
+                (GpuBackend::Cpu, self.create_runtime_cpu(&graph_paths)?)
+            }
+            #[cfg(not(target_os = "macos"))]
             GraniteBackendRequest::Auto => match self.create_runtime_cuda(&graph_paths) {
                 Ok(rt) => {
                     println!(
@@ -356,7 +392,7 @@ impl CohereManager {
         match self.transcribe_chunk_loaded(samples, sample_rate) {
             Ok(text) => Ok(text),
             Err(err)
-                if matches!(self.backend, GpuBackend::DirectML)
+                if matches!(self.backend, GpuBackend::DirectML | GpuBackend::CoreML)
                     && std::env::var("TAURSCRIBE_GRANITE_DISABLE_DML_FALLBACK")
                         .ok()
                         .as_deref()
@@ -528,6 +564,7 @@ impl CohereManager {
     fn warm_up_if_needed(&mut self) {
         let label = match self.backend {
             GpuBackend::DirectML => "DirectML",
+            GpuBackend::CoreML => "CoreML",
             GpuBackend::Cuda if granite_ort_mode() == GraniteOrtMode::Perf => "CUDA perf",
             _ => return,
         };
@@ -663,6 +700,74 @@ impl CohereManager {
             let _ = paths;
             Err("CUDA is not available on Windows ARM64".to_string())
         }
+    }
+
+    fn create_runtime_coreml(&self, paths: &GraniteGraphPaths) -> Result<GraniteRuntime, String> {
+        #[cfg(target_os = "macos")]
+        {
+            println!(
+                "[GRANITE] CoreML hybrid: fixed-shape encoder/projector on Apple GPU/Neural Engine; dynamic token embedder/editor on CPU"
+            );
+            Ok(GraniteRuntime {
+                encoder: self.create_session_coreml(&paths.encoder)?,
+                projector: self.create_session_coreml(&paths.projector)?,
+                // CoreML's dynamic MLProgram execution plan for the editor can
+                // take minutes to compile or stall. Keep the small gather and
+                // dynamic editor on ORT CPU; the fixed, compute-heavy audio
+                // path remains accelerated on Apple hardware.
+                embed_tokens: self.create_session_cpu(&paths.embed_tokens)?,
+                editor: self.create_session_cpu(&paths.editor)?,
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = paths;
+            Err("CoreML is only available on macOS".to_string())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn create_session_coreml(&self, path: &Path) -> Result<Session, String> {
+        use ort::ep::coreml::{ComputeUnits, ModelFormat, SpecializationStrategy};
+
+        let cache_dir = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("coreml-cache");
+        std::fs::create_dir_all(&cache_dir)
+            .map_err(|e| format!("Create CoreML cache {}: {e}", cache_dir.display()))?;
+
+        let profile_compute_plan = std::env::var("TAURSCRIBE_GRANITE_COREML_PROFILE")
+            .ok()
+            .as_deref()
+            == Some("1");
+        let low_precision_gpu = std::env::var("TAURSCRIBE_GRANITE_COREML_FP16_ACCUM")
+            .ok()
+            .as_deref()
+            != Some("0");
+        let coreml = ort::ep::CoreML::default()
+            .with_model_format(ModelFormat::MLProgram)
+            .with_compute_units(ComputeUnits::All)
+            .with_static_input_shapes(false)
+            .with_specialization_strategy(SpecializationStrategy::FastPrediction)
+            .with_low_precision_accumulation_on_gpu(low_precision_gpu)
+            .with_profile_compute_plan(profile_compute_plan)
+            .with_model_cache_dir(cache_dir.to_string_lossy())
+            .build()
+            .error_on_failure();
+
+        let builder = Session::builder()
+            .map_err(|e| format!("ORT builder: {e}"))?
+            .with_execution_providers([coreml])
+            .map_err(|e| format!("CoreML EP: {e}"))?
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(|e| format!("CoreML opt level: {e}"))?;
+        let builder = maybe_enable_granite_profiling(builder, "coreml", path)?;
+        let mut builder =
+            crate::ort_session::configure_low_ram_session_builder(builder, "granite-coreml")?;
+        builder
+            .commit_from_file(path)
+            .map_err(|e| format!("CoreML session load {}: {e}", path.display()))
     }
 
     fn create_session_cpu(&self, path: &Path) -> Result<Session, String> {
@@ -1086,6 +1191,7 @@ mod tests {
     #[test]
     fn portable_default_uses_platform_acceleration_policy() {
         let portable = Path::new("models").join(MODEL_ID_PORTABLE);
+        // macOS deliberately shares the CPU default: CoreML is opt-in only.
         let expected = if cfg!(target_os = "windows") {
             GraniteBackendRequest::Auto
         } else {
