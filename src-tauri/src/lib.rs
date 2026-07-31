@@ -7,7 +7,10 @@ mod commands;
 mod context;
 mod denoise;
 pub mod granite;
-mod granite_features;
+pub mod granite_features;
+/// Native MLX backend, Apple silicon only.
+#[cfg(target_os = "macos")]
+pub mod granite_mlx;
 mod hotkeys;
 pub mod librispeech_wer;
 mod llm;
