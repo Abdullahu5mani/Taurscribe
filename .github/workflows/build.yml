@@ -32,9 +32,9 @@ jobs:
             acceleration: 'Metal'
 
           # --- 2. Windows (x86_64) ---
-          # Standard Windows builds. "windows-latest" currently points to Windows Server 2022.
+          # Pin to windows-2022 for CUDA compatibility with current toolkit.
           # We enable CUDA here for NVIDIA GPU acceleration.
-          - platform: 'windows-latest'
+          - platform: 'windows-2022'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
             cuda: true
@@ -215,7 +215,7 @@ jobs:
       # Windows Dependencies (Critical)
       # 1. Vulkan SDK: Required for whisper-rs Vulkan backend on Windows
       - name: Install Vulkan SDK (Windows)
-        if: matrix.platform == 'windows-latest' && matrix.arch == 'x86_64'
+        if: contains(matrix.platform, 'windows') && matrix.arch == 'x86_64'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
