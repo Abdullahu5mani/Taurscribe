@@ -24,7 +24,7 @@ jobs:
             os_name: 'macOS'
             arch: 'ARM64'
 
-          - platform: 'windows-latest'
+          - platform: 'windows-2022'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
             cuda: true
