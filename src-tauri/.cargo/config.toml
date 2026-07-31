@@ -81,3 +81,15 @@ ar = "C:\\msys64\\ucrt64\\bin\\ar.exe"
 
 # [build]
 # target-dir = "C:/bld"
+
+# Codeberg rate-limits git fetches with a 403 (their issue tracker confirms 403
+# is the rate-limit code and that git requests count against it), which breaks
+# dependency resolution at random. GitHub carries the same repository and the
+# same pinned commit, so resolve whisper-rs from the mirror instead.
+[source.whisper-rs-codeberg]
+git = "https://codeberg.org/tazz4843/whisper-rs.git"
+replace-with = "whisper-rs-github"
+
+[source.whisper-rs-github]
+git = "https://github.com/tazz4843/whisper-rs.git"
+rev = "d38738df8dc54b12d2918494586ba0817c3cb12f"
