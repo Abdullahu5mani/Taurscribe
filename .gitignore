@@ -94,3 +94,8 @@ librispeech_results.csv
 
 # Local scratch / temp
 CODEBASE_GUIDE.pdf
+
+# Granite MLX backend (scripts/granite_mlx)
+.venv-granite-mlx/
+__pycache__/
+*.pyc
