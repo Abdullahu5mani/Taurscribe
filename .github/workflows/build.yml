@@ -32,9 +32,12 @@ jobs:
             acceleration: 'Metal'
 
           # --- 2. Windows (x86_64) ---
-          # Standard Windows builds. "windows-latest" currently points to Windows Server 2022.
-          # We enable CUDA here for NVIDIA GPU acceleration.
-          - platform: 'windows-latest'
+          # Pinned to windows-2022 on purpose. windows-latest is now the
+          # Windows Server 2025 / Visual Studio 2026 image, and nvcc refuses any
+          # host compiler newer than VS 2022 — no CUDA release accepts it yet,
+          # so this cannot be fixed by moving the toolkit version.
+          # CUDA is enabled here for NVIDIA GPU acceleration.
+          - platform: 'windows-2022'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
             cuda: true
