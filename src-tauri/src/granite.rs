@@ -106,6 +106,9 @@ enum GraniteBackendRequest {
     Cuda,
     DirectML,
     CoreML,
+    /// Native MLX on Apple silicon — needs the safetensors checkpoint, not the
+    /// ONNX bundle.
+    Mlx,
 }
 
 fn granite_backend_request(force_cpu: bool, model_dir: &Path) -> GraniteBackendRequest {
@@ -121,7 +124,8 @@ fn granite_backend_request(force_cpu: bool, model_dir: &Path) -> GraniteBackendR
         Some("cpu") => GraniteBackendRequest::Cpu,
         Some("cuda") | Some("gpu") => GraniteBackendRequest::Cuda,
         Some("directml") | Some("dml") => GraniteBackendRequest::DirectML,
-        Some("coreml") | Some("metal") | Some("apple") => GraniteBackendRequest::CoreML,
+        Some("coreml") | Some("apple") => GraniteBackendRequest::CoreML,
+        Some("mlx") | Some("metal") => GraniteBackendRequest::Mlx,
         // The portable Windows bundle uses an automatic DirectML -> CPU route.
         // Other platforms currently use the portable CPU path.
         _ if is_portable_granite_dir(model_dir) => portable_default_backend_request(),
@@ -144,6 +148,13 @@ fn portable_default_backend_request() -> GraniteBackendRequest {
 #[cfg(target_os = "macos")]
 fn portable_default_backend_request() -> GraniteBackendRequest {
     GraniteBackendRequest::Cpu
+}
+
+/// A Granite bundle carrying `model.safetensors` can run on native MLX, which
+/// measured RTF 0.069 against 1.218 for the ONNX CPU path on an M3.
+#[cfg(target_os = "macos")]
+fn mlx_checkpoint_present(model_dir: &Path) -> bool {
+    model_dir.join("model.safetensors").exists() && model_dir.join("config.json").exists()
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -199,6 +210,7 @@ pub enum GpuBackend {
     Cuda,
     DirectML,
     CoreML,
+    Mlx,
     Cpu,
 }
 
@@ -208,6 +220,7 @@ impl std::fmt::Display for GpuBackend {
             GpuBackend::Cuda => write!(f, "CUDA"),
             GpuBackend::DirectML => write!(f, "DirectML"),
             GpuBackend::CoreML => write!(f, "CoreML (Apple GPU/Neural Engine)"),
+            GpuBackend::Mlx => write!(f, "MLX (Apple GPU)"),
             GpuBackend::Cpu => write!(f, "CPU"),
         }
     }
@@ -230,6 +243,8 @@ struct GraniteRuntime {
 
 pub struct CohereManager {
     runtime: Option<GraniteRuntime>,
+    #[cfg(target_os = "macos")]
+    mlx: Option<crate::granite_mlx::GraniteMlx>,
     tokenizer: Option<tokenizers::Tokenizer>,
     backend: GpuBackend,
     model_name: Option<String>,
@@ -240,6 +255,8 @@ impl CohereManager {
     pub fn new() -> Self {
         Self {
             runtime: None,
+            #[cfg(target_os = "macos")]
+            mlx: None,
             tokenizer: None,
             backend: GpuBackend::Cpu,
             model_name: None,
@@ -249,17 +266,36 @@ impl CohereManager {
 
     pub fn get_status(&self) -> CohereStatus {
         CohereStatus {
+            #[cfg(target_os = "macos")]
+            loaded: self.runtime.is_some() || self.mlx.is_some(),
+            #[cfg(not(target_os = "macos"))]
             loaded: self.runtime.is_some(),
             model_id: self.model_name.clone(),
             backend: self.backend.to_string(),
             gpu_only: matches!(
                 self.backend,
-                GpuBackend::Cuda | GpuBackend::DirectML | GpuBackend::CoreML
+                GpuBackend::Cuda | GpuBackend::DirectML | GpuBackend::CoreML | GpuBackend::Mlx
             ),
         }
     }
 
+    fn load_tokenizer(&mut self, model_dir: &Path) -> Result<(), String> {
+        let path = model_dir.join("tokenizer.json");
+        let tokenizer = tokenizers::Tokenizer::from_file(&path)
+            .map_err(|e| format!("Load tokenizer {}: {e}", path.display()))?;
+        self.tokenizer = Some(tokenizer);
+        Ok(())
+    }
+
     pub fn unload(&mut self) {
+        #[cfg(target_os = "macos")]
+        if self.mlx.take().is_some() {
+            println!("[GRANITE] Unloading MLX model...");
+            self.tokenizer = None;
+            self.model_name = None;
+            self.resampler = None;
+            crate::memory::trim_process_memory();
+        }
         if self.runtime.is_some() {
             println!("[GRANITE] Unloading model...");
             if let Some(runtime) = self.runtime.as_mut() {
@@ -281,6 +317,46 @@ impl CohereManager {
     ) -> Result<String, String> {
         let models_dir = crate::utils::get_models_dir()?;
         let model_dir = resolve_cohere_model_dir(&models_dir, model_id)?;
+
+        // Apple silicon: if the bundle carries the safetensors checkpoint, run it
+        // natively on MLX. That path has no ONNX graphs, so it is decided before
+        // the ONNX bundle check below.
+        #[cfg(target_os = "macos")]
+        {
+            let explicit = matches!(
+                granite_backend_request(force_cpu, &model_dir),
+                GraniteBackendRequest::Mlx
+            );
+            if (explicit || mlx_checkpoint_present(&model_dir)) && !force_cpu {
+                if self.runtime.is_some() || self.mlx.is_some() {
+                    self.unload();
+                }
+                let started = std::time::Instant::now();
+                match crate::granite_mlx::GraniteMlx::load(&model_dir, mlx_rs::Dtype::Float16) {
+                    Ok(engine) => {
+                        self.load_tokenizer(&model_dir)?;
+                        self.mlx = Some(engine);
+                        self.backend = GpuBackend::Mlx;
+                        self.model_name = model_dir
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(str::to_string);
+                        println!(
+                            "[GRANITE] MLX backend ready in {:.2}s ({})",
+                            started.elapsed().as_secs_f32(),
+                            model_dir.display()
+                        );
+                        self.warm_up_if_needed();
+                        return Ok(format!("Granite Speech NAR loaded ({})", self.backend));
+                    }
+                    Err(err) if explicit => return Err(format!("MLX init failed: {err}")),
+                    Err(err) => {
+                        eprintln!("[GRANITE] MLX init failed; falling back to ONNX. {err}")
+                    }
+                }
+            }
+        }
+
         if !cohere_onnx_bundle_ready(&model_dir) {
             return Err(format!(
                 "Granite ONNX bundle not found in {}. Download/install Granite Speech NAR from Settings > Models.",
@@ -303,6 +379,12 @@ impl CohereManager {
 
         let graph_paths = GraniteGraphPaths::new(&model_dir);
         let (backend, runtime) = match request {
+            // Reachable only when MLX was asked for but is unavailable on this
+            // build; macOS returns above once the native engine is up.
+            GraniteBackendRequest::Mlx => {
+                eprintln!("[GRANITE] MLX backend unavailable here; using multi-threaded CPU.");
+                (GpuBackend::Cpu, self.create_runtime_cpu(&graph_paths)?)
+            }
             GraniteBackendRequest::Cpu => (GpuBackend::Cpu, self.create_runtime_cpu(&graph_paths)?),
             GraniteBackendRequest::Cuda => {
                 (GpuBackend::Cuda, self.create_runtime_cuda(&graph_paths)?)
@@ -371,12 +453,9 @@ impl CohereManager {
             },
         };
 
-        let tokenizer_path = model_dir.join("tokenizer.json");
-        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| format!("Load tokenizer {}: {e}", tokenizer_path.display()))?;
+        self.load_tokenizer(&model_dir)?;
 
         self.runtime = Some(runtime);
-        self.tokenizer = Some(tokenizer);
         self.backend = backend;
         self.model_name = Some(cohere_logical_model_id_for_dir(&model_dir));
         self.warm_up_if_needed();
@@ -392,7 +471,7 @@ impl CohereManager {
         match self.transcribe_chunk_loaded(samples, sample_rate) {
             Ok(text) => Ok(text),
             Err(err)
-                if matches!(self.backend, GpuBackend::DirectML | GpuBackend::CoreML)
+                if matches!(self.backend, GpuBackend::DirectML | GpuBackend::CoreML | GpuBackend::Mlx)
                     && std::env::var("TAURSCRIBE_GRANITE_DISABLE_DML_FALLBACK")
                         .ok()
                         .as_deref()
@@ -424,6 +503,26 @@ impl CohereManager {
         };
 
         let features = crate::granite_features::extract_features(&audio);
+
+        #[cfg(target_os = "macos")]
+        if let Some(engine) = self.mlx.as_ref() {
+            let frames = features.nrows();
+            if frames == 0 {
+                return Ok(String::new());
+            }
+            let tokenizer = self
+                .tokenizer
+                .as_ref()
+                .ok_or("Granite tokenizer not loaded")?;
+            // MLX has no fixed-shape bucket, so the true frame count is used.
+            let flat: Vec<f32> = features.iter().copied().collect();
+            let ids = engine.transcribe_features(&flat, frames)?;
+            let text = tokenizer
+                .decode(&ids, true)
+                .map_err(|e| format!("Granite tokenizer decode: {e}"))?;
+            return Ok(strip_whitelisted_sound_captions(&text).trim().to_string());
+        }
+
         let valid_frames = features.nrows().min(EXPORT_FRAMES);
         if valid_frames == 0 {
             return Ok(String::new());
@@ -564,6 +663,9 @@ impl CohereManager {
     fn warm_up_if_needed(&mut self) {
         let label = match self.backend {
             GpuBackend::DirectML => "DirectML",
+            // MLX compiles its Metal kernels on first use — ~13s on an M3 — so
+            // pay it at load instead of on the user's first dictation.
+            GpuBackend::Mlx => "MLX",
             GpuBackend::CoreML => "CoreML",
             GpuBackend::Cuda if granite_ort_mode() == GraniteOrtMode::Perf => "CUDA perf",
             _ => return,
