@@ -58,8 +58,8 @@ export const MODELS: DownloadableModel[] = [
     { id: 'parakeet-tdt', name: 'TDT v3 (Multilingual)', type: 'Parakeet', size: '~2.4 GB', description: 'High-accuracy multilingual TDT model. Runs on CUDA, DirectML, or CPU through ONNX Runtime. Best for file transcription, not streaming.', downloaded: false },
 
     // --- Granite engine slots ---
-    { id: 'granite-speech-4.1-2b-nar-cuda', name: 'NVIDIA CUDA', type: 'Granite', size: '~2.2 GB', description: 'Fastest Granite INT4 ONNX bundle for NVIDIA CUDA GPUs. All four model graphs run on CUDA.', downloaded: false },
-    { id: 'granite-speech-4.1-2b-nar-mlx', name: 'Apple Silicon (MLX)', type: 'Granite', size: '~4.3 GB', description: 'Runs Granite on the Apple GPU through MLX instead of ONNX. Roughly 16x faster than the CPU bundle on Apple silicon, and the same transcripts. macOS only.', downloaded: false },
+    { id: 'granite-speech-4.1-2b-nar-cuda', name: 'NVIDIA CUDA', type: 'Granite', size: '~2.2 GB', description: 'Fastest Granite INT4 ONNX bundle for NVIDIA CUDA GPUs. All four model graphs run on CUDA.', downloaded: false, windowsOnly: true },
+    { id: 'granite-speech-4.1-2b-nar-mlx', name: 'Apple Silicon (MLX)', type: 'Granite', size: '~4.3 GB', description: 'Runs Granite on the Apple GPU through MLX instead of ONNX. Roughly 16x faster than the CPU bundle on Apple silicon, and the same transcripts. macOS only.', downloaded: false, macosOnly: true },
     { id: 'granite-speech-4.1-2b-nar-portable', name: 'AMD / Intel / CPU', type: 'Granite', size: '~2.2 GB', description: 'Portable Granite INT4 ONNX bundle. Uses DirectML first on Windows AMD or Intel GPUs, then falls back to multi-threaded CPU.', downloaded: false },
 
     // --- LLM ---

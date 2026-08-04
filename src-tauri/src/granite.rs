@@ -153,9 +153,14 @@ fn portable_default_backend_request() -> GraniteBackendRequest {
 
 /// A Granite bundle carrying `model.safetensors` can run on native MLX, which
 /// measured RTF 0.069 against 1.218 for the ONNX CPU path on an M3.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn mlx_checkpoint_present(model_dir: &Path) -> bool {
     model_dir.join("model.safetensors").exists() && model_dir.join("config.json").exists()
+}
+
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+fn mlx_checkpoint_present(_model_dir: &Path) -> bool {
+    false
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -244,7 +249,7 @@ struct GraniteRuntime {
 
 pub struct CohereManager {
     runtime: Option<GraniteRuntime>,
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     mlx: Option<crate::granite_mlx::GraniteMlx>,
     tokenizer: Option<tokenizers::Tokenizer>,
     backend: GpuBackend,
@@ -256,7 +261,7 @@ impl CohereManager {
     pub fn new() -> Self {
         Self {
             runtime: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             mlx: None,
             tokenizer: None,
             backend: GpuBackend::Cpu,
@@ -267,9 +272,9 @@ impl CohereManager {
 
     pub fn get_status(&self) -> CohereStatus {
         CohereStatus {
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             loaded: self.runtime.is_some() || self.mlx.is_some(),
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
             loaded: self.runtime.is_some(),
             model_id: self.model_name.clone(),
             backend: self.backend.to_string(),
@@ -289,7 +294,7 @@ impl CohereManager {
     }
 
     pub fn unload(&mut self) {
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         if self.mlx.take().is_some() {
             println!("[GRANITE] Unloading MLX model...");
             self.tokenizer = None;
@@ -322,7 +327,7 @@ impl CohereManager {
         // Apple silicon: if the bundle carries the safetensors checkpoint, run it
         // natively on MLX. That path has no ONNX graphs, so it is decided before
         // the ONNX bundle check below.
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
             let explicit = matches!(
                 granite_backend_request(force_cpu, &model_dir),
@@ -505,7 +510,7 @@ impl CohereManager {
 
         let features = crate::granite_features::extract_features(&audio);
 
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         if let Some(engine) = self.mlx.as_ref() {
             let frames = features.nrows();
             if frames == 0 {
@@ -1204,7 +1209,7 @@ pub(crate) fn resolve_cohere_model_dir(
         // With no explicit choice, Apple silicon takes the MLX bundle when it is
         // installed; it is an order of magnitude faster than the ONNX graphs.
         None => {
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             {
                 let mlx = models_dir.join(MODEL_ID_MLX);
                 if mlx.join("model.safetensors").exists() {
@@ -1213,7 +1218,7 @@ pub(crate) fn resolve_cohere_model_dir(
                     models_dir.join(DEFAULT_MODEL_DIR)
                 }
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
             {
                 models_dir.join(DEFAULT_MODEL_DIR)
             }
