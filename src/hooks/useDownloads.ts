@@ -138,6 +138,7 @@ export function useDownloads(
                     delete lastActivityRef.current[payload.model_id];
                     toast.info(`Download cancelled: ${payload.model_id}`);
                     clearProgress(payload.model_id);
+                    void Promise.resolve(onDownloadFailedRef.current?.(payload.model_id)).catch(() => {});
                 } else if (payload.status === "delete-done") {
                     clearProgress(payload.model_id);
                 } else {
@@ -169,11 +170,13 @@ export function useDownloads(
         } catch (e) {
             activeDownloadsRef.current.delete(id);
             delete lastActivityRef.current[id];
-            if (cancelledRef.current.has(id)) {
+            const raw = `${e ?? "Unknown error"}`;
+            if (cancelledRef.current.has(id) || raw.toLowerCase().includes("cancel")) {
                 cancelledRef.current.delete(id);
+                clearProgress(id);
+                void Promise.resolve(onDownloadFailedRef.current?.(id)).catch(() => {});
                 return;
             }
-            const raw = `${e ?? "Unknown error"}`;
             const message = raw.includes("internet") || raw.includes("onnect") || raw.includes("stall") || raw.includes("lost")
                 ? raw
                 : `Download failed — ${raw}`;
@@ -186,11 +189,17 @@ export function useDownloads(
     };
 
     const handleCancelDownload = async (id: string) => {
+        cancelledRef.current.add(id);
+        activeDownloadsRef.current.delete(id);
+        delete lastActivityRef.current[id];
+        toast.info("Download cancelled");
         try {
             await invoke("cancel_download", { modelId: id });
         } catch (e) {
             console.warn("cancel_download failed:", e);
         }
+        clearProgress(id);
+        void Promise.resolve(onDownloadFailedRef.current?.(id)).catch(() => {});
     };
 
     return {

@@ -104,11 +104,6 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 # XNNPACK: Cross-platform CPU optimization (fallback for Intel Macs)
 # -------------------------------------------------------------------------
 [target.'cfg(target_os = "macos")'.dependencies]
-# MLX: Apple-silicon inference for the Granite NAR engine. The pure-ONNX path
-# runs this model on CPU (RTF 1.218); the MLX pipeline measured ~11x faster at
-# better WER, so the Apple build talks to MLX directly instead of ORT.
-mlx-rs = "0.25.3"
-
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "coreml",
 ] }
@@ -143,6 +138,13 @@ objc2-app-kit = { version = "0.3", features = [
     "NSScreen",
 ] }
 objc2-foundation = "0.3"
+
+# 2b. Apple Silicon Specific (M1/M2/M3/M4)
+# MLX: Apple-silicon inference for the Granite NAR engine. The pure-ONNX path
+# runs this model on CPU (RTF 1.218); the MLX pipeline measured ~11x faster at
+# better WER, so the Apple build talks to MLX directly instead of ORT.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+mlx-rs = "0.25.3"
 # 3. Windows (x86_64) -> CUDA + DirectML + TensorRT
 # CUDA: NVIDIA GPU acceleration (primary)
 # DirectML: Universal Windows GPU acceleration (AMD/Intel fallback)

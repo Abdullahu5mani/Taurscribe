@@ -121,10 +121,37 @@ pub fn scan_and_clean_stale_downloads() {
 
 /// Cancel an in-progress download. Deletes all partial files for that model.
 #[tauri::command]
-pub async fn cancel_download(model_id: String) -> Result<(), String> {
+pub async fn cancel_download(app: AppHandle, model_id: String) -> Result<(), String> {
     if let Some(flag) = cancel_flags().lock().unwrap().get(&model_id) {
         flag.store(true, Ordering::Relaxed);
     }
+    // Proactively clean up partial model files and sentinel lock file
+    if let Some(config) = super::model_registry::get_model_config(&model_id) {
+        if let Ok(models_dir) = crate::utils::get_models_dir() {
+            let base_dir = if let Some(subdir) = config.subdirectory {
+                models_dir.join(subdir)
+            } else {
+                models_dir.clone()
+            };
+            delete_model_files(&config, &base_dir);
+            remove_download_lock(&model_id);
+            let mut store = load_verified_store();
+            if store.remove(&model_id).is_some() {
+                save_verified_store(&store);
+            }
+        }
+    }
+    let _ = app.emit(
+        "download-progress",
+        DownloadProgressPayload {
+            model_id: model_id.clone(),
+            total_bytes: 0,
+            downloaded_bytes: 0,
+            status: "cancelled".to_string(),
+            current_file: 0,
+            total_files: 0,
+        },
+    );
     Ok(())
 }
 
@@ -379,22 +406,29 @@ pub async fn get_download_status(
                 models_dir.clone()
             };
 
+            // If download is currently in progress or actively being cancelled,
+            // the model is definitely not downloaded.
+            let is_downloading = lock_file_path(&id).map(|p| p.exists()).unwrap_or(false)
+                || cancel_flags().lock().unwrap().contains_key(&id);
+
             // Check all files exist on disk and sum their sizes.
-            let mut all_exist = true;
+            let mut all_exist = !is_downloading;
             let mut total_size: u64 = 0;
 
-            for file_spec in &config.files {
-                let file_path = base_dir.join(file_spec.filename);
-                if file_path.exists() {
-                    if file_path.is_dir() {
-                        total_size += 1; // CoreML .mlmodelc directories
-                    } else if let Ok(metadata) = std::fs::metadata(&file_path) {
-                        total_size += metadata.len();
+            if !is_downloading {
+                for file_spec in &config.files {
+                    let file_path = base_dir.join(file_spec.filename);
+                    if file_path.exists() {
+                        if file_path.is_dir() {
+                            total_size += 1; // CoreML .mlmodelc directories
+                        } else if let Ok(metadata) = std::fs::metadata(&file_path) {
+                            total_size += metadata.len();
+                        } else {
+                            all_exist = false;
+                        }
                     } else {
                         all_exist = false;
                     }
-                } else {
-                    all_exist = false;
                 }
             }
 
@@ -652,6 +686,26 @@ async fn download_model_inner(
             let emit_threshold = 1024 * 1024; // 1 MB
 
             while let Some(item) = stream.next().await {
+                // Check for user cancellation on every chunk immediately
+                if cancel_flag.load(Ordering::Relaxed) {
+                    drop(file);
+                    let _ = std::fs::remove_file(&download_path);
+                    delete_model_files(&config, &base_dir);
+                    remove_download_lock(model_id);
+                    let _ = app.emit(
+                        "download-progress",
+                        DownloadProgressPayload {
+                            model_id: model_id.to_string(),
+                            total_bytes: 0,
+                            downloaded_bytes: 0,
+                            status: "cancelled".to_string(),
+                            current_file: (i + 1) as u32,
+                            total_files: files_count as u32,
+                        },
+                    );
+                    return Err("Download cancelled by user".to_string());
+                }
+
                 let chunk = match item {
                     Ok(c) => c,
                     Err(e) => {
@@ -696,25 +750,6 @@ async fn download_model_inner(
                             total_files: files_count as u32,
                         },
                     );
-
-                    // Check for user cancellation at each progress emit.
-                    if cancel_flag.load(Ordering::Relaxed) {
-                        drop(file);
-                        let _ = std::fs::remove_file(&download_path);
-                        delete_model_files(&config, &base_dir);
-                        let _ = app.emit(
-                            "download-progress",
-                            DownloadProgressPayload {
-                                model_id: model_id.to_string(),
-                                total_bytes: 0,
-                                downloaded_bytes: 0,
-                                status: "cancelled".to_string(),
-                                current_file: (i + 1) as u32,
-                                total_files: files_count as u32,
-                            },
-                        );
-                        return Err("Download cancelled by user".to_string());
-                    }
                 }
             }
             drop(file);
