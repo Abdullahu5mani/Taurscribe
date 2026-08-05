@@ -5,7 +5,7 @@
 //! full window. That is what turns ~50 frames/s of audio into the far shorter
 //! token sequence the editor consumes.
 
-use mlx_rs::{error::Exception, fast, ops, Array};
+use mlx_rs::{error::Exception, ops, Array};
 
 use super::encoder::{LayerNorm, Linear, Weights};
 

@@ -11,6 +11,9 @@ pub mod granite_features;
 /// Native MLX backend, Apple silicon only.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod granite_mlx;
+/// Native MLX backend for Parakeet FastConformer, Apple silicon only.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub mod parakeet_mlx;
 mod hotkeys;
 pub mod librispeech_wer;
 mod llm;
