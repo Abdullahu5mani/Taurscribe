@@ -12,6 +12,7 @@ use crate::parakeet_runtime::LoadedParakeetRuntime;
 #[derive(Debug, Clone, serde::Serialize)]
 #[allow(dead_code)] // Cuda/DirectML used only on non-macOS builds
 pub enum GpuBackend {
+    Metal,    // Apple Silicon Metal via MLX
     Cuda,     // NVIDIA GPUs (Very Fast)
     DirectML, // Windows GPUs/NPUs (ARM64/AMD/Intel)
     Cpu,      // Processor (Slow fallback)
@@ -20,6 +21,7 @@ pub enum GpuBackend {
 impl std::fmt::Display for GpuBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            GpuBackend::Metal => write!(f, "Metal (MLX)"),
             GpuBackend::Cuda => write!(f, "CUDA"),
             GpuBackend::DirectML => write!(f, "DirectML"),
             GpuBackend::Cpu => write!(f, "CPU"),
@@ -74,6 +76,21 @@ mod tests {
 
         fs::remove_dir_all(&dir).expect("remove temp fixture dir");
     }
+
+    #[test]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    fn nemotron_mlx_layout_detection() {
+        let dir = unique_temp_dir("taurscribe_nemotron_mlx");
+        fs::create_dir_all(&dir).expect("create temp fixture dir");
+
+        create_empty_file(&dir.join("model.safetensors"));
+        create_empty_file(&dir.join("tokenizer.model"));
+
+        assert!(dir.join("model.safetensors").exists());
+        assert!(dir.join("tokenizer.model").exists());
+
+        fs::remove_dir_all(&dir).expect("remove temp fixture dir");
+    }
 }
 
 /// Information about a Parakeet Model
@@ -88,6 +105,8 @@ pub struct ParakeetModelInfo {
 /// Wrapper for different loaded model types
 pub(crate) enum LoadedModel {
     Nemotron(Nemotron),
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    NemotronMlx(crate::parakeet_mlx::ParakeetNemotronMlx),
     Ctc(Parakeet),
     Eou(ParakeetEOU),
     Tdt(ParakeetTDT),
@@ -173,6 +192,34 @@ impl ParakeetManager {
             }
             let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
 
+            // Detect Nemotron MLX (model.safetensors + tokenizer.model)
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            if path.join("model.safetensors").exists() && path.join("tokenizer.model").exists() {
+                models.push(ParakeetModelInfo {
+                    id: format!("nemotron:{}", dir_name),
+                    display_name: format!("Nemotron Streaming (Apple Silicon MLX) - {}", dir_name),
+                    model_type: "Nemotron Streaming".to_string(),
+                    size_mb: Self::estimate_model_size(&path),
+                });
+            } else if path.join("encoder.onnx").exists() && path.join("decoder_joint.onnx").exists() {
+                if path.join("tokenizer.model").exists() {
+                    models.push(ParakeetModelInfo {
+                        id: format!("nemotron:{}", dir_name),
+                        display_name: format!("Nemotron Streaming - {}", dir_name),
+                        model_type: "Nemotron Streaming".to_string(),
+                        size_mb: Self::estimate_model_size(&path),
+                    });
+                } else if path.join("tokenizer.json").exists() {
+                    models.push(ParakeetModelInfo {
+                        id: format!("eou:{}", dir_name),
+                        display_name: format!("Parakeet EOU - {}", dir_name),
+                        model_type: "EOU".to_string(),
+                        size_mb: Self::estimate_model_size(&path),
+                    });
+                }
+            }
+
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
             // Detect Nemotron / EOU (both have encoder.onnx + decoder_joint.onnx)
             if path.join("encoder.onnx").exists() && path.join("decoder_joint.onnx").exists() {
                 if path.join("tokenizer.model").exists() {
@@ -234,6 +281,8 @@ impl ParakeetManager {
     pub fn get_status(&self) -> ParakeetStatus {
         let model_type = self.runtime.as_ref().map(|slot| match &slot.model {
             LoadedModel::Nemotron(_) => "Nemotron Streaming".to_string(),
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            LoadedModel::NemotronMlx(_) => "Nemotron Streaming (Apple Silicon MLX)".to_string(),
             LoadedModel::Ctc(_) => "CTC".to_string(),
             LoadedModel::Eou(_) => "EOU".to_string(),
             LoadedModel::Tdt(_) => "TDT".to_string(),
@@ -361,8 +410,45 @@ impl ParakeetManager {
 
         let (model, backend): (LoadedModel, GpuBackend) = match info.model_type.as_str() {
             "Nemotron" | "Nemotron Streaming" => {
-                let (m, b) = init_nemotron(&model_path, force_cpu, load_path)?;
-                (LoadedModel::Nemotron(m), b)
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                if !force_cpu && load_path != ParakeetLoadPath::Cpu {
+                    let safetensors_path = model_path.join("model.safetensors");
+                    let mlx_dir = model_path
+                        .parent()
+                        .map(|p| p.join("parakeet-nemotron-mlx"))
+                        .unwrap_or_else(|| model_path.clone());
+                    let target_dir = if safetensors_path.exists() {
+                        Some(model_path.clone())
+                    } else if mlx_dir.join("model.safetensors").exists() {
+                        Some(mlx_dir)
+                    } else {
+                        None
+                    };
+
+                    if let Some(td) = target_dir {
+                        println!("[PARAKEET] Loading native Apple Silicon MLX backend (Metal GPU) from {}", td.display());
+                        match crate::parakeet_mlx::ParakeetNemotronMlx::load(&td) {
+                            Ok(m) => (LoadedModel::NemotronMlx(m), GpuBackend::Metal),
+                            Err(e) => {
+                                eprintln!("[PARAKEET] MLX loader failed, falling back to CPU ONNX: {e}");
+                                let (m, b) = init_nemotron(&model_path, force_cpu, load_path)?;
+                                (LoadedModel::Nemotron(m), b)
+                            }
+                        }
+                    } else {
+                        let (m, b) = init_nemotron(&model_path, force_cpu, load_path)?;
+                        (LoadedModel::Nemotron(m), b)
+                    }
+                } else {
+                    let (m, b) = init_nemotron(&model_path, force_cpu, load_path)?;
+                    (LoadedModel::Nemotron(m), b)
+                }
+
+                #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                {
+                    let (m, b) = init_nemotron(&model_path, force_cpu, load_path)?;
+                    (LoadedModel::Nemotron(m), b)
+                }
             }
             "CTC" => {
                 let (m, b) = init_ctc(&model_path, force_cpu, load_path)?;
@@ -401,8 +487,15 @@ impl ParakeetManager {
     /// Clear the internal context/state of the model (reset for new recording)
     pub fn clear_context(&mut self) {
         if let Some(slot) = &mut self.runtime {
-            if let LoadedModel::Nemotron(m) = &mut slot.model {
-                m.reset();
+            match &mut slot.model {
+                LoadedModel::Nemotron(m) => {
+                    m.reset();
+                }
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                LoadedModel::NemotronMlx(m) => {
+                    m.reset();
+                }
+                _ => {}
             }
         }
     }
@@ -477,6 +570,49 @@ impl ParakeetManager {
         // 2. Transcribe
         if let Some(slot) = &mut self.runtime {
             let result = match &mut slot.model {
+                #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                LoadedModel::NemotronMlx(m) => {
+                    let mut transcript = String::new();
+                    const CHUNK_SIZE: usize = 8960; // 560 ms at 16 kHz
+                    let total_subchunks = audio.as_ref().chunks(CHUNK_SIZE).len();
+                    for (idx, chunk) in audio.as_ref().chunks(CHUNK_SIZE).enumerate() {
+                        crate::memory::maybe_log_process_memory_with_sizes(
+                            &format!(
+                                "parakeet nemotron mlx subchunk {}/{} start",
+                                idx + 1,
+                                total_subchunks
+                            ),
+                            &[
+                                ("subchunk_samples", chunk.len()),
+                                (
+                                    "subchunk_audio_bytes",
+                                    chunk.len() * std::mem::size_of::<f32>(),
+                                ),
+                                ("transcript_chars_so_far", transcript.len()),
+                            ],
+                        );
+                        let mut chunk_vec = chunk.to_vec();
+                        if chunk_vec.len() < CHUNK_SIZE {
+                            chunk_vec.resize(CHUNK_SIZE, 0.0);
+                        }
+                        match m.transcribe_chunk(&chunk_vec) {
+                            Ok(t) => transcript.push_str(&t),
+                            Err(e) => eprintln!("[PARAKEET MLX] chunk inference error: {e}"),
+                        }
+                        crate::memory::maybe_log_process_memory_with_sizes(
+                            &format!(
+                                "parakeet nemotron mlx subchunk {}/{} end",
+                                idx + 1,
+                                total_subchunks
+                            ),
+                            &[
+                                ("padded_subchunk_samples", chunk_vec.len()),
+                                ("transcript_chars_so_far", transcript.len()),
+                            ],
+                        );
+                    }
+                    Ok(transcript)
+                }
                 LoadedModel::Nemotron(m) => {
                     let mut transcript = String::new();
                     const CHUNK_SIZE: usize = 8960; // 560 ms at 16 kHz
