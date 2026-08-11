@@ -55,6 +55,7 @@ export const MODELS: DownloadableModel[] = [
 
     // --- Parakeet ---
     { id: 'parakeet-nemotron', name: 'Nemotron Streaming (INT4)', type: 'Parakeet', size: '663 MB', description: 'Ultra-low latency streaming. English only. Runs on CUDA, DirectML, or CPU through ONNX Runtime. Best for live dictation.', downloaded: true },
+    { id: 'parakeet-nemotron-mlx', name: 'Nemotron Streaming (Apple Silicon MLX)', type: 'Parakeet', size: '1.25 GB', description: 'Runs Parakeet Nemotron on Apple Silicon Metal GPU through MLX. 3x faster with 121ms latency and identical accuracy. macOS Apple Silicon only.', downloaded: true, macosOnly: true },
     { id: 'parakeet-tdt', name: 'TDT v3 (Multilingual)', type: 'Parakeet', size: '~2.4 GB', description: 'High-accuracy multilingual TDT model. Runs on CUDA, DirectML, or CPU through ONNX Runtime. Best for file transcription, not streaming.', downloaded: false },
 
     // --- Granite engine slots ---
