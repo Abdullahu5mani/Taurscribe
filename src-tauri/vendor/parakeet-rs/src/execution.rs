@@ -92,7 +92,7 @@ impl ModelConfig {
         use ort::{AsPointer, ortsys};
 
         let mut builder = builder
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_optimization_level(GraphOptimizationLevel::Level2)?
             .with_intra_threads(self.intra_threads)?
             .with_inter_threads(self.inter_threads)?
             .with_memory_pattern(false)?

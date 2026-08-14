@@ -1,5 +1,5 @@
 //! Confirms mlx-rs reaches the GPU and exposes the ops the Granite port needs.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use mlx_rs::{fast, ops, Array, Dtype};
 
@@ -32,7 +32,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 fn main() {
-    println!("macOS only");
+    println!("Apple Silicon macOS (aarch64) only");
 }
+

@@ -27,6 +27,26 @@ if (platform() !== "darwin") {
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+const rawArgs = process.argv.slice(2);
+let targetTriple = "";
+const targetIdx = rawArgs.indexOf("--target");
+if (targetIdx !== -1 && rawArgs[targetIdx + 1]) {
+  targetTriple = rawArgs[targetIdx + 1];
+}
+
+const cargoArgs = ["build", "--release"];
+const tauriArgs = ["run", "tauri", "build"];
+if (targetTriple) {
+  cargoArgs.push("--target", targetTriple);
+  tauriArgs.push("--target", targetTriple);
+}
+
+const buildEnv = {
+  ...process.env,
+  CI: "true",
+  ...(targetTriple ? { TAURI_BUILD_TARGET: targetTriple } : {}),
+};
+
 function run(cmd: string, args: string[], opts?: { cwd?: string; env?: NodeJS.ProcessEnv }) {
   const cwd = opts?.cwd ?? root;
   const r = spawnSync(cmd, args, { stdio: "inherit", cwd, env: opts?.env });
@@ -36,14 +56,14 @@ function run(cmd: string, args: string[], opts?: { cwd?: string; env?: NodeJS.Pr
 console.log("build-macos: Building frontend...");
 run("bun", ["run", "build"]);
 
-console.log("build-macos: Building Rust binary...");
-run("cargo", ["build", "--release"], { cwd: join(root, "src-tauri") });
+console.log(`build-macos: Building Rust binary${targetTriple ? ` for ${targetTriple}` : ""}...`);
+run("cargo", cargoArgs, { cwd: join(root, "src-tauri") });
 
 console.log("build-macos: Bundling dylibs (dylibbundler)...");
-run("bun", ["scripts/bundle-macos-dylibs.ts"], { cwd: root });
+run("bun", ["scripts/bundle-macos-dylibs.ts"], { cwd: root, env: buildEnv });
 
-console.log("build-macos: Creating app bundle...");
+console.log(`build-macos: Creating app bundle${targetTriple ? ` for ${targetTriple}` : ""}...`);
 // CI=true makes create-dmg skip the Finder AppleScript window-styling step
 // (--skip-jenkins), which fails in non-interactive or restricted macOS sessions.
-run("bun", ["run", "tauri", "build"], { cwd: root, env: { ...process.env, CI: "true" } });
-// This will re-run beforeBuildCommand and cargo (cached) but config is merged now
+run("bun", tauriArgs, { cwd: root, env: buildEnv });
+

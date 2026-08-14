@@ -2,12 +2,12 @@
 //!
 //!   cargo run --release --bin granite_mlx_bench -- <model-dir> <16kHz-wav>
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 fn main() {
-    println!("macOS only");
+    println!("Apple Silicon macOS (aarch64) only");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use mlx_rs::Dtype;
     use taurscribe_lib::{granite_features, granite_mlx::GraniteMlx};
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Minimal 16-bit PCM WAV reader; the reference clip is 16 kHz mono.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn read_wav_mono16k(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     let raw = std::fs::read(path)?;
     if &raw[..4] != b"RIFF" || &raw[8..12] != b"WAVE" {
