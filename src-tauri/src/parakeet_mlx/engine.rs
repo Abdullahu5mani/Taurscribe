@@ -42,6 +42,38 @@ const BLANK_ID: usize = 1024;
 const MAX_SYMBOLS_PER_STEP: usize = 10;
 const RNNT_CONFIDENCE_THRESHOLD: f32 = 0.3;
 
+/// Error type for Parakeet MLX operations, including engine initialization, inference, and warmup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParakeetMlxError {
+    Engine(String),
+    LoadError(String),
+    WarmupError(String),
+}
+
+impl std::fmt::Display for ParakeetMlxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParakeetMlxError::Engine(e) => write!(f, "Parakeet MLX engine error: {e}"),
+            ParakeetMlxError::LoadError(e) => write!(f, "Parakeet MLX load error: {e}"),
+            ParakeetMlxError::WarmupError(e) => write!(f, "Parakeet MLX warmup error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ParakeetMlxError {}
+
+impl From<String> for ParakeetMlxError {
+    fn from(err: String) -> Self {
+        ParakeetMlxError::Engine(err)
+    }
+}
+
+impl From<&str> for ParakeetMlxError {
+    fn from(err: &str) -> Self {
+        ParakeetMlxError::Engine(err.to_string())
+    }
+}
+
 pub struct ParakeetNemotronMlx {
     subsampling: ConvSubsampling,
     encoder: FastConformerEncoder,
@@ -171,6 +203,26 @@ impl ParakeetNemotronMlx {
         self.audio_processed = 0;
         self.chunk_idx = 0;
         self.last_preemph_sample = 0.0;
+    }
+
+    /// Warms up Metal compute pipelines and JIT kernels with a dummy chunk (560ms of silence).
+    /// Calls self.reset() afterwards to restore clean state.
+    pub fn warmup(&mut self) -> Result<(), ParakeetMlxError> {
+        // 560ms chunk at 16kHz = 8960 audio samples (matching Taurscribe streaming chunk size)
+        const WARMUP_CHUNK_SAMPLES: usize = 8960;
+        let dummy_chunk = vec![0.0f32; WARMUP_CHUNK_SAMPLES];
+
+        // Execute dummy chunk through transcribe_chunk to trigger full forward pass
+        // and Metal shader compilation across ConvSubsampling, Conformer, Predictor, and Joint networks.
+        let _ = self
+            .transcribe_chunk(&dummy_chunk)
+            .map_err(|e| ParakeetMlxError::WarmupError(format!("MLX warmup forward pass failed: {e}")))?;
+
+        // Reset internal streaming caches (caches_channel, caches_time, LSTM states, audio_buffer)
+        // to guarantee a clean initial state for incoming user speech.
+        self.reset();
+
+        Ok(())
     }
 
     /// Transcribe a streaming chunk of audio
@@ -446,3 +498,41 @@ impl ParakeetNemotronMlx {
         weights
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parakeet_mlx_error_display_and_conversion() {
+        let err_engine: ParakeetMlxError = "test engine error".into();
+        assert_eq!(
+            err_engine.to_string(),
+            "Parakeet MLX engine error: test engine error"
+        );
+
+        let err_load = ParakeetMlxError::LoadError("missing file".to_string());
+        assert_eq!(
+            err_load.to_string(),
+            "Parakeet MLX load error: missing file"
+        );
+
+        let err_warmup = ParakeetMlxError::WarmupError("metal error".to_string());
+        assert_eq!(
+            err_warmup.to_string(),
+            "Parakeet MLX warmup error: metal error"
+        );
+    }
+
+    #[test]
+    fn test_warmup_chunk_parameters() {
+        // Taurscribe streaming chunks are 560ms at 16kHz
+        let samples_560ms = (16000.0 * 0.560) as usize;
+        assert_eq!(samples_560ms, 8960);
+
+        // HOP_LENGTH = 160, CHUNK_SIZE = 56 frames
+        // 56 frames * 160 samples/frame = 8960 samples
+        assert_eq!(CHUNK_SIZE * HOP_LENGTH, 8960);
+    }
+}
+

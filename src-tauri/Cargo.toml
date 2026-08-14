@@ -153,6 +153,15 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = [
     "load-dynamic",
     "api-20",
 ] }
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_Com",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+] }
+
 # 3. Windows (x86_64) -> CUDA + DirectML + TensorRT
 # CUDA: NVIDIA GPU acceleration (primary)
 # DirectML: Universal Windows GPU acceleration (AMD/Intel fallback)
@@ -165,6 +174,8 @@ windows = { version = "0.58", features = [
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
     "Win32_System_Com",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
 ] }
 
 # vulkan temporarily removed for Windows build
@@ -226,6 +237,8 @@ windows = { version = "0.58", features = [
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
     "Win32_System_Com",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
 ] }
 ort = { version = "2.0.0-rc.12", features = [
     "download-binaries",

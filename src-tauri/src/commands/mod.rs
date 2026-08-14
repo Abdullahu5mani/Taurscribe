@@ -3,7 +3,7 @@ mod file_transcription;
 mod history;
 mod llm;
 mod misc;
-pub(crate) mod model_registry;
+pub mod model_registry;
 mod models;
 mod recording;
 mod settings;

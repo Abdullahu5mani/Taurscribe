@@ -3,8 +3,9 @@ mod audio;
 pub mod audio_decode;
 pub mod audio_preprocess;
 pub mod cohere;
-mod commands;
+pub mod commands;
 mod context;
+pub mod cpu_features;
 mod denoise;
 pub mod granite;
 pub mod granite_features;
@@ -23,10 +24,12 @@ mod overlay;
 pub mod parakeet;
 pub mod parakeet_loaders;
 mod parakeet_runtime;
+pub mod platform_tuning;
 mod state;
 mod system_audio;
+pub mod text_injection;
 mod tray;
-mod types;
+pub mod types;
 pub mod utils;
 pub mod vad;
 mod watcher;
@@ -137,6 +140,9 @@ pub fn run() {
             } else {
                 println!("[INFO] Safety unmute on startup completed");
             }
+
+            // Log CPU SIMD features for quantized inference dispatch
+            cpu_features::log_simd_capabilities();
 
             // Initialise the native overlay (macOS: creates NSPanel; others: no-op)
             overlay::init(app.handle());

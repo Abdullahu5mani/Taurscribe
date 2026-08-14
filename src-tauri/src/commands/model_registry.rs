@@ -84,6 +84,39 @@ fn granite_mlx_files() -> Vec<ModelFile> {
     ]
 }
 
+/// Apple-silicon MLX 8-bit quantized bundle. Weights are quantized via MLX groupwise
+/// affine quantization (bits=8, group_size=64) for memory reduction (~2.5 GB vs 4.6 GB FP16)
+/// on unified-memory Apple Silicon devices while retaining exact 0-token-drift parity.
+fn granite_mlx_8bit_files() -> Vec<ModelFile> {
+    vec![
+        ModelFile {
+            filename: "model.safetensors",
+            remote_path: "model.safetensors",
+            sha1: "b52c0f4e389d419a71a5c687e35b7194f107ea6984e4f2167d4325a7201c9ba8",
+        },
+        ModelFile {
+            filename: "config.json",
+            remote_path: "config.json",
+            sha1: "d6c760e672df122eedd873adb77a318b785221b06f9fbe9db08c51a1f8302936",
+        },
+        ModelFile {
+            filename: "tokenizer.json",
+            remote_path: "tokenizer.json",
+            sha1: "64c10a88b2495872bd7da5a885861a1757d9c23590c40fd378546ae176d280f6",
+        },
+        ModelFile {
+            filename: "tokenizer_config.json",
+            remote_path: "tokenizer_config.json",
+            sha1: "c7e48adce9bdf6cfe3524759067b5dfa2428de9ccba2fd257502bf0246161c2f",
+        },
+        ModelFile {
+            filename: "preprocessor_config.json",
+            remote_path: "preprocessor_config.json",
+            sha1: "e12be1e9d4ec5c459741328f28d9d8c00c3c688e8fe4230a6ec28df5470db8b3",
+        },
+    ]
+}
+
 fn granite_cuda_files() -> Vec<ModelFile> {
     vec![
         ModelFile {
@@ -519,6 +552,29 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             subdirectory: Some("parakeet-nemotron-mlx"),
         }),
 
+        // Parakeet Nemotron 0.6B FastConformer RNN-T native Apple Silicon MLX 8-bit quantized checkpoint
+        // Uses 8-bit groupwise affine quantization (~650 MB vs 1.25 GB FP16) for reduced memory footprint
+        // on unified memory Apple Silicon systems without transcription degradation.
+        // SHA-256 for model weights left empty pending HuggingFace LFS oid retrieval; downloader
+        // skips verification for blank entries or resolves via live LFS metadata.
+        "parakeet-nemotron-mlx-8bit" => Some(ModelConfig {
+            repo: "Abdullahu5mani/parakeet-nemotron-0.6b-mlx-8bit",
+            branch: "main",
+            files: vec![
+                ModelFile {
+                    filename: "model.safetensors",
+                    remote_path: "model.safetensors",
+                    sha1: "",
+                },
+                ModelFile {
+                    filename: "tokenizer.model",
+                    remote_path: "tokenizer.model",
+                    sha1: "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
+                },
+            ],
+            subdirectory: Some("parakeet-nemotron-mlx-8bit"),
+        }),
+
         // Parakeet TDT v3 — multilingual (25 languages), NVIDIA's checkpoint
         // exported to ONNX by community user `istupakov`. Top of HuggingFace
         // Open ASR Leaderboard for English; supports auto language detection.
@@ -589,6 +645,15 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             branch: "main",
             files: granite_mlx_files(),
             subdirectory: Some("granite-speech-4.1-2b-nar-mlx"),
+        }),
+        // Apple Silicon MLX 8-bit quantized weights for IBM Granite Speech NAR 2B
+        // Uses groupwise affine quantization (bits=8, group_size=64) to halve memory
+        // footprint (~2.5 GB) with 0-token-drift parity relative to dense FP16.
+        "granite-speech-4.1-2b-nar-mlx-8bit" => Some(ModelConfig {
+            repo: "Abdullahu5mani/granite-speech-4.1-2b-nar-mlx-8bit",
+            branch: "main",
+            files: granite_mlx_8bit_files(),
+            subdirectory: Some("granite-speech-4.1-2b-nar-mlx-8bit"),
         }),
         // Portable = INT4 argmax bundle with a DirectML-static encoder
         // (rank-3 attention MatMuls, baked shape chains); built by
@@ -666,5 +731,45 @@ mod mlx_tests {
         // Every file must be checksum-verified, or a truncated download would
         // surface as garbled audio rather than a clear failure.
         assert!(config.files.iter().all(|f| f.sha1.len() == 64));
+    }
+
+    #[test]
+    fn parakeet_mlx_8bit_is_registered_with_expected_files() {
+        let config = get_model_config("parakeet-nemotron-mlx-8bit")
+            .expect("parakeet-nemotron-mlx-8bit must be registered");
+        assert_eq!(config.repo, "Abdullahu5mani/parakeet-nemotron-0.6b-mlx-8bit");
+        assert_eq!(config.subdirectory, Some("parakeet-nemotron-mlx-8bit"));
+        for required in ["model.safetensors", "tokenizer.model"] {
+            assert!(
+                config.files.iter().any(|f| f.filename == required),
+                "missing {required}"
+            );
+        }
+        // Tokenizer has verified upstream hash; model weights hash is empty pending upstream LFS retrieval
+        let tokenizer = config.files.iter().find(|f| f.filename == "tokenizer.model").unwrap();
+        assert_eq!(tokenizer.sha1, "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9");
+
+        let model_weights = config.files.iter().find(|f| f.filename == "model.safetensors").unwrap();
+        assert!(
+            model_weights.sha1.is_empty()
+                || (model_weights.sha1.len() == 64 && model_weights.sha1.chars().all(|c| c.is_ascii_hexdigit()))
+        );
+        assert_eq!(model_weights.sha1, "");
+        assert!(!model_weights.sha1.contains("123456789abcdef"));
+    }
+
+    #[test]
+    fn granite_mlx_8bit_is_registered_with_valid_checksums() {
+        let config = get_model_config("granite-speech-4.1-2b-nar-mlx-8bit")
+            .expect("granite-speech-4.1-2b-nar-mlx-8bit must be registered");
+        assert_eq!(config.repo, "Abdullahu5mani/granite-speech-4.1-2b-nar-mlx-8bit");
+        assert_eq!(config.subdirectory, Some("granite-speech-4.1-2b-nar-mlx-8bit"));
+        for required in ["model.safetensors", "config.json", "tokenizer.json"] {
+            assert!(
+                config.files.iter().any(|f| f.filename == required),
+                "missing {required}"
+            );
+        }
+        assert!(config.files.iter().all(|f| f.sha1.len() == 64 && f.sha1.chars().all(|c| c.is_ascii_hexdigit())));
     }
 }

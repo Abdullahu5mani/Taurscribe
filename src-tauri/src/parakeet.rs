@@ -359,7 +359,30 @@ impl ParakeetManager {
             ParakeetLoadPath::FallbackGpu
         };
 
-        self.initialize_with_load_path(model_id, force_cpu, load_path)
+        let res = self.initialize_with_load_path(model_id, force_cpu, load_path)?;
+        self.warm_up_if_needed();
+        Ok(res)
+    }
+
+    /// Warms up MLX Metal compute pipelines if currently loaded model is an Apple Silicon MLX model.
+    pub fn warm_up_if_needed(&mut self) {
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        if let Some(slot) = &mut self.runtime {
+            if let LoadedModel::NemotronMlx(m) = &mut slot.model {
+                if std::env::var("TAURSCRIBE_PARAKEET_WARMUP").ok().as_deref() == Some("0") {
+                    return;
+                }
+                println!("[PARAKEET] Pre-warming Metal shader cache for Parakeet MLX...");
+                let start = std::time::Instant::now();
+                match m.warmup() {
+                    Ok(_) => println!(
+                        "[PARAKEET] Metal shader cache warmup completed in {:.3}s",
+                        start.elapsed().as_secs_f32()
+                    ),
+                    Err(err) => eprintln!("[PARAKEET] Warning: Metal shader cache warmup failed: {err}"),
+                }
+            }
+        }
     }
 
     pub fn initialize_with_load_path(
@@ -428,7 +451,20 @@ impl ParakeetManager {
                     if let Some(td) = target_dir {
                         println!("[PARAKEET] Loading native Apple Silicon MLX backend (Metal GPU) from {}", td.display());
                         match crate::parakeet_mlx::ParakeetNemotronMlx::load(&td) {
-                            Ok(m) => (LoadedModel::NemotronMlx(m), GpuBackend::Metal),
+                            Ok(mut m) => {
+                                if std::env::var("TAURSCRIBE_PARAKEET_WARMUP").ok().as_deref() != Some("0") {
+                                    println!("[PARAKEET] Pre-warming Metal shader cache for Parakeet MLX upon load...");
+                                    let start = std::time::Instant::now();
+                                    match m.warmup() {
+                                        Ok(_) => println!(
+                                            "[PARAKEET] Metal shader cache warmup completed in {:.3}s",
+                                            start.elapsed().as_secs_f32()
+                                        ),
+                                        Err(err) => eprintln!("[PARAKEET] Warning: Metal shader cache warmup failed: {err}"),
+                                    }
+                                }
+                                (LoadedModel::NemotronMlx(m), GpuBackend::Metal)
+                            }
                             Err(e) => {
                                 eprintln!("[PARAKEET] MLX loader failed, falling back to CPU ONNX: {e}");
                                 let (m, b) = init_nemotron(&model_path, force_cpu, load_path)?;
@@ -480,6 +516,8 @@ impl ParakeetManager {
             load_path,
         );
         crate::memory::maybe_log_process_memory("parakeet after initialize");
+
+        self.warm_up_if_needed();
 
         Ok(format!("Loaded {} ({})", info.display_name, backend))
     }
