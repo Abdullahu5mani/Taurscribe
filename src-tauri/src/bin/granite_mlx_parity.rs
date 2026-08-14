@@ -8,12 +8,12 @@
 //! larger means the port drifted from the reference and would decode to
 //! plausible-but-wrong text.
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 fn main() {
-    println!("macOS only");
+    println!("Apple Silicon macOS (aarch64) only");
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::path::PathBuf;
 
@@ -172,12 +172,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// `as_slice` on a transposed view exposes the raw strided buffer, so flatten
 /// through a reshape first — that forces MLX to lay the data out logically.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn flat(a: &mlx_rs::Array) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     Ok(a.reshape(&[-1])?.as_slice::<f32>().to_vec())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn compare(name: &str, got: &[f32], want: &[f32]) -> Result<(), String> {
     if got.len() != want.len() {
         return Err(format!("{name}: length {} vs {}", got.len(), want.len()));
@@ -220,7 +220,7 @@ fn compare(name: &str, got: &[f32], want: &[f32]) -> Result<(), String> {
 }
 
 /// Minimal .npy reader for the C-order float32 arrays the capture writes.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn load_npy_f32(path: &str) -> Result<(Vec<usize>, Vec<f32>), Box<dyn std::error::Error>> {
     let raw = std::fs::read(path)?;
     if &raw[..6] != b"\x93NUMPY" {

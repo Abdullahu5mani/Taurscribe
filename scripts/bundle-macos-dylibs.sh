@@ -54,8 +54,15 @@ if [ -f "$BINARY_CROSS" ]; then
 elif [ -f "$BINARY_HOST" ]; then
   BINARY="$BINARY_HOST"
 else
-  echo "bundle-macos-dylibs: Binary not found at $BINARY_CROSS or $BINARY_HOST, skipping"
-  exit 0
+  # Auto-detect newest release binary among target triples (e.g. x86_64-apple-darwin on arm64 host)
+  NEWEST_BIN=$(ls -t "$TARGET_DIR"/*/release/taurscribe 2>/dev/null | head -n 1 || true)
+  if [ -n "$NEWEST_BIN" ] && [ -f "$NEWEST_BIN" ]; then
+    BINARY="$NEWEST_BIN"
+    TARGET_TRIPLE="$(basename "$(dirname "$(dirname "$BINARY")")")"
+  else
+    echo "bundle-macos-dylibs: Binary not found at $BINARY_CROSS or $BINARY_HOST, skipping"
+    exit 0
+  fi
 fi
 
 echo "bundle-macos-dylibs: Using binary at $BINARY"
@@ -106,6 +113,29 @@ echo "bundle-macos-dylibs: Running dylibbundler with search flags: ${SEARCH_FLAG
 # -od: use @executable_path; -b: bundle (copy) deps; -x: binary; -d: output dir; -p: rpath prefix
 # -s: additional search path for dylibs that aren't in standard locations
 dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks" "${SEARCH_FLAGS[@]}"
+
+# Create unversioned and major-version symlinks for llama.cpp/ggml dylibs so @rpath resolution succeeds
+for f in "$DYLIB_DIR"/*.dylib; do
+  [ -f "$f" ] || continue
+  bn=$(basename "$f")
+  case "$bn" in
+    libggml-base.*.*.*.dylib)
+      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml-base.0.dylib" && ln -sf "libggml-base.0.dylib" "libggml-base.dylib")
+      ;;
+    libggml-cpu.*.*.*.dylib)
+      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml-cpu.0.dylib" && ln -sf "libggml-cpu.0.dylib" "libggml-cpu.dylib")
+      ;;
+    libggml-metal.*.*.*.dylib)
+      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml-metal.0.dylib" && ln -sf "libggml-metal.0.dylib" "libggml-metal.dylib")
+      ;;
+    libggml.*.*.*.dylib)
+      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml.0.dylib" && ln -sf "libggml.0.dylib" "libggml.dylib")
+      ;;
+    libllama.*.*.*.dylib)
+      (cd "$DYLIB_DIR" && ln -sf "$bn" "libllama.0.dylib" && ln -sf "libllama.0.dylib" "libllama.dylib")
+      ;;
+  esac
+done
 
 # Generate tauri.macos.conf.json with framework paths (Tauri validates these at build time;
 # we create this file here so it only exists when dylibs exist, avoiding "Library not found").
