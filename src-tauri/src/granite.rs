@@ -159,6 +159,7 @@ fn mlx_checkpoint_present(model_dir: &Path) -> bool {
 }
 
 #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+#[allow(dead_code)]
 fn mlx_checkpoint_present(_model_dir: &Path) -> bool {
     false
 }

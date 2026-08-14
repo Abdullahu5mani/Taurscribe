@@ -29,6 +29,7 @@ impl std::fmt::Display for ParakeetLoadPath {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ParakeetBackendRequest {
     Auto,
@@ -36,6 +37,7 @@ enum ParakeetBackendRequest {
     DirectML,
 }
 
+#[cfg(not(target_os = "macos"))]
 fn parakeet_backend_request() -> ParakeetBackendRequest {
     match std::env::var("TAURSCRIBE_PARAKEET_BACKEND")
         .ok()
@@ -53,6 +55,7 @@ fn parakeet_backend_request() -> ParakeetBackendRequest {
 /// Number of intra-op threads: half the physical cores, clamped to [2, 6].
 /// Parakeet runs chunks continuously alongside the audio capture thread,
 /// so we leave headroom rather than saturating all cores.
+#[cfg(not(target_os = "macos"))]
 fn intra_thread_count() -> usize {
     (std::thread::available_parallelism()
         .map(|n| n.get())
@@ -139,6 +142,7 @@ pub fn init_nemotron(
     // and falling back would only cost a failed session build on every load.
     #[cfg(target_os = "macos")]
     {
+        let _ = (force_cpu, load_path);
         println!("[PARAKEET] macOS: CPU (CoreML unsupported for this model)");
         let m = try_cpu_nemotron(path.to_str().unwrap())?;
         return Ok((m, GpuBackend::Cpu));
@@ -271,6 +275,7 @@ pub fn init_ctc(
     // correct terminal choice on macOS rather than a missing optimisation.
     #[cfg(target_os = "macos")]
     {
+        let _ = (force_cpu, load_path);
         println!("[PARAKEET] macOS: CPU (CoreML unsupported for this model)");
         let m = try_cpu_ctc(path.to_str().unwrap())?;
         return Ok((m, GpuBackend::Cpu));
@@ -401,6 +406,7 @@ pub fn init_eou(
 ) -> Result<(ParakeetEOU, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
+        let _ = (force_cpu, load_path);
         let m = try_cpu_eou(path.to_str().unwrap())?;
         return Ok((m, GpuBackend::Cpu));
     }
@@ -531,6 +537,7 @@ pub fn init_tdt(
 ) -> Result<(ParakeetTDT, GpuBackend), String> {
     #[cfg(target_os = "macos")]
     {
+        let _ = (force_cpu, load_path);
         let m = try_cpu_tdt(path.to_str().unwrap())?;
         return Ok((m, GpuBackend::Cpu));
     }

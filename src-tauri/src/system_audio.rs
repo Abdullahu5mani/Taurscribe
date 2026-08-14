@@ -13,6 +13,7 @@ static WAS_ALREADY_MUTED: AtomicBool = AtomicBool::new(false);
 
 /// Tracks which endpoints we muted (so we restore only those).
 /// Bit 0 = multimedia, bit 1 = console, bit 2 = communications.
+#[cfg(target_os = "windows")]
 static WE_MUTED_ROLES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 // ── Windows implementation ──────────────────────────────────────────────────

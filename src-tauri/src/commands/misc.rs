@@ -74,9 +74,34 @@ pub fn request_overlay_action(app: tauri::AppHandle, action: String) -> Result<(
 pub async fn list_input_devices() -> Vec<String> {
     tauri::async_runtime::spawn_blocking(|| {
         let host = cpal::default_host();
-        host.input_devices()
+        #[allow(unused_mut)]
+        let mut list: Vec<String> = host
+            .input_devices()
             .map(|devices| devices.filter_map(|d| d.name().ok()).collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+
+        #[cfg(target_os = "linux")]
+        {
+            // Prioritize virtual ALSA/PipeWire PCMs ("default", "pipewire", "pulse") over raw hardware handles ("hw:X,Y")
+            list.sort_by(|a, b| {
+                let a_is_virt = a == "default" || a.to_lowercase().contains("pipewire") || a == "pulse";
+                let b_is_virt = b == "default" || b.to_lowercase().contains("pipewire") || b == "pulse";
+                let a_is_hw = a.starts_with("hw:") || a.contains("hw:");
+                let b_is_hw = b.starts_with("hw:") || b.contains("hw:");
+
+                match (a_is_virt, b_is_virt) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => match (a_is_hw, b_is_hw) {
+                        (true, false) => std::cmp::Ordering::Greater,
+                        (false, true) => std::cmp::Ordering::Less,
+                        _ => a.cmp(b),
+                    },
+                }
+            });
+        }
+
+        list
     })
     .await
     .unwrap_or_default()
@@ -103,6 +128,21 @@ pub async fn get_active_input_device(
                 }
             }
         }
+
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, prioritize virtual PCM "default" or "pipewire" to avoid EBUSY contention
+            if let Ok(devices) = host.input_devices() {
+                for d in devices {
+                    if let Ok(name) = d.name() {
+                        if name == "default" || name.to_lowercase().contains("pipewire") || name == "pulse" {
+                            return Ok(name);
+                        }
+                    }
+                }
+            }
+        }
+
         // Fall back to system default
         host.default_input_device()
             .and_then(|d| d.name().ok())

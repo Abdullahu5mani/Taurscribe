@@ -1,7 +1,9 @@
 //! End-to-end verification for macOS x86_64 architecture running via Rosetta 2 emulation.
 //! Tests architecture detection, ONNX Runtime CPU execution, and Parakeet ASR transcription accuracy.
 
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 use std::path::PathBuf;
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 use parakeet_rs::Nemotron;
 
 #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]

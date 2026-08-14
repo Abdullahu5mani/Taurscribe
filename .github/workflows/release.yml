@@ -24,6 +24,13 @@ jobs:
             os_name: 'macOS'
             arch: 'ARM64'
 
+          - platform: 'macos-latest'
+            name: 'macOS (Intel x86_64)'
+            target: 'x86_64-apple-darwin'
+            cuda: false
+            os_name: 'macOS'
+            arch: 'x86_64'
+
           - platform: 'windows-2022'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
@@ -38,13 +45,12 @@ jobs:
             os_name: 'Windows'
             arch: 'ARM64'
 
-          # --- Linux (x86_64) --- TEMPORARILY DISABLED
-          # - platform: 'ubuntu-24.04'
-          #   name: 'Linux (x86_64)'
-          #   target: 'x86_64-unknown-linux-gnu'
-          #   cuda: true
-          #   os_name: 'Linux'
-          #   arch: 'x86_64'
+          - platform: 'ubuntu-24.04'
+            name: 'Linux (x86_64)'
+            target: 'x86_64-unknown-linux-gnu'
+            cuda: true
+            os_name: 'Linux'
+            arch: 'x86_64'
 
     runs-on: ${{ matrix.platform }}
     name: Build - ${{ matrix.name }}
@@ -57,16 +63,35 @@ jobs:
         uses: actions/checkout@v4
 
       # ── CUDA Setup ──
-      - name: Install CUDA Toolkit (Linux)
+      - name: Install CUDA Toolkit & Configure Stubs (Linux)
         if: contains(matrix.platform, 'ubuntu') && matrix.cuda == true
         run: |
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
           sudo env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install cuda-toolkit-12-6
-          echo "CUDA_PATH=/usr/local/cuda-12.6" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-          echo "PATH=/usr/local/cuda-12.6/bin:$PATH" >> $GITHUB_ENV
+
+          # Dynamically discover installed CUDA directory
+          CUDA_DIR=$(find /usr/local -maxdepth 1 -type d -name "cuda*" | sort -V | tail -n 1)
+          if [ -z "$CUDA_DIR" ] || [ ! -d "$CUDA_DIR" ]; then
+            CUDA_DIR="/usr/local/cuda-12.6"
+          fi
+          echo "Discovered CUDA at: $CUDA_DIR"
+
+          # Configure driver stub for build-time linking on headless runner
+          STUB_DIR="$CUDA_DIR/lib64/stubs"
+          if [ -d "$STUB_DIR" ]; then
+            if [ -f "$STUB_DIR/libcuda.so" ] && [ ! -e "$STUB_DIR/libcuda.so.1" ]; then
+              sudo ln -sf libcuda.so "$STUB_DIR/libcuda.so.1"
+            fi
+            sudo ln -sf "$STUB_DIR/libcuda.so" /usr/lib/x86_64-linux-gnu/libcuda.so
+            sudo ln -sf "$STUB_DIR/libcuda.so" /usr/lib/x86_64-linux-gnu/libcuda.so.1
+          fi
+
+          echo "CUDA_PATH=$CUDA_DIR" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$STUB_DIR:$CUDA_DIR/lib64:${LIBRARY_PATH:-}" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$CUDA_DIR/lib64:$STUB_DIR:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+          echo "PATH=$CUDA_DIR/bin:$PATH" >> $GITHUB_ENV
 
       - name: Install CUDA Toolkit (Windows)
         if: contains(matrix.platform, 'windows') && matrix.cuda == true
@@ -103,6 +128,7 @@ jobs:
             librsvg2-dev \
             patchelf \
             libasound2-dev \
+            libpipewire-0.3-dev \
             build-essential \
             curl wget file \
             libssl-dev \
@@ -328,12 +354,12 @@ jobs:
           CMAKE_CUDA_ARCHITECTURES: "75;86;89"
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
-          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
-          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -C link-arg=-fuse-ld=mold', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           # Match Bundle step env vars so cargo doesn't see a changed environment and recompile
           CI: "true"
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -391,6 +417,7 @@ jobs:
             # Use build-windows.ts which handles DLL bundling
             bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
+            bash scripts/bundle-linux-solibs.sh
             # rpm and appimage are dropped: packaging a ~1 GB payload (531 MB binary +
             # 490 MB libggml-cuda.so) via rpmbuild/mksquashfs takes 4+ hours and risks
             # hitting the 6-hour GHA timeout. .deb + .tar.gz cover all practical Linux
@@ -429,12 +456,12 @@ jobs:
           CMAKE_CUDA_ARCHITECTURES: "75;86;89"
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
-          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
-          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -C link-arg=-fuse-ld=mold', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           APPIMAGE_EXTRACT_AND_RUN: "1"
 
       # Portable: zip the binary + DLLs from the already-built release directory.
@@ -485,11 +512,17 @@ jobs:
             done
           fi
 
-          # macOS DMG (Apple Silicon only)
+          # macOS DMG (Apple Silicon & Intel x86_64)
           if [ "${{ matrix.os_name }}" = "macOS" ]; then
+            ARCH_NAME=$([ "${{ matrix.arch }}" = "ARM64" ] && echo "arm64" || echo "x64")
             for f in src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg; do
               if [ -f "$f" ]; then
-                cp "$f" "release-assets/taurscribe-${TAG}-macos-arm64.dmg"
+                cp "$f" "release-assets/taurscribe-${TAG}-macos-${ARCH_NAME}.dmg"
+                if [ "${ARCH_NAME}" = "x64" ]; then
+                  cp "$f" "release-assets/Taurscribe_x64.dmg"
+                else
+                  cp "$f" "release-assets/Taurscribe_aarch64.dmg"
+                fi
               fi
             done
           fi

@@ -2,9 +2,11 @@ fn main() {
     // Standard Tauri build process
     tauri_build::build();
 
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+
     // CUSTOM: Set minimum macOS deployment target for ONNX Runtime
-    #[cfg(target_os = "macos")]
-    {
+    if target_os == "macos" {
         // ONNX Runtime requires macOS 13.4+ on Apple Silicon
         // (also satisfies whisper.cpp C++17 std::filesystem requirement which needs 10.15+)
         println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
@@ -19,8 +21,7 @@ fn main() {
     }
 
     // CUSTOM: Force Clang for ARM64 Windows (whisper.cpp requirement)
-    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-    {
+    if target_os == "windows" && target_arch == "aarch64" {
         // whisper.cpp requires Clang for ARM64 on Windows (MSVC not supported)
         println!("cargo:warning=Building for Windows ARM64 - Clang/LLVM required");
         std::env::set_var("CC", "clang-cl");
@@ -29,8 +30,7 @@ fn main() {
     }
 
     // CUSTOM: Add CUDA library search path to fix linker errors (Windows only)
-    #[cfg(windows)]
-    {
+    if target_os == "windows" {
         let mut found = false;
 
         // 1. Try CUDA_PATH environment variable
@@ -72,6 +72,41 @@ fn main() {
             println!(
                 "cargo:warning=GPU builds will fail with LNK1181 if the linker cannot find cublas.lib"
             );
+        }
+    }
+
+    // CUSTOM: Add CUDA library search path for Linux (both standard and headless stubs, target_os = "linux", target_arch = "x86_64")
+    if target_os == "linux" && target_arch == "x86_64" {
+        let mut candidates = Vec::new();
+        if let Ok(p) = std::env::var("CUDA_PATH") {
+            candidates.push(std::path::PathBuf::from(p));
+        }
+        candidates.push(std::path::PathBuf::from("/usr/local/cuda"));
+        candidates.push(std::path::PathBuf::from("/usr/local/cuda-12.6"));
+        candidates.push(std::path::PathBuf::from("/usr/local/cuda-12"));
+        candidates.push(std::path::PathBuf::from("/opt/cuda"));
+
+        if let Ok(entries) = std::fs::read_dir("/usr/local") {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() && p.file_name().map(|n| n.to_string_lossy().starts_with("cuda")).unwrap_or(false) {
+                    if !candidates.contains(&p) {
+                        candidates.push(p);
+                    }
+                }
+            }
+        }
+
+        for base in candidates {
+            let stubs = base.join("lib64").join("stubs");
+            if stubs.join("libcuda.so").exists() || stubs.join("libcuda.so.1").exists() {
+                println!("cargo:rustc-link-search=native={}", stubs.display());
+            }
+            let lib64 = base.join("lib64");
+            if lib64.exists() {
+                println!("cargo:rustc-link-search=native={}", lib64.display());
+                break;
+            }
         }
     }
 }

@@ -107,12 +107,26 @@ SEARCH_FLAGS=(-s "$BINARY_DIR")
 if [ -n "$LLAMA_LIB_DIR" ]; then
   SEARCH_FLAGS+=(-s "$LLAMA_LIB_DIR")
 fi
+if [ -d "$BINARY_DIR/../Frameworks" ]; then
+  SEARCH_FLAGS+=(-s "$BINARY_DIR/../Frameworks")
+fi
 
 echo "bundle-macos-dylibs: Running dylibbundler with search flags: ${SEARCH_FLAGS[*]}"
 
 # -od: use @executable_path; -b: bundle (copy) deps; -x: binary; -d: output dir; -p: rpath prefix
 # -s: additional search path for dylibs that aren't in standard locations
-dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks" "${SEARCH_FLAGS[@]}"
+dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks" "${SEARCH_FLAGS[@]}" || true
+
+# Fallback: if dylibbundler didn't copy (e.g. binary was already bundled on prior run), copy from LLAMA_LIB_DIR or Frameworks
+if ! ls "$DYLIB_DIR"/*.dylib 1>/dev/null 2>&1; then
+  if [ -n "$LLAMA_LIB_DIR" ] && ls "$LLAMA_LIB_DIR"/*.dylib 1>/dev/null 2>&1; then
+    echo "bundle-macos-dylibs: Copying dylibs from $LLAMA_LIB_DIR to $DYLIB_DIR"
+    cp -f "$LLAMA_LIB_DIR"/*.dylib "$DYLIB_DIR/"
+  elif [ -d "$BINARY_DIR/../Frameworks" ] && ls "$BINARY_DIR/../Frameworks"/*.dylib 1>/dev/null 2>&1; then
+    echo "bundle-macos-dylibs: Copying dylibs from $BINARY_DIR/../Frameworks to $DYLIB_DIR"
+    cp -f "$BINARY_DIR/../Frameworks"/*.dylib "$DYLIB_DIR/"
+  fi
+fi
 
 # Create unversioned and major-version symlinks for llama.cpp/ggml dylibs so @rpath resolution succeeds
 for f in "$DYLIB_DIR"/*.dylib; do
@@ -133,6 +147,9 @@ for f in "$DYLIB_DIR"/*.dylib; do
       ;;
     libllama.*.*.*.dylib)
       (cd "$DYLIB_DIR" && ln -sf "$bn" "libllama.0.dylib" && ln -sf "libllama.0.dylib" "libllama.dylib")
+      ;;
+    libggml-blas.*.*.*.dylib)
+      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml-blas.0.dylib" && ln -sf "libggml-blas.0.dylib" "libggml-blas.dylib")
       ;;
   esac
 done

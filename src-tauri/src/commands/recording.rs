@@ -286,6 +286,36 @@ fn start_recording_blocking(
         }
     }
 
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux, detect if PipeWire / PulseAudio is active
+        let is_pipewire = std::env::var("PIPEWIRE_REMOTE").is_ok()
+            || std::env::var("XDG_RUNTIME_DIR")
+                .map(|p| std::path::Path::new(&p).join("pipewire-0").exists() || std::path::Path::new(&p).join("pulse/native").exists())
+                .unwrap_or(false);
+
+        // If no preferred device, or if preferred device is a raw hardware "hw:X,Y" PCM while PipeWire is active,
+        // prioritize the virtual ALSA/PipeWire PCM ("default" or "pipewire") to eliminate EBUSY device lock contention.
+        let prefer_virtual = device_opt.is_none()
+            || (is_pipewire && preferred.as_deref().map(|s| s.starts_with("hw:") || s.contains("hw:")).unwrap_or(false));
+
+        if prefer_virtual {
+            if let Ok(devices) = host.input_devices() {
+                let dev_list: Vec<_> = devices.collect();
+                if let Some(d) = dev_list.into_iter().find(|d| {
+                    if let Ok(name) = d.name() {
+                        name == "default" || name.to_lowercase().contains("pipewire") || name == "pulse"
+                    } else {
+                        false
+                    }
+                }) {
+                    println!("[INFO] Linux PipeWire audio: Selected virtual PCM '{}' to eliminate EBUSY device lock contention", d.name().unwrap_or_default());
+                    device_opt = Some(d);
+                }
+            }
+        }
+    }
+
     if device_opt.is_none() {
         device_opt = host.default_input_device();
     }
@@ -549,6 +579,9 @@ fn start_recording_blocking(
     // 7. SPAWN THREAD 2: THE REAL-TIME TRANSCRIBER
     let app_clone = app_handle.clone();
     let transcriber_thread = std::thread::spawn(move || {
+        // Apply P-core affinity, elevated priority, and disable EcoQoS on Windows hybrid CPUs
+        crate::platform_tuning::apply_thread_performance_affinity();
+
         let mut buffer: VecDeque<f32> = VecDeque::new();
         let parakeet_live = if active_engine == ASREngine::Parakeet {
             let status = parakeet_manager.lock().unwrap().get_status();
@@ -1422,9 +1455,24 @@ fn should_prefer_clipboard_paste() -> bool {
     }
 }
 
+/// Injects transcription text into the active window.
+/// On Linux, executes the multi-tier Wayland/X11 injection strategy.
+/// On macOS/Windows, delegates to the platform-specific clipboard paste routine.
+#[allow(dead_code)]
+pub fn inject_transcription(text: &str) -> Result<crate::text_injection::TextInjectionBackend, String> {
+    crate::text_injection::inject_text_or_paste(text)
+}
+
 /// Clipboard + simulated paste keystroke (Cmd+V on macOS, Ctrl+V elsewhere).
 /// Saves and restores the previous clipboard content.
 fn clipboard_paste(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let backend = inject_transcription(text)?;
+        println!("[INSERT] Linux text injection succeeded using backend {:?}", backend);
+        return Ok(());
+    }
+
     use arboard::Clipboard;
 
     // Windows: classic cmd.exe console windows use a different paste path
@@ -1713,6 +1761,9 @@ fn stop_recording_blocking(
     // Brief tail capture for OS audio scheduling; silence padding in the
     // transcriber thread handles the actual word-boundary safety margin.
     teardown_recording(recording, 80);
+
+    // Ensure final inference pass runs on P-cores with elevated priority on Windows
+    crate::platform_tuning::apply_thread_performance_affinity();
 
     if active_engine == ASREngine::Parakeet {
         let final_pass_model_type = {
