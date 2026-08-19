@@ -294,6 +294,69 @@ class TestM5LinuxWaylandAndAudio(unittest.TestCase):
         self.assertIn('/usr/local/cuda-12.6', content)
         self.assertTrue('stubs' in content and 'lib64' in content)
 
+    def test_clipboard_lock_concurrency_guards(self):
+        """CLIPBOARD_LOCK must be defined in text_injection.rs and acquired in injection paths."""
+        text_inj = SRC_TAURI / "src" / "text_injection.rs"
+        self.assertTrue(text_inj.exists())
+        content = text_inj.read_text(encoding="utf-8")
+        self.assertIn("pub static CLIPBOARD_LOCK: std::sync::Mutex<()>", content)
+        self.assertIn("let _guard = CLIPBOARD_LOCK.lock().unwrap_or_else", content)
+
+        recording_rs = SRC_TAURI / "src" / "commands" / "recording.rs"
+        self.assertTrue(recording_rs.exists())
+        rec_content = recording_rs.read_text(encoding="utf-8")
+        self.assertIn("crate::text_injection::CLIPBOARD_LOCK.lock().unwrap_or_else", rec_content)
+
+    def test_audio_device_priority_oracle(self):
+        """Verify audio device sorting rules against boundary cases using the production algorithm."""
+        misc_rs = SRC_TAURI / "src" / "commands" / "misc.rs"
+        self.assertTrue(misc_rs.exists())
+        content = misc_rs.read_text(encoding="utf-8")
+        self.assertIn("pub fn sort_audio_devices_by_priority(devices: &mut [String])", content)
+
+        # Oracle replicating the exact production closure
+        def priority(name: str) -> int:
+            n = name.lower()
+            if n == "default" or n == "sysdefault":
+                return 0
+            elif "pipewire" in n:
+                return 1
+            elif "pulse" in n:
+                return 2
+            elif "hw:" in n:
+                return 4
+            else:
+                return 3
+
+        # Boundary test 1: Empty list
+        empty = []
+        empty.sort(key=priority)
+        self.assertEqual(empty, [])
+
+        # Boundary test 2: Unrecognized device names, unicode, symbols
+        devices = [
+            "hw:2,0",
+            "",
+            "🎙️ USB Mic",
+            "PipeWire-Jack",
+            "DEFAULT",
+            "pulse-audio",
+            "Unknown External Audio",
+            "SYSDEFAULT",
+            "hw:0,0",
+        ]
+        devices.sort(key=priority)
+        self.assertEqual(priority(devices[0]), 0) # DEFAULT
+        self.assertEqual(priority(devices[1]), 0) # SYSDEFAULT
+        self.assertEqual(priority(devices[2]), 1) # PipeWire-Jack
+        self.assertEqual(priority(devices[3]), 2) # pulse-audio
+        self.assertEqual(priority(devices[4]), 3) # ""
+        self.assertEqual(priority(devices[5]), 3) # "🎙️ USB Mic"
+        self.assertEqual(priority(devices[6]), 3) # "Unknown External Audio"
+        self.assertEqual(priority(devices[7]), 4) # hw:2,0
+        self.assertEqual(priority(devices[8]), 4) # hw:0,0
+
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

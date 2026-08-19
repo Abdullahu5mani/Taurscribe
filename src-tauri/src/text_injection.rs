@@ -63,10 +63,14 @@ pub fn is_wayland_session() -> bool {
     false
 }
 
+pub static CLIPBOARD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Main entry point for cross-platform text injection.
 /// Places `text` onto the system clipboard, simulates the appropriate paste shortcut
 /// (Cmd+V on macOS, Ctrl+V on Windows/Linux via the optimal backend), and restores previous clipboard.
 pub fn inject_text_or_paste(text: &str) -> Result<TextInjectionBackend, String> {
+    let _guard = CLIPBOARD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     if text.is_empty() {
         return Ok(TextInjectionBackend::Enigo);
     }

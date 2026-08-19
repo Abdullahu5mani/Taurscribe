@@ -67,6 +67,29 @@ pub fn request_overlay_action(app: tauri::AppHandle, action: String) -> Result<(
 }
 
 /// Returns the names of all available audio input devices on this machine.
+/// Sorts audio devices to prioritize virtual ALSA/PipeWire PCMs ("default", "sysdefault", "pipewire", "pulse")
+/// over raw hardware handles ("hw:X,Y").
+pub fn sort_audio_devices_by_priority(devices: &mut [String]) {
+    devices.sort_by(|a, b| {
+        let priority = |name: &str| {
+            let n = name.to_lowercase();
+            if n == "default" || n == "sysdefault" {
+                0
+            } else if n.contains("pipewire") {
+                1
+            } else if n.contains("pulse") {
+                2
+            } else if n.contains("hw:") {
+                4
+            } else {
+                3
+            }
+        };
+        priority(a).cmp(&priority(b))
+    });
+}
+
+/// Lists available microphone devices.
 ///
 /// macOS fix: Async with spawn_blocking because cpal device enumeration
 /// touches CoreAudio, which can block and freeze the AppKit main thread.
@@ -82,29 +105,19 @@ pub async fn list_input_devices() -> Vec<String> {
 
         #[cfg(target_os = "linux")]
         {
-            // Prioritize virtual ALSA/PipeWire PCMs ("default", "pipewire", "pulse") over raw hardware handles ("hw:X,Y")
-            list.sort_by(|a, b| {
-                let a_is_virt = a == "default" || a.to_lowercase().contains("pipewire") || a == "pulse";
-                let b_is_virt = b == "default" || b.to_lowercase().contains("pipewire") || b == "pulse";
-                let a_is_hw = a.starts_with("hw:") || a.contains("hw:");
-                let b_is_hw = b.starts_with("hw:") || b.contains("hw:");
-
-                match (a_is_virt, b_is_virt) {
-                    (true, false) => std::cmp::Ordering::Less,
-                    (false, true) => std::cmp::Ordering::Greater,
-                    _ => match (a_is_hw, b_is_hw) {
-                        (true, false) => std::cmp::Ordering::Greater,
-                        (false, true) => std::cmp::Ordering::Less,
-                        _ => a.cmp(b),
-                    },
-                }
-            });
+            sort_audio_devices_by_priority(&mut list);
         }
 
         list
     })
     .await
     .unwrap_or_default()
+}
+
+/// Alias for `list_input_devices` providing device enumeration and prioritization.
+#[tauri::command]
+pub async fn list_audio_devices() -> Vec<String> {
+    list_input_devices().await
 }
 
 /// Returns the name of the microphone that will actually be used for the next recording.
