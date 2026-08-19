@@ -2,7 +2,7 @@ mod cohere;
 mod file_transcription;
 mod history;
 mod llm;
-mod misc;
+pub mod misc;
 pub mod model_registry;
 mod models;
 mod recording;

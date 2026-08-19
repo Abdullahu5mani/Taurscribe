@@ -1473,6 +1473,8 @@ fn clipboard_paste(text: &str) -> Result<(), String> {
         return Ok(());
     }
 
+    let _guard = crate::text_injection::CLIPBOARD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     use arboard::Clipboard;
 
     // Windows: classic cmd.exe console windows use a different paste path

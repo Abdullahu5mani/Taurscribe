@@ -85,6 +85,17 @@ pub fn resample_mono_to_16k(samples: &[f32], from_rate: u32) -> Result<Vec<f32>,
     resample_mono_ratio(samples, from_rate, 16000)
 }
 
+/// Downmix interleaved multi-channel audio to mono f32 by averaging across channels.
+pub fn downmix_interleaved_to_mono(interleaved: &[f32], channels: usize) -> Vec<f32> {
+    if channels <= 1 {
+        return interleaved.to_vec();
+    }
+    interleaved
+        .chunks(channels)
+        .map(|chunk| chunk.iter().copied().sum::<f32>() / chunk.len() as f32)
+        .collect()
+}
+
 fn frame_rms_list(samples: &[f32], frame: usize) -> Vec<f32> {
     if frame == 0 || samples.is_empty() {
         return Vec::new();

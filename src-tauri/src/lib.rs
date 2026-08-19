@@ -35,6 +35,8 @@ pub mod vad;
 mod watcher;
 pub mod whisper;
 
+pub use commands::misc::sort_audio_devices_by_priority;
+
 // Imports
 use cohere::CohereManager;
 use parakeet::ParakeetManager;
@@ -240,6 +242,7 @@ pub fn run() {
             commands::set_hotkey,
             commands::set_hotkey_suppressed,
             commands::list_input_devices,
+            commands::list_audio_devices,
             commands::get_active_input_device,
             commands::set_input_device,
             commands::show_overlay,
