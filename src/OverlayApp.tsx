@@ -215,23 +215,35 @@ export function OverlayApp() {
         phase === "cancelled";
 
     return (
-        <div className={`overlay-pill overlay-pill--${phase}`}>
+        <div
+            id="overlay-pill"
+            data-testid="overlay-pill"
+            className={`overlay-pill overlay-pill--${phase}`}
+            role="status"
+            aria-live="polite"
+            aria-label={`Recording Overlay: ${getStatusLabel(phase)}`}
+        >
             <div className="overlay-pill__left">
                 {isDone ? (
-                    <span className="overlay-pill__icon overlay-pill__icon--done">✓</span>
+                    <span className="overlay-pill__icon overlay-pill__icon--done" aria-hidden="true">✓</span>
                 ) : isProcessing ? (
-                    <span className="overlay-pill__spinner" />
+                    <span className="overlay-pill__spinner" aria-hidden="true" />
                 ) : isError ? (
-                    <span className="overlay-pill__icon overlay-pill__icon--error">!</span>
+                    <span className="overlay-pill__icon overlay-pill__icon--error" aria-hidden="true">!</span>
                 ) : (
-                    <span className={`overlay-pill__dot${phase === "paused" ? " overlay-pill__dot--paused" : ""}`} />
+                    <span className={`overlay-pill__dot${phase === "paused" ? " overlay-pill__dot--paused" : ""}`} aria-hidden="true" />
                 )}
-                <span className="overlay-pill__time">
+                <span
+                    id="overlay-time-label"
+                    data-testid="overlay-time-label"
+                    className="overlay-pill__time"
+                    aria-label={`Overlay status: ${isDone ? `Transcription finished in ${formatLatency(latencyMs)}` : isLive ? `Elapsed time ${formatElapsed(elapsedMs)}` : getStatusLabel(phase)}`}
+                >
                     {isDone ? formatLatency(latencyMs) : isLive ? formatElapsed(elapsedMs) : getStatusLabel(phase)}
                 </span>
             </div>
 
-            <div className={`overlay-pill__wave${isLive ? "" : " overlay-pill__wave--inactive"}`}>
+            <div className={`overlay-pill__wave${isLive ? "" : " overlay-pill__wave--inactive"}`} aria-hidden="true">
                 {levels.map((level, index) => (
                     <span
                         key={index}

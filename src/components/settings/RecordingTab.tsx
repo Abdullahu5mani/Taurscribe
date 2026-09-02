@@ -205,12 +205,29 @@ export function RecordingTab({
                     Works even when Taurscribe is minimised to the tray.
                 </p>
 
-                <div className="recording-mode-seg" style={{ marginBottom: '16px' }}>
+                <div
+                    id="hotkey-mode-group"
+                    data-testid="hotkey-mode-group"
+                    className="recording-mode-seg"
+                    role="radiogroup"
+                    aria-label="Recording mode"
+                    style={{ marginBottom: '16px' }}
+                >
                     <button
+                        id="hotkey-mode-hold-btn"
+                        data-testid="hotkey-mode-hold-btn"
+                        role="radio"
+                        aria-checked={currentBinding.mode === 'hold'}
+                        aria-label="Hold to record mode"
                         className={currentBinding.mode === 'hold' ? 'active' : ''}
                         onClick={() => handleModeChange('hold')}
                     >Hold to Record</button>
                     <button
+                        id="hotkey-mode-toggle-btn"
+                        data-testid="hotkey-mode-toggle-btn"
+                        role="radio"
+                        aria-checked={currentBinding.mode === 'toggle'}
+                        aria-label="Click to toggle record mode"
                         className={currentBinding.mode === 'toggle' ? 'active' : ''}
                         onClick={() => handleModeChange('toggle')}
                     >Click to Toggle</button>
@@ -222,7 +239,15 @@ export function RecordingTab({
                         <div className="hotkey-chips">{chips(currentBinding.keys)}</div>
                         <div className="hotkey-current-actions">
                             {hotkeySaved && <span className="saved-confirm">Saved ✓</span>}
-                            <button className="ghost-btn" onClick={startRecording}>Change</button>
+                            <button
+                                id="hotkey-change-btn"
+                                data-testid="hotkey-change-btn"
+                                className="ghost-btn"
+                                onClick={startRecording}
+                                aria-label="Change global hotkey binding"
+                            >
+                                Change
+                            </button>
                         </div>
                     </div>
                 )}
@@ -242,11 +267,20 @@ export function RecordingTab({
                         </div>
                         <div className="hotkey-capture-actions">
                             <button
+                                id="hotkey-save-btn"
+                                data-testid="hotkey-save-btn"
                                 className={`ghost-btn ghost-btn--confirm ${pendingKeys.length !== 2 ? 'ghost-btn--disabled' : ''}`}
                                 onClick={saveBinding}
                                 disabled={pendingKeys.length !== 2}
+                                aria-label="Save hotkey binding"
                             >Save</button>
-                            <button className="ghost-btn" onClick={cancelRecording}>Cancel</button>
+                            <button
+                                id="hotkey-cancel-btn"
+                                data-testid="hotkey-cancel-btn"
+                                className="ghost-btn"
+                                onClick={cancelRecording}
+                                aria-label="Cancel hotkey recording"
+                            >Cancel</button>
                         </div>
                         <p className="hotkey-supported-keys">
                             Supported: Ctrl · Shift · Alt{isMac ? ' · Option' : ''} · {isMac ? 'Cmd' : isLinux ? 'Super' : 'Win'} · Caps Lock · Esc · Tab · F1–F12
@@ -288,8 +322,13 @@ export function RecordingTab({
                         <span className="status-dot" style={{ background: enableOverlay ? 'var(--success)' : 'var(--text-muted)' }} />
                         <span>Recording Overlay</span>
                     </div>
-                    <label className="switch">
+                    <label className="switch" htmlFor="recording-overlay-toggle">
                         <input
+                            id="recording-overlay-toggle"
+                            data-testid="recording-overlay-toggle"
+                            role="switch"
+                            aria-checked={enableOverlay}
+                            aria-label="Recording overlay HUD"
                             type="checkbox"
                             checked={enableOverlay}
                             onChange={e => setEnableOverlay(e.target.checked)}
@@ -307,9 +346,26 @@ export function RecordingTab({
 
             <div className="setting-card">
                 <div className="setting-card-header">
-                    <span className="setting-card-label-plain">Input Device</span>
-                    {audioSaved && <span className="saved-confirm">Saved ✓</span>}
-                    {audioError && <span role="alert" className="setting-card-error">{audioError}</span>}
+                    {audioSaved && (
+                        <span
+                            id="recording-audio-saved"
+                            data-testid="recording-audio-saved"
+                            className="saved-confirm"
+                            role="status"
+                        >
+                            Saved ✓
+                        </span>
+                    )}
+                    {audioError && (
+                        <span
+                            id="recording-audio-error"
+                            data-testid="recording-audio-error"
+                            role="alert"
+                            className="setting-card-error"
+                        >
+                            {audioError}
+                        </span>
+                    )}
                 </div>
                 <p className="setting-card-desc">
                     Choose which microphone Taurscribe records from. Takes effect on the next recording.
@@ -318,11 +374,14 @@ export function RecordingTab({
                     <div className="audio-detecting">Detecting devices…</div>
                 ) : (
                     <select
+                        id="recording-device-select"
+                        data-testid="recording-device-select"
                         className="select-input select-input--full"
                         value={selected}
                         onChange={e => handleDeviceChange(e.target.value)}
                         onFocus={() => invoke<string[]>('list_input_devices').then(setDevices).catch(() => {})}
                         onMouseEnter={() => invoke<string[]>('list_input_devices').then(setDevices).catch(() => {})}
+                        aria-label="Microphone input device"
                     >
                         <option value="">System Default</option>
                         {devices.map(name => (
@@ -342,8 +401,13 @@ export function RecordingTab({
                         <span>RNNoise</span>
                         <span className="setting-card-meta">CPU · real-time</span>
                     </div>
-                    <label className="switch">
+                    <label className="switch" htmlFor="recording-denoise-toggle">
                         <input
+                            id="recording-denoise-toggle"
+                            data-testid="recording-denoise-toggle"
+                            role="switch"
+                            aria-checked={enableDenoise}
+                            aria-label="RNNoise background noise reduction"
                             type="checkbox"
                             checked={enableDenoise}
                             onChange={e => setEnableDenoise(e.target.checked)}
@@ -363,8 +427,13 @@ export function RecordingTab({
                         <span className="status-dot" style={{ background: muteBackgroundAudio ? 'var(--success)' : 'var(--text-muted)' }} />
                         <span>Mute During Recording</span>
                     </div>
-                    <label className="switch">
+                    <label className="switch" htmlFor="recording-mute-bg-toggle">
                         <input
+                            id="recording-mute-bg-toggle"
+                            data-testid="recording-mute-bg-toggle"
+                            role="switch"
+                            aria-checked={muteBackgroundAudio}
+                            aria-label="Mute system audio during recording"
                             type="checkbox"
                             checked={muteBackgroundAudio}
                             onChange={e => setMuteBackgroundAudio(e.target.checked)}

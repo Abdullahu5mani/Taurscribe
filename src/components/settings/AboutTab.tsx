@@ -118,8 +118,11 @@ export function AboutTab() {
                         <code className="about-path">{pathByPlatform[platform] ?? pathByPlatform['windows']}</code>
                         <button
                             type="button"
+                            id={`open-folder-${folder}-btn`}
+                            data-testid={`open-folder-${folder}-btn`}
                             className="about-open-btn"
                             onClick={() => openFolder(folder)}
+                            aria-label={`Open ${label} storage folder`}
                             title={`Open ${label} folder`}
                         >
                             Open ↗
@@ -152,19 +155,25 @@ export function AboutTab() {
                 </p>
                 <div className="about-reset-actions">
                     <button
+                        id={confirmReset ? "factory-reset-confirm-btn" : "factory-reset-btn"}
+                        data-testid={confirmReset ? "factory-reset-confirm-btn" : "factory-reset-btn"}
                         className={`ghost-btn ghost-btn--danger ${resetting ? 'ghost-btn--disabled' : ''}`}
                         onClick={handleFactoryReset}
                         disabled={resetting}
+                        aria-label={confirmReset ? "Confirm factory reset of all application data" : "Factory reset application data"}
                     >
                         {resetting ? 'Resetting…' : confirmReset ? 'Confirm Factory Reset' : 'Factory Reset'}
                     </button>
                     {confirmReset && !resetting && (
                         <button
+                            id="factory-reset-cancel-btn"
+                            data-testid="factory-reset-cancel-btn"
                             className="ghost-btn"
                             onClick={() => {
                                 setConfirmReset(false);
                                 setResetError('');
                             }}
+                            aria-label="Cancel factory reset"
                         >
                             Cancel
                         </button>

@@ -55,8 +55,13 @@ export function PostProcessingTab({
                         <span>Grammar LLM</span>
                         <span className="setting-card-meta">FlowScribe Qwen 2.5 0.5B · GGUF</span>
                     </div>
-                    <label className={`switch ${llmLoading || llmNotDownloaded ? 'switch--disabled' : ''}`}>
+                    <label className={`switch ${llmLoading || llmNotDownloaded ? 'switch--disabled' : ''}`} htmlFor="grammar-llm-toggle">
                         <input
+                            id="grammar-llm-toggle"
+                            data-testid="grammar-llm-toggle"
+                            role="switch"
+                            aria-checked={enableGrammarLM}
+                            aria-label="Grammar LLM post-processing"
                             type="checkbox"
                             checked={enableGrammarLM}
                             onChange={e => setEnableGrammarLM(e.target.checked)}
@@ -92,18 +97,32 @@ export function PostProcessingTab({
                                 </span>
                             )}
                         </span>
-                        <div className={`backend-toggle ${llmBackendLocked ? 'backend-toggle--locked' : ''}`}>
+                        <div
+                            id="pp-llm-backend-group"
+                            data-testid="pp-llm-backend-group"
+                            className={`backend-toggle ${llmBackendLocked ? 'backend-toggle--locked' : ''}`}
+                            role="group"
+                            aria-label="Grammar LLM hardware backend"
+                        >
                             <button
+                                id="pp-llm-backend-gpu"
+                                data-testid="pp-llm-backend-gpu"
                                 className={`backend-toggle-btn ${llmBackend === 'gpu' ? 'active' : ''}`}
                                 onClick={() => setLlmBackend('gpu')}
                                 disabled={llmBackendLocked}
+                                aria-pressed={llmBackend === 'gpu'}
+                                aria-label="Run Grammar LLM on GPU"
                             >
                                 <IconBolt size={12} style={{ color: '#facc15' }} /> GPU
                             </button>
                             <button
+                                id="pp-llm-backend-cpu"
+                                data-testid="pp-llm-backend-cpu"
                                 className={`backend-toggle-btn ${llmBackend === 'cpu' ? 'active' : ''}`}
                                 onClick={() => setLlmBackend('cpu')}
                                 disabled={llmBackendLocked}
+                                aria-pressed={llmBackend === 'cpu'}
+                                aria-label="Run Grammar LLM on CPU"
                             >
                                 <IconCpu size={12} /> CPU
                             </button>
@@ -123,10 +142,21 @@ export function PostProcessingTab({
                 <p className="setting-card-desc">
                     Controls the tone the LLM applies when cleaning up the transcript.
                 </p>
-                <div className="style-grid">
+                <div
+                    id="pp-style-grid"
+                    data-testid="pp-style-grid"
+                    className="style-grid"
+                    role="radiogroup"
+                    aria-label="Transcription style"
+                >
                     {STYLES.map(s => (
                         <button
                             key={s.value}
+                            id={`pp-style-btn-${s.value.toLowerCase()}`}
+                            data-testid={`pp-style-btn-${s.value.toLowerCase()}`}
+                            role="radio"
+                            aria-checked={transcriptionStyle === s.value}
+                            aria-label={`${s.label}: ${s.desc}`}
                             className={`style-btn ${transcriptionStyle === s.value ? 'active' : ''}`}
                             onClick={() => setTranscriptionStyle(s.value)}
                             disabled={!llmLoaded}

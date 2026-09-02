@@ -290,7 +290,13 @@ function StepWelcome({ onNext, logoSrc }: { onNext: () => void; logoSrc: string 
       </ul>
 
       <div className="setup-nav">
-        <button className="setup-btn setup-btn--primary" onClick={onNext}>
+        <button
+          id="wizard-welcome-begin-btn"
+          data-testid="wizard-welcome-begin-btn"
+          className="setup-btn setup-btn--primary"
+          onClick={onNext}
+          aria-label="Begin setup"
+        >
           Begin Setup →
         </button>
       </div>
@@ -354,9 +360,7 @@ function StepHardware({
           </div>
           <div className="hw-row">
             <span className="hw-label">GPU</span>
-            <span className={`hw-value ${!hasGpu ? 'hw-value--dim' : ''}`}>
-              {hasGpu ? sysInfo!.gpu_name : 'Not detected'}
-            </span>
+            <span className="hw-value">{hasGpu ? sysInfo!.gpu_name : 'Not detected'}</span>
             <span className={`hw-status ${hasGpu ? 'hw-status--ok' : 'hw-status--warn'}`} />
           </div>
           {/* macOS fix: Apple Silicon has unified memory shared between CPU
@@ -385,8 +389,21 @@ function StepHardware({
       {verdict()}
 
       <div className="setup-nav setup-nav--spread">
-        <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
-        <button className="setup-btn setup-btn--primary" onClick={onNext} disabled={loading}>
+        <button
+          id="wizard-hardware-back-btn"
+          data-testid="wizard-hardware-back-btn"
+          className="setup-btn setup-btn--ghost"
+          onClick={onBack}
+          aria-label="Back to welcome step"
+        >← Back</button>
+        <button
+          id="wizard-hardware-next-btn"
+          data-testid="wizard-hardware-next-btn"
+          className="setup-btn setup-btn--primary"
+          onClick={onNext}
+          disabled={loading}
+          aria-label="Continue to engines step"
+        >
           Continue →
         </button>
       </div>
@@ -482,23 +499,46 @@ function StepEngines({
         </div>
 
         <div className="setup-engine-carousel-controls">
-          <button type="button" className="setup-engine-carousel-btn" onClick={goPrev} aria-label="Previous engine">
+          <button
+            type="button"
+            id="wizard-engine-prev-btn"
+            data-testid="wizard-engine-prev-btn"
+            className="setup-engine-carousel-btn"
+            onClick={goPrev}
+            aria-label="Previous engine slide"
+          >
             ← Prev
           </button>
-          <div className="setup-engine-carousel-dots" role="tablist" aria-label="Engine slides">
+          <div
+            id="wizard-engine-carousel-dots"
+            data-testid="wizard-engine-carousel-dots"
+            className="setup-engine-carousel-dots"
+            role="tablist"
+            aria-label="Engine slides"
+          >
             {ENGINE_CAROUSEL_SLIDES.map((engine, index) => (
               <button
                 key={engine.id}
                 type="button"
+                id={`wizard-engine-dot-${engine.id}`}
+                data-testid={`wizard-engine-dot-${engine.id}`}
                 role="tab"
                 aria-selected={index === activeSlide}
+                aria-label={`Engine slide: ${engine.title}`}
                 className={`setup-engine-carousel-dot${index === activeSlide ? ' setup-engine-carousel-dot--active' : ''}`}
                 onClick={() => goToSlide(index, index >= activeSlide ? 'next' : 'prev')}
                 title={engine.title}
               />
             ))}
           </div>
-          <button type="button" className="setup-engine-carousel-btn" onClick={goNext} aria-label="Next engine">
+          <button
+            type="button"
+            id="wizard-engine-next-btn"
+            data-testid="wizard-engine-next-btn"
+            className="setup-engine-carousel-btn"
+            onClick={goNext}
+            aria-label="Next engine slide"
+          >
             Next →
           </button>
         </div>
@@ -511,8 +551,21 @@ function StepEngines({
       </p>
 
       <div className="setup-nav setup-nav--spread">
-        <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
-        <button className="setup-btn setup-btn--primary" onClick={onNext} disabled={!hasViewedAllSlides}>Continue →</button>
+        <button
+          id="wizard-engines-back-btn"
+          data-testid="wizard-engines-back-btn"
+          className="setup-btn setup-btn--ghost"
+          onClick={onBack}
+          aria-label="Back to hardware step"
+        >← Back</button>
+        <button
+          id="wizard-engines-next-btn"
+          data-testid="wizard-engines-next-btn"
+          className="setup-btn setup-btn--primary"
+          onClick={onNext}
+          disabled={!hasViewedAllSlides}
+          aria-label="Continue to FlowScribe step"
+        >Continue →</button>
       </div>
     </>
   );
@@ -599,8 +652,20 @@ function StepFlowScribe({
       </div>
 
       <div className="setup-nav setup-nav--spread">
-        <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
-        <button className="setup-btn setup-btn--primary" onClick={onNext}>Continue →</button>
+        <button
+          id="wizard-flowscribe-back-btn"
+          data-testid="wizard-flowscribe-back-btn"
+          className="setup-btn setup-btn--ghost"
+          onClick={onBack}
+          aria-label="Back to engines step"
+        >← Back</button>
+        <button
+          id="wizard-flowscribe-next-btn"
+          data-testid="wizard-flowscribe-next-btn"
+          className="setup-btn setup-btn--primary"
+          onClick={onNext}
+          aria-label="Continue to hotkey step"
+        >Continue →</button>
       </div>
     </>
   );
@@ -646,8 +711,20 @@ function StepHotkey({ onNext, onBack, platform, totalSteps }: { onNext: () => vo
       <p className="hotkey-privacy">No internet · No cloud · No tracking</p>
 
       <div className="setup-nav setup-nav--spread">
-        <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
-        <button className="setup-btn setup-btn--primary" onClick={onNext}>Continue →</button>
+        <button
+          id="wizard-hotkey-back-btn"
+          data-testid="wizard-hotkey-back-btn"
+          className="setup-btn setup-btn--ghost"
+          onClick={onBack}
+          aria-label="Back to FlowScribe step"
+        >← Back</button>
+        <button
+          id="wizard-hotkey-next-btn"
+          data-testid="wizard-hotkey-next-btn"
+          className="setup-btn setup-btn--primary"
+          onClick={onNext}
+          aria-label="Continue to recording settings step"
+        >Continue →</button>
       </div>
     </>
   );
@@ -691,9 +768,12 @@ function StepRecordingSettings({
           </div>
           <button
             type="button"
+            id="wizard-toggle-denoise"
+            data-testid="wizard-toggle-denoise"
+            role="switch"
             className={`setup-recording-toggle ${enableDenoise ? 'setup-recording-toggle--on' : ''}`}
             aria-label="Toggle denoise"
-            aria-pressed={enableDenoise}
+            aria-checked={enableDenoise}
             onClick={() => setEnableDenoise(!enableDenoise)}
           >
             <span className="setup-recording-toggle-thumb" />
@@ -707,9 +787,12 @@ function StepRecordingSettings({
           </div>
           <button
             type="button"
+            id="wizard-toggle-overlay"
+            data-testid="wizard-toggle-overlay"
+            role="switch"
             className={`setup-recording-toggle ${enableOverlay ? 'setup-recording-toggle--on' : ''}`}
             aria-label="Toggle live overlay"
-            aria-pressed={enableOverlay}
+            aria-checked={enableOverlay}
             onClick={() => setEnableOverlay(!enableOverlay)}
           >
             <span className="setup-recording-toggle-thumb" />
@@ -723,9 +806,12 @@ function StepRecordingSettings({
           </div>
           <button
             type="button"
+            id="wizard-toggle-mute-bg"
+            data-testid="wizard-toggle-mute-bg"
+            role="switch"
             className={`setup-recording-toggle ${muteBackgroundAudio ? 'setup-recording-toggle--on' : ''}`}
             aria-label="Toggle mute background audio"
-            aria-pressed={muteBackgroundAudio}
+            aria-checked={muteBackgroundAudio}
             onClick={() => setMuteBackgroundAudio(!muteBackgroundAudio)}
           >
             <span className="setup-recording-toggle-thumb" />
@@ -734,8 +820,20 @@ function StepRecordingSettings({
       </div>
 
       <div className="setup-nav setup-nav--spread">
-        <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
-        <button className="setup-btn setup-btn--primary" onClick={onNext}>Continue →</button>
+        <button
+          id="wizard-recording-back-btn"
+          data-testid="wizard-recording-back-btn"
+          className="setup-btn setup-btn--ghost"
+          onClick={onBack}
+          aria-label="Back to hotkey step"
+        >← Back</button>
+        <button
+          id="wizard-recording-next-btn"
+          data-testid="wizard-recording-next-btn"
+          className="setup-btn setup-btn--primary"
+          onClick={onNext}
+          aria-label="Continue to permissions step"
+        >Continue →</button>
       </div>
     </>
   );
@@ -873,14 +971,27 @@ function StepPermissions({
           </div>
           <div className="perm-action">
             {micOk
-              ? <span className="perm-badge perm-badge--ok">Granted</span>
+              ? <span id="wizard-perm-mic-ok" data-testid="wizard-perm-mic-ok" className="perm-badge perm-badge--ok" role="status">Granted</span>
               : micStatus === 'restricted'
-                ? <span className="perm-badge perm-badge--denied">Restricted by policy</span>
+                ? <span id="wizard-perm-mic-restricted" data-testid="wizard-perm-mic-restricted" className="perm-badge perm-badge--denied" role="status">Restricted by policy</span>
                 : micStatus === 'denied'
-                  ? <button className="setup-btn setup-btn--primary perm-btn" onClick={openMicrophone}>
+                  ? <button
+                      id="wizard-perm-mic-settings-btn"
+                      data-testid="wizard-perm-mic-settings-btn"
+                      className="setup-btn setup-btn--primary perm-btn"
+                      onClick={openMicrophone}
+                      aria-label="Open Microphone Settings"
+                    >
                       Open Settings
                     </button>
-                  : <button className="setup-btn setup-btn--primary perm-btn" onClick={requestMic} disabled={micRequesting}>
+                  : <button
+                      id="wizard-perm-mic-grant-btn"
+                      data-testid="wizard-perm-mic-grant-btn"
+                      className="setup-btn setup-btn--primary perm-btn"
+                      onClick={requestMic}
+                      disabled={micRequesting}
+                      aria-label="Grant Microphone Access"
+                    >
                       {micRequesting ? 'Requesting…' : 'Grant Access'}
                     </button>
             }
@@ -901,8 +1012,14 @@ function StepPermissions({
           </div>
           <div className="perm-action">
             {accOk
-              ? <span className="perm-badge perm-badge--ok">Granted</span>
-              : <button className="setup-btn setup-btn--primary perm-btn" onClick={requestAccessibility}>
+              ? <span id="wizard-perm-acc-ok" data-testid="wizard-perm-acc-ok" className="perm-badge perm-badge--ok" role="status">Granted</span>
+              : <button
+                  id="wizard-perm-accessibility-grant-btn"
+                  data-testid="wizard-perm-accessibility-grant-btn"
+                  className="setup-btn setup-btn--primary perm-btn"
+                  onClick={requestAccessibility}
+                  aria-label="Grant Accessibility Access"
+                >
                   Grant Access
                 </button>
             }
@@ -922,8 +1039,14 @@ function StepPermissions({
           </div>
           <div className="perm-action">
             {inputOk
-              ? <span className="perm-badge perm-badge--ok">Granted</span>
-              : <button className="setup-btn setup-btn--primary perm-btn" onClick={requestInputMonitoring}>
+              ? <span id="wizard-perm-input-ok" data-testid="wizard-perm-input-ok" className="perm-badge perm-badge--ok" role="status">Granted</span>
+              : <button
+                  id="wizard-perm-input-grant-btn"
+                  data-testid="wizard-perm-input-grant-btn"
+                  className="setup-btn setup-btn--primary perm-btn"
+                  onClick={requestInputMonitoring}
+                  aria-label="Grant Input Monitoring Access"
+                >
                   Grant Access
                 </button>
             }
@@ -932,17 +1055,40 @@ function StepPermissions({
       </div>
 
       {restartNeeded && (
-        <div className="perm-restart-notice">
+        <div
+          id="wizard-perm-restart-notice"
+          data-testid="wizard-perm-restart-notice"
+          className="perm-restart-notice"
+          role="alert"
+        >
           <strong>Restart required.</strong> Permissions changed — restart so the hotkey and text insertion activate.
-          <button className="setup-btn setup-btn--primary perm-restart-btn" onClick={relaunchApp}>
+          <button
+            id="wizard-perm-restart-btn"
+            data-testid="wizard-perm-restart-btn"
+            className="setup-btn setup-btn--primary perm-restart-btn"
+            onClick={relaunchApp}
+            aria-label="Restart Application Now"
+          >
             Restart Now
           </button>
         </div>
       )}
 
       <div className="setup-nav setup-nav--spread">
-        <button className="setup-btn setup-btn--ghost" onClick={onBack}>← Back</button>
-        <button className="setup-btn setup-btn--primary" onClick={onNext}>
+        <button
+          id="wizard-perm-back-btn"
+          data-testid="wizard-perm-back-btn"
+          className="setup-btn setup-btn--ghost"
+          onClick={onBack}
+          aria-label="Back to previous step"
+        >← Back</button>
+        <button
+          id="wizard-perm-next-btn"
+          data-testid="wizard-perm-next-btn"
+          className="setup-btn setup-btn--primary"
+          onClick={onNext}
+          aria-label={micOk && accOk && inputOk ? 'Continue to next step' : 'Skip permissions for now'}
+        >
           {micOk && accOk && inputOk ? 'Continue →' : 'Skip for now →'}
         </button>
       </div>
@@ -1046,7 +1192,12 @@ function StepReady({
               <span className="ready-download-pct">{progressLabel}</span>
             </div>
             {isMultiFileDownload && (
-              <div className="ready-download-bundle-indicator" role="status">
+              <div
+                id="wizard-ready-bundle-indicator"
+                data-testid="wizard-ready-bundle-indicator"
+                className="ready-download-bundle-indicator"
+                role="status"
+              >
                 <span>Bundle files</span>
                 <span>File {currentFile} / {totalFiles}</span>
               </div>
@@ -1058,8 +1209,11 @@ function StepReady({
               />
             </div>
             <button
+              id="wizard-ready-cancel-download-btn"
+              data-testid="wizard-ready-cancel-download-btn"
               className="ready-download-cancel"
               onClick={() => handleCancelDownload(modelId)}
+              aria-label="Cancel model download"
             >
               Cancel
             </button>
@@ -1070,8 +1224,11 @@ function StepReady({
               Download your recommended model to start recording immediately.
             </p>
             <button
+              id="wizard-ready-download-model-btn"
+              data-testid="wizard-ready-download-model-btn"
               className="setup-btn setup-btn--primary setup-btn--full"
               onClick={() => handleDownload(modelId, recommendation.primaryLabel)}
+              aria-label={`Download ${recommendation.primaryLabel}`}
             >
               Download {recommendation.primaryLabel}
               {modelEntry?.size ? <span className="ready-download-size"> · {modelEntry.size}</span> : null}
@@ -1082,16 +1239,22 @@ function StepReady({
 
       <div className="setup-nav--ready">
         <button
+          id="wizard-ready-launch-btn"
+          data-testid="wizard-ready-launch-btn"
           className="setup-btn setup-btn--primary setup-btn--full"
           disabled={!canLaunch}
           style={!canLaunch ? { opacity: 0.35, cursor: 'not-allowed' } : undefined}
           onClick={() => canLaunch && onComplete({ openSettings: false, useCase })}
+          aria-label="Launch Taurscribe Application"
         >
           Launch App →
         </button>
         <button
+          id="wizard-ready-skip-btn"
+          data-testid="wizard-ready-skip-btn"
           className="ready-skip-btn"
           onClick={() => onComplete({ openSettings: !alreadyDownloaded, useCase })}
+          aria-label={alreadyDownloaded ? 'Open Models tab instead' : 'Skip and set up models manually'}
         >
           {alreadyDownloaded ? 'Open Models tab instead' : 'Skip — set up models manually'}
         </button>

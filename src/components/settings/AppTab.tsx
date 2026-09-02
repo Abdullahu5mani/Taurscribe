@@ -36,14 +36,23 @@ export function AppTab({
                 <p className="setting-card-desc">
                     What happens when you click the window's close (×) button.
                 </p>
-                <div className="close-behavior-options">
-                    <label className={`close-behavior-option${closeBehavior === 'tray' ? ' close-behavior-option--active' : ''}`}>
+                <div
+                    id="close-behavior-options"
+                    data-testid="close-behavior-options"
+                    className="close-behavior-options"
+                    role="radiogroup"
+                    aria-label="Close button behavior"
+                >
+                    <label className={`close-behavior-option${closeBehavior === 'tray' ? ' close-behavior-option--active' : ''}`} htmlFor="close-behavior-tray">
                         <input
                             type="radio"
+                            id="close-behavior-tray"
+                            data-testid="close-behavior-tray"
                             name="close_behavior"
                             value="tray"
                             checked={closeBehavior === 'tray'}
                             onChange={() => handleCloseBehavior('tray')}
+                            aria-label="Minimise to tray"
                         />
                         <div className="close-behavior-option-content">
                             <span className="close-behavior-option-title">Minimise to tray</span>
@@ -52,13 +61,16 @@ export function AppTab({
                             </span>
                         </div>
                     </label>
-                    <label className={`close-behavior-option${closeBehavior === 'quit' ? ' close-behavior-option--active' : ''}`}>
+                    <label className={`close-behavior-option${closeBehavior === 'quit' ? ' close-behavior-option--active' : ''}`} htmlFor="close-behavior-quit">
                         <input
                             type="radio"
+                            id="close-behavior-quit"
+                            data-testid="close-behavior-quit"
                             name="close_behavior"
                             value="quit"
                             checked={closeBehavior === 'quit'}
                             onChange={() => handleCloseBehavior('quit')}
+                            aria-label="Quit app"
                         />
                         <div className="close-behavior-option-content">
                             <span className="close-behavior-option-title">Quit app</span>
@@ -77,8 +89,12 @@ export function AppTab({
                 <div className="setting-card-header">
                     <span className="setting-card-label-plain">Playback</span>
                     <button
+                        id="app-sound-mute-btn"
+                        data-testid="app-sound-mute-btn"
                         className={`ghost-btn ${soundMuted ? 'ghost-btn--danger' : 'ghost-btn--ok'}`}
                         onClick={() => setSoundMuted(!soundMuted)}
+                        aria-pressed={soundMuted}
+                        aria-label={soundMuted ? 'Unmute sound effects' : 'Mute sound effects'}
                         title={soundMuted ? 'Unmute sounds' : 'Mute sounds'}
                     >
                         {soundMuted ? (
@@ -115,6 +131,13 @@ export function AppTab({
                     </svg>
                     <input
                         type="range"
+                        id="app-sound-volume-slider"
+                        data-testid="app-sound-volume-slider"
+                        role="slider"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={Math.round((soundMuted ? 0 : soundVolume) * 100)}
+                        aria-label="Sound effects volume"
                         min={0} max={1} step={0.01}
                         value={soundVolume}
                         disabled={soundMuted}

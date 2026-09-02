@@ -203,6 +203,8 @@ export function SettingsModal({
 
     return (
         <div
+            id="settings-modal-overlay"
+            data-testid="settings-modal-overlay"
             className={`settings-overlay ${isOpen ? 'settings-overlay--open' : 'settings-overlay--closed'}`}
             onClick={isOpen ? onClose : undefined}
             aria-hidden={!isOpen}
@@ -217,6 +219,8 @@ export function SettingsModal({
             )}
             {isOpen && (
                 <div
+                    id="settings-modal"
+                    data-testid="settings-modal"
                     className="settings-modal"
                     ref={modalRef}
                     role="dialog"
@@ -226,24 +230,49 @@ export function SettingsModal({
                 >
                     <div className="settings-header">
                         <h2 id="settings-modal-title">Settings</h2>
-                        <button className="close-btn" onClick={onClose} aria-label="Close settings"><IconX size={14} /></button>
+                        <button
+                            id="settings-close-btn"
+                            data-testid="settings-close-btn"
+                            className="close-btn"
+                            onClick={onClose}
+                            aria-label="Close settings"
+                        >
+                            <IconX size={14} />
+                        </button>
                     </div>
 
                     <div className="settings-body">
-                        <nav className="settings-tabbar" aria-label="Settings sections">
+                        <nav
+                            id="settings-tablist"
+                            data-testid="settings-tablist"
+                            className="settings-tabbar"
+                            role="tablist"
+                            aria-label="Settings sections"
+                        >
                             {TABS.map(tab => (
                                 <button
                                     key={tab.id}
+                                    id={`settings-tab-${tab.id}`}
+                                    data-testid={`settings-tab-${tab.id}`}
+                                    role="tab"
+                                    aria-selected={activeTab === tab.id}
+                                    aria-controls={`settings-tabpanel-${tab.id}`}
                                     className={`settings-tab-btn ${activeTab === tab.id ? 'active' : ''}`}
                                     onClick={() => setActiveTab(tab.id)}
-                                    aria-current={activeTab === tab.id ? 'page' : undefined}
                                 >
                                     {tab.label}
                                 </button>
                             ))}
                         </nav>
 
-                        <div className="settings-content" key={activeTab}>
+                        <div
+                            className="settings-content"
+                            key={activeTab}
+                            id={`settings-tabpanel-${activeTab}`}
+                            data-testid={`settings-tabpanel-${activeTab}`}
+                            role="tabpanel"
+                            aria-labelledby={`settings-tab-${activeTab}`}
+                        >
                             {renderContent()}
                         </div>
                     </div>
