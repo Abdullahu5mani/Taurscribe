@@ -938,6 +938,8 @@ function App() {
                     <>
                       <button
                         type="button"
+                        id="enable-input-monitoring-btn"
+                        data-testid="enable-input-monitoring-btn"
                         className="accessibility-banner-action"
                         onClick={async () => {
                           await invoke<boolean>('request_input_monitoring_permission').catch(() => false);
@@ -952,6 +954,8 @@ function App() {
                   {accessibilityMissing && (
                     <button
                       type="button"
+                      id="enable-accessibility-btn"
+                      data-testid="enable-accessibility-btn"
                       className="accessibility-banner-action"
                       onClick={async () => {
                         await invoke<boolean>('request_accessibility_permission').catch(() => false);
@@ -964,6 +968,8 @@ function App() {
                   )}
                   <button
                     type="button"
+                    id="restart-app-btn"
+                    data-testid="restart-app-btn"
                     className="accessibility-banner-action"
                     onClick={async () => {
                       await invoke('relaunch_app').catch(() => {});
@@ -974,12 +980,14 @@ function App() {
                 </div>
                 <button
                   type="button"
+                  id="dismiss-accessibility-banner-btn"
+                  data-testid="dismiss-accessibility-banner-btn"
                   className="accessibility-banner-dismiss"
                   onClick={() => {
                     setAccessibilityMissing(false);
                     setInputMonitoringMissing(false);
                   }}
-                  aria-label="Dismiss"
+                  aria-label="Dismiss accessibility banner"
                 >
                   ✕
                 </button>
@@ -1002,6 +1010,8 @@ function App() {
                     Microphone access is required for recording.{' '}
                     <button
                       type="button"
+                      id="grant-mic-permission-btn"
+                      data-testid="grant-mic-permission-btn"
                       className="mic-banner-action"
                       onClick={async () => {
                         await invoke<string>('request_microphone_permission');
@@ -1021,6 +1031,8 @@ function App() {
                     {' '}
                     <button
                       type="button"
+                      id="open-mic-settings-btn"
+                      data-testid="open-mic-settings-btn"
                       className="mic-banner-action"
                       onClick={async () => {
                         await invoke('open_microphone_settings').catch(() => {});
@@ -1030,12 +1042,26 @@ function App() {
                     </button>
                   </span>
                 )}
-                <button type="button" className="mic-banner-dismiss" onClick={() => setMicPermission(null)} aria-label="Dismiss">✕</button>
+                <button
+                  type="button"
+                  id="dismiss-mic-banner-btn"
+                  data-testid="dismiss-mic-banner-btn"
+                  className="mic-banner-dismiss"
+                  onClick={() => setMicPermission(null)}
+                  aria-label="Dismiss microphone banner"
+                >
+                  ✕
+                </button>
               </div>
             )}
 
             {showSilenceWarning && isRecording && !isPaused && (
-              <div className="silence-banner" role="alert">
+              <div
+                id="silence-warning-banner"
+                data-testid="silence-warning-banner"
+                className="silence-banner"
+                role="alert"
+              >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                   <line x1="1" y1="1" x2="23" y2="23" />
                   <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
@@ -1044,15 +1070,35 @@ function App() {
                   <line x1="8" y1="23" x2="16" y2="23" />
                 </svg>
                 <span>No audio detected — is your mic muted or the wrong device selected?</span>
-                <button type="button" className="silence-banner-dismiss" onClick={() => setShowSilenceWarning(false)} aria-label="Dismiss">✕</button>
+                <button
+                  type="button"
+                  id="dismiss-silence-banner-btn"
+                  data-testid="dismiss-silence-banner-btn"
+                  className="silence-banner-dismiss"
+                  onClick={() => setShowSilenceWarning(false)}
+                  aria-label="Dismiss silence warning"
+                >
+                  ✕
+                </button>
               </div>
             )}
           </div>
 
           {/* Mic / File mode toggle — top-left, directly under the header */}
-          <div className="mode-toggle">
+          <div
+            id="mode-toggle-group"
+            data-testid="mode-toggle-group"
+            className="mode-toggle"
+            role="radiogroup"
+            aria-label="Input mode"
+          >
             <button
               type="button"
+              id="mode-toggle-mic"
+              data-testid="mode-toggle-mic"
+              role="radio"
+              aria-checked={!fileMode}
+              aria-label="Microphone dictation mode"
               className={`mode-toggle-btn${!fileMode ? " mode-toggle-btn--active" : ""}`}
               onClick={() => setFileMode(false)}
               disabled={fileMode && isFileTranscribing}
@@ -1062,6 +1108,11 @@ function App() {
             </button>
             <button
               type="button"
+              id="mode-toggle-files"
+              data-testid="mode-toggle-files"
+              role="radio"
+              aria-checked={fileMode}
+              aria-label="File transcription mode"
               className={`mode-toggle-btn${fileMode ? " mode-toggle-btn--active" : ""}`}
               onClick={() => setFileMode(true)}
             >
@@ -1149,11 +1200,14 @@ function App() {
                 )}
                 <button
                   type="button"
+                  id="empty-state-download-cta"
+                  data-testid="empty-state-download-cta"
                   className={`empty-state-cta${noModelCtaAttention ? " empty-state-cta--attention" : ""}`}
                   onClick={() => {
                     setNoModelCtaAttention(false);
                     openModelSettingsForEngine(activeEngine as 'whisper' | 'parakeet' | 'granite');
                   }}
+                  aria-label="Open Settings to download models"
                 >
                   Open Settings → Download Models
                 </button>
@@ -1188,6 +1242,8 @@ function App() {
                   </svg>
                   {/* H5 fix: aria-label names the control for screen readers */}
                   <select
+                    id="mic-selector-dropdown"
+                    data-testid="mic-selector-dropdown"
                     className="mic-selector-dropdown"
                     aria-label="Input device"
                     value={activeMic ?? ''}
@@ -1206,10 +1262,13 @@ function App() {
 
               <button
                 type="button"
+                id="engine-chip-button"
+                data-testid="engine-chip-button"
                 className="engine-chip"
                 onClick={() => setIsEnginePickerOpen(o => !o)}
                 aria-label="Switch engine or model"
                 aria-expanded={isEnginePickerOpen}
+                aria-haspopup="dialog"
               >
                 <span
                   className={`eng-status-dot eng-status-dot--${
@@ -1232,6 +1291,8 @@ function App() {
                 loadedEngine === activeEngine ? (
                   <button
                     type="button"
+                    id="load-eject-btn"
+                    data-testid="load-eject-btn"
                     className="load-eject-btn"
                     onClick={handleEjectModel}
                     title="Unload model (free VRAM)"
@@ -1245,6 +1306,8 @@ function App() {
                    !noCohereModel) && (
                     <button
                       type="button"
+                      id="load-eject-btn"
+                      data-testid="load-eject-btn"
                       className="load-eject-btn load-eject-btn--load"
                       onClick={handleLoadActiveEngine}
                       title="Load model"
@@ -1285,6 +1348,10 @@ function App() {
             <div className="record-btn-wrap">
               <button
                 type="button"
+                id="record-button"
+                data-testid="record-button"
+                aria-pressed={isRecording}
+                aria-label={recordBtnLabel}
                 className={recordBtnClass}
                 disabled={!noModel && recordBtnDisabled}
                 onClick={onRecordClick}
@@ -1296,6 +1363,8 @@ function App() {
 
             <button
               type="button"
+              id="settings-open-btn"
+              data-testid="settings-open-btn"
               className="settings-btn"
               onClick={() => setIsSettingsOpen(true)}
               title="Settings"

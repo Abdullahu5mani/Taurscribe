@@ -49,12 +49,16 @@ interface QuickSettingsProps {
 
 
 function Toggle({
-    id, checked, onChange, disabled,
-}: { id: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+    id, checked, onChange, disabled, 'aria-label': ariaLabel,
+}: { id: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; 'aria-label'?: string }) {
     return (
         <label className={`qs-toggle${disabled ? " qs-toggle--disabled" : ""}`} htmlFor={id}>
             <input
                 id={id}
+                data-testid={id}
+                role="switch"
+                aria-checked={checked}
+                aria-label={ariaLabel}
                 type="checkbox"
                 checked={checked}
                 disabled={disabled}
@@ -137,11 +141,13 @@ function QuickSettingsComponent({
     }, [setSoundMuted, setSoundVolume, soundMuted]);
 
     return (
-        <aside className="quick-settings">
+        <aside className="quick-settings" aria-label="Quick Settings">
             <div className="qs-header">
                 <span className="qs-title">Quick Settings</span>
                 <button
                     type="button"
+                    id="qs-settings-btn"
+                    data-testid="qs-settings-btn"
                     className="qs-settings-link"
                     onClick={openFullSettings}
                     title="Open full settings"
@@ -163,6 +169,7 @@ function QuickSettingsComponent({
                     info="FlowScribe 2.5 0.5B fixes grammar, punctuation, and tone after each recording.">
                     <Toggle
                         id="qs-grammar"
+                        aria-label="Grammar LLM post-processing"
                         checked={enableGrammarLM}
                         onChange={setEnableGrammarLM}
                         disabled={llmStatus === "Loading..." || llmStatus === "Not Downloaded"}
@@ -174,6 +181,7 @@ function QuickSettingsComponent({
                     info="Background noise reduction. Only affects the AI input — saved WAV keeps original audio.">
                     <Toggle
                         id="qs-denoise"
+                        aria-label="Background noise reduction"
                         checked={enableDenoise}
                         onChange={setEnableDenoise}
                     />
@@ -183,6 +191,7 @@ function QuickSettingsComponent({
                     info="Floating transcript window — see words appear as you speak.">
                     <Toggle
                         id="qs-overlay"
+                        aria-label="Floating transcript overlay"
                         checked={enableOverlay}
                         onChange={setEnableOverlay}
                     />
@@ -192,6 +201,7 @@ function QuickSettingsComponent({
                     info="Mutes system audio while recording to prevent bleed-in.">
                     <Toggle
                         id="qs-mute-bg"
+                        aria-label="Mute mic background audio"
                         checked={muteBackgroundAudio}
                         onChange={setMuteBackgroundAudio}
                     />
@@ -199,11 +209,22 @@ function QuickSettingsComponent({
 
                 {/* ── Tone ────────────────────────────────────── */}
                 <Section label="Tone" info="Transcription style applied by the grammar LLM." />
-                <div className="qs-style-pills">
+                <div
+                    id="qs-style-pills"
+                    data-testid="qs-style-pills"
+                    className="qs-style-pills"
+                    role="radiogroup"
+                    aria-label="Transcription tone style"
+                >
                     {STYLES.map(s => (
                         <button
                             key={s.value}
                             type="button"
+                            id={`qs-style-pill-${s.value.toLowerCase()}`}
+                            data-testid={`qs-style-pill-${s.value.toLowerCase()}`}
+                            role="radio"
+                            aria-checked={transcriptionStyle === s.value}
+                            aria-label={`${s.label} transcription style`}
                             className={`qs-style-pill${transcriptionStyle === s.value ? " qs-style-pill--active" : ""}`}
                             disabled={!enableGrammarLM || llmStatus !== 'Loaded'}
                             onClick={() => setTranscriptionStyle(s.value)}
@@ -220,26 +241,43 @@ function QuickSettingsComponent({
                   <>
                     <Section label="Speech Engine Backend" info="Run the active speech-recognition engine (Whisper/Parakeet/Granite) on GPU (faster) or CPU. This transcribes your voice." />
                     <div className="qs-row-hint" style={{ padding: "0 18px 4px" }}>{backendInfo}</div>
-                    <div className={`qs-backend-row${cohereGpuOnlyLoaded ? " qs-backend-row--locked" : ""}`}>
+                    <div
+                        id="qs-asr-backend-group"
+                        data-testid="qs-asr-backend-group"
+                        className={`qs-backend-row${cohereGpuOnlyLoaded ? " qs-backend-row--locked" : ""}`}
+                        role="group"
+                        aria-label="Speech Engine Backend"
+                    >
                             <button
                                 type="button"
+                                id="qs-asr-backend-gpu"
+                                data-testid="qs-asr-backend-gpu"
                                 className={`qs-backend-btn${asrBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
                                 onClick={() => onToggleAsrBackend("gpu")}
                                 disabled={asrBackendLoading || cohereGpuOnlyLoaded}
                                 aria-pressed={asrBackend === "gpu"}
+                                aria-label="Run speech engine on GPU"
                                 title="Run the active speech engine on GPU (faster, requires VRAM)"
                             ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
                             <button
                                 type="button"
+                                id="qs-asr-backend-cpu"
+                                data-testid="qs-asr-backend-cpu"
                                 className={`qs-backend-btn${asrBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
                                 onClick={() => onToggleAsrBackend("cpu")}
                                 disabled={asrBackendLoading || cohereGpuOnlyLoaded}
                                 aria-pressed={asrBackend === "cpu"}
+                                aria-label="Run speech engine on CPU"
                                 title="Run the active speech engine on CPU (universal, slower)"
                             ><IconCpu size={11} /> CPU</button>
                         </div>
                     {cohereGpuOnlyLoaded && activeEngine === "granite" && (
-                        <p className="qs-backend-hint" role="status">
+                        <p
+                            id="qs-asr-backend-hint"
+                            data-testid="qs-asr-backend-hint"
+                            className="qs-backend-hint"
+                            role="status"
+                        >
                             Granite is loaded on a GPU backend — unload it before switching to CPU.
                         </p>
                     )}
@@ -252,17 +290,31 @@ function QuickSettingsComponent({
                 {!isMac && (
                   <>
                     <Section label="Grammar LLM Backend" info="Run the grammar/punctuation correction model (FlowScribe) on GPU (faster) or CPU. This cleans up the transcript after the speech engine produces it." />
-                    <div className="qs-backend-row">
+                    <div
+                        id="qs-llm-backend-group"
+                        data-testid="qs-llm-backend-group"
+                        className="qs-backend-row"
+                        role="group"
+                        aria-label="Grammar LLM Backend"
+                    >
                         <button
                             type="button"
+                            id="qs-llm-backend-gpu"
+                            data-testid="qs-llm-backend-gpu"
                             className={`qs-backend-btn${llmBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
                             onClick={() => setLlmBackend("gpu")}
+                            aria-pressed={llmBackend === "gpu"}
+                            aria-label="Run grammar LLM on GPU"
                             title="Run grammar LLM on GPU (Fast, requires VRAM)"
                         ><IconBolt size={12} style={{ color: '#facc15' }} /> GPU</button>
                         <button
                             type="button"
+                            id="qs-llm-backend-cpu"
+                            data-testid="qs-llm-backend-cpu"
                             className={`qs-backend-btn${llmBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
                             onClick={() => setLlmBackend("cpu")}
+                            aria-pressed={llmBackend === "cpu"}
+                            aria-label="Run grammar LLM on CPU"
                             title="Run grammar LLM on CPU (Universal, slower)"
                         ><IconCpu size={12} /> CPU</button>
                     </div>
@@ -274,14 +326,25 @@ function QuickSettingsComponent({
                 <div className="qs-volume-row">
                     <button
                         type="button"
+                        id="qs-sound-mute-btn"
+                        data-testid="qs-sound-mute-btn"
                         className="qs-mute-btn"
                         onClick={() => setSoundMuted(!soundMuted)}
+                        aria-pressed={soundMuted}
+                        aria-label={soundMuted ? "Unmute sounds" : "Mute sounds"}
                         title={soundMuted ? "Unmute sounds" : "Mute sounds"}
                     >
                         {soundMuted ? <IconVolumeMuted size={14} /> : soundVolume > 50 ? <IconVolumeHigh size={14} /> : <IconVolumeLow size={14} />}
                     </button>
                     <input
                         type="range"
+                        id="qs-volume-slider"
+                        data-testid="qs-volume-slider"
+                        role="slider"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={Math.round((soundMuted ? 0 : soundVolume) * 100)}
+                        aria-valuetext={volumeLabel}
                         className="qs-volume-slider"
                         min={0}
                         max={1}
@@ -295,11 +358,25 @@ function QuickSettingsComponent({
 
                 {/* ── Personalisation ─────────────────────────── */}
                 <Section label="Personalisation" />
-                <button type="button" className="qs-personal-row" onClick={openTextSettings}>
+                <button
+                    type="button"
+                    id="qs-personal-dictionary-btn"
+                    data-testid="qs-personal-dictionary-btn"
+                    className="qs-personal-row"
+                    onClick={openTextSettings}
+                    aria-label={`Open Dictionary settings, currently ${dictionaryCount} entries`}
+                >
                     <span>Dictionary</span>
                     <span className="qs-personal-count">{dictionaryCount} entries →</span>
                 </button>
-                <button type="button" className="qs-personal-row" onClick={openTextSettings}>
+                <button
+                    type="button"
+                    id="qs-personal-snippets-btn"
+                    data-testid="qs-personal-snippets-btn"
+                    className="qs-personal-row"
+                    onClick={openTextSettings}
+                    aria-label={`Open Snippets settings, currently ${snippetsCount} entries`}
+                >
                     <span>Snippets</span>
                     <span className="qs-personal-count">{snippetsCount} entries →</span>
                 </button>

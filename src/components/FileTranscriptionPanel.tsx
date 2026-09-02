@@ -376,6 +376,10 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
             {/* Drop zone */}
             <div
                 className={dropZoneClass}
+                id="file-drop-zone"
+                data-testid="file-drop-zone"
+                role="region"
+                aria-label="Audio file drop zone"
                 onDragOver={isDisabled ? undefined : onDragOver}
                 onDragLeave={isDisabled ? undefined : onDragLeave}
                 onDrop={isDisabled ? undefined : onDrop}
@@ -415,14 +419,30 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                         </div>
                         <p className="file-drop-title">Drop audio files here</p>
                         <p className="file-drop-hint">Drop one or more files · WAV, MP3, M4A, FLAC, OGG</p>
-                        <button className="file-browse-btn" onClick={handleBrowse}>Browse files</button>
+                        <button
+                            id="file-browse-btn"
+                            data-testid="file-browse-btn"
+                            className="file-browse-btn"
+                            onClick={handleBrowse}
+                            aria-label="Browse audio files"
+                        >
+                            Browse files
+                        </button>
                     </>
                 ) : (
                     <>
                         <p className="file-drop-hint file-drop-hint--inline">
                             {isDragOver ? "Drop to add more files" : "Drop more files or"}
                         </p>
-                        <button className="file-browse-btn file-browse-btn--compact" onClick={handleBrowse}>Browse</button>
+                        <button
+                            id="file-browse-btn-compact"
+                            data-testid="file-browse-btn-compact"
+                            className="file-browse-btn file-browse-btn--compact"
+                            onClick={handleBrowse}
+                            aria-label="Browse more audio files"
+                        >
+                            Browse
+                        </button>
                     </>
                 )}
             </div>
@@ -445,7 +465,14 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                                     {files.length} files · {doneCount} done · {queuedCount} queued
                                 </span>
                                 {hasActive && (
-                                    <button type="button" className="file-queue-cancel-all" onClick={cancelAll}>
+                                    <button
+                                        type="button"
+                                        id="file-queue-cancel-all"
+                                        data-testid="file-queue-cancel-all"
+                                        className="file-queue-cancel-all"
+                                        onClick={cancelAll}
+                                        aria-label="Cancel all queued and active file transcriptions"
+                                    >
                                         Cancel all
                                     </button>
                                 )}
@@ -453,23 +480,36 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                         );
                     })()}
                     {files.map(item => (
-                        <div key={item.id} className={`file-card file-card--${item.status}`}>
+                        <div
+                            key={item.id}
+                            id={`file-card-${item.id}`}
+                            data-testid={`file-card-${item.id}`}
+                            role="article"
+                            aria-label={`File ${item.name}, status ${item.status}`}
+                            className={`file-card file-card--${item.status}`}
+                        >
                             <div className="file-card-header">
                                 <span className="file-card-name" title={item.path}>{item.name}</span>
                                 <div className="file-card-actions">
                                     {item.status === "done" && (
                                         <>
                                             <button
+                                                id={`file-copy-${item.id}`}
+                                                data-testid={`file-copy-${item.id}`}
                                                 className="file-card-btn"
                                                 onClick={() => copyText(item.transcript)}
                                                 title="Copy transcript"
+                                                aria-label={`Copy transcript for ${item.name}`}
                                             >
                                                 Copy
                                             </button>
                                             <button
+                                                id={`file-rerun-${item.id}`}
+                                                data-testid={`file-rerun-${item.id}`}
                                                 className="file-card-btn file-card-btn--secondary"
                                                 onClick={() => retranscribe(item)}
                                                 title={`Re-transcribe with ${engineLabel(activeEngineRef.current, activeModelIdRef.current)} (switch engine first to use a different model)`}
+                                                aria-label={`Re-transcribe ${item.name} with ${engineLabel(activeEngineRef.current, activeModelIdRef.current)}`}
                                             >
                                                 Re-run · {engineLabel(activeEngineRef.current, activeModelIdRef.current)}
                                             </button>
@@ -477,23 +517,31 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                                     )}
                                     {item.status === "error" && (
                                         <button
+                                            id={`file-retry-${item.id}`}
+                                            data-testid={`file-retry-${item.id}`}
                                             className="file-card-btn file-card-btn--error"
                                             onClick={() => retranscribe(item)}
                                             title={`Retry with ${engineLabel(activeEngineRef.current, activeModelIdRef.current)}`}
+                                            aria-label={`Retry transcribing ${item.name}`}
                                         >
                                             Retry · {engineLabel(activeEngineRef.current, activeModelIdRef.current)}
                                         </button>
                                     )}
                                     {item.status === "cancelled" && (
                                         <button
+                                            id={`file-run-${item.id}`}
+                                            data-testid={`file-run-${item.id}`}
                                             className="file-card-btn file-card-btn--secondary"
                                             onClick={() => retranscribe(item)}
                                             title={`Transcribe with ${engineLabel(activeEngineRef.current, activeModelIdRef.current)}`}
+                                            aria-label={`Transcribe ${item.name}`}
                                         >
                                             Run · {engineLabel(activeEngineRef.current, activeModelIdRef.current)}
                                         </button>
                                     )}
                                     <button
+                                        id={`file-remove-${item.id}`}
+                                        data-testid={`file-remove-${item.id}`}
                                         className={`file-card-btn file-card-btn--remove${item.status === "queued" ? " file-card-btn--remove-queued" : ""}`}
                                         onClick={() => item.status !== "processing" && removeFile(item.id)}
                                         disabled={item.status === "processing"}
@@ -514,9 +562,12 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                                             <span>{item.progress}%</span>
                                             <button
                                                 type="button"
+                                                id={`file-cancel-${item.id}`}
+                                                data-testid={`file-cancel-${item.id}`}
                                                 className="file-card-btn file-card-btn--error"
                                                 onClick={() => cancelTranscription(item.path)}
                                                 title="Stop transcription"
+                                                aria-label={`Cancel transcription for ${item.name}`}
                                             >
                                                 Cancel
                                             </button>
@@ -533,7 +584,14 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
 
                             {/* Error */}
                             {(item.status === "error" || item.status === "cancelled") && item.error && (
-                                <p className="file-card-error" role="alert">{item.error}</p>
+                                <p
+                                    id={`file-error-${item.id}`}
+                                    data-testid={`file-error-${item.id}`}
+                                    className="file-card-error"
+                                    role="alert"
+                                >
+                                    {item.error}
+                                </p>
                             )}
 
                             {/* Metadata row */}
@@ -555,8 +613,12 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                                     {item.transcript && (
                                         <button
                                             type="button"
+                                            id={`file-toggle-transcript-${item.id}`}
+                                            data-testid={`file-toggle-transcript-${item.id}`}
                                             className="file-meta-toggle"
                                             onClick={() => toggleExpanded(item.id)}
+                                            aria-expanded={item.expanded}
+                                            aria-label={item.expanded ? `Hide transcript for ${item.name}` : `Show transcript for ${item.name}`}
                                         >
                                             {item.expanded ? "Hide transcript ▲" : "Show transcript ▼"}
                                         </button>
@@ -566,7 +628,11 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
 
                             {/* Transcript — collapsed by default */}
                             {item.status === "done" && item.transcript && item.expanded && (
-                                <div className="file-card-transcript">
+                                <div
+                                    id={`file-transcript-text-${item.id}`}
+                                    data-testid={`file-transcript-text-${item.id}`}
+                                    className="file-card-transcript"
+                                >
                                     {item.transcript}
                                 </div>
                             )}

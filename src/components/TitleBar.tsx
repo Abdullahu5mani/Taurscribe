@@ -41,6 +41,8 @@ export function TitleBar({
           announced as interactive by screen readers */}
       <button
         type="button"
+        id="titlebar-logo-btn"
+        data-testid="titlebar-logo-btn"
         className="titlebar-logo-btn"
         onClick={onLogoClick}
         aria-label="Cycle logo animation"
@@ -57,13 +59,45 @@ export function TitleBar({
   );
 
   return (
-    <header className={`titlebar titlebar--${mac ? "mac" : "win"}`}>
+    <header
+      id="titlebar-header"
+      data-testid="titlebar-header"
+      className={`titlebar titlebar--${mac ? "mac" : "win"}`}
+      role="banner"
+    >
       {mac ? (
         <>
-          <div className="titlebar-controls titlebar-controls--mac">
-            <button type="button" className="titlebar-btn titlebar-btn--close" onClick={handleClose} aria-label="Close" />
-            <button type="button" className="titlebar-btn titlebar-btn--minimize" onClick={handleMinimize} aria-label="Minimize" />
-            <button type="button" className="titlebar-btn titlebar-btn--maximize" onClick={handleMaximize} aria-label="Maximize" />
+          <div
+            id="titlebar-controls-mac"
+            data-testid="titlebar-controls-mac"
+            className="titlebar-controls titlebar-controls--mac"
+            role="group"
+            aria-label="Window management"
+          >
+            <button
+              type="button"
+              id="titlebar-close-btn"
+              data-testid="titlebar-close-btn"
+              className="titlebar-btn titlebar-btn--close"
+              onClick={handleClose}
+              aria-label="Close"
+            />
+            <button
+              type="button"
+              id="titlebar-minimize-btn"
+              data-testid="titlebar-minimize-btn"
+              className="titlebar-btn titlebar-btn--minimize"
+              onClick={handleMinimize}
+              aria-label="Minimize"
+            />
+            <button
+              type="button"
+              id="titlebar-maximize-btn"
+              data-testid="titlebar-maximize-btn"
+              className="titlebar-btn titlebar-btn--maximize"
+              onClick={handleMaximize}
+              aria-label="Maximize"
+            />
           </div>
           <div className="titlebar-drag titlebar-drag--mac" data-tauri-drag-region>
             {brand}
@@ -74,14 +108,41 @@ export function TitleBar({
           <div className="titlebar-drag titlebar-drag--win" data-tauri-drag-region>
             {brand}
           </div>
-          <div className="titlebar-controls titlebar-controls--win">
-            <button type="button" className="titlebar-btn titlebar-btn--minimize" onClick={handleMinimize} aria-label="Minimize">
+          <div
+            id="titlebar-controls-win"
+            data-testid="titlebar-controls-win"
+            className="titlebar-controls titlebar-controls--win"
+            role="group"
+            aria-label="Window management"
+          >
+            <button
+              type="button"
+              id="titlebar-minimize-btn"
+              data-testid="titlebar-minimize-btn"
+              className="titlebar-btn titlebar-btn--minimize"
+              onClick={handleMinimize}
+              aria-label="Minimize"
+            >
               <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="1.2" /></svg>
             </button>
-            <button type="button" className="titlebar-btn titlebar-btn--maximize" onClick={handleMaximize} aria-label="Maximize">
+            <button
+              type="button"
+              id="titlebar-maximize-btn"
+              data-testid="titlebar-maximize-btn"
+              className="titlebar-btn titlebar-btn--maximize"
+              onClick={handleMaximize}
+              aria-label="Maximize"
+            >
               <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>
             </button>
-            <button type="button" className="titlebar-btn titlebar-btn--close" onClick={handleClose} aria-label="Close">
+            <button
+              type="button"
+              id="titlebar-close-btn"
+              data-testid="titlebar-close-btn"
+              className="titlebar-btn titlebar-btn--close"
+              onClick={handleClose}
+              aria-label="Close"
+            >
               <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0L10 10M10 0L0 10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /></svg>
             </button>
           </div>

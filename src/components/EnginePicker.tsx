@@ -62,20 +62,47 @@ export function EnginePicker(props: EnginePickerProps) {
     return (
       <>
         <div className="ep-header">
-          <button type="button" className="ep-back" onClick={() => setDrilled(null)} aria-label="Back">‹</button>
+          <button
+            type="button"
+            id="ep-back-btn"
+            data-testid="ep-back-btn"
+            className="ep-back"
+            onClick={() => setDrilled(null)}
+            aria-label="Back to engine list"
+          >
+            ‹
+          </button>
           <span className="ep-dot" style={{ background: meta.color }} />
           <span className="ep-title" style={{ color: meta.color }}>{meta.label}</span>
           {meta.pill && <span className="ep-pill">{meta.pill}</span>}
         </div>
-        <div className="ep-models">
+        <div
+          id="ep-models-list"
+          data-testid="ep-models-list"
+          className="ep-models"
+          role="radiogroup"
+          aria-label={`${meta.label} models`}
+        >
           {rows.length === 0 ? (
-            <button type="button" className="ep-model-row ep-model-row--empty" onClick={() => { onOpenDownloads(drilled); onClose(); }}>
+            <button
+              type="button"
+              id={`ep-download-${drilled}-btn`}
+              data-testid={`ep-download-${drilled}-btn`}
+              className="ep-model-row ep-model-row--empty"
+              onClick={() => { onOpenDownloads(drilled); onClose(); }}
+              aria-label={`Open settings to download ${drilled} model`}
+            >
               {isDownloading ? "Downloading…" : "Download from Settings"}
             </button>
           ) : rows.map(r => (
             <button
               key={r.id}
               type="button"
+              id={`ep-model-row-${r.id}`}
+              data-testid={`ep-model-row-${r.id}`}
+              role="radio"
+              aria-checked={r.selected}
+              aria-label={`Select model ${r.name}, size ${r.size}`}
               className={`ep-model-row${r.selected ? " ep-model-row--selected" : ""}`}
               disabled={disabled}
               onClick={() => {
@@ -97,7 +124,14 @@ export function EnginePicker(props: EnginePickerProps) {
             </button>
           ))}
           {loadedEngine === drilled && (
-            <button type="button" className="ep-unload" onClick={() => { onUnload(); onClose(); }}>
+            <button
+              type="button"
+              id="ep-unload-btn"
+              data-testid="ep-unload-btn"
+              className="ep-unload"
+              onClick={() => { onUnload(); onClose(); }}
+              aria-label="Unload model and free VRAM"
+            >
               Unload — free VRAM
             </button>
           )}
@@ -115,8 +149,11 @@ export function EnginePicker(props: EnginePickerProps) {
           <button
             key={engine}
             type="button"
+            id={`ep-engine-row-${engine}`}
+            data-testid={`ep-engine-row-${engine}`}
             className={`ep-row${isActive ? " ep-row--active" : ""}`}
             onClick={() => setDrilled(engine)}
+            aria-label={`Engine ${meta.label}${isActive ? ", active" : ""}`}
           >
             <span
               className="ep-row-dot"
@@ -135,8 +172,23 @@ export function EnginePicker(props: EnginePickerProps) {
 
   return (
     <>
-      <div className="engine-picker-backdrop" onClick={onClose} />
-      <div className="engine-picker">{content}</div>
+      <div
+        className="engine-picker-backdrop"
+        id="engine-picker-backdrop"
+        data-testid="engine-picker-backdrop"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
+        className="engine-picker"
+        id="engine-picker-dialog"
+        data-testid="engine-picker-dialog"
+        role="dialog"
+        aria-label="Engine picker"
+        aria-modal="true"
+      >
+        {content}
+      </div>
     </>
   );
 }

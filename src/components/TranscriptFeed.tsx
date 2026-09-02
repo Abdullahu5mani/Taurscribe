@@ -232,9 +232,22 @@ function TranscriptFeedComponent({
     const liveClass = isRecording && !isPaused ? "feed-live-row--recording" : "feed-live-row--processing";
 
     return (
-        <div className="transcript-feed">
+        <div
+            className="transcript-feed"
+            id="transcript-feed"
+            data-testid="transcript-feed"
+            role="region"
+            aria-label="Transcript feed"
+            aria-live="polite"
+        >
             {showLive && (
-                <div className={`feed-live-row ${liveClass}`}>
+                <div
+                    className={`feed-live-row ${liveClass}`}
+                    id="feed-live-status"
+                    data-testid="feed-live-status"
+                    role="status"
+                    aria-live="assertive"
+                >
                     <span className="feed-live-dot" />
                     {isRecording && !isPaused && (
                         <div className="feed-live-waveform" aria-hidden="true">
@@ -248,7 +261,12 @@ function TranscriptFeedComponent({
             )}
 
             {items.length === 0 && !showLive && (
-                <div className="feed-empty">
+                <div
+                    className="feed-empty"
+                    id="feed-empty-state"
+                    data-testid="feed-empty-state"
+                    role="status"
+                >
                     <div className="feed-empty-waveform" aria-hidden="true">
                         {[4, 8, 14, 18, 14, 8, 4].map((h, i) => (
                             <span
@@ -279,6 +297,10 @@ function TranscriptFeedComponent({
                         <div
                             className={`feed-item${isLatest ? " feed-item--latest" : ""}${isNew ? " feed-item--entering feed-item--fading-in" : ""}`}
                             data-distance={distance}
+                            id={`transcript-card-${item.id}`}
+                            data-testid={`transcript-card-${item.id}`}
+                            role="article"
+                            aria-label={`Transcript recorded at ${formatTimestamp(item.created_at)}`}
                         >
                             <div className="feed-item-header">
                                 <span className="feed-timestamp">{formatTimestamp(item.created_at)}</span>
@@ -296,10 +318,12 @@ function TranscriptFeedComponent({
                                     )}
                                     <button
                                         type="button"
+                                        id={`transcript-copy-${item.id}`}
+                                        data-testid={`transcript-copy-${item.id}`}
                                         className={`feed-icon-btn feed-copy-btn${copiedId === item.id ? " feed-copy-btn--done" : ""}`}
                                         onClick={(e) => onCopy(e, item.id, item.transcript)}
                                         title={copiedId === item.id ? "Copied!" : "Copy to clipboard"}
-                                        aria-label="Copy transcript"
+                                        aria-label={copiedId === item.id ? "Copied transcript" : "Copy transcript to clipboard"}
                                     >
                                         {copiedId === item.id ? (
                                             <IconCheck size={12} />
@@ -309,10 +333,12 @@ function TranscriptFeedComponent({
                                     </button>
                                     <button
                                         type="button"
+                                        id={`transcript-delete-${item.id}`}
+                                        data-testid={`transcript-delete-${item.id}`}
                                         className="feed-icon-btn feed-delete-btn"
                                         onClick={(e) => onDelete(e, item.id)}
                                         title="Delete this record"
-                                        aria-label="Delete record"
+                                        aria-label={`Delete transcript from ${formatTimestamp(item.created_at)}`}
                                     >
                                         ×
                                     </button>

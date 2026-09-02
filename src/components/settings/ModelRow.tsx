@@ -65,7 +65,13 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
         : 'model-tag--default';
 
     return (
-        <div className="model-item">
+        <div
+            className="model-item"
+            id={`model-row-${model.id}`}
+            data-testid={`model-row-${model.id}`}
+            role="region"
+            aria-label={`Model ${model.name}`}
+        >
             <div className="model-info">
                 <div className="model-title-row">
                     <h3>{model.name}</h3>
@@ -81,7 +87,14 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                 </div>
                 <p className="model-desc">{model.description}</p>
                 {deleteError && (
-                    <p role="alert" className="model-delete-error">{deleteError}</p>
+                    <p
+                        id={`model-delete-error-${model.id}`}
+                        data-testid={`model-delete-error-${model.id}`}
+                        role="alert"
+                        className="model-delete-error"
+                    >
+                        {deleteError}
+                    </p>
                 )}
             </div>
             <div className="model-row-actions">
@@ -126,8 +139,11 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                 {progress.status !== 'finalizing' && (
                                     <button
                                         type="button"
+                                        id={`model-cancel-download-btn-${model.id}`}
+                                        data-testid={`model-cancel-download-btn-${model.id}`}
                                         className="model-cancel-btn"
                                         onClick={() => onCancelDownload(model.id)}
+                                        aria-label={`Cancel download of ${model.name}`}
                                         title="Cancel download and delete partial files"
                                     >
                                         Cancel
@@ -172,14 +188,20 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                 <div className="delete-confirm-row">
                                     <span className="delete-confirm-label">Delete?</span>
                                     <button
+                                        id={`model-confirm-delete-yes-${model.id}`}
+                                        data-testid={`model-confirm-delete-yes-${model.id}`}
                                         className="delete-confirm-btn delete-confirm-btn--yes"
                                         onClick={handleConfirmDelete}
+                                        aria-label={`Confirm delete ${model.name}`}
                                     >
                                         Yes
                                     </button>
                                     <button
+                                        id={`model-confirm-delete-no-${model.id}`}
+                                        data-testid={`model-confirm-delete-no-${model.id}`}
                                         className="delete-confirm-btn delete-confirm-btn--no"
                                         onClick={handleCancelDelete}
+                                        aria-label={`Cancel delete ${model.name}`}
                                     >
                                         No
                                     </button>
@@ -187,6 +209,8 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                             ) : (
                                 <>
                                     <button
+                                        id={`model-delete-btn-${model.id}`}
+                                        data-testid={`model-delete-btn-${model.id}`}
                                         className="model-delete-icon-btn"
                                         onClick={handleDeleteClick}
                                         title="Delete Model"
@@ -196,8 +220,11 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                     </button>
 
                                     <button
+                                        id={`model-status-badge-${model.id}`}
+                                        data-testid={`model-status-badge-${model.id}`}
                                         className={`download-btn downloaded${!model.verified ? ' download-btn--unverified' : ''}`}
                                         disabled
+                                        aria-label={`${model.name} is ${model.verified ? 'Verified' : 'Installed'}`}
                                         title={model.verified ? "Verified Integrity" : "Unverified"}
                                     >
                                         {model.verified ? (
@@ -210,8 +237,11 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                             )
                         ) : (
                             <button
+                                id={`model-download-btn-${model.id}`}
+                                data-testid={`model-download-btn-${model.id}`}
                                 className="download-btn"
                                 onClick={() => onDownload(model.id, model.name)}
+                                aria-label={`Download ${model.name}`}
                                 title="Download Model"
                             >
                                 <IconDownload size={14} /> Download

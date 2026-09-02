@@ -259,7 +259,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     return (
         <div className="models-tab">
             {/* ── Whisper ──────────────────────────────────────────── */}
-            <div className="model-group" ref={whisperGroupRef}>
+            <div className="model-group" id="models-group-whisper" data-testid="models-group-whisper" ref={whisperGroupRef}>
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Whisper</h3>
                     <span className="model-group-sub model-group-sub--whisper">by OpenAI · multilingual · any hardware</span>
@@ -269,7 +269,13 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     <div className="whisper-picker-grid">
                         <label className="whisper-picker-field">
                             <span>Size</span>
-                            <select value={activeTier} onChange={(e) => setActiveTier(e.target.value as WhisperTier)}>
+                            <select
+                                id="whisper-tier-select"
+                                data-testid="whisper-tier-select"
+                                aria-label="Whisper model tier"
+                                value={activeTier}
+                                onChange={(e) => setActiveTier(e.target.value as WhisperTier)}
+                            >
                                 {TIERS.map(tier => {
                                     const hasDownloaded = TIER_MODEL_IDS[tier].some(
                                         id => models.find(m => m.id === id)?.downloaded
@@ -286,6 +292,9 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                         <label className="whisper-picker-field">
                             <span>Language</span>
                             <select
+                                id="whisper-language-select"
+                                data-testid="whisper-language-select"
+                                aria-label="Whisper model language"
                                 value={selectedLanguage}
                                 onChange={(e) => setWhisperLanguage(e.target.value as WhisperLanguage)}
                             >
@@ -300,13 +309,19 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                                 Quantization
                                 <button
                                     type="button"
+                                    id="whisper-quantization-help-btn"
+                                    data-testid="whisper-quantization-help-btn"
                                     className="whisper-help-dot"
+                                    aria-label="Quantization explanation"
                                     title="Quantization stores the model in fewer bits. It usually saves RAM, disk, and battery, with a small accuracy tradeoff."
                                 >
                                     ?
                                 </button>
                             </span>
                             <select
+                                id="whisper-optimization-select"
+                                data-testid="whisper-optimization-select"
+                                aria-label="Whisper model quantization"
                                 value={whisperOptimization}
                                 onChange={(e) => setWhisperOptimization(e.target.value as WhisperOptimization)}
                             >
@@ -348,7 +363,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             </div>
 
             {/* ── Parakeet ─────────────────────────────────────────── */}
-            <div className="model-group" ref={parakeetGroupRef}>
+            <div className="model-group" id="models-group-parakeet" data-testid="models-group-parakeet" ref={parakeetGroupRef}>
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Parakeet</h3>
                     <span className="model-group-sub model-group-sub--parakeet">by NVIDIA · streaming &amp; high-accuracy variants</span>
@@ -363,7 +378,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             </div>
 
             {/* ── Granite ─────────────────────────────────────────── */}
-            <div className="model-group" ref={cohereGroupRef}>
+            <div className="model-group" id="models-group-granite" data-testid="models-group-granite" ref={cohereGroupRef}>
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Granite</h3>
                     <span className="model-group-badge model-group-badge--warn">Experimental</span>
@@ -382,7 +397,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             </div>
 
             {/* ── Post-Processing Models ────────────────────────────── */}
-            <div className="model-group">
+            <div className="model-group" id="models-group-postprocessing" data-testid="models-group-postprocessing">
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Post-Processing</h3>
                     <span className="model-group-sub">optional · grammar correction</span>
