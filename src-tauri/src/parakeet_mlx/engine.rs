@@ -205,6 +205,16 @@ impl ParakeetNemotronMlx {
         self.last_preemph_sample = 0.0;
     }
 
+    /// Returns the current cache length (number of historical acoustic frames).
+    pub fn cache_len(&self) -> i32 {
+        self.cache_len
+    }
+
+    /// Returns whether internal buffers and caches are completely cleared.
+    pub fn is_clean_state(&self) -> bool {
+        self.cache_len == 0 && self.audio_buffer.is_empty() && self.audio_processed == 0 && self.chunk_idx == 0
+    }
+
     /// Warms up Metal compute pipelines and JIT kernels with a dummy chunk (560ms of silence).
     /// Calls self.reset() afterwards to restore clean state.
     pub fn warmup(&mut self) -> Result<(), ParakeetMlxError> {

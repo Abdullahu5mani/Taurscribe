@@ -206,6 +206,20 @@ fn test_m1_real_parakeet_mlx_metal_warmup_and_reset() {
     let dur = start.elapsed();
     assert!(res.is_ok(), "Warmup must succeed on Apple Silicon Metal: {:?}", res);
     println!("[TEST] Cold Metal warmup completed in {:.3}s", dur.as_secs_f32());
+    let max_warmup_secs = if std::env::var("MTL_SHADER_VALIDATION").as_deref() == Ok("1") {
+        4.5
+    } else {
+        1.5
+    };
+    assert!(
+        dur.as_secs_f32() < max_warmup_secs,
+        "Cold warmup must complete in under {:.1}s (validation={}), took {:?}",
+        max_warmup_secs,
+        std::env::var("MTL_SHADER_VALIDATION").as_deref() == Ok("1"),
+        dur
+    );
+    assert_eq!(model.cache_len(), 0, "Cache length after warmup must be 0");
+    assert!(model.is_clean_state(), "Model state must be clean after warmup");
 
     // 2. Sequential warmups (idempotency + no memory explosion)
     for i in 2..=4 {
@@ -221,11 +235,28 @@ fn test_m1_real_parakeet_mlx_metal_warmup_and_reset() {
         let t = i as f32 / 16000.0;
         synth_chunk.push((2.0 * std::f32::consts::PI * 440.0 * t).sin() * 0.5);
     }
+    let chunk_start = std::time::Instant::now();
     let trans_res = model.transcribe_chunk(&synth_chunk);
+    let chunk_dur = chunk_start.elapsed();
     assert!(trans_res.is_ok(), "Inference after warmup must succeed: {:?}", trans_res);
+    let chunk_ms = chunk_dur.as_secs_f32() * 1000.0;
+    println!("[TEST] Subsequent chunk inference completed in {:.2}ms", chunk_ms);
+    let max_chunk_ms = if std::env::var("MTL_SHADER_VALIDATION").as_deref() == Ok("1") {
+        250.0
+    } else {
+        125.0
+    };
+    assert!(
+        chunk_ms < max_chunk_ms,
+        "Subsequent chunk must run in <{:.0}ms, took {:.2}ms",
+        max_chunk_ms,
+        chunk_ms
+    );
 
     // 4. Test state reset clean guarantee
     model.reset();
+    assert_eq!(model.cache_len(), 0, "Cache length after manual reset must be 0");
+    assert!(model.is_clean_state(), "Model state must be clean after manual reset");
     let trans_after_reset = model.transcribe_chunk(&synth_chunk);
     assert!(trans_after_reset.is_ok(), "Inference after reset must succeed");
 }

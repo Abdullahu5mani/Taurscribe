@@ -91,6 +91,54 @@ pub fn compute_topology_from_cores(cores: &[(u8, usize)]) -> Option<HybridCpuTop
         total_cores: cores.len(),
     })
 }
+/// Serializes or parses raw binary buffer representation of Windows `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` records.
+pub fn parse_processor_info_bytes(buffer: &[u8]) -> Option<Vec<(u8, usize)>> {
+    let mut offset = 0usize;
+    let mut cores = Vec::new();
+
+    while offset + 8 <= buffer.len() {
+        let rel = u32::from_ne_bytes(buffer[offset..offset + 4].try_into().ok()?);
+        let size = u32::from_ne_bytes(buffer[offset + 4..offset + 8].try_into().ok()?);
+        if size == 0 || offset + (size as usize) > buffer.len() {
+            break;
+        }
+
+        // RelationProcessorCore = 0
+        if rel == 0 && size >= 36 {
+            let eff = buffer[offset + 9];
+            let group_count = u16::from_ne_bytes(buffer[offset + 30..offset + 32].try_into().ok()?);
+            if group_count > 0 && offset + 32 + std::mem::size_of::<usize>() <= buffer.len() {
+                let mask = usize::from_ne_bytes(
+                    buffer[offset + 32..offset + 32 + std::mem::size_of::<usize>()].try_into().ok()?,
+                );
+                cores.push((eff, mask));
+            }
+        }
+        offset += size as usize;
+    }
+
+    if cores.is_empty() {
+        None
+    } else {
+        Some(cores)
+    }
+}
+
+/// Helper to synthesize a raw binary buffer for a processor core record.
+pub fn build_synthetic_core_record(efficiency_class: u8, mask: usize) -> Vec<u8> {
+    let mut rec = Vec::with_capacity(48);
+    rec.extend_from_slice(&0u32.to_ne_bytes()); // RelationProcessorCore = 0
+    let size = (32 + std::mem::size_of::<usize>() + 8) as u32;
+    rec.extend_from_slice(&size.to_ne_bytes()); // Size
+    rec.push(0u8); // Flags
+    rec.push(efficiency_class); // EfficiencyClass
+    rec.extend_from_slice(&[0u8; 20]); // Reserved[20]
+    rec.extend_from_slice(&1u16.to_ne_bytes()); // GroupCount = 1
+    rec.extend_from_slice(&mask.to_ne_bytes()); // GroupMask[0].Mask
+    rec.extend_from_slice(&0u16.to_ne_bytes()); // Group
+    rec.extend_from_slice(&[0u8; 6]); // Reserved2[3]
+    rec
+}
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
@@ -304,9 +352,121 @@ mod tests {
     }
 
     #[test]
+    fn test_case_a_intel_i9_13900k_hybrid() {
+        // Case A: Intel Core i9-13900K (Hybrid)
+        // 8 P-cores (16 threads with SMT, EfficiencyClass = 1) + 16 E-cores (16 threads without SMT, EfficiencyClass = 0)
+        let mut raw_buffer = Vec::new();
+        let mut cores = Vec::new();
+
+        // 8 P-cores (each has 2 threads)
+        for i in 0..8 {
+            let mask = 0x3 << (i * 2);
+            cores.push((1u8, mask));
+            raw_buffer.extend_from_slice(&build_synthetic_core_record(1, mask));
+        }
+        // 16 E-cores (threads 16..31)
+        for i in 0..16 {
+            let mask = 0x1 << (16 + i);
+            cores.push((0u8, mask));
+            raw_buffer.extend_from_slice(&build_synthetic_core_record(0, mask));
+        }
+
+        // Test algorithmic core
+        let mask = compute_hybrid_p_core_mask(&cores);
+        assert_eq!(mask, Some(0x0000_FFFF), "P-core mask must isolate threads 0..15");
+
+        let topo = compute_topology_from_cores(&cores).unwrap();
+        assert!(topo.is_hybrid);
+        assert_eq!(topo.p_core_count, 8);
+        assert_eq!(topo.e_core_count, 16);
+        assert_eq!(topo.total_cores, 24);
+
+        // Test raw binary buffer parsing (simulating Windows Win32 API return buffer)
+        let parsed_cores = parse_processor_info_bytes(&raw_buffer).expect("Parse raw buffer");
+        assert_eq!(parsed_cores.len(), 24);
+        let parsed_mask = compute_hybrid_p_core_mask(&parsed_cores);
+        assert_eq!(parsed_mask, Some(0x0000_FFFF));
+    }
+
+    #[test]
+    fn test_case_b_intel_core_ultra_7_155h_3tier() {
+        // Case B: Intel Core Ultra 7 155H (3-Tier Hybrid)
+        // 6 P-cores (eff=2) + 8 E-cores (eff=1) + 2 LP E-cores (eff=0)
+        let mut raw_buffer = Vec::new();
+        let mut cores = Vec::new();
+
+        // 2 LP E-cores (threads 0..1)
+        for i in 0..2 {
+            let mask = 1 << i;
+            cores.push((0u8, mask));
+            raw_buffer.extend_from_slice(&build_synthetic_core_record(0, mask));
+        }
+        // 8 E-cores (threads 2..9)
+        for i in 0..8 {
+            let mask = 1 << (2 + i);
+            cores.push((1u8, mask));
+            raw_buffer.extend_from_slice(&build_synthetic_core_record(1, mask));
+        }
+        // 6 P-cores with SMT (threads 10..21)
+        let mut p_expected_mask = 0usize;
+        for i in 0..6 {
+            let mask = 0x3 << (10 + i * 2);
+            p_expected_mask |= mask;
+            cores.push((2u8, mask));
+            raw_buffer.extend_from_slice(&build_synthetic_core_record(2, mask));
+        }
+
+        let mask = compute_hybrid_p_core_mask(&cores);
+        assert_eq!(mask, Some(p_expected_mask), "Must isolate only highest EfficiencyClass (eff=2)");
+
+        let topo = compute_topology_from_cores(&cores).unwrap();
+        assert!(topo.is_hybrid);
+        assert_eq!(topo.p_core_count, 6);
+        assert_eq!(topo.e_core_count, 10); // 8 E + 2 LP-E
+        assert_eq!(topo.total_cores, 16);
+
+        // Test raw binary buffer parsing
+        let parsed_cores = parse_processor_info_bytes(&raw_buffer).expect("Parse raw buffer");
+        assert_eq!(parsed_cores.len(), 16);
+        let parsed_mask = compute_hybrid_p_core_mask(&parsed_cores);
+        assert_eq!(parsed_mask, Some(p_expected_mask));
+    }
+
+    #[test]
+    fn test_case_c_amd_ryzen_9_7950x_homogeneous() {
+        // Case C: AMD Ryzen 9 7950X (Homogeneous)
+        // 16 cores / 32 threads, all EfficiencyClass = 0
+        let mut raw_buffer = Vec::new();
+        let mut cores = Vec::new();
+
+        for i in 0..16 {
+            let mask = 0x3 << (i * 2);
+            cores.push((0u8, mask));
+            raw_buffer.extend_from_slice(&build_synthetic_core_record(0, mask));
+        }
+
+        let mask = compute_hybrid_p_core_mask(&cores);
+        assert_eq!(mask, None, "Homogeneous CPU must return None to avoid core starvation");
+
+        let topo = compute_topology_from_cores(&cores).unwrap();
+        assert!(!topo.is_hybrid);
+        assert_eq!(topo.p_core_count, 16);
+        assert_eq!(topo.e_core_count, 0);
+        assert_eq!(topo.p_core_affinity_mask, None);
+
+        // Test raw binary buffer parsing
+        let parsed_cores = parse_processor_info_bytes(&raw_buffer).expect("Parse raw buffer");
+        assert_eq!(parsed_cores.len(), 16);
+        let parsed_mask = compute_hybrid_p_core_mask(&parsed_cores);
+        assert_eq!(parsed_mask, None);
+    }
+
+    #[test]
     fn test_empty_cores_slice() {
         assert_eq!(compute_hybrid_p_core_mask(&[]), None);
         assert_eq!(compute_topology_from_cores(&[]), None);
+        assert_eq!(parse_processor_info_bytes(&[]), None);
+        assert_eq!(parse_processor_info_bytes(&[0u8; 10]), None);
     }
 
     #[test]
