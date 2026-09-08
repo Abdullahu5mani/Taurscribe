@@ -12,6 +12,7 @@
     "build:windows": "bun scripts/build-windows.ts --bundles nsis",
     "build:windows-portable": "npm run tauri build -- --target x86_64-pc-windows-msvc --config '{\"bundle\":{\"targets\":[\"nsis\"],\"windows\":{\"nsis\":{\"installMode\":\"portable\"}}}}'",
     "check": "cd src-tauri && cargo check",
+    "test:appium": "bun scripts/tests/test_appium_models_e2e.ts",
     "reset": "rm -rf ~/Library/Application\\ Support/taurscribe/settings.json ~/Library/Application\\ Support/Taurscribe/transcripts.db && echo 'Settings and history reset.'"
   },
   "dependencies": {
@@ -32,6 +33,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "webdriverio": "^9.31.9"
   }
 }
