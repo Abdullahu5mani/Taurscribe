@@ -1,7 +1,7 @@
 import { remote } from 'webdriverio';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 
 interface ModelBenchmarkResult {
   model: string;
@@ -16,6 +16,17 @@ interface ModelBenchmarkResult {
 }
 
 const RESULTS: ModelBenchmarkResult[] = [];
+
+async function isAppiumResponding(): Promise<boolean> {
+  try {
+    const res = await fetch('http://127.0.0.1:4723/status');
+    if (!res.ok) return false;
+    const data = await res.json() as any;
+    return data?.value?.ready === true;
+  } catch {
+    return false;
+  }
+}
 
 async function runE2ETest() {
   console.log('===============================================================================');
@@ -39,7 +50,25 @@ async function runE2ETest() {
   if (existsSync(libriFixture)) {
     console.log(`[INIT] Audio Fixture LibriSpeech: ${libriFixture}`);
   }
-  console.log('[INIT] Connecting to Appium Mac2 driver at http://127.0.0.1:4723...');
+
+  let appiumProcess: ChildProcess | null = null;
+  if (!(await isAppiumResponding())) {
+    console.log('[INIT] Appium not active on port 4723. Spawning Appium server...');
+    appiumProcess = spawn('/opt/homebrew/bin/appium', ['--port', '4723', '--log-level', 'error'], {
+      stdio: 'ignore',
+    });
+    const t0 = Date.now();
+    while (!(await isAppiumResponding())) {
+      if (Date.now() - t0 > 15000) {
+        if (appiumProcess) appiumProcess.kill();
+        throw new Error('Failed to start Appium server on port 4723 within 15 seconds');
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    console.log('  ✔ Appium server started and listening on http://127.0.0.1:4723');
+  } else {
+    console.log('[INIT] Connecting to existing Appium Mac2 driver at http://127.0.0.1:4723...');
+  }
 
   const driver = await remote({
     path: '/',
@@ -249,7 +278,17 @@ async function runE2ETest() {
 
   } finally {
     console.log('\n[TEARDOWN] Terminating Appium session...');
-    await driver.deleteSession();
+    try {
+      await driver.deleteSession();
+    } catch {}
+
+    if (appiumProcess) {
+      console.log('[TEARDOWN] Stopping spawned Appium server process...');
+      appiumProcess.kill('SIGINT');
+      await new Promise((r) => setTimeout(r, 600));
+      spawnSync('pkill', ['-f', 'WebDriverAgentRunner']);
+      console.log('  ✔ Appium daemon stopped cleanly.');
+    }
   }
 
   // ---------------------------------------------------------------------------
