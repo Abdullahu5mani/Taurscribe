@@ -500,6 +500,25 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             subdirectory: Some("parakeet-nemotron"),
         }),
 
+        // Parakeet Nemotron 0.6B FastConformer RNN-T native Apple Silicon MLX GPU checkpoint
+        "parakeet-nemotron-mlx" => Some(ModelConfig {
+            repo: "Abdullahu5mani/parakeet-nemotron-0.6b-mlx",
+            branch: "main",
+            files: vec![
+                ModelFile {
+                    filename: "model.safetensors",
+                    remote_path: "model.safetensors",
+                    sha1: "fb8e5b00361f0655f5fcbaf6b8d7391472765f1be3004cfc638e93a835890740",
+                },
+                ModelFile {
+                    filename: "tokenizer.model",
+                    remote_path: "tokenizer.model",
+                    sha1: "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
+                },
+            ],
+            subdirectory: Some("parakeet-nemotron-mlx"),
+        }),
+
         // Parakeet TDT v3 — multilingual (25 languages), NVIDIA's checkpoint
         // exported to ONNX by community user `istupakov`. Top of HuggingFace
         // Open ASR Leaderboard for English; supports auto language detection.
