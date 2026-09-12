@@ -665,6 +665,10 @@ pub fn log_parakeet_backend_resolution(
         return;
     }
     match backend {
+        GpuBackend::Metal => println!(
+            "[PARAKEET] {} — Metal GPU backend loaded via MLX.",
+            model_type
+        ),
         GpuBackend::Cuda => println!(
             "[PARAKEET] {} — CUDA EP loaded (load_path={}; {}CPU EP fallback).",
             model_type,
