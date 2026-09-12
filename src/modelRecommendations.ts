@@ -205,8 +205,8 @@ export function computeModelRecommendation({
       summary: "Parakeet gives you the fastest English-only live text, with Whisper as the safer fallback when you want a second opinion.",
       primaryEngine: "parakeet",
       primaryEngineLabel: ENGINE_LABELS.parakeet,
-      primaryModelId: "parakeet-nemotron",
-      primaryLabel: "Parakeet Nemotron Streaming",
+      primaryModelId: isAppleSilicon ? "parakeet-nemotron-mlx" : "parakeet-nemotron",
+      primaryLabel: isAppleSilicon ? "Parakeet Nemotron Streaming (Apple Silicon MLX)" : "Parakeet Nemotron Streaming",
       primaryReasoning: [
         "Best fit for short English dictation where sub-second feedback matters.",
         "Your hardware profile can support the larger streaming model comfortably.",
@@ -240,8 +240,8 @@ export function computeModelRecommendation({
       ],
       backupEngine: profile.accelerated ? "parakeet" : null,
       backupEngineLabel: profile.accelerated ? ENGINE_LABELS.parakeet : null,
-      backupModelId: profile.accelerated ? "parakeet-nemotron" : null,
-      backupLabel: profile.accelerated ? "Parakeet Nemotron Streaming" : null,
+      backupModelId: profile.accelerated ? (isAppleSilicon ? "parakeet-nemotron-mlx" : "parakeet-nemotron") : null,
+      backupLabel: profile.accelerated ? (isAppleSilicon ? "Parakeet Nemotron Streaming (Apple Silicon MLX)" : "Parakeet Nemotron Streaming") : null,
       hardwareLine: baseHardwareLine,
       whisperTier: tier,
     };
