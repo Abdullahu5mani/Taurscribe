@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use mlx_rs::ops::indexing::IndexOp;
-use mlx_rs::{Array, Dtype};
+use mlx_rs::Array;
 use ndarray::Array2;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 
@@ -105,15 +105,11 @@ impl ParakeetNemotronMlx {
         for _ in 0..24 {
             caches_channel.push(
                 Array::zeros::<f32>(&[1, 70, 1024])
-                    .map_err(|e| format!("mlx zeros error: {e}"))?
-                    .as_dtype(Dtype::Float16)
-                    .map_err(|e| format!("mlx dtype error: {e}"))?,
+                    .map_err(|e| format!("mlx zeros error: {e}"))?,
             );
             caches_time.push(
                 Array::zeros::<f32>(&[1, 8, 1024])
-                    .map_err(|e| format!("mlx zeros error: {e}"))?
-                    .as_dtype(Dtype::Float16)
-                    .map_err(|e| format!("mlx dtype error: {e}"))?,
+                    .map_err(|e| format!("mlx zeros error: {e}"))?,
             );
         }
 
@@ -155,16 +151,12 @@ impl ParakeetNemotronMlx {
     pub fn reset(&mut self) {
         for ch in &mut self.caches_channel {
             if let Ok(z) = Array::zeros::<f32>(&[1, 70, 1024]) {
-                if let Ok(h) = z.as_dtype(Dtype::Float16) {
-                    *ch = h;
-                }
+                *ch = z;
             }
         }
         for tm in &mut self.caches_time {
             if let Ok(z) = Array::zeros::<f32>(&[1, 8, 1024]) {
-                if let Ok(h) = z.as_dtype(Dtype::Float16) {
-                    *tm = h;
-                }
+                *tm = z;
             }
         }
         self.cache_len = 0;
@@ -248,7 +240,6 @@ impl ParakeetNemotronMlx {
         self.caches_time = new_caches_tm;
         self.cache_len = (self.cache_len + 7).min(70);
 
-        // 3. Greedy RNN-T decoding
         let enc_frames = encoded.shape()[2];
         let mut emitted_tokens = Vec::new();
 
@@ -440,6 +431,18 @@ impl ParakeetNemotronMlx {
                 }
             }
         }
+
+        // Slaney normalization
+        for i in 0..N_MELS {
+            let bandwidth = mel_points[i + 2] - mel_points[i];
+            if bandwidth > 0.0 {
+                let enorm = 2.0 / bandwidth;
+                for j in 0..num_freqs {
+                    weights[[i, j]] *= enorm;
+                }
+            }
+        }
+
         weights
     }
 }

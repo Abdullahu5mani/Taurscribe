@@ -192,6 +192,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if is_bit_perfect { "MATCH" } else { "DIFF" }
         );
 
+        if !is_bit_perfect {
+            println!("       REF:  {}", row.ref_text);
+            println!("       MLX:  {}", mlx_clean);
+            println!("       ONNX: {}", onnx_clean);
+        }
+
         if idx < 10 {
             cached_pcms.push(pcm);
         }
