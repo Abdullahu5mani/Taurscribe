@@ -23,7 +23,7 @@ fn infer_whisper_backend_from_system_info(info: &str) -> Option<GpuBackend> {
         return Some(GpuBackend::CoreML);
     }
     if info.contains("METAL = 1") {
-        return Some(GpuBackend::CoreML);
+        return Some(GpuBackend::Metal);
     }
     if info.contains("VULKAN = 1") {
         return Some(GpuBackend::Vulkan);
@@ -68,10 +68,11 @@ fn warn_whisper_backend_mismatch(info: &str, backend: &GpuBackend) {
 
 /// GPU Backend type
 /// Determines which hardware is powering the AI
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GpuBackend {
     Cuda,   // NVIDIA GPUs (Very Fast)
     CoreML, // macOS Apple Silicon / Neural Engine
+    Metal,  // macOS Apple Silicon / Metal GPU
     Vulkan, // AMD/Intel/Other GPUs (Fast)
     Cpu,    // Processor (Slow fallback)
 }
@@ -82,6 +83,7 @@ impl std::fmt::Display for GpuBackend {
         match self {
             GpuBackend::Cuda => write!(f, "CUDA"),
             GpuBackend::CoreML => write!(f, "CoreML"),
+            GpuBackend::Metal => write!(f, "Metal"),
             GpuBackend::Vulkan => write!(f, "Vulkan"),
             GpuBackend::Cpu => write!(f, "CPU"),
         }
@@ -434,8 +436,26 @@ impl WhisperManager {
             Ok(ctx) => {
                 let info = print_system_info();
                 log_whisper_system_report("after GPU context creation (use_gpu=true)", info);
-                let backend = infer_whisper_backend_from_system_info(info)
+                let mut backend = infer_whisper_backend_from_system_info(info)
                     .unwrap_or_else(|| self.detect_gpu_backend());
+                // If whisper.cpp was built with CoreML, it may report COREML = 1,
+                // but CoreML is only active if the matching {stem}-encoder.mlmodelc directory exists.
+                if matches!(backend, GpuBackend::CoreML) {
+                    let base_name = model_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .trim_start_matches("ggml-");
+                    let base_id = if let Some(pos) = base_name.find("-q") {
+                        &base_name[..pos]
+                    } else {
+                        base_name
+                    };
+                    let encoder_dir = model_path.with_file_name(format!("ggml-{}-encoder.mlmodelc", base_id));
+                    if !encoder_dir.is_dir() {
+                        backend = GpuBackend::Metal;
+                    }
+                }
                 warn_whisper_backend_mismatch(info, &backend);
                 println!(
                     "[SUCCESS] ✓ Whisper loaded with GPU offload — inferred backend: {} (from GGML flags where available)",
@@ -457,7 +477,7 @@ impl WhisperManager {
         }
 
         if cfg!(target_os = "macos") {
-            return GpuBackend::CoreML;
+            return GpuBackend::Metal;
         }
 
         GpuBackend::Vulkan
