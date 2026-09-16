@@ -1,0 +1,16 @@
+FROM --platform=linux/amd64 debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wine \
+    wine64 \
+    gcc-mingw-w64-x86-64 \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    && if [ -f /usr/lib/wine/wine64 ] && [ ! -f /usr/bin/wine64 ]; then ln -s /usr/lib/wine/wine64 /usr/bin/wine64; fi
+
+ENV WINEPREFIX=/tmp/wine-env
+ENV WINEDEBUG=-all
+
+WORKDIR /workspace
+
+CMD ["/bin/bash"]
