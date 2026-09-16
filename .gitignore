@@ -99,3 +99,4 @@ CODEBASE_GUIDE.pdf
 .venv-granite-mlx/
 __pycache__/
 *.pyc
+*.exe
