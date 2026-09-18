@@ -31,7 +31,16 @@ jobs:
             arch: 'ARM64'
             acceleration: 'Metal'
 
-          # --- 2. Windows (x86_64) ---
+          # --- 2. macOS (Intel x86_64) ---
+          - platform: 'macos-latest'
+            name: 'macOS (Intel x86_64)'
+            target: 'x86_64-apple-darwin'
+            cuda: false
+            os_name: 'macOS'
+            arch: 'x86_64'
+            acceleration: 'CPU'
+
+          # --- 3. Windows (x86_64) ---
           # Pinned to windows-2022 on purpose. windows-latest is now the
           # Windows Server 2025 / Visual Studio 2026 image, and nvcc refuses any
           # host compiler newer than VS 2022 — no CUDA release accepts it yet,
@@ -45,7 +54,7 @@ jobs:
             arch: 'x86_64'
             acceleration: 'CUDA'
 
-          # --- 3. Windows (ARM64) ---
+          # --- 4. Windows (ARM64) ---
           # Cross-compilation for Windows on ARM (Snapdragon, Surface Pro X).
           # Does not support CUDA, relies on CPU fallback or NPU (future).
           - platform: 'windows-latest'
@@ -56,14 +65,14 @@ jobs:
             arch: 'ARM64'
             acceleration: 'CPU'
 
-          # --- 4. Linux (x86_64) --- TEMPORARILY DISABLED
-          # - platform: 'ubuntu-24.04'
-          #   name: 'Linux (x86_64)'
-          #   target: 'x86_64-unknown-linux-gnu'
-          #   cuda: true
-          #   os_name: 'Linux'
-          #   arch: 'x86_64'
-          #   acceleration: 'CUDA'
+          # --- 5. Linux (x86_64) ---
+          - platform: 'ubuntu-24.04'
+            name: 'Linux (x86_64)'
+            target: 'x86_64-unknown-linux-gnu'
+            cuda: true
+            os_name: 'Linux'
+            arch: 'x86_64'
+            acceleration: 'CUDA'
           
           # Note: Linux ARM builds (e.g., Raspberry Pi) are commented out.
           # They require complex cross-compilation setup (linker issues with GTK/Webkit).
@@ -85,7 +94,7 @@ jobs:
       # This block installs the NVIDIA CUDA Toolkit.
       # It is ONLY run if 'cuda: true' in the matrix matches the platform.
 
-      - name: Install CUDA Toolkit (Linux)
+      - name: Install CUDA Toolkit & Configure Stubs (Linux)
         if: contains(matrix.platform, 'ubuntu') && matrix.cuda == true
         run: |
           # Download the CUDA keyring for Ubuntu 24.04 to get access to NVIDIA repos
@@ -94,10 +103,28 @@ jobs:
           sudo apt-get update
           # Install the toolkit (compiler, libraries, etc.)
           sudo env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install cuda-toolkit-12-6
-          # Set Environment variables so build scripts can find CUDA
-          echo "CUDA_PATH=/usr/local/cuda-12.6" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-          echo "PATH=/usr/local/cuda-12.6/bin:$PATH" >> $GITHUB_ENV
+
+          # Dynamically discover installed CUDA directory
+          CUDA_DIR=$(find /usr/local -maxdepth 1 -type d -name "cuda*" | sort -V | tail -n 1)
+          if [ -z "$CUDA_DIR" ] || [ ! -d "$CUDA_DIR" ]; then
+            CUDA_DIR="/usr/local/cuda-12.6"
+          fi
+          echo "Discovered CUDA at: $CUDA_DIR"
+
+          # Configure driver stub for build-time linking on headless runner
+          STUB_DIR="$CUDA_DIR/lib64/stubs"
+          if [ -d "$STUB_DIR" ]; then
+            if [ -f "$STUB_DIR/libcuda.so" ] && [ ! -e "$STUB_DIR/libcuda.so.1" ]; then
+              sudo ln -sf libcuda.so "$STUB_DIR/libcuda.so.1"
+            fi
+            sudo ln -sf "$STUB_DIR/libcuda.so" /usr/lib/x86_64-linux-gnu/libcuda.so
+            sudo ln -sf "$STUB_DIR/libcuda.so" /usr/lib/x86_64-linux-gnu/libcuda.so.1
+          fi
+
+          echo "CUDA_PATH=$CUDA_DIR" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$STUB_DIR:$CUDA_DIR/lib64:${LIBRARY_PATH:-}" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$CUDA_DIR/lib64:$STUB_DIR:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+          echo "PATH=$CUDA_DIR/bin:$PATH" >> $GITHUB_ENV
           
       - name: Install CUDA Toolkit (Windows)
         if: contains(matrix.platform, 'windows') && matrix.cuda == true
@@ -152,6 +179,7 @@ jobs:
             librsvg2-dev \
             patchelf \
             libasound2-dev \
+            libpipewire-0.3-dev \
             build-essential \
             curl wget file \
             libssl-dev \
@@ -452,7 +480,7 @@ jobs:
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
 
           # Pass environment variables set in previous steps to the build process
-          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
@@ -460,7 +488,7 @@ jobs:
           # LD_LIBRARY_PATH is set via GITHUB_ENV but we also pass it explicitly here
           # and add a -L flag via RUSTFLAGS so rustc's linker invocation finds libvulkan.so.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
-          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -C link-arg=-fuse-ld=mold', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           # Match Bundle step env vars so cargo doesn't see a changed environment and recompile
           CI: "true"
           NO_STRIP: "true"
@@ -504,7 +532,8 @@ jobs:
             # Use build-windows.ts which handles DLL bundling
             bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
-            bun run tauri build --target ${{ matrix.target }} --bundles deb,rpm,appimage
+            bash scripts/bundle-linux-solibs.sh
+            bun run tauri build --target ${{ matrix.target }} --bundles deb
           else
             # bundle_dmg.sh drives hdiutil, which intermittently fails on hosted
             # runners even with CI=true. The .app is already built by this point,
@@ -555,13 +584,13 @@ jobs:
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
           
           # Pass environment variables set in previous steps to the build process
-          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
           # Linux: ensure the Vulkan SDK lib dir is on the linker search path.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
-          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -C link-arg=-fuse-ld=mold', env.VULKAN_SDK) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           # Linux AppImage: linuxdeploy requires FUSE to self-mount, but CI runners lack it.
           # This flag makes it extract to a temp directory instead.
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -648,7 +677,7 @@ jobs:
           name: taurscribe-linux-rpm
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       # Linux: AppImage
       - name: Upload AppImage (Linux)
@@ -658,7 +687,7 @@ jobs:
           name: taurscribe-linux-appimage
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       # Linux: portable tarball (same layout as .deb payload)
       - name: Create Linux tarball (Linux)
