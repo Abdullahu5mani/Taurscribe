@@ -23,12 +23,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-.claude/
 generated_logos/
 
 # AI/dev artifacts
 AGENTS.md
-CLAUDE.md
 SKILL.md
 CODE_REFERENCE.md
 ARCHITECTURE.md
@@ -82,9 +80,6 @@ src-tauri/linux-libs/*.so.*
 
 # Agents folder
 .agents/
-
-# Claude Code harness
-skills-lock.json
 
 # LibriSpeech / offline eval (local manifests & CSV output)
 manifest.jsonl
