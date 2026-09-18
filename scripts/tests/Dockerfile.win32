@@ -3,6 +3,10 @@ FROM --platform=linux/amd64 debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wine \
     wine64 \
+    libvkd3d1 \
+    libvkd3d-shader1 \
+    mesa-vulkan-drivers \
+    xvfb \
     gcc-mingw-w64-x86-64 \
     build-essential \
     && rm -rf /var/lib/apt/lists/* \
