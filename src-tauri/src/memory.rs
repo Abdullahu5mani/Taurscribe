@@ -117,6 +117,20 @@ pub fn trim_process_memory() {
             let _ = malloc_trim(0);
         }
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        unsafe {
+            #[link(name = "c")]
+            extern "C" {
+                fn malloc_zone_pressure_relief(
+                    zone: *mut std::ffi::c_void,
+                    goal: usize,
+                ) -> usize;
+            }
+            let _ = malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+        }
+    }
 }
 
 pub fn process_memory_stats() -> ProcessMemoryStats {

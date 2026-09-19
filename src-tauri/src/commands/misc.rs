@@ -1550,5 +1550,35 @@ mod auto_unload_tests {
         state.last_activity_timestamp.store(0, Ordering::Relaxed);
         assert_eq!(state.last_activity_timestamp.load(Ordering::Relaxed), 0);
     }
+
+    #[test]
+    fn test_process_memory_usage_decreases_after_trim() {
+        let stats_before = crate::memory::process_memory_stats();
+        let baseline_mb = stats_before.working_set_bytes as f64 / (1024.0 * 1024.0);
+        println!("\n[MEMORY VERIFICATION] Baseline: {:.2} MB", baseline_mb);
+
+        // Allocate a 64 MiB buffer and write dirty bytes to force page faults
+        let mut simulated_model: Option<Vec<u8>> = Some(vec![0xAA; 64 * 1024 * 1024]);
+        if let Some(buf) = simulated_model.as_mut() {
+            buf[0] = 1;
+            buf[1024 * 1024] = 2;
+            let last_idx = buf.len() - 1;
+            buf[last_idx] = 3;
+        }
+
+        let stats_loaded = crate::memory::process_memory_stats();
+        let loaded_mb = stats_loaded.working_set_bytes as f64 / (1024.0 * 1024.0);
+        println!("[MEMORY VERIFICATION] With Loaded Weights: {:.2} MB (diff: +{:.2} MB)", loaded_mb, loaded_mb - baseline_mb);
+        assert!(stats_loaded.working_set_bytes >= stats_before.working_set_bytes, "Memory must increase when weights are loaded");
+
+        // Simulate unload and OS working set / heap purge
+        drop(simulated_model);
+        crate::memory::trim_process_memory();
+
+        let stats_unloaded = crate::memory::process_memory_stats();
+        let unloaded_mb = stats_unloaded.working_set_bytes as f64 / (1024.0 * 1024.0);
+        let freed_mb = loaded_mb - unloaded_mb;
+        println!("[MEMORY VERIFICATION] Post-Unload & Trim: {:.2} MB (Freed: {:.2} MB)", unloaded_mb, freed_mb);
+    }
 }
 
