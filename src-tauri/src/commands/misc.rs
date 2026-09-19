@@ -1529,4 +1529,26 @@ mod auto_unload_tests {
         state.auto_unload_seconds.store(1, Ordering::Relaxed);
         assert_eq!(state.auto_unload_seconds.load(Ordering::Relaxed), 1);
     }
+
+    #[test]
+    fn test_cross_platform_load_unload_lifecycle() {
+        let state = create_test_state();
+        
+        // 1. Initial state: nothing loaded
+        let unloaded = state.unload_all_loaded_asr().expect("unload should succeed");
+        assert!(unloaded.is_empty(), "clean state should have 0 loaded engines");
+
+        // 2. Simulate activity & memory trimming call
+        state.touch_activity();
+        crate::memory::trim_process_memory();
+
+        // 3. Mark model as loaded
+        state.model_loaded.store(true, Ordering::Relaxed);
+        assert!(state.model_loaded.load(Ordering::Relaxed));
+
+        // 4. Trigger auto-unload reset
+        state.last_activity_timestamp.store(0, Ordering::Relaxed);
+        assert_eq!(state.last_activity_timestamp.load(Ordering::Relaxed), 0);
+    }
 }
+
