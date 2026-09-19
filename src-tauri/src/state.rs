@@ -5,7 +5,7 @@ use crate::parakeet::ParakeetManager;
 use crate::types::{ASREngine, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
-use std::sync::{atomic::AtomicBool, Arc, Mutex, RwLock};
+use std::sync::{atomic::{AtomicBool, AtomicU64}, Arc, Mutex, RwLock};
 
 /// The Global "Brain" of the application.
 /// This struct holds all the data that needs to live as long as the app runs.
@@ -75,6 +75,15 @@ pub struct AudioState {
 
     // True while an ASR engine is actively loading (blocks unload attempts).
     pub engine_loading: Arc<AtomicBool>,
+
+    // Inactivity timeout in seconds before loaded ASR models are automatically unloaded.
+    // 0 = never / disabled
+    // 1 = immediate (unload after every transcription)
+    // >1 = seconds of inactivity (e.g. 300 = 5m, 1800 = 30m)
+    pub auto_unload_seconds: Arc<AtomicU64>,
+
+    // UNIX epoch seconds of the last user transcription or model load activity.
+    pub last_activity_timestamp: Arc<AtomicU64>,
 }
 
 impl AudioState {
@@ -102,7 +111,19 @@ impl AudioState {
             recording_paused: Arc::new(AtomicBool::new(false)),
             model_loaded: Arc::new(AtomicBool::new(false)),
             engine_loading: Arc::new(AtomicBool::new(false)),
+            auto_unload_seconds: Arc::new(AtomicU64::new(1800)),
+            last_activity_timestamp: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Record activity timestamp (called whenever audio is transcribed or a model is loaded)
+    pub fn touch_activity(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.last_activity_timestamp
+            .store(now, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// True when at least one ASR bundle exists on disk for the currently selected engine.

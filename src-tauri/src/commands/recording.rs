@@ -1924,7 +1924,10 @@ fn stop_recording_blocking(
 /// On Windows/Linux synchronous commands already run on a thread pool so the
 /// original blocking behaviour is fine, but async is harmless there too.
 #[tauri::command]
-pub async fn stop_recording(state: State<'_, AudioState>) -> Result<CommandResult<String>, String> {
+pub async fn stop_recording(
+    state: State<'_, AudioState>,
+    app: AppHandle,
+) -> Result<CommandResult<String>, String> {
     // --- Quick state access (non-blocking, just mutex snapshots) ---
     *state.denoiser.lock().unwrap() = None;
     state.recording_paused.store(false, Ordering::Relaxed);
@@ -1942,7 +1945,7 @@ pub async fn stop_recording(state: State<'_, AudioState>) -> Result<CommandResul
 
     // --- Heavy work: dispatched off the main thread via spawn_blocking so the
     //     macOS AppKit event loop stays responsive (thread joins, VAD, Whisper). ---
-    tauri::async_runtime::spawn_blocking(move || {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         stop_recording_blocking(
             recording,
             active_engine,
@@ -1954,11 +1957,33 @@ pub async fn stop_recording(state: State<'_, AudioState>) -> Result<CommandResul
         )
     })
     .await
-    .map(|result| match result {
-        Ok(transcript) => CommandResult::ok(transcript),
-        Err(message) => CommandResult::err("recording_stop_failed", message),
-    })
-    .map_err(|e| format!("stop_recording task failed: {}", e))
+    .map_err(|e| format!("stop_recording task failed: {}", e))?;
+
+    state.touch_activity();
+
+    // If configured to unload immediately after each transcription, free VRAM now.
+    if state.auto_unload_seconds.load(Ordering::Relaxed) == 1 {
+        if let Ok(unloaded) = state.unload_all_loaded_asr() {
+            if !unloaded.is_empty() {
+                crate::memory::trim_process_memory();
+                crate::tray::reconcile_model_loaded_tray(&app, &state);
+                let _ = app.emit("model-unloaded", ());
+                let _ = app.emit(
+                    "model-auto-unloaded",
+                    serde_json::json!({
+                        "timeout_seconds": 1,
+                        "unloaded_engines": unloaded,
+                    }),
+                );
+                let _ = crate::tray::update_tray_icon(&app, crate::types::AppState::Ready);
+            }
+        }
+    }
+
+    match outcome {
+        Ok(transcript) => Ok(CommandResult::ok(transcript)),
+        Err(message) => Ok(CommandResult::err("recording_stop_failed", message)),
+    }
 }
 
 #[cfg(test)]

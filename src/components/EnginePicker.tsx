@@ -3,6 +3,7 @@ import type { ASREngine } from "../hooks/useEngineSwitch";
 import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "../hooks/useModels";
 import type { DownloadProgress } from "./settings/types";
 import { beautifyModelName, formatSize } from "../utils/modelDisplay";
+import { AUTO_UNLOAD_OPTIONS } from "../hooks/useAutoUnload";
 
 interface EnginePickerProps {
   activeEngine: ASREngine;
@@ -25,6 +26,8 @@ interface EnginePickerProps {
   onUnload: () => void;
   onOpenDownloads: (engine: "whisper" | "parakeet" | "granite") => void;
   onClose: () => void;
+  autoUnloadTimeout?: number;
+  onUpdateAutoUnloadTimeout?: (seconds: number) => void;
 }
 
 const ENGINE_META: Record<ASREngine, { label: string; color: string; pill?: string }> = {
@@ -43,6 +46,7 @@ export function EnginePicker(props: EnginePickerProps) {
     disabled,
     onSelectWhisperModel, onSelectParakeetModel, onSelectCohereModel,
     onUnload, onOpenDownloads, onClose,
+    autoUnloadTimeout, onUpdateAutoUnloadTimeout,
   } = props;
 
   const [drilled, setDrilled] = useState<ASREngine | null>(null);
@@ -124,16 +128,36 @@ export function EnginePicker(props: EnginePickerProps) {
             </button>
           ))}
           {loadedEngine === drilled && (
-            <button
-              type="button"
-              id="ep-unload-btn"
-              data-testid="ep-unload-btn"
-              className="ep-unload"
-              onClick={() => { onUnload(); onClose(); }}
-              aria-label="Unload model and free VRAM"
-            >
-              Unload — free VRAM
-            </button>
+            <div className="ep-unload-section">
+              <button
+                type="button"
+                id="ep-unload-btn"
+                data-testid="ep-unload-btn"
+                className="ep-unload"
+                onClick={() => { onUnload(); onClose(); }}
+                aria-label="Unload model and free VRAM"
+              >
+                Unload — free VRAM
+              </button>
+              {onUpdateAutoUnloadTimeout && (
+                <div className="ep-auto-unload-row">
+                  <span className="ep-auto-unload-label">Auto-unload:</span>
+                  <div className="ep-auto-unload-chips" role="group" aria-label="Auto-unload inactivity options">
+                    {AUTO_UNLOAD_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        className={`ep-auto-unload-chip${autoUnloadTimeout === opt.value ? " ep-auto-unload-chip--selected" : ""}`}
+                        onClick={() => onUpdateAutoUnloadTimeout(opt.value)}
+                        title={opt.description}
+                      >
+                        {opt.shortLabel}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </>

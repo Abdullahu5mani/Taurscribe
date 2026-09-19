@@ -2297,3 +2297,62 @@
 .info-row--muted .info-row-value {
   color: var(--text-muted);
 }
+
+/* ── Model Memory & Auto-Unload Card ── */
+
+.model-memory-card {
+  margin-bottom: 24px;
+}
+
+.auto-unload-options-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.auto-unload-option-pill {
+  appearance: none;
+  -webkit-appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ink-80, #e2e8f0);
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.auto-unload-option-pill:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.auto-unload-option-pill--active {
+  background: rgba(var(--accent-primary-rgb, 56, 189, 248), 0.12);
+  border-color: var(--accent-primary, #38bdf8);
+  color: var(--accent-primary, #38bdf8);
+}
+
+.auto-unload-option-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.auto-unload-option-hint {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.auto-unload-option-pill--active .auto-unload-option-hint {
+  opacity: 0.9;
+}
+

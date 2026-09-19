@@ -33,6 +33,7 @@ import "./components/TitleBar.css";
 import "./App.css";
 import { IconFileText, IconBolt, IconEject, IconDownload, IconMic, IconLightbulb, IconSettings } from "./components/Icons";
 import { getEngineForModelId } from "./utils/engineUtils";
+import { useAutoUnload, AUTO_UNLOAD_OPTIONS, formatTimeoutLabel, formatRemaining } from "./hooks/useAutoUnload";
 import { OverlayScrollbarsComponent } from "overlayscrollbars-react";
 import type { CommandResult } from "./types/session";
 
@@ -591,6 +592,18 @@ function App() {
   });
 
   useModelsWatcher({ refreshModels, downloadProgressRef, setSettingsModels });
+
+  const {
+    timeoutSeconds: autoUnloadTimeout,
+    remainingSeconds: autoUnloadRemaining,
+    isMenuOpen: isAutoUnloadMenuOpen,
+    setIsMenuOpen: setIsAutoUnloadMenuOpen,
+    updateTimeout: handleUpdateAutoUnloadTimeout,
+  } = useAutoUnload({
+    loadedEngine,
+    setLoadedEngine,
+    setHeaderStatus,
+  });
 
   // ── Small helpers (local, use hook outputs) ──
   const handleEjectModel = async () => {
@@ -1289,17 +1302,99 @@ function App() {
                   engine has no installed model to load. */}
               {!isLoading && !isRecording && !isProcessingTranscript && (
                 loadedEngine === activeEngine ? (
-                  <button
-                    type="button"
-                    id="load-eject-btn"
-                    data-testid="load-eject-btn"
-                    className="load-eject-btn"
-                    onClick={handleEjectModel}
-                    title="Unload model (free VRAM)"
-                    aria-label="Unload model"
-                  >
-                    <IconEject size={14} />
-                  </button>
+                  <div className="load-eject-group">
+                    <button
+                      type="button"
+                      id="load-eject-btn"
+                      data-testid="load-eject-btn"
+                      className="load-eject-btn"
+                      onClick={handleEjectModel}
+                      title="Unload model (free VRAM immediately)"
+                      aria-label="Unload model"
+                    >
+                      <IconEject size={14} />
+                    </button>
+
+                    <button
+                      type="button"
+                      id="auto-unload-timer-btn"
+                      data-testid="auto-unload-timer-btn"
+                      className={`auto-unload-timer-btn${isAutoUnloadMenuOpen ? " auto-unload-timer-btn--active" : ""}`}
+                      onClick={() => setIsAutoUnloadMenuOpen(!isAutoUnloadMenuOpen)}
+                      title={
+                        autoUnloadRemaining !== null
+                          ? `Auto-unloads in ${formatRemaining(autoUnloadRemaining)} of inactivity (click to configure)`
+                          : `Model auto-unload: ${formatTimeoutLabel(autoUnloadTimeout)} (click to configure)`
+                      }
+                      aria-label="Configure model memory auto-unload"
+                    >
+                      <span className="auto-unload-pill-icon">⏱️</span>
+                      <span className="auto-unload-pill-text">
+                        {autoUnloadRemaining !== null
+                          ? formatRemaining(autoUnloadRemaining)
+                          : formatTimeoutLabel(autoUnloadTimeout)}
+                      </span>
+                      <span className="auto-unload-pill-caret" aria-hidden="true">▾</span>
+                    </button>
+
+                    {isAutoUnloadMenuOpen && (
+                      <>
+                        <div
+                          className="auto-unload-backdrop"
+                          onClick={() => setIsAutoUnloadMenuOpen(false)}
+                        />
+                        <div
+                          className="auto-unload-menu"
+                          role="menu"
+                          aria-label="Model memory retention options"
+                        >
+                          <div className="auto-unload-menu-header">
+                            <span className="auto-unload-menu-title">Model Memory & Auto-Unload</span>
+                            {autoUnloadRemaining !== null && (
+                              <span className="auto-unload-countdown">
+                                Freeing VRAM in {formatRemaining(autoUnloadRemaining)}
+                              </span>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            className="auto-unload-eject-action"
+                            onClick={() => {
+                              setIsAutoUnloadMenuOpen(false);
+                              void handleEjectModel();
+                            }}
+                          >
+                            <IconEject size={13} />
+                            <span>Unload Now (Free VRAM)</span>
+                          </button>
+
+                          <div className="auto-unload-menu-divider" />
+                          <div className="auto-unload-menu-section-label">Keep model loaded in memory:</div>
+
+                          {AUTO_UNLOAD_OPTIONS.map((opt) => (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              className={`auto-unload-menu-item${autoUnloadTimeout === opt.value ? " auto-unload-menu-item--selected" : ""}`}
+                              onClick={() => {
+                                void handleUpdateAutoUnloadTimeout(opt.value);
+                                setIsAutoUnloadMenuOpen(false);
+                              }}
+                            >
+                              <div className="auto-unload-item-info">
+                                <span className="auto-unload-item-label">{opt.label}</span>
+                                <span className="auto-unload-item-desc">{opt.description}</span>
+                              </div>
+                              {autoUnloadTimeout === opt.value && (
+                                <span className="auto-unload-item-check" aria-hidden="true">✓</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 ) : (
                   (activeEngine === "whisper" ? !noWhisperModel :
                    activeEngine === "parakeet" ? !noParakeetModel :
@@ -1341,6 +1436,8 @@ function App() {
                   onUnload={handleEjectModel}
                   onOpenDownloads={openModelSettingsForEngine}
                   onClose={() => setIsEnginePickerOpen(false)}
+                  autoUnloadTimeout={autoUnloadTimeout}
+                  onUpdateAutoUnloadTimeout={handleUpdateAutoUnloadTimeout}
                 />
               )}
             </div>

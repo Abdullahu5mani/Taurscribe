@@ -176,6 +176,67 @@ pub fn run() {
                 eprintln!("[WARN] Failed to start models watcher: {}", e);
             }
 
+            // Start Inactivity Auto-Unload Watchdog Background Thread
+            let auto_unload_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let state = auto_unload_handle.state::<AudioState>();
+                    let timeout = state.auto_unload_seconds.load(std::sync::atomic::Ordering::Relaxed);
+                    // 0 = never, 1 = immediate (handled synchronously on transcription finish)
+                    if timeout <= 1 {
+                        continue;
+                    }
+
+                    // Only check if an ASR model is loaded
+                    if !state.model_loaded.load(std::sync::atomic::Ordering::Relaxed) {
+                        continue;
+                    }
+
+                    // Guard: Do not unload if recording or engine is actively loading
+                    if state.engine_loading.load(std::sync::atomic::Ordering::Relaxed)
+                        || state.recording_handle.lock().unwrap().is_some()
+                    {
+                        continue;
+                    }
+
+                    let last = state.last_activity_timestamp.load(std::sync::atomic::Ordering::Relaxed);
+                    if last == 0 {
+                        continue;
+                    }
+
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+
+                    if now.saturating_sub(last) >= timeout {
+                        println!(
+                            "[AUTO-UNLOAD] Inactivity timeout reached ({}s). Unloading models to free VRAM...",
+                            timeout
+                        );
+                        if let Ok(unloaded) = state.unload_all_loaded_asr() {
+                            if !unloaded.is_empty() {
+                                state.last_activity_timestamp.store(0, std::sync::atomic::Ordering::Relaxed);
+                                crate::memory::trim_process_memory();
+                                crate::tray::reconcile_model_loaded_tray(&auto_unload_handle, &state);
+                                use tauri::Emitter;
+                                let _ = auto_unload_handle.emit("model-unloaded", ());
+                                let _ = auto_unload_handle.emit(
+                                    "model-auto-unloaded",
+                                    serde_json::json!({
+                                        "timeout_seconds": timeout,
+                                        "unloaded_engines": unloaded,
+                                    }),
+                                );
+                                let _ = crate::tray::update_tray_icon(&auto_unload_handle, crate::types::AppState::Ready);
+                                println!("[AUTO-UNLOAD] Successfully freed VRAM for: {:?}", unloaded);
+                            }
+                        }
+                    }
+                }
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -267,6 +328,10 @@ pub fn run() {
             commands::factory_reset_app_data,
             commands::get_close_behavior,
             commands::set_close_behavior,
+            commands::get_auto_unload_timeout,
+            commands::set_auto_unload_timeout,
+            commands::get_auto_unload_status,
+            commands::touch_activity,
             commands::init_granite,
             commands::get_granite_status,
             commands::list_granite_models,

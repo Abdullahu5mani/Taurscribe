@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
 import type { DownloadableModel, DownloadProgress } from './types';
 import { ModelRow } from './ModelRow';
+import { AUTO_UNLOAD_OPTIONS } from '../../hooks/useAutoUnload';
 import {
     computeModelRecommendation,
     getWhisperTierFromModelId,
@@ -80,11 +81,11 @@ const TIER_RECOMMENDED_ANS: Record<WhisperTier, string> = {
 };
 
 const TIER_COREML_IDS: Record<WhisperTier, string[]> = {
-    Tiny: ['whisper-tiny-en-coreml', 'whisper-tiny-coreml'],
-    Base: ['whisper-base-en-coreml', 'whisper-base-coreml'],
-    Small: ['whisper-small-en-coreml', 'whisper-small-coreml'],
-    Medium: ['whisper-medium-en-coreml', 'whisper-medium-coreml'],
-    Large: ['whisper-large-v3-turbo-coreml', 'whisper-large-v3-coreml'],
+    Tiny: ['coreml-tiny-encoder', 'coreml-tiny.en-encoder'],
+    Base: ['coreml-base-encoder', 'coreml-base.en-encoder'],
+    Small: ['coreml-small-encoder', 'coreml-small.en-encoder'],
+    Medium: ['coreml-medium-encoder', 'coreml-medium.en-encoder'],
+    Large: ['coreml-large-v3-encoder', 'coreml-large-v3-turbo-encoder'],
 };
 
 interface ModelsTabProps {
@@ -105,6 +106,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const [isAppleSilicon, setIsAppleSilicon] = useState(false);
     const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
     const [useCase, setUseCase] = useState<OnboardingUseCase>('quick_notes');
+    const [autoUnloadTimeout, setAutoUnloadTimeout] = useState<number>(1800);
     const hydratedTierRef = useRef(false);
     const [pulseModelIds, setPulseModelIds] = useState<Set<string>>(new Set());
     const whisperGroupRef = useRef<HTMLDivElement>(null);
@@ -116,14 +118,28 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
         invoke<boolean>('is_apple_silicon').then(setIsAppleSilicon).catch(() => { });
         invoke<SystemInfo>('get_system_info').then(setSysInfo).catch(() => { });
         Store.load('settings.json')
-            .then((store) => store.get<OnboardingUseCase>('onboarding_use_case'))
-            .then((savedUseCase) => {
-                if (savedUseCase) {
-                    setUseCase(savedUseCase);
+            .then(async (store) => {
+                const savedUseCase = await store.get<OnboardingUseCase>('onboarding_use_case');
+                if (savedUseCase) setUseCase(savedUseCase);
+                const savedTimeout = await store.get<number>('auto_unload_timeout_secs');
+                if (savedTimeout !== null && savedTimeout !== undefined) {
+                    setAutoUnloadTimeout(savedTimeout);
                 }
             })
             .catch(() => { });
     }, []);
+
+    const handleUpdateAutoUnload = async (seconds: number) => {
+        setAutoUnloadTimeout(seconds);
+        try {
+            await invoke('set_auto_unload_timeout', { seconds });
+            const store = await Store.load('settings.json');
+            await store.set('auto_unload_timeout_secs', seconds);
+            await store.save();
+        } catch (e) {
+            console.error('Failed to save auto-unload timeout:', e);
+        }
+    };
 
     const isMac = platform === 'macos';
     const isWindows = platform === 'windows';
@@ -260,6 +276,32 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
 
     return (
         <div className="models-tab">
+            {/* ── Model Memory & Auto-Unload ──────────────────────────── */}
+            <div className="setting-card model-memory-card" id="models-memory-retention">
+                <div className="setting-card-header">
+                    <span className="setting-card-label">Model Memory & Inactivity Unload</span>
+                    <span className="setting-card-badge">VRAM Retention</span>
+                </div>
+                <p className="setting-card-desc">
+                    Keep speech models loaded in VRAM/RAM between dictations for zero cold-start latency.
+                    Automatically unloads the model to free memory after a period of inactivity.
+                </p>
+                <div className="auto-unload-options-grid" role="radiogroup" aria-label="Model memory retention timeout">
+                    {AUTO_UNLOAD_OPTIONS.map((opt) => (
+                        <button
+                            key={opt.value}
+                            type="button"
+                            className={`auto-unload-option-pill${autoUnloadTimeout === opt.value ? ' auto-unload-option-pill--active' : ''}`}
+                            onClick={() => handleUpdateAutoUnload(opt.value)}
+                            title={opt.description}
+                        >
+                            <span className="auto-unload-option-name">{opt.label}</span>
+                            <span className="auto-unload-option-hint">{opt.shortLabel}</span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+
             {/* ── Whisper ──────────────────────────────────────────── */}
             <div className="model-group" id="models-group-whisper" data-testid="models-group-whisper" ref={whisperGroupRef}>
                 <div className="model-group-header">

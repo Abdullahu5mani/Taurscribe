@@ -1349,6 +1349,7 @@ pub async fn unload_current_model(
 
     crate::memory::log_process_memory("unload_current_model start");
     let unloaded = state.unload_all_loaded_asr()?;
+    state.last_activity_timestamp.store(0, Ordering::Relaxed);
     crate::memory::trim_process_memory();
     crate::memory::log_process_memory("unload_current_model after trim");
     crate::tray::reconcile_model_loaded_tray(&app, &state);
@@ -1359,6 +1360,61 @@ pub async fn unload_current_model(
         Ok(CommandResult::ok("none".to_string()))
     } else {
         Ok(CommandResult::ok(unloaded.join(",")))
+    }
+}
+
+/// Status payload returned to frontend for auto-unload monitoring and countdowns.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AutoUnloadStatus {
+    pub timeout_seconds: u64,
+    pub remaining_seconds: Option<u64>,
+    pub is_loaded: bool,
+    pub last_activity_epoch: u64,
+}
+
+#[tauri::command]
+pub fn get_auto_unload_timeout(state: tauri::State<'_, AudioState>) -> u64 {
+    state.auto_unload_seconds.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tauri::command]
+pub fn set_auto_unload_timeout(
+    state: tauri::State<'_, AudioState>,
+    seconds: u64,
+) -> Result<(), String> {
+    state.auto_unload_seconds.store(seconds, std::sync::atomic::Ordering::Relaxed);
+    state.touch_activity();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn touch_activity(state: tauri::State<'_, AudioState>) {
+    state.touch_activity();
+}
+
+#[tauri::command]
+pub fn get_auto_unload_status(state: tauri::State<'_, AudioState>) -> AutoUnloadStatus {
+    use std::sync::atomic::Ordering;
+    let timeout_seconds = state.auto_unload_seconds.load(Ordering::Relaxed);
+    let last = state.last_activity_timestamp.load(Ordering::Relaxed);
+    let is_loaded = state.model_loaded.load(Ordering::Relaxed);
+
+    let remaining_seconds = if is_loaded && timeout_seconds > 1 && last > 0 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let elapsed = now.saturating_sub(last);
+        Some(timeout_seconds.saturating_sub(elapsed))
+    } else {
+        None
+    };
+
+    AutoUnloadStatus {
+        timeout_seconds,
+        remaining_seconds,
+        is_loaded,
+        last_activity_epoch: last,
     }
 }
 
@@ -1409,3 +1465,68 @@ mod hardware_diagnostics_tests {
     }
 }
 
+#[cfg(test)]
+mod auto_unload_tests {
+    use super::*;
+    use crate::cohere::CohereManager;
+    use crate::parakeet::ParakeetManager;
+    use crate::vad::VADManager;
+    use crate::whisper::WhisperManager;
+    use std::sync::atomic::Ordering;
+
+    fn create_test_state() -> AudioState {
+        AudioState::new(
+            WhisperManager::new(),
+            ParakeetManager::new(),
+            VADManager::new().expect("vad init"),
+            CohereManager::new(),
+        )
+    }
+
+    #[test]
+    fn test_auto_unload_defaults_and_touch() {
+        let state = create_test_state();
+        assert_eq!(state.auto_unload_seconds.load(Ordering::Relaxed), 1800);
+        assert_eq!(state.last_activity_timestamp.load(Ordering::Relaxed), 0);
+
+        state.touch_activity();
+        let ts = state.last_activity_timestamp.load(Ordering::Relaxed);
+        assert!(ts > 0, "touch_activity must record a positive unix timestamp");
+    }
+
+    #[test]
+    fn test_auto_unload_status_calculation() {
+        let state = create_test_state();
+        state.model_loaded.store(true, Ordering::Relaxed);
+        state.auto_unload_seconds.store(300, Ordering::Relaxed);
+        state.touch_activity();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Simulate activity 100 seconds ago
+        state.last_activity_timestamp.store(now - 100, Ordering::Relaxed);
+
+        let timeout = state.auto_unload_seconds.load(Ordering::Relaxed);
+        let last = state.last_activity_timestamp.load(Ordering::Relaxed);
+        let elapsed = now.saturating_sub(last);
+        let remaining = timeout.saturating_sub(elapsed);
+
+        assert!(remaining <= 201 && remaining >= 199, "remaining should be ~200s, got {remaining}");
+    }
+
+    #[test]
+    fn test_auto_unload_immediate_and_disabled_modes() {
+        let state = create_test_state();
+        
+        // Disabled (never)
+        state.auto_unload_seconds.store(0, Ordering::Relaxed);
+        assert_eq!(state.auto_unload_seconds.load(Ordering::Relaxed), 0);
+
+        // Immediate
+        state.auto_unload_seconds.store(1, Ordering::Relaxed);
+        assert_eq!(state.auto_unload_seconds.load(Ordering::Relaxed), 1);
+    }
+}

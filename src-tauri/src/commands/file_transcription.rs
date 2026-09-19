@@ -79,10 +79,11 @@ pub async fn transcribe_file(
     let cohere = state.cohere.clone();
     let active_engine = state.active_engine.lock().unwrap().clone();
     let path_for_task = path.clone();
+    let app_for_task = app.clone();
 
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         transcribe_file_blocking(
-            &app,
+            &app_for_task,
             &path_for_task,
             active_engine,
             whisper,
@@ -95,9 +96,31 @@ pub async fn transcribe_file(
 
     unregister_cancel_flag(&path);
 
-    join_result
+    let res = join_result
         .map_err(|e| format!("transcribe_file task failed: {}", e))
-        .and_then(|r| r)
+        .and_then(|r| r);
+
+    state.touch_activity();
+
+    if state.auto_unload_seconds.load(std::sync::atomic::Ordering::Relaxed) == 1 {
+        if let Ok(unloaded) = state.unload_all_loaded_asr() {
+            if !unloaded.is_empty() {
+                crate::memory::trim_process_memory();
+                crate::tray::reconcile_model_loaded_tray(&app, &state);
+                let _ = app.emit("model-unloaded", ());
+                let _ = app.emit(
+                    "model-auto-unloaded",
+                    serde_json::json!({
+                        "timeout_seconds": 1,
+                        "unloaded_engines": unloaded,
+                    }),
+                );
+                let _ = crate::tray::update_tray_icon(&app, crate::types::AppState::Ready);
+            }
+        }
+    }
+
+    res
 }
 
 fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: Option<String>) {
