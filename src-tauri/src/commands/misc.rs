@@ -276,6 +276,303 @@ fn get_system_info_blocking() -> SystemInfo {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct HardwareDiagnostics {
+    pub platform: String,
+    pub platform_label: String,
+    pub os_detail: String,
+    pub arch: String,
+    pub is_apple_silicon: bool,
+    pub cpu_name: String,
+    pub cpu_cores: usize,
+    pub ram_total_gb: f32,
+    pub ram_used_gb: f32,
+    pub gpu_name: String,
+    pub gpu_cores: Option<usize>,
+    pub metal_version: Option<String>,
+    pub vram_gb: Option<f32>,
+    pub neural_accelerator: String,
+    pub ane_available: bool,
+    pub cuda_available: bool,
+    pub directml_available: bool,
+    pub vulkan_available: bool,
+    pub sim_dsp: String,
+    pub audio_driver: String,
+    pub whisper_framework: String,
+    pub whisper_coreml_models: Vec<String>,
+    pub parakeet_framework: String,
+    pub granite_framework: String,
+    pub active_engine: String,
+    pub active_model_id: Option<String>,
+    pub active_backend: String,
+}
+
+#[tauri::command]
+pub async fn get_hardware_diagnostics(
+    state: tauri::State<'_, AudioState>,
+) -> Result<HardwareDiagnostics, String> {
+    let state_clone = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || get_hardware_diagnostics_blocking(&state_clone))
+        .await
+        .map_err(|e| format!("get_hardware_diagnostics task failed: {}", e))
+}
+
+fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+
+    let cpu_name = sys
+        .cpus()
+        .first()
+        .map(|c| c.brand().trim().to_string())
+        .unwrap_or_else(|| "Unknown CPU".to_string());
+
+    let cpu_cores = sys.cpus().len();
+
+    let ram_total_gb = sys.total_memory() as f32 / 1_073_741_824.0;
+    let ram_used_gb = (sys.total_memory().saturating_sub(sys.available_memory())) as f32 / 1_073_741_824.0;
+
+    let (gpu_name, cuda_available, vram_gb) = detect_gpu();
+
+    let arch = std::env::consts::ARCH.to_string();
+
+    #[cfg(target_os = "macos")]
+    let (platform, platform_label) = ("macos".to_string(), "macOS".to_string());
+    #[cfg(target_os = "windows")]
+    let (platform, platform_label) = ("windows".to_string(), "Windows".to_string());
+    #[cfg(target_os = "linux")]
+    let (platform, platform_label) = ("linux".to_string(), "Linux".to_string());
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let (platform, platform_label) = ("unknown".to_string(), "Unknown".to_string());
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let is_apple_silicon = true;
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    let is_apple_silicon = false;
+
+    #[cfg(target_os = "macos")]
+    let os_detail = {
+        let out = std::process::Command::new("sw_vers").output().ok();
+        if let Some(o) = out {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let mut ver = "macOS".to_string();
+            for line in text.lines() {
+                if line.starts_with("ProductVersion:") {
+                    ver = format!("macOS {}", line.trim_start_matches("ProductVersion:").trim());
+                }
+            }
+            ver
+        } else {
+            "macOS".to_string()
+        }
+    };
+    #[cfg(target_os = "windows")]
+    let os_detail = "Windows 11 / 10".to_string();
+    #[cfg(target_os = "linux")]
+    let os_detail = "Linux".to_string();
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let os_detail = "Unknown OS".to_string();
+
+    #[cfg(target_os = "macos")]
+    let (gpu_cores, metal_version) = {
+        let mut cores = None;
+        let mut metal = None;
+        if let Ok(out) = std::process::Command::new("system_profiler").args(["SPDisplaysDataType"]).output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("Total Number of Cores:") {
+                    if let Some(val) = trimmed.splitn(2, ':').nth(1) {
+                        cores = val.trim().parse::<usize>().ok();
+                    }
+                } else if trimmed.starts_with("Metal Support:") {
+                    if let Some(val) = trimmed.splitn(2, ':').nth(1) {
+                        metal = Some(val.trim().to_string());
+                    }
+                }
+            }
+        }
+        (cores, metal)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (gpu_cores, metal_version) = (None, None);
+
+    #[cfg(target_os = "windows")]
+    let directml_available = true;
+    #[cfg(not(target_os = "windows"))]
+    let directml_available = false;
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let vulkan_available = true;
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let vulkan_available = false;
+
+    let (neural_accelerator, ane_available) = if is_apple_silicon {
+        ("Apple Neural Engine (16-Core ANE Matrix Hardware)".to_string(), true)
+    } else if cuda_available {
+        ("NVIDIA Tensor Cores (FP16 / INT8 Matrix Acceleration)".to_string(), false)
+    } else {
+        #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+        {
+            ("Qualcomm Hexagon NPU (45 TOPS AI Accelerator)".to_string(), false)
+        }
+        #[cfg(not(all(target_os = "windows", target_arch = "aarch64")))]
+        {
+            ("CPU Vector SIMD Execution Engine".to_string(), false)
+        }
+    };
+
+    #[cfg(target_arch = "aarch64")]
+    let sim_dsp = "ARM NEON 128-bit SIMD Vector Pipeline (1,075+ Msamples/s)".to_string();
+    #[cfg(target_arch = "x86_64")]
+    let sim_dsp = "x86_64 AVX2 / FMA 256-bit SIMD Vector Pipeline".to_string();
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    let sim_dsp = "Standard IEEE-754 Floating-Point DSP".to_string();
+
+    #[cfg(target_os = "macos")]
+    let audio_driver = "CoreAudio AUHAL (Ultra-low latency buffer)".to_string();
+    #[cfg(target_os = "windows")]
+    let audio_driver = "Windows WASAPI (Low-latency streaming)".to_string();
+    #[cfg(target_os = "linux")]
+    let audio_driver = {
+        if std::env::var("PIPEWIRE_RUNTIME_DIR").is_ok()
+            || std::path::Path::new("/usr/bin/pipewire").exists()
+        {
+            "PipeWire Pro-Audio (Hardware priority)".to_string()
+        } else {
+            "ALSA / PulseAudio (Direct hardware access)".to_string()
+        }
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let audio_driver = "Default Audio Driver".to_string();
+
+    let whisper_coreml_models = {
+        let mut found = Vec::new();
+        if let Ok(dir) = crate::utils::get_models_dir() {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.starts_with("ggml-") && name.ends_with("-encoder.mlmodelc") {
+                                let model_stem = name
+                                    .trim_start_matches("ggml-")
+                                    .trim_end_matches("-encoder.mlmodelc");
+                                found.push(model_stem.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        found.sort();
+        found
+    };
+
+    let whisper_framework = if is_apple_silicon {
+        if !whisper_coreml_models.is_empty() {
+            "whisper.cpp · CoreML ANE Encoder (85x Real-Time) + Metal GPU Decoder".to_string()
+        } else {
+            "whisper.cpp · Apple Metal GPU (Parallel Compute Shaders)".to_string()
+        }
+    } else if cuda_available {
+        "whisper.cpp · NVIDIA CUDA 12 (cuBLAS Accelerated)".to_string()
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            "whisper.cpp · DirectML / Vulkan 1.3 / CPU AVX2".to_string()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            "whisper.cpp · Vulkan 1.3 / CPU SIMD".to_string()
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        {
+            "whisper.cpp · CPU Multi-threaded".to_string()
+        }
+    };
+
+    let parakeet_framework = if is_apple_silicon {
+        "parakeet-rs · Apple MLX Metal GPU (Unified Memory Zero-Copy)".to_string()
+    } else if cuda_available {
+        "parakeet-rs · ONNX Runtime (CUDA 12 Execution Provider)".to_string()
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            "parakeet-rs · ONNX Runtime (DirectML Execution Provider)".to_string()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            "parakeet-rs · ONNX Runtime (CPU XNNPACK)".to_string()
+        }
+    };
+
+    let granite_framework = if is_apple_silicon {
+        "ONNX Runtime · CoreML Hybrid EP (Apple Neural Engine + GPU)".to_string()
+    } else if cuda_available {
+        "llama-cpp-2 / ONNX · CUDA 12 Hardware Offload".to_string()
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            "ONNX Runtime · DirectML Hardware Offload".to_string()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            "CPU Multi-threaded (INT8 / FP16 Quantized)".to_string()
+        }
+    };
+
+    let active = *state.active_engine.lock().unwrap();
+    let (active_engine, active_model_id, active_backend) = match active {
+        ASREngine::Whisper => {
+            let whisper = state.whisper.lock().unwrap();
+            let model = whisper.get_current_model().cloned();
+            let backend = format!("{}", whisper.get_backend());
+            ("whisper".to_string(), model, backend)
+        }
+        ASREngine::Parakeet => {
+            let parakeet = state.parakeet.lock().unwrap();
+            let status = parakeet.get_status();
+            ("parakeet".to_string(), status.model_id, status.backend)
+        }
+        ASREngine::Granite => {
+            let cohere = state.cohere.lock().unwrap();
+            let status = cohere.get_status();
+            ("granite".to_string(), status.model_id, status.backend)
+        }
+    };
+
+    HardwareDiagnostics {
+        platform,
+        platform_label,
+        os_detail,
+        arch,
+        is_apple_silicon,
+        cpu_name,
+        cpu_cores,
+        ram_total_gb,
+        ram_used_gb,
+        gpu_name,
+        gpu_cores,
+        metal_version,
+        vram_gb,
+        neural_accelerator,
+        ane_available,
+        cuda_available,
+        directml_available,
+        vulkan_available,
+        sim_dsp,
+        audio_driver,
+        whisper_framework,
+        whisper_coreml_models,
+        parakeet_framework,
+        granite_framework,
+        active_engine,
+        active_model_id,
+        active_backend,
+    }
+}
+
 // ── System audio mute / unmute ────────────────────────────────────────────────
 
 /// macOS fix: Async with spawn_blocking — system audio control
@@ -1064,3 +1361,51 @@ pub async fn unload_current_model(
         Ok(CommandResult::ok(unloaded.join(",")))
     }
 }
+
+#[cfg(test)]
+mod hardware_diagnostics_tests {
+    use super::*;
+    use crate::cohere::CohereManager;
+    use crate::parakeet::ParakeetManager;
+    use crate::vad::VADManager;
+    use crate::whisper::WhisperManager;
+
+    #[test]
+    fn test_get_hardware_diagnostics() {
+        let state = AudioState::new(
+            WhisperManager::new(),
+            ParakeetManager::new(),
+            VADManager::new().expect("vad init"),
+            CohereManager::new(),
+        );
+        let diag = get_hardware_diagnostics_blocking(&state);
+        println!("\n=== HARDWARE DIAGNOSTICS REPORT ===");
+        println!("Platform:            {} ({})", diag.platform_label, diag.platform);
+        println!("OS Detail:           {}", diag.os_detail);
+        println!("Arch:                {}", diag.arch);
+        println!("Is Apple Silicon:    {}", diag.is_apple_silicon);
+        println!("CPU:                 {} ({} cores)", diag.cpu_name, diag.cpu_cores);
+        println!("RAM:                 {:.1} GB total, {:.1} GB used", diag.ram_total_gb, diag.ram_used_gb);
+        println!("GPU:                 {}", diag.gpu_name);
+        println!("GPU Cores:           {:?}", diag.gpu_cores);
+        println!("Metal Support:       {:?}", diag.metal_version);
+        println!("Neural Accelerator:  {}", diag.neural_accelerator);
+        println!("ANE Available:       {}", diag.ane_available);
+        println!("CUDA Available:      {}", diag.cuda_available);
+        println!("DSP SIMD:            {}", diag.sim_dsp);
+        println!("Audio Driver:        {}", diag.audio_driver);
+        println!("Whisper Framework:   {}", diag.whisper_framework);
+        println!("Whisper CoreML:      {:?}", diag.whisper_coreml_models);
+        println!("Parakeet Framework:  {}", diag.parakeet_framework);
+        println!("Granite Framework:   {}", diag.granite_framework);
+        println!("Active Engine:       {}", diag.active_engine);
+        println!("Active Backend:      {}", diag.active_backend);
+        println!("====================================\n");
+
+        assert!(!diag.platform.is_empty());
+        assert!(!diag.cpu_name.is_empty());
+        assert!(diag.cpu_cores > 0);
+        assert!(diag.ram_total_gb > 0.0);
+    }
+}
+

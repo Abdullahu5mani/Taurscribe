@@ -208,6 +208,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::show_main_window,
             commands::get_system_info,
+            commands::get_hardware_diagnostics,
             commands::get_process_memory_stats,
             commands::start_recording,
             commands::stop_recording,
