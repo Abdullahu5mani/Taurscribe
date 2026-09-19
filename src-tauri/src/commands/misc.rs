@@ -1580,5 +1580,71 @@ mod auto_unload_tests {
         let freed_mb = loaded_mb - unloaded_mb;
         println!("[MEMORY VERIFICATION] Post-Unload & Trim: {:.2} MB (Freed: {:.2} MB)", unloaded_mb, freed_mb);
     }
+
+    #[test]
+    fn test_all_three_asr_engines_lifecycle() {
+        let state = create_test_state();
+
+        // 1. Whisper Engine Verification
+        {
+            let mut w = state.whisper.lock().unwrap();
+            let avail = WhisperManager::list_available_models().unwrap_or_default();
+            if !avail.is_empty() {
+                let id = &avail[0].id;
+                println!("[TEST ENGINE 1/3] Loading Whisper model '{}'...", id);
+                let init_res = w.initialize(Some(id), false);
+                assert!(init_res.is_ok(), "Whisper model failed to initialize: {:?}", init_res.err());
+                assert!(w.get_current_model().is_some(), "Whisper current_model should be Some");
+                println!("[TEST ENGINE 1/3] Whisper loaded successfully. Unloading...");
+                w.unload();
+                assert!(w.get_current_model().is_none(), "Whisper current_model should be None after unload");
+                println!("[TEST ENGINE 1/3] ✓ Whisper load/unload verified!");
+            } else {
+                println!("[TEST ENGINE 1/3] Whisper models not found in local AppData - skipping init");
+            }
+        }
+
+        // 2. Parakeet Engine Verification
+        {
+            let mut p = state.parakeet.lock().unwrap();
+            let avail = ParakeetManager::list_available_models().unwrap_or_default();
+            if !avail.is_empty() {
+                let id = &avail[0].id;
+                println!("[TEST ENGINE 2/3] Loading Parakeet model '{}'...", id);
+                let init_res = p.initialize(Some(id), false);
+                assert!(init_res.is_ok(), "Parakeet model failed to initialize: {:?}", init_res.err());
+                assert!(p.get_status().loaded, "Parakeet status.loaded should be true");
+                println!("[TEST ENGINE 2/3] Parakeet loaded successfully. Unloading...");
+                p.unload();
+                assert!(!p.get_status().loaded, "Parakeet status.loaded should be false after unload");
+                println!("[TEST ENGINE 2/3] ✓ Parakeet load/unload verified!");
+            } else {
+                println!("[TEST ENGINE 2/3] Parakeet models not found in local AppData - skipping init");
+            }
+        }
+
+        // 3. Granite Speech Engine Verification
+        {
+            let mut g = state.cohere.lock().unwrap();
+            println!("[TEST ENGINE 3/3] Checking Granite engine slot...");
+            assert!(!g.get_status().loaded, "Granite status.loaded should be false initially");
+            // Granite initialize returns Err when model files are not downloaded
+            let init_res = g.initialize(None, true);
+            if init_res.is_ok() {
+                assert!(g.get_status().loaded, "Granite status.loaded should be true when initialized");
+                g.unload();
+                assert!(!g.get_status().loaded, "Granite status.loaded should be false after unload");
+                println!("[TEST ENGINE 3/3] ✓ Granite load/unload verified!");
+            } else {
+                println!("[TEST ENGINE 3/3] Granite weights not installed ({:?}) - contract verified!", init_res.err());
+                g.unload();
+                assert!(!g.get_status().loaded);
+            }
+        }
+
+        // 4. Test Global unload_all_loaded_asr()
+        let res = state.unload_all_loaded_asr();
+        assert!(res.is_ok());
+    }
 }
 

@@ -120,6 +120,14 @@ pub fn trim_process_memory() {
 
     #[cfg(target_os = "macos")]
     {
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            extern "C" {
+                #[link_name = "_ZN3mlx4core11clear_cacheEv"]
+                fn mlx_core_clear_cache();
+            }
+            mlx_core_clear_cache();
+        }
         unsafe {
             #[link(name = "c")]
             extern "C" {
@@ -140,7 +148,65 @@ pub fn process_memory_stats() -> ProcessMemoryStats {
             return stats;
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(stats) = darwin_process_memory_stats() {
+            return stats;
+        }
+    }
     sysinfo_process_memory_stats()
+}
+
+#[cfg(target_os = "macos")]
+fn darwin_process_memory_stats() -> Option<ProcessMemoryStats> {
+    #[repr(C)]
+    struct TaskVmInfo {
+        virtual_size: u64,
+        region_count: i32,
+        page_size: i32,
+        resident_size: u64,
+        resident_size_peak: u64,
+        device: u64,
+        device_peak: u64,
+        internal: u64,
+        internal_peak: u64,
+        external: u64,
+        external_peak: u64,
+        reusable: u64,
+        reusable_peak: u64,
+        purgeable_volatile_pmap: u64,
+        purgeable_volatile_resident: u64,
+        purgeable_volatile_virtual: u64,
+        compressed: u64,
+        compressed_peak: u64,
+        compressed_lifetime: u64,
+        phys_footprint: u64,
+    }
+    unsafe {
+        let mut info: TaskVmInfo = std::mem::zeroed();
+        let mut count = (std::mem::size_of::<TaskVmInfo>() / std::mem::size_of::<i32>()) as u32;
+        extern "C" {
+            fn mach_task_self() -> u32;
+            fn task_info(
+                target_task: u32,
+                flavor: u32,
+                task_info_out: *mut TaskVmInfo,
+                task_info_out_cnt: *mut u32,
+            ) -> i32;
+        }
+        // TASK_VM_INFO = 22
+        if task_info(mach_task_self(), 22, &mut info, &mut count) == 0 {
+            Some(ProcessMemoryStats {
+                working_set_bytes: info.phys_footprint,
+                private_bytes: Some(info.internal),
+                virtual_bytes: Some(info.virtual_size),
+                peak_working_set_bytes: Some(info.resident_size_peak),
+                source: "darwin_task_vm_info".to_string(),
+            })
+        } else {
+            None
+        }
+    }
 }
 
 fn sysinfo_process_memory_stats() -> ProcessMemoryStats {
