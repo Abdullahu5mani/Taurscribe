@@ -33,6 +33,51 @@ fn single_file_whisper(filename: &'static str, sha256: &'static str) -> ModelCon
     }
 }
 
+/// Build a Whisper model config that bundles the weight binary with its
+/// companion CoreML encoder archive (`ggml-{stem}-encoder.mlmodelc.zip`).
+///
+/// On Apple Silicon the downloader fetches + extracts both files so
+/// `whisper.rs` finds the `ggml-{stem}-encoder.mlmodelc` directory next to
+/// the `.bin` and activates the CoreML ANE backend automatically. On other
+/// platforms the downloader skips the `.zip` entry (see `downloader.rs`).
+fn whisper_with_coreml(
+    bin_filename: &'static str,
+    bin_sha256: &'static str,
+    encoder_dirname: &'static str,
+    encoder_zip: &'static str,
+    encoder_sha256: &'static str,
+) -> ModelConfig {
+    ModelConfig {
+        repo: DEFAULT_HF_REPO,
+        branch: DEFAULT_HF_BRANCH,
+        files: vec![
+            ModelFile {
+                filename: bin_filename,
+                remote_path: bin_filename,
+                sha1: bin_sha256,
+            },
+            ModelFile {
+                filename: encoder_dirname,
+                remote_path: encoder_zip,
+                sha1: encoder_sha256,
+            },
+        ],
+        subdirectory: None,
+    }
+}
+
+/// Returns true when a registry file entry is a CoreML encoder bundle
+/// (a `.mlmodelc` directory delivered as a `.zip` archive).
+pub fn is_coreml_bundle_file(filename: &str, remote_path: &str) -> bool {
+    filename.ends_with(".mlmodelc") || remote_path.ends_with(".mlmodelc.zip")
+}
+
+/// True only on macOS Apple Silicon builds, where the ANE can execute the
+/// CoreML encoder graph. Everywhere else the companion bundle is skipped.
+pub fn coreml_companion_supported() -> bool {
+    cfg!(all(target_os = "macos", target_arch = "aarch64"))
+}
+
 /// Build a single-file model config from a staged local source directory.
 fn local_single_file(
     local_source: &'static str,
@@ -262,9 +307,14 @@ fn granite_portable_files() -> Vec<ModelFile> {
 pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
     match model_id {
         // ── Whisper Tiny ──────────────────────────────────────────────────────
-        "whisper-tiny" => Some(single_file_whisper(
+        // Full-precision variants bundle the CoreML ANE encoder so a single
+        // "Download Model" click pulls both files on Apple Silicon.
+        "whisper-tiny" => Some(whisper_with_coreml(
             "ggml-tiny.bin",
             "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+            "ggml-tiny-encoder.mlmodelc",
+            "ggml-tiny-encoder.mlmodelc.zip",
+            "c88cbd2648e1f5415092bcf5256add463a0f19943e6938f46e8d4ffdebd47739",
         )),
         "whisper-tiny-q5_1" => Some(single_file_whisper(
             "ggml-tiny-q5_1.bin",
@@ -274,9 +324,12 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             "ggml-tiny-q8_0.bin",
             "c2085835d3f50733e2ff6e4b41ae8a2b8d8110461e18821b09a15c40c42d1cca",
         )),
-        "whisper-tiny-en" => Some(single_file_whisper(
+        "whisper-tiny-en" => Some(whisper_with_coreml(
             "ggml-tiny.en.bin",
             "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+            "ggml-tiny.en-encoder.mlmodelc",
+            "ggml-tiny.en-encoder.mlmodelc.zip",
+            "82b32eef73c94bb0c432a776a047b757d9525c26d84038a15d8798d7c8d1ee58",
         )),
         "whisper-tiny-en-q5_1" => Some(single_file_whisper(
             "ggml-tiny.en-q5_1.bin",
@@ -288,9 +341,12 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
         )),
 
         // ── Whisper Base ──────────────────────────────────────────────────────
-        "whisper-base" => Some(single_file_whisper(
+        "whisper-base" => Some(whisper_with_coreml(
             "ggml-base.bin",
             "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+            "ggml-base-encoder.mlmodelc",
+            "ggml-base-encoder.mlmodelc.zip",
+            "7e6ab77041942572f239b5b602f8aaa1c3ed29d73e3d8f20abea03a773541089",
         )),
         "whisper-base-q5_1" => Some(single_file_whisper(
             "ggml-base-q5_1.bin",
@@ -300,9 +356,12 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             "ggml-base-q8_0.bin",
             "c577b9a86e7e048a0b7eada054f4dd79a56bbfa911fbdacf900ac5b567cbb7d9",
         )),
-        "whisper-base-en" => Some(single_file_whisper(
+        "whisper-base-en" => Some(whisper_with_coreml(
             "ggml-base.en.bin",
             "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+            "ggml-base.en-encoder.mlmodelc",
+            "ggml-base.en-encoder.mlmodelc.zip",
+            "8cf860309e2449e2bdc8be834cf838ab2565747ecc8c0ef914ef5975115e192b",
         )),
         "whisper-base-en-q5_1" => Some(local_single_file(
             "local:whisper-base-en-q5_1",
@@ -315,9 +374,12 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
         )),
 
         // ── Whisper Small ─────────────────────────────────────────────────────
-        "whisper-small" => Some(single_file_whisper(
+        "whisper-small" => Some(whisper_with_coreml(
             "ggml-small.bin",
             "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+            "ggml-small-encoder.mlmodelc",
+            "ggml-small-encoder.mlmodelc.zip",
+            "de43fb9fed471e95c19e60ae67575c2bf09e8fb607016da171b06ddad313988b",
         )),
         "whisper-small-q5_1" => Some(single_file_whisper(
             "ggml-small-q5_1.bin",
@@ -327,9 +389,12 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             "ggml-small-q8_0.bin",
             "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f",
         )),
-        "whisper-small-en" => Some(single_file_whisper(
+        "whisper-small-en" => Some(whisper_with_coreml(
             "ggml-small.en.bin",
             "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+            "ggml-small.en-encoder.mlmodelc",
+            "ggml-small.en-encoder.mlmodelc.zip",
+            "b2ef1c506378b825b4b4341979a93e1656b5d6c129f17114cfb8fb78aabc2f89",
         )),
         "whisper-small-en-q5_1" => Some(single_file_whisper(
             "ggml-small.en-q5_1.bin",
@@ -341,9 +406,12 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
         )),
 
         // ── Whisper Medium ────────────────────────────────────────────────────
-        "whisper-medium" => Some(single_file_whisper(
+        "whisper-medium" => Some(whisper_with_coreml(
             "ggml-medium.bin",
             "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+            "ggml-medium-encoder.mlmodelc",
+            "ggml-medium-encoder.mlmodelc.zip",
+            "79b0b8d436d47d3f24dd3afc91f19447dd686a4f37521b2f6d9c30a642133fbd",
         )),
         "whisper-medium-q5_0" => Some(single_file_whisper(
             "ggml-medium-q5_0.bin",
@@ -353,9 +421,12 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             "ggml-medium-q8_0.bin",
             "42a1ffcbe4167d224232443396968db4d02d4e8e87e213d3ee2e03095dea6502",
         )),
-        "whisper-medium-en" => Some(single_file_whisper(
+        "whisper-medium-en" => Some(whisper_with_coreml(
             "ggml-medium.en.bin",
             "cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356",
+            "ggml-medium.en-encoder.mlmodelc",
+            "ggml-medium.en-encoder.mlmodelc.zip",
+            "cdc44fee3c62b5743913e3147ed75f4e8ecfb52dd7a0f0f7387094b406ff0ee6",
         )),
         "whisper-medium-en-q5_0" => Some(single_file_whisper(
             "ggml-medium.en-q5_0.bin",
@@ -383,17 +454,23 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             "ggml-large-v2-q8_0.bin",
             "fef54e6d898246a65c8285bfa83bd1807e27fadf54d5d4e81754c47634737e8c",
         )),
-        "whisper-large-v3" => Some(single_file_whisper(
+        "whisper-large-v3" => Some(whisper_with_coreml(
             "ggml-large-v3.bin",
             "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+            "ggml-large-v3-encoder.mlmodelc",
+            "ggml-large-v3-encoder.mlmodelc.zip",
+            "47837be7594a29429ec08620043390c4d6d467f8bd362df09e9390ace76a55a4",
         )),
         "whisper-large-v3-q5_0" => Some(single_file_whisper(
             "ggml-large-v3-q5_0.bin",
             "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
         )),
-        "whisper-large-v3-turbo" => Some(single_file_whisper(
+        "whisper-large-v3-turbo" => Some(whisper_with_coreml(
             "ggml-large-v3-turbo.bin",
             "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+            "ggml-large-v3-turbo-encoder.mlmodelc",
+            "ggml-large-v3-turbo-encoder.mlmodelc.zip",
+            "84bedfe895bd7b5de6e8e89a0803dfc5addf8c0c5bc4c937451716bf7cf7988a",
         )),
         "whisper-large-v3-turbo-q5_0" => Some(single_file_whisper(
             "ggml-large-v3-turbo-q5_0.bin",
@@ -771,5 +848,80 @@ mod mlx_tests {
             );
         }
         assert!(config.files.iter().all(|f| f.sha1.len() == 64 && f.sha1.chars().all(|c| c.is_ascii_hexdigit())));
+    }
+}
+
+#[cfg(test)]
+mod ane_tests {
+    use super::*;
+
+    /// Full-precision Whisper models must bundle the ANE encoder so one
+    /// click downloads both the weights and the `.mlmodelc` companion.
+    const ANE_BUNDLED: &[(&str, &str, &str)] = &[
+        ("whisper-tiny", "ggml-tiny.bin", "ggml-tiny-encoder.mlmodelc"),
+        ("whisper-tiny-en", "ggml-tiny.en.bin", "ggml-tiny.en-encoder.mlmodelc"),
+        ("whisper-base", "ggml-base.bin", "ggml-base-encoder.mlmodelc"),
+        ("whisper-base-en", "ggml-base.en.bin", "ggml-base.en-encoder.mlmodelc"),
+        ("whisper-small", "ggml-small.bin", "ggml-small-encoder.mlmodelc"),
+        ("whisper-small-en", "ggml-small.en.bin", "ggml-small.en-encoder.mlmodelc"),
+        ("whisper-medium", "ggml-medium.bin", "ggml-medium-encoder.mlmodelc"),
+        ("whisper-medium-en", "ggml-medium.en.bin", "ggml-medium.en-encoder.mlmodelc"),
+        ("whisper-large-v3", "ggml-large-v3.bin", "ggml-large-v3-encoder.mlmodelc"),
+        (
+            "whisper-large-v3-turbo",
+            "ggml-large-v3-turbo.bin",
+            "ggml-large-v3-turbo-encoder.mlmodelc",
+        ),
+    ];
+
+    #[test]
+    fn full_precision_whisper_models_bundle_coreml_encoder() {
+        for (model_id, bin, encoder_dir) in ANE_BUNDLED {
+            let config = get_model_config(model_id).expect("ANE-capable registry entry");
+            assert_eq!(config.files.len(), 2, "missing companion for {model_id}");
+            let weight = &config.files[0];
+            assert_eq!(weight.filename, *bin);
+            assert!(weight.remote_path.ends_with(".bin"));
+            let encoder = &config.files[1];
+            assert_eq!(encoder.filename, *encoder_dir);
+            assert!(
+                encoder.remote_path.ends_with(".mlmodelc.zip"),
+                "encoder must be a zip archive for {model_id}"
+            );
+            assert!(is_coreml_bundle_file(encoder.filename, encoder.remote_path));
+            // Both artifacts are checksum-pinned so a truncated download
+            // surfaces as a clear failure, not garbled audio.
+            for file in &config.files {
+                assert_eq!(file.sha1.len(), 64, "unpinned hash for {model_id}");
+                assert!(file.sha1.bytes().all(|b| b.is_ascii_hexdigit()));
+            }
+        }
+    }
+
+    #[test]
+    fn quantized_whisper_models_stay_single_file() {
+        for model_id in [
+            "whisper-tiny-q5_1",
+            "whisper-base-q5_1",
+            "whisper-small-q5_1",
+            "whisper-medium-q5_0",
+            "whisper-large-v3-turbo-q5_0",
+        ] {
+            let config = get_model_config(model_id).expect("quantized registry entry");
+            assert_eq!(config.files.len(), 1, "{model_id} must not auto-pull ANE bundle");
+            assert!(!is_coreml_bundle_file(
+                config.files[0].filename,
+                config.files[0].remote_path
+            ));
+        }
+    }
+
+    #[test]
+    fn coreml_bundle_detection_matches_naming_convention() {
+        assert!(is_coreml_bundle_file(
+            "ggml-small-encoder.mlmodelc",
+            "ggml-small-encoder.mlmodelc.zip"
+        ));
+        assert!(!is_coreml_bundle_file("ggml-small.bin", "ggml-small.bin"));
     }
 }

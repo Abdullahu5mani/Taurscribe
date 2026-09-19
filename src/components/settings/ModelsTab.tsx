@@ -128,6 +128,8 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const isMac = platform === 'macos';
     const isWindows = platform === 'windows';
     const rowProps = { downloadProgress, onDownload, onDelete, onCancelDownload };
+    /** ANE badge: Apple Silicon + full-precision Whisper model with bundled encoder. */
+    const aneBadgeFor = (m: DownloadableModel) => isAppleSilicon && m.aneCapable === true;
     const recommendation = useMemo(
         () => computeModelRecommendation({ sysInfo, isAppleSilicon, useCase }),
         [sysInfo, isAppleSilicon, useCase],
@@ -343,7 +345,13 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
 
                     {selectedWhisperModel && (
                         <div className={`model-item-wrapper${pulseModelIds.has(selectedWhisperModel.id) ? ' model-item-wrapper--pulse' : ''}`}>
-                            <ModelRow model={selectedWhisperModel} {...rowProps} />
+                            <ModelRow model={selectedWhisperModel} {...rowProps} showAneBadge={aneBadgeFor(selectedWhisperModel)} />
+                            {aneBadgeFor(selectedWhisperModel) && !selectedWhisperModel.downloaded && (
+                                <p className="model-group-desc" data-testid="ane-bundle-note">
+                                    ⚡ Includes the Apple Neural Engine encoder — one click downloads
+                                    both files for up to 85x real-time transcription.
+                                </p>
+                            )}
                         </div>
                     )}
 
@@ -354,7 +362,9 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                                 <span className="model-group-badge">Apple Silicon</span>
                             </div>
                             <p className="model-group-desc">
-                                Optional Apple Neural Engine encoder for this full-precision Whisper selection.
+                                {selectedWhisperModel && aneBadgeFor(selectedWhisperModel) && selectedWhisperModel.downloaded
+                                    ? 'Already bundled with the Whisper download above — only needed if you installed the weights before ANE bundling.'
+                                    : 'Optional Apple Neural Engine encoder for this full-precision Whisper selection.'}
                             </p>
                             <ModelRow model={selectedCoremlModel} {...rowProps} />
                         </div>

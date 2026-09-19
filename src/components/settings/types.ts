@@ -11,6 +11,12 @@ export interface DownloadableModel {
     macosOnly?: boolean;
     /** Hide unless running on Windows (e.g. NVIDIA CUDA-only download). */
     windowsOnly?: boolean;
+    /**
+     * Full-precision Whisper model whose download bundles the CoreML ANE
+     * encoder (ggml-{stem}-encoder.mlmodelc) on Apple Silicon. The UI shows
+     * an "⚡ ANE Accelerated" badge for these when running on Apple Silicon.
+     */
+    aneCapable?: boolean;
 }
 
 export interface DownloadProgress {
@@ -24,33 +30,34 @@ export interface DownloadProgress {
 
 export const MODELS: DownloadableModel[] = [
     // --- Tiny ---
-    { id: 'whisper-tiny', name: 'Tiny (Multilingual)', type: 'Whisper', size: '75 MB', description: 'Fastest, lowest accuracy. 99+ languages.', downloaded: false },
+    // aneCapable = full-precision models whose download auto-bundles the ANE encoder on Apple Silicon.
+    { id: 'whisper-tiny', name: 'Tiny (Multilingual)', type: 'Whisper', size: '75 MB', description: 'Fastest, lowest accuracy. 99+ languages.', downloaded: false, aneCapable: true },
     { id: 'whisper-tiny-q5_1', name: 'Tiny (Multi, Q5_1)', type: 'Whisper', size: '31 MB', description: 'Quantized Tiny. 99+ languages.', downloaded: false },
-    { id: 'whisper-tiny-en', name: 'Tiny (English)', type: 'Whisper', size: '75 MB', description: 'Fastest model. English only.', downloaded: false },
+    { id: 'whisper-tiny-en', name: 'Tiny (English)', type: 'Whisper', size: '75 MB', description: 'Fastest model. English only.', downloaded: false, aneCapable: true },
     { id: 'whisper-tiny-en-q5_1', name: 'Tiny (English, Q5_1)', type: 'Whisper', size: '31 MB', description: 'Quantized, ultra-fast. English only.', downloaded: false },
 
     // --- Base ---
-    { id: 'whisper-base', name: 'Base (Multilingual)', type: 'Whisper', size: '142 MB', description: 'Balanced entry model. 99+ languages.', downloaded: false },
-    { id: 'whisper-base-en', name: 'Base (English)', type: 'Whisper', size: '142 MB', description: 'Standard balanced model. English only.', downloaded: false },
+    { id: 'whisper-base', name: 'Base (Multilingual)', type: 'Whisper', size: '142 MB', description: 'Balanced entry model. 99+ languages.', downloaded: false, aneCapable: true },
+    { id: 'whisper-base-en', name: 'Base (English)', type: 'Whisper', size: '142 MB', description: 'Standard balanced model. English only.', downloaded: false, aneCapable: true },
     { id: 'whisper-base-q5_1', name: 'Base (Multi, Q5_1)', type: 'Whisper', size: '57 MB', description: 'Quantized Base. 99+ languages.', downloaded: false },
     { id: 'whisper-base-en-q5_1', name: 'Base (English, Q5_1)', type: 'Whisper', size: '57 MB', description: 'Quantized Base. English only.', downloaded: false },
 
     // --- Small ---
-    { id: 'whisper-small', name: 'Small (Multilingual)', type: 'Whisper', size: '466 MB', description: 'Good accuracy for general use. 99+ languages.', downloaded: false },
-    { id: 'whisper-small-en', name: 'Small (English)', type: 'Whisper', size: '466 MB', description: 'Good accuracy model. English only.', downloaded: false },
+    { id: 'whisper-small', name: 'Small (Multilingual)', type: 'Whisper', size: '466 MB', description: 'Good accuracy for general use. 99+ languages.', downloaded: false, aneCapable: true },
+    { id: 'whisper-small-en', name: 'Small (English)', type: 'Whisper', size: '466 MB', description: 'Good accuracy model. English only.', downloaded: false, aneCapable: true },
     { id: 'whisper-small-q5_1', name: 'Small (Multi, Q5_1)', type: 'Whisper', size: '181 MB', description: 'Quantized Small. 99+ languages.', downloaded: false },
     { id: 'whisper-small-en-q5_1', name: 'Small (English, Q5_1)', type: 'Whisper', size: '181 MB', description: 'Quantized Small. English only.', downloaded: false },
 
     // --- Medium ---
-    { id: 'whisper-medium', name: 'Medium (Multilingual)', type: 'Whisper', size: '1.5 GB', description: 'High accuracy, slower. 99+ languages.', downloaded: false },
-    { id: 'whisper-medium-en', name: 'Medium (English)', type: 'Whisper', size: '1.5 GB', description: 'High accuracy. English only.', downloaded: false },
+    { id: 'whisper-medium', name: 'Medium (Multilingual)', type: 'Whisper', size: '1.5 GB', description: 'High accuracy, slower. 99+ languages.', downloaded: false, aneCapable: true },
+    { id: 'whisper-medium-en', name: 'Medium (English)', type: 'Whisper', size: '1.5 GB', description: 'High accuracy. English only.', downloaded: false, aneCapable: true },
     { id: 'whisper-medium-q5_0', name: 'Medium (Multi, Q5_0)', type: 'Whisper', size: '514 MB', description: 'Quantized Medium. 99+ languages.', downloaded: false },
     { id: 'whisper-medium-en-q5_0', name: 'Medium (English, Q5_0)', type: 'Whisper', size: '514 MB', description: 'Quantized Medium. English only.', downloaded: false },
 
     // --- Large ---
-    { id: 'whisper-large-v3', name: 'Large V3 (Multilingual)', type: 'Whisper', size: '2.9 GB', description: 'State of the art accuracy. 99+ languages.', downloaded: false },
+    { id: 'whisper-large-v3', name: 'Large V3 (Multilingual)', type: 'Whisper', size: '2.9 GB', description: 'State of the art accuracy. 99+ languages.', downloaded: false, aneCapable: true },
     { id: 'whisper-large-v3-q5_0', name: 'Large V3 (Multi, Q5_0)', type: 'Whisper', size: '1.1 GB', description: 'Quantized Large V3. 99+ languages.', downloaded: false },
-    { id: 'whisper-large-v3-turbo', name: 'Large V3 Turbo', type: 'Whisper', size: '1.5 GB', description: 'Optimized Large V3. 99+ languages.', downloaded: false },
+    { id: 'whisper-large-v3-turbo', name: 'Large V3 Turbo', type: 'Whisper', size: '1.5 GB', description: 'Optimized Large V3. 99+ languages.', downloaded: false, aneCapable: true },
     { id: 'whisper-large-v3-turbo-q5_0', name: 'Large V3 Turbo (Q5_0)', type: 'Whisper', size: '547 MB', description: 'Quantized Turbo. 99+ languages.', downloaded: false },
 
     // --- Parakeet ---

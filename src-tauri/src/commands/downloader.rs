@@ -274,10 +274,23 @@ fn save_verified_store(store: &VerifiedStore) {
     }
 }
 
-/// Build the expected fingerprint from the registry (all sha256 values joined with "+").
-/// Returns an empty string if no file has a hash (verification disabled).
-fn registry_fingerprint(files: &[ModelFile]) -> String {
-    files
+/// Files that actually participate in download / status / verification on
+/// this build. The CoreML ANE companion bundle (`.mlmodelc.zip`) is only
+/// usable on Apple Silicon — everywhere else it is skipped so users don't
+/// download hundreds of MB they can never execute.
+fn active_files<'a>(config: &'a ModelConfig) -> Vec<&'a ModelFile> {
+    use super::model_registry::{coreml_companion_supported, is_coreml_bundle_file};
+    let include_coreml = coreml_companion_supported();
+    config
+        .files
+        .iter()
+        .filter(|f| include_coreml || !is_coreml_bundle_file(f.filename, f.remote_path))
+        .collect()
+}
+
+/// Fingerprint over exactly the files in `active_files`.
+fn active_fingerprint(active: &[&ModelFile]) -> String {
+    active
         .iter()
         .map(|f| f.sha1) // sha1 field now holds SHA-256
         .collect::<Vec<_>>()
@@ -292,15 +305,15 @@ fn fingerprint_is_empty(fp: &str) -> bool {
 /// Verify an existing installation against the registry without downloading it
 /// again. This migrates models installed before verified.json receipts existed.
 fn verify_installed_model_files(
-    config: &ModelConfig,
+    active: &[&ModelFile],
     base_dir: &std::path::Path,
 ) -> Result<String, String> {
     use sha2::{Digest, Sha256};
 
-    let mut fingerprint_parts = Vec::with_capacity(config.files.len());
+    let mut fingerprint_parts = Vec::with_capacity(active.len());
     let mut buffer = [0u8; 65536];
 
-    for file_spec in &config.files {
+    for file_spec in active {
         let expected_hash = file_spec.sha1;
         if expected_hash.is_empty() {
             fingerprint_parts.push(String::new());
@@ -411,12 +424,16 @@ pub async fn get_download_status(
             let is_downloading = lock_file_path(&id).map(|p| p.exists()).unwrap_or(false)
                 || cancel_flags().lock().unwrap().contains_key(&id);
 
+            // Only the files relevant on this platform count (the ANE
+            // companion is Apple-Silicon-only and skipped elsewhere).
+            let active = active_files(&config);
+
             // Check all files exist on disk and sum their sizes.
             let mut all_exist = !is_downloading;
             let mut total_size: u64 = 0;
 
             if !is_downloading {
-                for file_spec in &config.files {
+                for file_spec in &active {
                     let file_path = base_dir.join(file_spec.filename);
                     if file_path.exists() {
                         if file_path.is_dir() {
@@ -439,7 +456,7 @@ pub async fn get_download_status(
             let verified = if !downloaded {
                 false
             } else {
-                let expected_fp = registry_fingerprint(&config.files);
+                let expected_fp = active_fingerprint(&active);
                 if fingerprint_is_empty(&expected_fp) {
                     true
                 } else if store
@@ -448,7 +465,7 @@ pub async fn get_download_status(
                 {
                     true
                 } else {
-                    match verify_installed_model_files(&config, &base_dir) {
+                    match verify_installed_model_files(&active, &base_dir) {
                         Ok(computed_fp) if computed_fp == expected_fp => {
                             println!("[VERIFY] Migrated existing verified model: {id}");
                             store.insert(
@@ -558,7 +575,10 @@ async fn download_model_inner(
             .map_err(|e| format!("Failed to create directory: {}", e))?;
     }
 
-    let files_count = config.files.len();
+    // Platform-active files only: the ANE companion is skipped off Apple
+    // Silicon so other platforms never fetch an unusable ~1 GB bundle.
+    let active = active_files(&config);
+    let files_count = active.len();
     let source = model_source(&config)?;
     let is_hf_repo = matches!(source, ModelSource::HuggingFace);
 
@@ -569,7 +589,7 @@ async fn download_model_inner(
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
     // ── Download phase ────────────────────────────────────────────────────────
-    for (i, file_spec) in config.files.iter().enumerate() {
+    for (i, file_spec) in active.iter().enumerate() {
         let is_zip = file_spec.remote_path.ends_with(".zip");
         let download_path = if is_zip {
             base_dir.join(format!("{}.zip", file_spec.filename))
@@ -844,7 +864,7 @@ async fn download_model_inner(
     println!("[DOWNLOAD] Finished downloading {}", model_id);
 
     // ── Auto-verify phase ─────────────────────────────────────────────────────
-    let expected_fp = registry_fingerprint(&config.files);
+    let expected_fp = active_fingerprint(&active);
 
     // Only skip verification entirely for non-HuggingFace repos with no hashes.
     // HuggingFace entries without pinned hashes use live LFS pointer metadata.
@@ -865,7 +885,7 @@ async fn download_model_inner(
 
     // Pre-calculate total bytes for progress reporting (all non-directory files).
     let mut total_verify_bytes: u64 = 0;
-    for file_spec in &config.files {
+    for file_spec in &active {
         let file_path = base_dir.join(file_spec.filename);
         if file_path.is_dir() {
             continue;
@@ -880,7 +900,7 @@ async fn download_model_inner(
     let mut verified_bytes: u64 = 0;
     let emit_threshold: u64 = 512 * 1024; // emit every 512 KiB
 
-    for (i, file_spec) in config.files.iter().enumerate() {
+    for (i, file_spec) in active.iter().enumerate() {
         // Pinned registry hashes are authoritative. Only unpinned HuggingFace
         // files fall back to live LFS metadata.
         let expected_hash: String = if !file_spec.sha1.is_empty() {
@@ -1188,8 +1208,9 @@ mod tests {
             }],
             subdirectory: Some("test"),
         };
+        let valid_active: Vec<&ModelFile> = valid.files.iter().collect();
         assert_eq!(
-            verify_installed_model_files(&valid, &dir).expect("matching SHA-256"),
+            verify_installed_model_files(&valid_active, &dir).expect("matching SHA-256"),
             valid.files[0].sha1
         );
 
@@ -1203,7 +1224,8 @@ mod tests {
             }],
             subdirectory: valid.subdirectory,
         };
-        assert!(verify_installed_model_files(&invalid, &dir).is_err());
+        let invalid_active: Vec<&ModelFile> = invalid.files.iter().collect();
+        assert!(verify_installed_model_files(&invalid_active, &dir).is_err());
 
         let _ = std::fs::remove_dir_all(dir);
     }

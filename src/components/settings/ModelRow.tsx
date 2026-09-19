@@ -9,11 +9,13 @@ interface ModelRowProps {
     onDownload: (id: string, name: string) => void;
     onDelete: (id: string, name: string) => Promise<void>;
     onCancelDownload: (id: string) => void;
+    /** Show the "⚡ ANE Accelerated" badge (Apple Silicon + ANE-capable Whisper model). */
+    showAneBadge?: boolean;
 }
 
 type DeletePhase = 'idle' | 'confirm' | 'deleting' | 'deleted';
 
-export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCancelDownload }: ModelRowProps) {
+export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCancelDownload, showAneBadge }: ModelRowProps) {
     const progress = downloadProgress[model.id];
     const graniteBadge = model.type === 'Granite'
         ? model.id.includes('cuda') ? 'CUDA' : 'PORTABLE'
@@ -78,6 +80,14 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                     {graniteBadge && (
                         <span className={`model-hardware-badge${graniteBadge === 'CUDA' ? ' model-hardware-badge--cuda' : ' model-hardware-badge--portable'}`}>
                             {graniteBadge}
+                        </span>
+                    )}
+                    {showAneBadge && (
+                        <span
+                            className="model-hardware-badge model-hardware-badge--ane"
+                            title="Downloads with the Apple Neural Engine encoder on this Mac — up to 85x real-time"
+                        >
+                            ⚡ ANE Accelerated
                         </span>
                     )}
                 </div>
