@@ -4,7 +4,7 @@ pub mod audio_decode;
 pub mod audio_preprocess;
 pub mod cohere;
 pub mod commands;
-mod context;
+pub mod context;
 pub mod cpu_features;
 mod denoise;
 pub mod granite;
@@ -342,7 +342,8 @@ pub fn run() {
             commands::resume_recording,
             commands::cancel_recording,
             commands::transcribe_file,
-            commands::cancel_file_transcription
+            commands::cancel_file_transcription,
+            crate::context::get_active_context_preview
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

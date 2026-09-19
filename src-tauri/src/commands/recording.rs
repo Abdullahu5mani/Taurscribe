@@ -10,7 +10,6 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::{RecordingHandle, SendStream};
 use crate::audio_preprocess;
-use crate::context::get_active_context;
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
 use crate::types::{ASREngine, CommandResult, TranscriptionChunk};
@@ -1785,7 +1784,9 @@ fn stop_recording_blocking(
                     .and_then(|audio| transcribe_parakeet_final(&parakeet_arc, audio))
                 {
                     Ok(raw_text) => {
-                        let final_text = clean_transcript(&raw_text);
+                        let cleaned = clean_transcript(&raw_text);
+                        let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
+                        let final_text = crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
                         println!(
                             "[FINAL_TRANSCRIPT] (Parakeet {} final)\n{}",
                             model_type, final_text
@@ -1820,10 +1821,12 @@ fn stop_recording_blocking(
             engine_name
         );
         let transcript = session_transcript.lock().unwrap().clone();
+        let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
         let final_text = if transcript.trim().is_empty() {
             String::new()
         } else {
-            clean_transcript(&transcript)
+            let cleaned = clean_transcript(&transcript);
+            crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab)
         };
         println!("[FINAL_TRANSCRIPT] (Raw)\n{}", final_text);
         if let Some(path) = last_recording_path.as_ref() {
@@ -1838,10 +1841,11 @@ fn stop_recording_blocking(
             path
         );
 
-        // Snapshot active-app context BEFORE acquiring any locks
-        let app_context = get_active_context();
-        if let Some(ref ctx) = app_context {
-            println!("[CONTEXT] Active window: \"{}\"", ctx);
+        // Build dynamic decoder prompt combining user custom vocabulary and active window context
+        let (custom_vocab, context_bias_enabled) = crate::context::load_custom_vocabulary_from_settings();
+        let prompt = crate::context::build_dynamic_prompt(&custom_vocab, context_bias_enabled);
+        if let Some(ref p) = prompt {
+            println!("[CONTEXT] Dynamic decoder prompt ({} chars): \"{}\"", p.len(), p);
         }
 
         let whisper = whisper_arc.lock().unwrap();
@@ -1893,7 +1897,7 @@ fn stop_recording_blocking(
 
         let result = {
             let mut whisper = whisper_arc.lock().unwrap();
-            whisper.transcribe_audio_data(&clean, app_context.as_deref())
+            whisper.transcribe_audio_data(&clean, prompt.as_deref())
         };
 
         let _ = std::fs::remove_file(&path);
@@ -1901,7 +1905,8 @@ fn stop_recording_blocking(
         match result {
             Ok(raw_text) => {
                 println!("[FINAL_TRANSCRIPT] (Raw)\n{}", raw_text);
-                let final_text = clean_transcript(&raw_text);
+                let cleaned = clean_transcript(&raw_text);
+                let final_text = crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
                 Ok(final_text)
             }
             Err(e) => {

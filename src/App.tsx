@@ -367,6 +367,8 @@ function App() {
   const {
     dictionary, dictionaryRef, addDictEntry, updateDictEntry, removeDictEntry,
     snippets, snippetsRef, addSnippet, updateSnippet, removeSnippet,
+    customVocabulary, contextBiasEnabled,
+    addVocabWord, removeVocabWord, addVocabPreset, clearVocab, setContextBiasEnabled,
   } = usePersonalization();
 
   // useEngineSwitch must be declared before useRecording is *used* but after
@@ -1503,6 +1505,13 @@ function App() {
             addSnippet={addSnippet}
             updateSnippet={updateSnippet}
             removeSnippet={removeSnippet}
+            customVocabulary={customVocabulary}
+            contextBiasEnabled={contextBiasEnabled}
+            addVocabWord={addVocabWord}
+            removeVocabWord={removeVocabWord}
+            addVocabPreset={addVocabPreset}
+            clearVocab={clearVocab}
+            setContextBiasEnabled={setContextBiasEnabled}
             settingsModels={settingsModels}
             downloadProgress={downloadProgress}
             onDownload={handleDownloadWithCoreml}

@@ -266,6 +266,9 @@ fn transcribe_file_blocking(
 
     emit_progress(app, path, 50, "transcribing", None);
 
+    let (custom_vocab, context_bias_enabled) = crate::context::load_custom_vocabulary_from_settings();
+    let dynamic_prompt = crate::context::build_dynamic_prompt(&custom_vocab, context_bias_enabled);
+
     let text = match active_engine {
         // Whisper: chunked so the user can cancel between segments (long files).
         ASREngine::Whisper => {
@@ -295,7 +298,7 @@ fn transcribe_file_blocking(
                 let mut w = whisper
                     .lock()
                     .map_err(|_| "Whisper lock poisoned".to_string())?;
-                let t = w.transcribe_audio_data(raw_chunk, None)?;
+                let t = w.transcribe_audio_data(raw_chunk, dynamic_prompt.as_deref())?;
                 if !t.trim().is_empty() {
                     parts.push(t.trim().to_string());
                 }
@@ -360,7 +363,8 @@ fn transcribe_file_blocking(
         }
     };
 
-    let final_text = clean_transcript(&text);
+    let cleaned = clean_transcript(&text);
+    let final_text = crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
     let processing_time_ms = transcribe_start.elapsed().as_millis() as i64;
 
     emit_progress(app, path, 100, "done", None);

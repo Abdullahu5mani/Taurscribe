@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { DictEntry, SnippetEntry } from "../../hooks/usePersonalization";
-import { IconBook, IconFileLightning, IconTrash } from "../Icons";
+import { IconBook, IconFileLightning, IconTrash, IconBolt, IconX } from "../Icons";
 
 interface TextTabProps {
     dictionary: DictEntry[];
@@ -11,16 +12,55 @@ interface TextTabProps {
     addSnippet: (entry: Omit<SnippetEntry, "id">) => void;
     updateSnippet: (id: string, updates: Partial<Omit<SnippetEntry, "id">>) => void;
     removeSnippet: (id: string) => void;
+    // Custom Vocabulary & Jargon
+    customVocabulary?: string[];
+    contextBiasEnabled?: boolean;
+    addVocabWord?: (word: string) => void;
+    removeVocabWord?: (word: string) => void;
+    addVocabPreset?: (category: "developer" | "medical" | "legal") => void;
+    clearVocab?: () => void;
+    setContextBiasEnabled?: (enabled: boolean) => void;
 }
 
 export function TextTab({
     dictionary, addDictEntry, updateDictEntry, removeDictEntry,
     snippets, addSnippet, updateSnippet, removeSnippet,
+    customVocabulary = [], contextBiasEnabled = true,
+    addVocabWord, removeVocabWord, addVocabPreset, clearVocab, setContextBiasEnabled,
 }: TextTabProps) {
     const [newSoundsLike, setNewSoundsLike] = useState("");
     const [newCorrect, setNewCorrect] = useState("");
     const [newTrigger, setNewTrigger] = useState("");
     const [newExpansion, setNewExpansion] = useState("");
+    const [newVocabTerm, setNewVocabTerm] = useState("");
+    const [previewData, setPreviewData] = useState<{ active_window: string | null; assembled_prompt: string | null } | null>(null);
+    const [loadingPreview, setLoadingPreview] = useState(false);
+
+    const handleAddVocab = () => {
+        const term = newVocabTerm.trim();
+        if (!term || !addVocabWord) return;
+        addVocabWord(term);
+        setNewVocabTerm("");
+    };
+
+    const handleRefreshPreview = async () => {
+        setLoadingPreview(true);
+        try {
+            const res = await invoke<{
+                active_window: string | null;
+                assembled_prompt: string | null;
+                custom_vocab_count: number;
+            }>("get_active_context_preview", {
+                customVocab: customVocabulary,
+                includeWindow: contextBiasEnabled,
+            });
+            setPreviewData(res);
+        } catch (err) {
+            console.error("Failed to load context preview:", err);
+        } finally {
+            setLoadingPreview(false);
+        }
+    };
 
     const handleAddDict = () => {
         const sl = newSoundsLike.trim();
@@ -41,13 +81,175 @@ export function TextTab({
     return (
         <div className="text-tab">
 
-            {/* ── Custom Dictionary ───────────────────────────────── */}
-            <h3 className="settings-section-title">Custom Dictionary</h3>
+            {/* ── Custom Vocabulary & Context Jargon Injection ─────────── */}
+            <div className="vocab-header-row">
+                <h3 className="settings-section-title" style={{ margin: 0 }}>
+                    Custom Vocabulary & Decoder Jargon
+                </h3>
+                <span className="vocab-count-badge">
+                    {customVocabulary.length} {customVocabulary.length === 1 ? "term" : "terms"}
+                </span>
+            </div>
 
             <div className="setting-card">
                 <p className="setting-card-desc">
-                    Fix words the AI keeps getting wrong — proper nouns, names, technical terms.
-                    Replacements run <strong>before</strong> grammar correction.
+                    Biases the acoustic speech decoder toward specialized names, acronyms, and technical jargon.
+                    Eliminates phonetic misspellings at the source before transcripts are generated.
+                </p>
+
+                {/* Context Bias Toggle */}
+                <div className="setting-row" style={{ padding: "8px 0 16px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                    <div className="setting-info">
+                        <span className="setting-label">Active App Contextual Biasing</span>
+                        <span className="setting-desc">
+                            Automatically infer domain keywords from your currently focused window (IDEs, Slack, Zoom, medical software).
+                        </span>
+                    </div>
+                    <label className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={contextBiasEnabled}
+                            onChange={(e) => setContextBiasEnabled?.(e.target.checked)}
+                            aria-label="Toggle active app contextual biasing"
+                        />
+                        <span className="toggle-slider"></span>
+                    </label>
+                </div>
+
+                {/* Add Term Input */}
+                <div className="dict-add-row" style={{ marginTop: "16px" }}>
+                    <div className="dict-field" style={{ flex: 1 }}>
+                        <label className="dict-field-label" htmlFor="vocab-input-term">Add Technical Term or Name</label>
+                        <input
+                            type="text"
+                            id="vocab-input-term"
+                            data-testid="vocab-input-term"
+                            className="dict-input"
+                            placeholder="e.g. Taurscribe, Kubernetes, Athenaïs, useCallback"
+                            aria-label="Technical term or name"
+                            value={newVocabTerm}
+                            onChange={(e) => setNewVocabTerm(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") handleAddVocab(); }}
+                        />
+                    </div>
+                    <button
+                        id="vocab-add-btn"
+                        data-testid="vocab-add-btn"
+                        className="ghost-btn ghost-btn--confirm"
+                        onClick={handleAddVocab}
+                        disabled={!newVocabTerm.trim()}
+                        aria-label="Add custom vocabulary term"
+                    >
+                        + Add Term
+                    </button>
+                </div>
+
+                {/* Preset Packs */}
+                <div className="vocab-presets-section">
+                    <span className="vocab-presets-label">Domain Presets:</span>
+                    <div className="vocab-presets-row">
+                        <button
+                            type="button"
+                            className="vocab-preset-btn"
+                            onClick={() => addVocabPreset?.("developer")}
+                            title="Add Developer keywords (TypeScript, Rust, Docker, etc.)"
+                        >
+                            + Developer Pack
+                        </button>
+                        <button
+                            type="button"
+                            className="vocab-preset-btn"
+                            onClick={() => addVocabPreset?.("medical")}
+                            title="Add Medical keywords (hypertension, tachycardia, etc.)"
+                        >
+                            + Medical Pack
+                        </button>
+                        <button
+                            type="button"
+                            className="vocab-preset-btn"
+                            onClick={() => addVocabPreset?.("legal")}
+                            title="Add Legal keywords (affidavit, indemnification, etc.)"
+                        >
+                            + Legal Pack
+                        </button>
+                        {customVocabulary.length > 0 && (
+                            <button
+                                type="button"
+                                className="vocab-preset-btn vocab-preset-btn--clear"
+                                onClick={() => clearVocab?.()}
+                                title="Remove all custom vocabulary terms"
+                            >
+                                Clear All
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* Vocabulary Tags Cloud */}
+                {customVocabulary.length === 0 ? (
+                    <div className="dict-empty" style={{ padding: "16px 0" }}>
+                        <span className="dict-empty-icon"><IconBolt size={24} /></span>
+                        <span>No custom terms configured. Add terms or pick a domain preset above.</span>
+                    </div>
+                ) : (
+                    <div className="vocab-tags-container">
+                        {customVocabulary.map((word) => (
+                            <span key={word} className="vocab-tag">
+                                <span className="vocab-tag-text">{word}</span>
+                                <button
+                                    type="button"
+                                    className="vocab-tag-remove"
+                                    onClick={() => removeVocabWord?.(word)}
+                                    aria-label={`Remove term ${word}`}
+                                    title="Remove term"
+                                >
+                                    <IconX size={12} />
+                                </button>
+                            </span>
+                        ))}
+                    </div>
+                )}
+
+                {/* Live Context Prompt Preview */}
+                <div className="vocab-preview-container">
+                    <div className="vocab-preview-header">
+                        <span className="vocab-preview-title">Live Decoder Prompt Preview</span>
+                        <button
+                            type="button"
+                            className="vocab-preview-refresh-btn"
+                            onClick={handleRefreshPreview}
+                            disabled={loadingPreview}
+                        >
+                            {loadingPreview ? "Reading Context..." : "Inspect Active Decoder Prompt"}
+                        </button>
+                    </div>
+                    {previewData && (
+                        <div className="vocab-preview-body">
+                            <div className="vocab-preview-item">
+                                <span className="vocab-preview-key">Active Window:</span>
+                                <span className="vocab-preview-val">{previewData.active_window || "(none detected)"}</span>
+                            </div>
+                            <div className="vocab-preview-item">
+                                <span className="vocab-preview-key">Whisper Initial Prompt:</span>
+                                <span className="vocab-preview-prompt">
+                                    {previewData.assembled_prompt ? `"${previewData.assembled_prompt}"` : "(none - vocabulary empty & context disabled)"}
+                                </span>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <p className="dict-tab-note">
+                <strong>Tip:</strong> Decoder biasing guides beam search probabilities so proper nouns and acronyms are recognized on the first pass.
+            </p>
+
+            {/* ── Custom Dictionary ───────────────────────────────── */}
+            <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Custom Dictionary</h3>
+
+            <div className="setting-card">
+                <p className="setting-card-desc">
+                    Fix words the AI keeps getting wrong — phonetic replacements that run <strong>before</strong> grammar correction.
                 </p>
 
                 <div className="dict-add-row">

@@ -59,19 +59,43 @@ export function applySnippets(text: string, snippets: SnippetEntry[]): string {
     return result;
 }
 
+// ── Vocabulary Presets ────────────────────────────────────────────────────────
+
+export const VOCAB_PRESETS = {
+    developer: [
+        "Taurscribe", "TypeScript", "JavaScript", "Rust", "GitHub", "API",
+        "GraphQL", "async", "await", "useCallback", "useEffect", "Docker",
+        "Kubernetes", "PostgreSQL", "TailwindCSS"
+    ],
+    medical: [
+        "hypertension", "tachycardia", "myocardial", "infarction", "dyspnea",
+        "erythema", "acetaminophen", "ibuprofen", "amoxicillin", "metformin",
+        "lisinopril", "hypoglycemia", "electrocardiogram"
+    ],
+    legal: [
+        "affidavit", "indemnification", "jurisdiction", "force majeure", "subpoena",
+        "plaintiff", "defendant", "liability", "arbitration", "confidentiality",
+        "intellectual property", "severability"
+    ]
+} as const;
+
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 /**
- * Manages custom dictionary entries and text snippets.
- * Both are persisted to settings.json and restored on startup.
+ * Manages custom dictionary entries, text snippets, and custom vocabulary jargon injection.
+ * Persisted to settings.json and restored on startup.
  *
  * Persisted keys:
- *   custom_dictionary  DictEntry[]
- *   snippets           SnippetEntry[]
+ *   custom_dictionary    DictEntry[]
+ *   snippets             SnippetEntry[]
+ *   custom_vocabulary    string[]
+ *   context_bias_enabled boolean
  */
 export function usePersonalization() {
     const [dictionary, setDictionaryState] = useState<DictEntry[]>([]);
     const [snippets, setSnippetsState] = useState<SnippetEntry[]>([]);
+    const [customVocabulary, setCustomVocabularyState] = useState<string[]>([]);
+    const [contextBiasEnabled, setContextBiasEnabledState] = useState<boolean>(true);
     const [loaded, setLoaded] = useState(false);
 
     // Refs for use in the recording pipeline (avoids stale closure issues)
@@ -91,9 +115,13 @@ export function usePersonalization() {
 
                 const savedDict = await store.get<DictEntry[]>("custom_dictionary");
                 const savedSnippets = await store.get<SnippetEntry[]>("snippets");
+                const savedVocab = await store.get<string[]>("custom_vocabulary");
+                const savedBias = await store.get<boolean>("context_bias_enabled");
 
                 if (savedDict && Array.isArray(savedDict)) setDictionaryState(savedDict);
                 if (savedSnippets && Array.isArray(savedSnippets)) setSnippetsState(savedSnippets);
+                if (savedVocab && Array.isArray(savedVocab)) setCustomVocabularyState(savedVocab);
+                if (savedBias !== null && savedBias !== undefined) setContextBiasEnabledState(Boolean(savedBias));
 
                 setLoaded(true);
             })
@@ -162,6 +190,48 @@ export function usePersonalization() {
         });
     }, [persist]);
 
+    // ── Custom Vocabulary operations ────────────────────────────────────
+    const addVocabWord = useCallback((rawWord: string) => {
+        const word = rawWord.trim();
+        if (!word) return;
+        setCustomVocabularyState((prev) => {
+            if (prev.some((w) => w.toLowerCase() === word.toLowerCase())) return prev;
+            const next = [...prev, word];
+            persist("custom_vocabulary", next);
+            return next;
+        });
+    }, [persist]);
+
+    const removeVocabWord = useCallback((wordToRemove: string) => {
+        setCustomVocabularyState((prev) => {
+            const next = prev.filter((w) => w !== wordToRemove);
+            persist("custom_vocabulary", next);
+            return next;
+        });
+    }, [persist]);
+
+    const addVocabPreset = useCallback((category: keyof typeof VOCAB_PRESETS) => {
+        const presetWords = VOCAB_PRESETS[category] || [];
+        setCustomVocabularyState((prev) => {
+            const existingLower = new Set(prev.map((w) => w.toLowerCase()));
+            const toAdd = presetWords.filter((w) => !existingLower.has(w.toLowerCase()));
+            if (toAdd.length === 0) return prev;
+            const next = [...prev, ...toAdd];
+            persist("custom_vocabulary", next);
+            return next;
+        });
+    }, [persist]);
+
+    const clearVocab = useCallback(() => {
+        setCustomVocabularyState([]);
+        persist("custom_vocabulary", []);
+    }, [persist]);
+
+    const setContextBiasEnabled = useCallback((enabled: boolean) => {
+        setContextBiasEnabledState(enabled);
+        persist("context_bias_enabled", enabled);
+    }, [persist]);
+
     return {
         // Dictionary
         dictionary,
@@ -177,6 +247,16 @@ export function usePersonalization() {
         updateSnippet,
         removeSnippet,
 
+        // Custom Vocabulary & Context Jargon Injection
+        customVocabulary,
+        contextBiasEnabled,
+        addVocabWord,
+        removeVocabWord,
+        addVocabPreset,
+        clearVocab,
+        setContextBiasEnabled,
+
         loaded,
     };
 }
+

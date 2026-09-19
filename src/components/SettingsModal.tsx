@@ -41,6 +41,13 @@ interface SettingsModalProps {
     addSnippet: (entry: Omit<SnippetEntry, "id">) => void;
     updateSnippet: (id: string, updates: Partial<Omit<SnippetEntry, "id">>) => void;
     removeSnippet: (id: string) => void;
+    customVocabulary?: string[];
+    contextBiasEnabled?: boolean;
+    addVocabWord?: (word: string) => void;
+    removeVocabWord?: (word: string) => void;
+    addVocabPreset?: (category: "developer" | "medical" | "legal") => void;
+    clearVocab?: () => void;
+    setContextBiasEnabled?: (enabled: boolean) => void;
     settingsModels: DownloadableModel[];
     downloadProgress: Record<string, DownloadProgress>;
     onDownload: (id: string, name: string) => void;
@@ -74,6 +81,8 @@ export function SettingsModal({
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
     dictionary, addDictEntry, updateDictEntry, removeDictEntry,
     snippets, addSnippet, updateSnippet, removeSnippet,
+    customVocabulary, contextBiasEnabled,
+    addVocabWord, removeVocabWord, addVocabPreset, clearVocab, setContextBiasEnabled,
     settingsModels, downloadProgress, onDownload, onDelete, onCancelDownload,
     scrollTarget, onScrollHandled,
     closeBehavior, setCloseBehavior,
@@ -183,6 +192,13 @@ export function SettingsModal({
                         addSnippet={addSnippet}
                         updateSnippet={updateSnippet}
                         removeSnippet={removeSnippet}
+                        customVocabulary={customVocabulary}
+                        contextBiasEnabled={contextBiasEnabled}
+                        addVocabWord={addVocabWord}
+                        removeVocabWord={removeVocabWord}
+                        addVocabPreset={addVocabPreset}
+                        clearVocab={clearVocab}
+                        setContextBiasEnabled={setContextBiasEnabled}
                     />
                 );
             case 'app':

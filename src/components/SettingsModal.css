@@ -1692,6 +1692,212 @@
   text-align: center;
 }
 
+/* ── Custom Vocabulary & Context Jargon ───────────────────────────── */
+
+.vocab-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.vocab-count-badge {
+  font-size: 0.72rem;
+  font-family: var(--font-mono, monospace);
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(var(--accent-primary-rgb), 0.12);
+  color: var(--accent-light, #93c5fd);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.25);
+  letter-spacing: 0.02em;
+}
+
+.vocab-presets-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0 16px 0;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.vocab-presets-label {
+  font-size: 0.75rem;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.vocab-presets-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vocab-preset-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 500;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.vocab-preset-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-primary);
+}
+
+.vocab-preset-btn--clear {
+  border-color: rgba(239, 68, 68, 0.2);
+  color: rgba(239, 68, 68, 0.8);
+  margin-left: auto;
+}
+
+.vocab-preset-btn--clear:hover {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+.vocab-tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+
+.vocab-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 0.78rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-primary);
+  transition: border-color 0.15s ease;
+}
+
+.vocab-tag:hover {
+  border-color: rgba(var(--accent-primary-rgb), 0.4);
+}
+
+.vocab-tag-text {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vocab-tag-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease;
+}
+
+.vocab-tag-remove:hover {
+  color: #ef4444;
+}
+
+.vocab-preview-container {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vocab-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.vocab-preview-title {
+  font-size: 0.74rem;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.vocab-preview-refresh-btn {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.vocab-preview-refresh-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.vocab-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.76rem;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.vocab-preview-item {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.vocab-preview-key {
+  color: var(--text-muted);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.vocab-preview-val {
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vocab-preview-prompt {
+  color: var(--accent-light, #93c5fd);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.74rem;
+  word-break: break-all;
+}
+
 /* ── Dictionary tab ───────────────────────────────────────────────── */
 
 .dict-tab,
