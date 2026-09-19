@@ -7,17 +7,17 @@
 
 ## Master Ranking & Complexity Overview
 
-| Rank | Feature | Estimated Time | Complexity | Core Dependency |
+| Rank | Feature | Estimated Time | Complexity | Core Dependency & Notes |
 |:---:|:---|:---:|:---:|:---|
 | **#1** | [1-Click Whisper CoreML ANE Auto-Downloader](#rank-1-1-click-whisper-coreml-ane-auto-downloader) | **~1–2 hours** | ⭐ | Existing Downloader & Model Registry |
 | **#2** | [Custom Vocabulary & Context Jargon Injection](#rank-2-custom-vocabulary--context-jargon-injection) | **~2–3 hours** | ⭐⭐ | Existing `DictionaryTab.tsx` + Whisper `initial_prompt` |
-| **#3** | [Voice Transformation Commands (Local LLM Actions)](#rank-3-voice-transformation-commands-local-llm-actions) | **~3–5 hours** | ⭐⭐⭐ | Existing FlowScribe Qwen 2.5 LLM (`llm.rs`) |
-| **#4** | [Automated Meeting Categorization with User Confirmation](#rank-4-automated-meeting-categorization-with-user-confirmation) | **~1 day** | ⭐⭐⭐ | Local Qwen 2.5 Structured JSON Inference |
-| **#5** | [Searchable Meeting Catalog & Action Item Hub](#rank-5-searchable-meeting-catalog--action-item-hub) | **~1–2 days** | ⭐⭐⭐⭐ | SQLite / JSON Store + React Catalog View |
-| **#6** | [Qwen3-ASR Engine Integration (Open ASR SOTA)](#rank-6-qwen3-asr-engine-integration-open-asr-leaderboard-sota) | **~1–2 days** | ⭐⭐⭐⭐ | Existing `ort` (CoreML/DirectML/CUDA) + Model Runtime |
-| **#7** | [Speaker Diarization with Voiceprint Vault & Audio Snippets](#rank-7-speaker-diarization-with-isolated-voiceprint-enrollment--memory) | **~2–3 days** | ⭐⭐⭐⭐ | ONNX `pyannote` + `CAM++` Embedding Pipeline |
-| **#8** | [Live Floating Capsule with Real-Time Audio Waveform](#rank-8-live-floating-capsule-with-real-time-audio-waveform) | **~2–3 days** | ⭐⭐⭐⭐ | Non-activating NSPanel/WebView + Caret Tracker |
-| **#9** | [Dual-Channel System Loopback & Mic Meeting Recorder](#rank-9-dual-channel-system-loopback--mic-meeting-recorder) | **~3–4 days** | ⭐⭐⭐⭐⭐ | ScreenCaptureKit (Mac), WASAPI Loopback (Win), PipeWire (Linux) |
+| **#3** | [Automated Meeting Categorization with User Confirmation](#rank-3-automated-meeting-categorization-with-user-confirmation) | **~1 day** | ⭐⭐⭐ | Local LLM Zero-Shot Structured JSON Inference |
+| **#4** | [Searchable Meeting Catalog & Action Item Hub](#rank-4-searchable-meeting-catalog--action-item-hub) | **~1–2 days** | ⭐⭐⭐ | SQLite / JSON Store + React Catalog View |
+| **#5** | [Qwen3-ASR Engine Integration (Open ASR SOTA)](#rank-5-qwen3-asr-engine-integration-open-asr-leaderboard-sota) | **~1–2 days** | ⭐⭐⭐⭐ | Existing `ort` (CoreML/DirectML/CUDA) + Model Runtime |
+| **#6** | [Speaker Diarization with Voiceprint Vault & Audio Snippets](#rank-6-speaker-diarization-with-isolated-voiceprint-enrollment--memory) | **~2–3 days** | ⭐⭐⭐⭐ | ONNX `pyannote` + `CAM++` Embedding Pipeline |
+| **#7** | [Live Floating Capsule with Real-Time Audio Waveform](#rank-7-live-floating-capsule-with-real-time-audio-waveform) | **~2–3 days** | ⭐⭐⭐⭐ | Non-activating NSPanel/WebView + Caret Tracker |
+| **#8** | [Dual-Channel System Loopback & Mic Meeting Recorder](#rank-8-dual-channel-system-loopback--mic-meeting-recorder) | **~3–4 days** | ⭐⭐⭐⭐⭐ | ScreenCaptureKit (Mac), WASAPI Loopback (Win), PipeWire (Linux) |
+| **#9** | [Voice Transformation Commands (Specialized Model Fine-Tuning)](#rank-9-voice-transformation-commands-specialized-model-fine-tuning) | **Deferred** | ⭐⭐⭐⭐⭐ | **DEFERRED**: Requires dataset curation, LoRA/fine-tuning, GGUF export |
 
 ---
 
@@ -74,35 +74,13 @@ General ASR models stumble on proprietary developer syntax (`useCallback`, `taur
 
 ---
 
-## [RANK 3] Voice Transformation Commands (Local LLM Actions)
-* **Difficulty:** ⭐⭐⭐ (Moderate)
-* **Estimated Effort:** ~3–5 hours
-* **Target Platforms:** All Platforms (macOS, Windows, Linux)
-
-### Problem
-Raw dictation includes filler words (*"um"*, *"uh"*), false starts, and lacks structured formatting (e.g. lists, email sign-offs).
-
-### The Solution
-Taurscribe already bundles **FlowScribe Qwen 2.5 0.5B** in [`llm.rs`](file:///Volumes/ExternalSSD/Projects/Code%20Projects/Taurscribe/src-tauri/src/llm.rs) for grammar cleanup. This feature expands it to support **voice-directed intent commands**:
-
-### Trigger Examples
-- *"Turn this into three bullet points: [speaks content]"* ──► Outputs markdown bulleted list.
-- *"Summarize as a formal email to my team: [speaks content]"* ──► Outputs structured business email.
-- *"Make this concise and executive: [speaks content]"* ──► Trims fluff and sharpens prose.
-- *"Format as code comments: [speaks content]"* ──► Formats as `// ...` or docstrings.
-
-### Latency
-The 0.5B Qwen model processes a 100-word paragraph in **~120–180ms** on Apple Silicon Metal or NVIDIA Tensor Cores. The transformation feels instantaneous to the user.
-
----
-
-## [RANK 4] Automated Meeting Categorization with User Confirmation
+## [RANK 3] Automated Meeting Categorization with User Confirmation
 * **Difficulty:** ⭐⭐⭐ (Moderate)
 * **Estimated Effort:** ~1 day
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
 ### Overview
-Immediately after a meeting ends, the embedded local LLM (Qwen 2.5 / FlowScribe) processes the transcript, automatically categorizes the meeting, generates a concise descriptive title, extracts action items with assigned owners, and presents an interactive confirmation modal for 1-click approval.
+Immediately after a meeting ends, the embedded local LLM processes the transcript, automatically categorizes the meeting, generates a concise descriptive title, extracts action items with assigned owners, and presents an interactive confirmation modal for 1-click approval.
 
 ### Interactive Confirmation Modal UI
 ```
@@ -153,8 +131,8 @@ Immediately after a meeting ends, the embedded local LLM (Qwen 2.5 / FlowScribe)
 
 ---
 
-## [RANK 5] Searchable Meeting Catalog & Action Item Hub
-* **Difficulty:** ⭐⭐⭐⭐ (Medium)
+## [RANK 4] Searchable Meeting Catalog & Action Item Hub
+* **Difficulty:** ⭐⭐⭐ (Moderate)
 * **Estimated Effort:** ~1–2 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
@@ -172,7 +150,7 @@ A dedicated **Meetings** view inside the main window that organizes all past rec
 
 ---
 
-## [RANK 6] Qwen3-ASR Engine Integration (Open ASR Leaderboard SOTA)
+## [RANK 5] Qwen3-ASR Engine Integration (Open ASR Leaderboard SOTA)
 * **Difficulty:** ⭐⭐⭐⭐ (Medium–Hard)
 * **Estimated Effort:** ~1–2 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
@@ -207,7 +185,7 @@ Rather than replacing Parakeet, Taurscribe uses each model where it excels:
 
 ---
 
-## [RANK 7] Speaker Diarization with Isolated Voiceprint Enrollment & Memory
+## [RANK 6] Speaker Diarization with Isolated Voiceprint Enrollment & Memory
 * **Difficulty:** ⭐⭐⭐⭐ (Medium–Hard)
 * **Estimated Effort:** ~2–3 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
@@ -267,7 +245,7 @@ Automatically detects "who spoke when" in meetings and audio recordings, assigns
 
 ---
 
-## [RANK 8] Live Floating Capsule with Real-Time Audio Waveform
+## [RANK 7] Live Floating Capsule with Real-Time Audio Waveform
 * **Difficulty:** ⭐⭐⭐⭐ (Hard)
 * **Estimated Effort:** ~2–3 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
@@ -284,8 +262,8 @@ The current overlay is functional but static. Modern users expect a sleek, unobt
 
 ---
 
-## [RANK 9] Dual-Channel System Loopback & Mic Meeting Recorder
-* **Difficulty:** ⭐⭐⭐⭐⭐ (Hardest)
+## [RANK 8] Dual-Channel System Loopback & Mic Meeting Recorder
+* **Difficulty:** ⭐⭐⭐⭐⭐ (Very Hard)
 * **Estimated Effort:** ~3–4 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
@@ -305,38 +283,51 @@ To record online meetings (Zoom, Google Meet, Microsoft Teams) without inviting 
 
 ---
 
-## Implementation Phasing Summary
+## [RANK 9] Voice Transformation Commands (Specialized Model Fine-Tuning)
+* **Difficulty:** ⭐⭐⭐⭐⭐ (Hardest — High ML Overhead)
+* **Status:** **DEFERRED** (Leave for later phase)
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
+
+### Rationale for Deferral
+Unlike standard zero-shot prompting on an off-the-shelf LLM, robust voice transformation commands (*"format as bullet points"*, *"summarize as executive email"*, *"remove hesitation and make formal"*) require:
+1. **Dataset Curation & Pairing**: Compiling thousands of raw transcribed voice audio/text pairs paired with ideal formatted targets across diverse domains.
+2. **Supervised Fine-Tuning (SFT / LoRA)**: Training a dedicated small language model (e.g. Qwen 2.5 0.5B / 1.5B) to reliably separate the *command prefix* from the *content to transform* with near-zero latency and high fidelity.
+3. **Quantization & Edge Conversion**: Quantizing the fine-tuned checkpoint into 4-bit / 8-bit GGUF or CoreML formats for smooth local inference without ballooning user download size.
+
+Because of the specialized training pipeline, data curation, and evaluation cycles required, this feature is placed at **Rank 9** and deferred until the core meeting intelligence and diarization infrastructure is fully deployed.
+
+---
+
+## Updated Implementation Phasing Roadmap
 
 ```
    COMPLEXITY
        ▲
-   5   │                                                     [#9 System Loopback]
+   5   │                                      [#8 System Loopback]   [#9 Model Fine-Tuning (Deferred)]
        │
-   4   │                         [#6 Qwen3-ASR]   [#7 Diarization & Vault]
-       │                         [#8 Floating Capsule]
-   3   │          [#3 Voice Commands]             [#4 Auto-Categorization]
-       │                                          [#5 Meeting Catalog]
+   4   │                         [#5 Qwen3-ASR]   [#6 Diarization & Vault]
+       │                         [#7 Floating Capsule]
+   3   │                         [#3 Auto-Categorization]
+       │                         [#4 Meeting Catalog]
    2   │   [#2 Custom Dictionary]
        │
    1   │   [#1 ANE Downloader]
        └────────────────────────────────────────────────────────────────────────►
-           PHASE 1 (Days 1-2)        PHASE 2 (Days 3-5)       PHASE 3 (Week 2+)
-                                     TIME / ROADMAP
+           PHASE 1 (Quick Wins)      PHASE 2 (Catalog & Speech)   PHASE 3 (Deep Systems & ML)
+                                     DEVELOPMENT TIMELINE
 ```
 
 ### Phase 1: High-Polish Quick Wins (Days 1–2)
 1. **#1 Whisper CoreML ANE Auto-Downloader**: 1-click companion bundle download; immediate 85x real-time inference.
 2. **#2 Custom Vocabulary & Jargon Injection**: Biasing Whisper `initial_prompt` with user dictionary.
 
-### Phase 2: AI Intelligence & Transformation (Days 3–5)
-3. **#3 Voice Transformation Commands**: Expand local Qwen 2.5 LLM to execute voice formatting commands.
-4. **#4 Automated Meeting Categorization**: Structured JSON classification with user confirmation modal.
-5. **#5 Searchable Meeting Catalog**: Multi-filter catalog tab (by Category, Speaker, Date, and Action Item).
+### Phase 2: Meeting Catalog & Next-Gen Speech (Days 3–7)
+3. **#3 Automated Meeting Categorization**: Structured JSON classification with user confirmation modal.
+4. **#4 Searchable Meeting Catalog**: Multi-filter catalog tab (by Category, Speaker, Date, and Action Item).
+5. **#5 Qwen3-ASR Engine Integration**: Add the #1 Open ASR Leaderboard model alongside Parakeet.
+6. **#6 Speaker Diarization with Isolated Voiceprint Enrollment**: ONNX CAM++ pipeline with 3s audio snippet player and `voiceprints.json`.
 
-### Phase 3: The Flagship Speech Engines (Week 2)
-6. **#6 Qwen3-ASR Engine Integration**: Add the #1 Open ASR Leaderboard model alongside Parakeet.
-7. **#7 Speaker Diarization with Isolated Voiceprint Enrollment**: ONNX CAM++ pipeline with 3s audio snippet player and `voiceprints.json`.
-
-### Phase 4: Hardware & Audio System Upgrades (Week 3+)
-8. **#8 Live Floating Capsule with Waveform**: Native non-activating dynamic HUD.
-9. **#9 Dual-Channel System Loopback Recorder**: Full local bot-free meeting recording.
+### Phase 3: Deep Systems & Advanced ML (Later Milestones)
+7. **#7 Live Floating Capsule with Waveform**: Native non-activating dynamic HUD.
+8. **#8 Dual-Channel System Loopback Recorder**: Full local bot-free meeting recording.
+9. **#9 Voice Transformation Commands**: Fine-tuning specialized instruction model.
