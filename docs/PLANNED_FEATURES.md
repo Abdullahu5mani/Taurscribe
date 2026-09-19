@@ -1,25 +1,27 @@
 # Taurscribe: Planned Features & Architectural Roadmap
+### Ordered Strictly from Easiest to Hardest
 
 > **Vision**: Transform Taurscribe from a local speech-to-text dictation utility into the premier **100% offline, cross-platform AI Meeting Intelligence & Dictation Suite**—combining sub-80ms streaming voice typing with speaker-diarized meeting cataloging and local LLM intelligence, with zero cloud dependency and zero subscription fees.
 
 ---
 
-## Table of Contents
-1. [Core Architectural Philosophy](#core-architectural-philosophy)
-2. [Feature 1: Speaker Diarization with Isolated Voiceprint Enrollment & Memory](#feature-1-speaker-diarization-with-isolated-voiceprint-enrollment--memory)
-3. [Feature 2: Automated Meeting Categorization with User Confirmation](#feature-2-automated-meeting-categorization-with-user-confirmation)
-4. [Feature 3: Searchable Meeting Catalog & Action Item Hub](#feature-3-searchable-meeting-catalog--action-item-hub)
-5. [Feature 4: Qwen3-ASR Engine Integration (Open ASR Leaderboard SOTA)](#feature-4-qwen3-asr-engine-integration-open-asr-leaderboard-sota)
-6. [Feature 5: 1-Click Whisper CoreML ANE Auto-Downloader](#feature-5-1-click-whisper-coreml-ane-auto-downloader)
-7. [Feature 6: Custom Vocabulary & Context-Aware Jargon Injection](#feature-6-custom-vocabulary--context-aware-jargon-injection)
-8. [Feature 7: Voice Transformation Commands (Local LLM Actions)](#feature-7-voice-transformation-commands-local-llm-actions)
-9. [Feature 8: Live Floating Capsule with Real-Time Audio Waveform](#feature-8-live-floating-capsule-with-real-time-audio-waveform)
-10. [Feature 9: Dual-Channel System Loopback & Mic Meeting Recorder](#feature-9-dual-channel-system-loopback--mic-meeting-recorder)
-11. [Implementation Phasing & Complexity Matrix](#implementation-phasing--complexity-matrix)
+## Master Ranking & Complexity Overview
+
+| Rank | Feature | Estimated Time | Complexity | Core Dependency |
+|:---:|:---|:---:|:---:|:---|
+| **#1** | [1-Click Whisper CoreML ANE Auto-Downloader](#rank-1-1-click-whisper-coreml-ane-auto-downloader) | **~1–2 hours** | ⭐ | Existing Downloader & Model Registry |
+| **#2** | [Custom Vocabulary & Context Jargon Injection](#rank-2-custom-vocabulary--context-jargon-injection) | **~2–3 hours** | ⭐⭐ | Existing `DictionaryTab.tsx` + Whisper `initial_prompt` |
+| **#3** | [Voice Transformation Commands (Local LLM Actions)](#rank-3-voice-transformation-commands-local-llm-actions) | **~3–5 hours** | ⭐⭐⭐ | Existing FlowScribe Qwen 2.5 LLM (`llm.rs`) |
+| **#4** | [Automated Meeting Categorization with User Confirmation](#rank-4-automated-meeting-categorization-with-user-confirmation) | **~1 day** | ⭐⭐⭐ | Local Qwen 2.5 Structured JSON Inference |
+| **#5** | [Searchable Meeting Catalog & Action Item Hub](#rank-5-searchable-meeting-catalog--action-item-hub) | **~1–2 days** | ⭐⭐⭐⭐ | SQLite / JSON Store + React Catalog View |
+| **#6** | [Qwen3-ASR Engine Integration (Open ASR SOTA)](#rank-6-qwen3-asr-engine-integration-open-asr-leaderboard-sota) | **~1–2 days** | ⭐⭐⭐⭐ | Existing `ort` (CoreML/DirectML/CUDA) + Model Runtime |
+| **#7** | [Speaker Diarization with Voiceprint Vault & Audio Snippets](#rank-7-speaker-diarization-with-isolated-voiceprint-enrollment--memory) | **~2–3 days** | ⭐⭐⭐⭐ | ONNX `pyannote` + `CAM++` Embedding Pipeline |
+| **#8** | [Live Floating Capsule with Real-Time Audio Waveform](#rank-8-live-floating-capsule-with-real-time-audio-waveform) | **~2–3 days** | ⭐⭐⭐⭐ | Non-activating NSPanel/WebView + Caret Tracker |
+| **#9** | [Dual-Channel System Loopback & Mic Meeting Recorder](#rank-9-dual-channel-system-loopback--mic-meeting-recorder) | **~3–4 days** | ⭐⭐⭐⭐⭐ | ScreenCaptureKit (Mac), WASAPI Loopback (Win), PipeWire (Linux) |
 
 ---
 
-## Core Architectural Philosophy
+## Core Architectural Guarantees
 
 | Principle | Taurscribe Guarantee |
 |:---|:---|
@@ -30,7 +32,185 @@
 
 ---
 
-## Feature 1: Speaker Diarization with Isolated Voiceprint Enrollment & Memory
+## [RANK 1] 1-Click Whisper CoreML ANE Auto-Downloader
+* **Difficulty:** ⭐ (Easiest — Quick Win)
+* **Estimated Effort:** ~1–2 hours
+* **Target Platforms:** macOS (Apple Silicon M-Series)
+
+### Problem & Opportunity
+Whisper runs at **38x real-time** on Apple Silicon Metal GPU, but jumps to **85x real-time** (2.2x faster) with zero fan noise and almost zero battery draw when the 30-second mel encoder graph is offloaded to the **Apple Neural Engine (ANE)** via a companion `ggml-{model}-encoder.mlmodelc` bundle. Currently, users must manually locate, download, and extract these bundles.
+
+### The Solution
+1. **Model Manager UI**:
+   - Detect `is_apple_silicon()`.
+   - Display an **"⚡ ANE Accelerated"** badge on supported Whisper models (Tiny, Base, Small, Medium, Large-v3-Turbo).
+2. **Automated Companion Download**:
+   - In [`model_registry.rs`](file:///Volumes/ExternalSSD/Projects/Code%20Projects/Taurscribe/src-tauri/src/commands/model_registry.rs), attach companion CoreML `.zip` URLs from Hugging Face (`ggerganov/whisper.cpp`).
+   - When the user clicks "Download Model", the existing [`downloader.rs`](file:///Volumes/ExternalSSD/Projects/Code%20Projects/Taurscribe/src-tauri/src/commands/downloader.rs) automatically pulls both `ggml-{model}.bin` and `ggml-{model}-encoder.mlmodelc.zip`.
+   - Extract the `.mlmodelc` folder alongside the binary.
+   - [`whisper.rs`](file:///Volumes/ExternalSSD/Projects/Code%20Projects/Taurscribe/src-tauri/src/whisper.rs) automatically detects the companion directory and activates the `CoreML` backend.
+
+---
+
+## [RANK 2] Custom Vocabulary & Context Jargon Injection
+* **Difficulty:** ⭐⭐ (Easy–Moderate)
+* **Estimated Effort:** ~2–3 hours
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
+
+### Problem
+General ASR models stumble on proprietary developer syntax (`useCallback`, `tauri-plugin-store`, `x86_64`), medical/legal jargon, and company names.
+
+### The Solution
+1. **User Custom Vocabulary List**:
+   - Leverage the existing [`DictionaryTab.tsx`](file:///Volumes/ExternalSSD/Projects/Code%20Projects/Taurscribe/src/components/settings/AboutTab.tsx) store.
+   - Users maintain a list of custom words, names, acronyms, and technical symbols.
+2. **Whisper Decoder Logit Biasing**:
+   - Pass the custom word list into Whisper's `params.set_initial_prompt(...)`.
+   - Tells Whisper’s autoregressive decoder to strongly favor the tokens making up those specific words during beam search.
+3. **Dynamic Active-Window Context Detection**:
+   - When the recording hotkey is pressed, inspect the active window title:
+     - Active in VS Code / Terminal ──► Automatically append language/syntax keywords to prompt.
+     - Active in Medical EHR / Law practice app ──► Bias toward domain vocabulary.
+
+---
+
+## [RANK 3] Voice Transformation Commands (Local LLM Actions)
+* **Difficulty:** ⭐⭐⭐ (Moderate)
+* **Estimated Effort:** ~3–5 hours
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
+
+### Problem
+Raw dictation includes filler words (*"um"*, *"uh"*), false starts, and lacks structured formatting (e.g. lists, email sign-offs).
+
+### The Solution
+Taurscribe already bundles **FlowScribe Qwen 2.5 0.5B** in [`llm.rs`](file:///Volumes/ExternalSSD/Projects/Code%20Projects/Taurscribe/src-tauri/src/llm.rs) for grammar cleanup. This feature expands it to support **voice-directed intent commands**:
+
+### Trigger Examples
+- *"Turn this into three bullet points: [speaks content]"* ──► Outputs markdown bulleted list.
+- *"Summarize as a formal email to my team: [speaks content]"* ──► Outputs structured business email.
+- *"Make this concise and executive: [speaks content]"* ──► Trims fluff and sharpens prose.
+- *"Format as code comments: [speaks content]"* ──► Formats as `// ...` or docstrings.
+
+### Latency
+The 0.5B Qwen model processes a 100-word paragraph in **~120–180ms** on Apple Silicon Metal or NVIDIA Tensor Cores. The transformation feels instantaneous to the user.
+
+---
+
+## [RANK 4] Automated Meeting Categorization with User Confirmation
+* **Difficulty:** ⭐⭐⭐ (Moderate)
+* **Estimated Effort:** ~1 day
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
+
+### Overview
+Immediately after a meeting ends, the embedded local LLM (Qwen 2.5 / FlowScribe) processes the transcript, automatically categorizes the meeting, generates a concise descriptive title, extracts action items with assigned owners, and presents an interactive confirmation modal for 1-click approval.
+
+### Interactive Confirmation Modal UI
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 🎙️ Meeting Processed (24m 18s)                              [Auto-Categorized]│
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Title:    [ Sprint Planning: CoreML ANE Integration                  ] ✏️   │
+│ Category: [ 🛠️ Engineering / Sprint ▾ ]  (AI Suggested · Click to change)   │
+│ Tags:     [#backend] [#coreml] [#sprint-42]                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 👥 Speakers Detected (2):                                                   │
+│   ✓ Abdullah   [94% Match · Enrolled Voiceprint]   (Speaks 54% of call)    │
+│   ❓ Speaker 2  [▶ Play 3s sample]  Who is this? [ Sarah             ]      │
+│                ☑️ Save voiceprint for future meetings                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 📌 AI Summary & Action Items:                                               │
+│   • Sarah: Benchmark CoreML encoder on M4 Max                               │
+│   • Abdullah: Finalize ONNX diarization pipeline                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                   [ Discard ]      [ Confirm & Save to Catalog ]            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Pre-defined Category Taxonomy
+1. `🛠️ Engineering / Sprint` (Code reviews, architecture discussions, sprint planning)
+2. `👥 1-on-1 Meeting` (Direct reports, manager check-ins, mentoring)
+3. `💼 Client & Sales Call` (Customer demos, pitch meetings, discovery calls)
+4. `🎨 Product & Design Review` (UI/UX specs, roadmap reviews, user research)
+5. `💡 Brainstorm / Personal Notes` (Solo thinking out loud, ideation sessions)
+6. `🎙️ Interview / Podcast` (Candidate hiring screens, external recordings)
+
+### Structured LLM Output Format
+```json
+{
+  "title": "Sprint Planning: CoreML ANE Integration",
+  "category": "Engineering / Sprint",
+  "tags": ["backend", "coreml", "sprint-42"],
+  "summary": "Reviewed 85x real-time speedup on Apple Neural Engine. Assigned CoreML benchmarking on M4 Max to Sarah and ONNX diarization pipeline to Abdullah.",
+  "decisions": [
+    "Retain Parakeet for live dictation; add Qwen3-ASR for meeting transcription."
+  ],
+  "action_items": [
+    { "owner": "Sarah", "task": "Benchmark CoreML encoder on M4 Max", "deadline": "Friday" },
+    { "owner": "Abdullah", "task": "Finalize ONNX diarization pipeline", "deadline": "Monday" }
+  ]
+}
+```
+
+---
+
+## [RANK 5] Searchable Meeting Catalog & Action Item Hub
+* **Difficulty:** ⭐⭐⭐⭐ (Medium)
+* **Estimated Effort:** ~1–2 days
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
+
+### Overview
+A dedicated **Meetings** view inside the main window that organizes all past recordings, transcripts, summaries, and action items with powerful local search and filtering.
+
+### Key Capabilities
+- **Category Filter Tabs**: One click to isolate `Engineering`, `1-on-1s`, or `Client Calls`.
+- **Speaker Filtering**: Select a participant (e.g. `Sarah`) to view every meeting she attended, her total speaking time, and all action items assigned to her across history.
+- **Full-Text & Audio-Linked Search**: Search across spoken words, summaries, or decisions. Clicking any search result jumps playback to the exact timestamp.
+- **Export Formats**:
+  - Markdown (`.md`) with timestamps, speaker names, and GitHub-style checklist action items.
+  - Notion-compatible block structure.
+  - JSON for developer automation.
+
+---
+
+## [RANK 6] Qwen3-ASR Engine Integration (Open ASR Leaderboard SOTA)
+* **Difficulty:** ⭐⭐⭐⭐ (Medium–Hard)
+* **Estimated Effort:** ~1–2 days
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
+
+### Why Qwen3-ASR?
+On the **Hugging Face Open ASR Leaderboard**, Alibaba’s **Qwen3-ASR (0.6B and 1.7B)** model family consistently ranks #1, outperforming Whisper Large-v3 and commercial speech APIs on:
+- Spontaneous conversational speech and interruptions.
+- Heavy accents, dialects, and technical terminology.
+- Code-switching (seamlessly transitioning between English and other languages mid-sentence).
+
+### Coexistence Architecture: Parakeet + Qwen3-ASR
+Rather than replacing Parakeet, Taurscribe uses each model where it excels:
+
+```
+┌───────────────────────────────┬───────────────────────────────┐
+│     PARAKEET NEMOTRON TDT     │           QWEN3-ASR           │
+├───────────────────────────────┼───────────────────────────────┤
+│ • Sub-80ms streaming latency  │ • Audio-Language Transformer  │
+│ • Zero hallucination risk     │ • Understands full context    │
+│ • Ultra-low CPU/GPU usage     │ • SOTA benchmark accuracy     │
+│                               │                               │
+│ 🎯 BEST FOR:                  │ 🎯 BEST FOR:                  │
+│ Live system-wide voice typing │ Meeting recording & files     │
+│ (Push-to-talk in any app)     │ (Multi-speaker conversations) │
+└───────────────────────────────┴───────────────────────────────┘
+```
+
+### Technical Integration
+- Weights available in ONNX and GGUF format.
+- Executes via Taurscribe’s existing `ort` (ONNX Runtime) with CoreML (macOS), DirectML (Windows), and CUDA (NVIDIA), or `llama-cpp-2` for GGUF execution.
+- Replaces or elevates the current Granite / Cohere engine slot.
+
+---
+
+## [RANK 7] Speaker Diarization with Isolated Voiceprint Enrollment & Memory
+* **Difficulty:** ⭐⭐⭐⭐ (Medium–Hard)
+* **Estimated Effort:** ~2–3 days
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
 ### Overview
 Automatically detects "who spoke when" in meetings and audio recordings, assigns transcripts to individual speakers, extracts isolated audio snippets for unknown speakers, and remembers voiceprints so people are recognized automatically in future meetings.
@@ -87,163 +267,10 @@ Automatically detects "who spoke when" in meetings and audio recordings, assigns
 
 ---
 
-## Feature 2: Automated Meeting Categorization with User Confirmation
-
-### Overview
-Immediately after a meeting ends, the embedded local LLM (Qwen 2.5 / FlowScribe) processes the speaker-labeled transcript, automatically categorizes the meeting, generates a concise descriptive title, extracts action items with assigned owners, and presents an interactive confirmation modal for 1-click approval.
-
-### Interactive Confirmation Modal UI
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 🎙️ Meeting Processed (24m 18s)                              [Auto-Categorized]│
-├─────────────────────────────────────────────────────────────────────────────┤
-│ Title:    [ Sprint Planning: CoreML ANE Integration                  ] ✏️   │
-│ Category: [ 🛠️ Engineering / Sprint ▾ ]  (AI Suggested · Click to change)   │
-│ Tags:     [#backend] [#coreml] [#sprint-42]                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ 👥 Speakers Detected (2):                                                   │
-│   ✓ Abdullah   [94% Match · Enrolled Voiceprint]   (Speaks 54% of call)    │
-│   ❓ Speaker 2  [▶ Play 3s sample]  Who is this? [ Sarah             ]      │
-│                ☑️ Save voiceprint for future meetings                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ 📌 AI Summary & Action Items:                                               │
-│   • Sarah: Benchmark CoreML encoder on M4 Max                               │
-│   • Abdullah: Finalize ONNX diarization pipeline                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                   [ Discard ]      [ Confirm & Save to Catalog ]            │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Pre-defined Category Taxonomy
-1. `🛠️ Engineering / Sprint` (Code reviews, architecture discussions, sprint planning)
-2. `👥 1-on-1 Meeting` (Direct reports, manager check-ins, mentoring)
-3. `💼 Client & Sales Call` (Customer demos, pitch meetings, discovery calls)
-4. `🎨 Product & Design Review` (UI/UX specs, roadmap reviews, user research)
-5. `💡 Brainstorm / Personal Notes` (Solo thinking out loud, ideation sessions)
-6. `🎙️ Interview / Podcast` (Candidate hiring screens, external recordings)
-
-### Structured LLM Output Format
-```json
-{
-  "title": "Sprint Planning: CoreML ANE Integration",
-  "category": "Engineering / Sprint",
-  "tags": ["backend", "coreml", "sprint-42"],
-  "summary": "Reviewed 85x real-time speedup on Apple Neural Engine. Assigned CoreML benchmarking on M4 Max to Sarah and ONNX diarization pipeline to Abdullah.",
-  "decisions": [
-    "Retain Parakeet for live dictation; add Qwen3-ASR for meeting transcription."
-  ],
-  "action_items": [
-    { "owner": "Sarah", "task": "Benchmark CoreML encoder on M4 Max", "deadline": "Friday" },
-    { "owner": "Abdullah", "task": "Finalize ONNX diarization pipeline", "deadline": "Monday" }
-  ]
-}
-```
-
----
-
-## Feature 3: Searchable Meeting Catalog & Action Item Hub
-
-### Overview
-A dedicated **Meetings** view inside the main window that organizes all past recordings, transcripts, summaries, and action items with powerful local search and filtering.
-
-### Key Capabilities
-- **Category Filter Tabs**: One click to isolate `Engineering`, `1-on-1s`, or `Client Calls`.
-- **Speaker Filtering**: Select a participant (e.g. `Sarah`) to view every meeting she attended, her total speaking time, and all action items assigned to her across history.
-- **Full-Text & Audio-Linked Search**: Search across spoken words, summaries, or decisions. Clicking any search result jumps playback to the exact timestamp.
-- **Export Formats**:
-  - Markdown (`.md`) with timestamps, speaker names, and GitHub-style checklist action items.
-  - Notion-compatible block structure.
-  - JSON for developer automation.
-
----
-
-## Feature 4: Qwen3-ASR Engine Integration (Open ASR Leaderboard SOTA)
-
-### Why Qwen3-ASR?
-On the **Hugging Face Open ASR Leaderboard**, Alibaba’s **Qwen3-ASR (0.6B and 1.7B)** model family consistently ranks #1, outperforming Whisper Large-v3 and commercial speech APIs on:
-- Spontaneous conversational speech and interruptions.
-- Heavy accents, dialects, and technical terminology.
-- Code-switching (seamlessly transitioning between English and other languages mid-sentence).
-
-### Coexistence Architecture: Parakeet + Qwen3-ASR
-Rather than replacing Parakeet, Taurscribe uses each model where it excels:
-
-```
-┌───────────────────────────────┬───────────────────────────────┐
-│     PARAKEET NEMOTRON TDT     │           QWEN3-ASR           │
-├───────────────────────────────┼───────────────────────────────┤
-│ • Sub-80ms streaming latency  │ • Audio-Language Transformer  │
-│ • Zero hallucination risk     │ • Understands full context    │
-│ • Ultra-low CPU/GPU usage     │ • SOTA benchmark accuracy     │
-│                               │                               │
-│ 🎯 BEST FOR:                  │ 🎯 BEST FOR:                  │
-│ Live system-wide voice typing │ Meeting recording & files     │
-│ (Push-to-talk in any app)     │ (Multi-speaker conversations) │
-└───────────────────────────────┴───────────────────────────────┘
-```
-
-### Technical Integration
-- Weights available in ONNX and GGUF format.
-- Executes via Taurscribe’s existing `ort` (ONNX Runtime) with CoreML (macOS), DirectML (Windows), and CUDA (NVIDIA), or `llama-cpp-2` for GGUF execution.
-- Replaces or elevates the current Granite / Cohere engine slot.
-
----
-
-## Feature 5: 1-Click Whisper CoreML ANE Auto-Downloader
-
-### Problem & Opportunity
-Whisper runs at **38x real-time** on Apple Silicon Metal GPU, but jumps to **85x real-time** (2.2x faster) with zero fan noise and almost zero battery draw when the 30-second mel encoder graph is offloaded to the **Apple Neural Engine (ANE)** via a companion `ggml-{model}-encoder.mlmodelc` bundle. Currently, users must manually locate and unpack these bundles.
-
-### The Solution
-1. In the **Model Manager**:
-   - Detect `is_apple_silicon()`.
-   - Display an **"⚡ ANE Accelerated"** badge on supported Whisper models (Tiny, Base, Small, Medium, Large-v3-Turbo).
-2. When downloading a Whisper model:
-   - Provide an automatic companion download for `ggml-{model}-encoder.mlmodelc.zip` from Hugging Face (`ggerganov/whisper.cpp`).
-   - Automatically extract the `.mlmodelc` folder into `~/Library/Application Support/Taurscribe/models/`.
-   - `whisper.rs` immediately detects the directory and switches the active backend to `CoreML`.
-
----
-
-## Feature 6: Custom Vocabulary & Context-Aware Jargon Injection
-
-### Problem
-General ASR models stumble on proprietary developer syntax (`useCallback`, `tauri-plugin-store`, `x86_64`), medical/legal jargon, and company names.
-
-### The Solution
-1. **User Custom Vocabulary List**:
-   - Built on top of the existing `DictionaryTab.tsx`.
-   - Users maintain a list of custom words, names, acronyms, and technical symbols.
-2. **Whisper Decoder Logit Biasing**:
-   - Pass the custom word list into Whisper's `params.set_initial_prompt(...)`.
-   - Tells Whisper’s autoregressive decoder to strongly favor the tokens making up those specific words.
-3. **Dynamic Active-Window Context Detection**:
-   - When the recording hotkey is pressed, query the active window title:
-     - Active in VS Code / Terminal ──► Automatically append language/syntax keywords to prompt.
-     - Active in Medical EHR / Law practice app ──► Bias toward domain vocabulary.
-
----
-
-## Feature 7: Voice Transformation Commands (Local LLM Actions)
-
-### Problem
-Raw dictation includes filler words (*"um"*, *"uh"*), false starts, and lacks structured formatting (e.g. lists, email sign-offs).
-
-### The Solution
-Taurscribe already bundles **FlowScribe Qwen 2.5 0.5B** in [`llm.rs`](file:///Volumes/ExternalSSD/Projects/Code%20Projects/Taurscribe/src-tauri/src/llm.rs) for grammar cleanup. This feature expands it to support **voice-directed intent commands**:
-
-### Trigger Examples
-- *"Turn this into three bullet points: [speaks content]"* ──► Outputs markdown bulleted list.
-- *"Summarize as a formal email to my team: [speaks content]"* ──► Outputs structured business email.
-- *"Make this concise and executive: [speaks content]"* ──► Trims fluff and sharpens prose.
-- *"Format as code comments: [speaks content]"* ──► Formats as `// ...` or docstrings.
-
-### Latency
-The 0.5B Qwen model processes a 100-word paragraph in **~120–180ms** on Apple Silicon Metal or NVIDIA Tensor Cores. The transformation feels instantaneous to the user.
-
----
-
-## Feature 8: Live Floating Capsule with Real-Time Audio Waveform
+## [RANK 8] Live Floating Capsule with Real-Time Audio Waveform
+* **Difficulty:** ⭐⭐⭐⭐ (Hard)
+* **Estimated Effort:** ~2–3 days
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
 ### Problem
 The current overlay is functional but static. Modern users expect a sleek, unobtrusive floating pill (similar to macOS Dynamic Island or Raycast) that docks near the active text caret.
@@ -257,7 +284,10 @@ The current overlay is functional but static. Modern users expect a sleek, unobt
 
 ---
 
-## Feature 9: Dual-Channel System Loopback & Mic Meeting Recorder
+## [RANK 9] Dual-Channel System Loopback & Mic Meeting Recorder
+* **Difficulty:** ⭐⭐⭐⭐⭐ (Hardest)
+* **Estimated Effort:** ~3–4 days
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
 ### Problem
 To record online meetings (Zoom, Google Meet, Microsoft Teams) without inviting an external bot, the app must capture both your voice (mic) and the other participants' voices (computer speakers).
@@ -275,37 +305,37 @@ To record online meetings (Zoom, Google Meet, Microsoft Teams) without inviting 
 
 ---
 
-## Implementation Phasing & Complexity Matrix
+## Implementation Phasing Summary
 
 ```
    COMPLEXITY
        ▲
    5   │                                                     [#9 System Loopback]
        │
-   4   │                         [#4 Qwen3-ASR]   [#1 Diarization & Vault]
+   4   │                         [#6 Qwen3-ASR]   [#7 Diarization & Vault]
        │                         [#8 Floating Capsule]
-   3   │          [#7 Voice Commands]             [#2 Auto-Categorization]
-       │                                          [#3 Meeting Catalog]
-   2   │   [#6 Custom Dictionary]
+   3   │          [#3 Voice Commands]             [#4 Auto-Categorization]
+       │                                          [#5 Meeting Catalog]
+   2   │   [#2 Custom Dictionary]
        │
-   1   │   [#5 ANE Downloader]
+   1   │   [#1 ANE Downloader]
        └────────────────────────────────────────────────────────────────────────►
            PHASE 1 (Days 1-2)        PHASE 2 (Days 3-5)       PHASE 3 (Week 2+)
                                      TIME / ROADMAP
 ```
 
 ### Phase 1: High-Polish Quick Wins (Days 1–2)
-1. **#5 Whisper CoreML ANE Auto-Downloader**: 1-click companion bundle download; immediate 85x real-time inference.
-2. **#6 Custom Vocabulary & Jargon Injection**: Biasing Whisper `initial_prompt` with user dictionary.
+1. **#1 Whisper CoreML ANE Auto-Downloader**: 1-click companion bundle download; immediate 85x real-time inference.
+2. **#2 Custom Vocabulary & Jargon Injection**: Biasing Whisper `initial_prompt` with user dictionary.
 
 ### Phase 2: AI Intelligence & Transformation (Days 3–5)
-3. **#7 Voice Transformation Commands**: Expand local Qwen 2.5 LLM to execute voice formatting commands.
-4. **#4 Qwen3-ASR Engine Integration**: Add the #1 Open ASR Leaderboard model alongside Parakeet.
+3. **#3 Voice Transformation Commands**: Expand local Qwen 2.5 LLM to execute voice formatting commands.
+4. **#4 Automated Meeting Categorization**: Structured JSON classification with user confirmation modal.
+5. **#5 Searchable Meeting Catalog**: Multi-filter catalog tab (by Category, Speaker, Date, and Action Item).
 
-### Phase 3: The Meeting Intelligence Suite (Week 2)
-5. **#1 Speaker Diarization with Isolated Voiceprint Enrollment**: ONNX CAM++ pipeline with 3s audio snippet player and `voiceprints.json`.
-6. **#2 Automated Meeting Categorization**: Structured JSON classification with user confirmation modal.
-7. **#3 Searchable Meeting Catalog**: Multi-filter catalog tab (by Category, Speaker, Date, and Action Item).
+### Phase 3: The Flagship Speech Engines (Week 2)
+6. **#6 Qwen3-ASR Engine Integration**: Add the #1 Open ASR Leaderboard model alongside Parakeet.
+7. **#7 Speaker Diarization with Isolated Voiceprint Enrollment**: ONNX CAM++ pipeline with 3s audio snippet player and `voiceprints.json`.
 
 ### Phase 4: Hardware & Audio System Upgrades (Week 3+)
 8. **#8 Live Floating Capsule with Waveform**: Native non-activating dynamic HUD.
