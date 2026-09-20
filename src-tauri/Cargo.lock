@@ -3113,6 +3113,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "meeting-record"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fd3b8fd82bd080edc992eea45826aa486412a21a524cafafae88328bb3d83cc"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6030,6 +6039,7 @@ dependencies = [
  "hound",
  "llama-cpp-2",
  "llama-cpp-sys-2",
+ "meeting-record",
  "mlx-rs",
  "ndarray",
  "nnnoiseless",

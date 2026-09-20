@@ -17,6 +17,7 @@ Rather than building in arbitrary order, this roadmap is strictly engineered so 
 │   • Foundation 3: Qwen3-ASR SOTA Engine (Zero Python, 0 Quant, 3.4x speedup)│
 │   • Foundation 4: 5-Tier Cross-Platform Hardware Emulation Suite (Metal/CPU)│
 │   • Foundation 5: Appium macOS E2E UI Automation Suite (19 live screenshots)│
+│   • Foundation 6: Dual-Channel Loopback & Bot-Free Meeting Detector (Live)  │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
                                        ▼
@@ -24,20 +25,12 @@ Rather than building in arbitrary order, this roadmap is strictly engineered so 
 │ STEP 1: Searchable Meeting Catalog Hub & Local Store (NEXT FOCUS)           │
 │ Builds the SQLite/JSON schema & dedicated "Meetings" UI view to hold calls, │
 │ transcripts, search, and markdown exports. You need a home for meetings     │
-│ before capturing or processing them.                                        │
+│ before categorizing or diarizing them.                                      │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 2: Dual-Channel System Audio Loopback & Mic Meeting Recorder           │
-│ Captures internal computer audio (Zoom, Teams, Google Meet) on Channel 2    │
-│ and your microphone on Channel 1 without external bots. Produces the raw    │
-│ dual-stream meeting audio.                                                  │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 3: Speaker Diarization, Voiceprint Vault & Audio Snippets              │
+│ STEP 2: Speaker Diarization, Voiceprint Vault & Audio Snippets              │
 │ Ingests dual-channel audio, runs pyannote + CAM++ clustering to separate    │
 │ speakers into conversational turns, extracts 3s isolated audio clips for    │
 │ labeling, and persists voiceprints.                                         │
@@ -45,7 +38,7 @@ Rather than building in arbitrary order, this roadmap is strictly engineered so 
                                        │
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 4: Automated Meeting Summarization, Categorization & Action Items      │
+│ STEP 3: Automated Meeting Summarization, Categorization & Action Items      │
 │ Feeds the diarized, speaker-attributed transcript turns into our local LLM  │
 │ to generate titles, categories, summaries, and action items with a slide-up │
 │ confirmation modal.                                                         │
@@ -53,21 +46,21 @@ Rather than building in arbitrary order, this roadmap is strictly engineered so 
                                        │
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 5: Live Floating Capsule with Real-Time Audio Waveform                 │
+│ STEP 4: Live Floating Capsule with Real-Time Audio Waveform                 │
 │ Circles back to polish daily voice typing: dynamic Island-style floating    │
 │ pill tracking the active text caret with a 60 FPS visualizer.               │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 6: Adaptive In-Situ Correction Learning (Self-Improving Flywheel)      │
+│ STEP 5: Adaptive In-Situ Correction Learning (Self-Improving Flywheel)      │
 │ Monitors post-paste text edits in the user's active editor, extracts diffs, │
 │ and auto-ingests corrected proper nouns into custom vocabulary for next time│
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 7: Voice Transformation Commands (Model Fine-Tuning - Deferred)        │
+│ STEP 6: Voice Transformation Commands (Model Fine-Tuning - Deferred)        │
 │ Supervised fine-tuning of an instruction model for real-time voice edits    │
 │ ("bullet this", "make executive email format").                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -86,6 +79,7 @@ These core technical layers are completely implemented, tested, and verified on 
 | **[Foundation 3: Qwen3-ASR SOTA Engine (Zero-Python, 0 Quant)](#foundation-3-qwen3-asr-engine-zero-python-0-quantization)** | ✅ **COMPLETE** | **Conversational SOTA Accuracy**: 100% native Rust MLX (Metal) & ONNX engine, full-precision `model.safetensors` (0 quantization), stateful KV-caching, **3.4× speedup** (12.05s vs 40.44s), and exact bit-by-bit parity. | Done |
 | **[Foundation 4: Cross-Platform Hardware Emulation Suite](#foundation-4-cross-platform-hardware-emulation-suite)** | ✅ **COMPLETE** | **5/5 Tiers Validated**: Automated test suite simulating Apple Silicon Metal, CPU multi-threading, Windows DirectML WARP, NVIDIA CUDA mock, and AMD ROCm HIP-CPU. | Done |
 | **[Foundation 5: Appium macOS E2E UI Automation & Benchmarks](#foundation-5-appium-macos-e2e-ui-automation--benchmarks)** | ✅ **COMPLETE** | **100% E2E UI & Multi-Model Verification**: Automated native file picker (`Cmd+Shift+G`), CoreML file transcription (50.2x RT), engine picker popover, dictation mode, 6-tab settings tour, and 19 live screenshot artifacts. | Done |
+| **[Foundation 6: Dual-Channel Loopback & Bot-Free Meeting Detector](#foundation-6-dual-channel-system-loopback--bot-free-meeting-detector)** | ✅ **COMPLETE** | **Bot-Free Dual Capture & Call Detection**: CoreAudio HAL process tap / WASAPI loopback, real-time meeting detection (Zoom, Teams, Meet, Slack, Discord, Webex), 48 kHz stereo WAV (CH1 Mic / CH2 Call), 1-click recording banner, auto-record, and dual-level visualizer. | Done |
 
 ---
 
@@ -95,13 +89,12 @@ Strictly ordered by true architectural dependencies and cumulative user value:
 
 | Step | Milestone | Status | Strategic Rationale & Architectural Dependency | Effort |
 |:---:|:---|:---:|:---|:---:|
-| **1** | [Searchable Meeting Catalog Hub](#step-1-searchable-meeting-catalog-hub) | 🟡 **NEXT FOCUS** | **Data & UI Foundation**: You cannot record, categorize, or diarize meetings until there is a database store and a dedicated "Meetings" view in the UI to hold them. | ~1–2 days |
-| **2** | [Dual-Channel System Loopback & Mic Recorder](#step-2-dual-channel-system-loopback--mic-recorder) | ⚪ Planned | **Bot-Free Audio Capture**: Unlocks recording Zoom, Teams, Meet, and podcasts. Captures your mic on Channel 1 and internal computer audio on Channel 2. | ~2–3 days |
-| **3** | [Speaker Diarization, Voiceprint Vault & Audio Snippets](#step-3-speaker-diarization-voiceprint-vault--audio-snippets) | ⚪ Planned | **Speaker Intelligence**: Takes dual-channel meeting audio, separates speakers into conversation turns, extracts 3s isolated audio clips for naming, and stores voiceprints. | ~2–3 days |
-| **4** | [Automated Meeting Summarization, Categorization & Action Items](#step-4-automated-meeting-summarization-categorization--action-items) | ⚪ Planned | **Post-Meeting Intelligence**: Runs local LLM on the diarized conversation turns to generate structured titles, categories, summaries, and action items with confirmation modal. | ~1 day |
-| **5** | [Live Floating Capsule with Real-Time Audio Waveform](#step-5-live-floating-capsule-with-real-time-audio-waveform) | ⚪ Planned | **Daily Voice-Typing Polish**: Upgrades the dictation overlay to a Dynamic Island pill tracking the active caret with a 60 FPS audio visualizer without stealing keyboard focus. | ~2–3 days |
-| **6** | [Adaptive In-Situ Correction Learning](#step-6-adaptive-in-situ-correction-learning) | ⚪ Planned | **Self-Improving Flywheel**: Monitors post-paste user edits in the active text field, computes word-level diffs, and auto-ingests technical terms into custom vocabulary for next time. | ~1 day |
-| **7** | [Voice Transformation Commands (Model Fine-Tuning)](#step-7-voice-transformation-commands-model-fine-tuning---deferred) | ⏸️ **DEFERRED** | **Advanced Post-Processing**: Supervised LoRA fine-tuning of a specialized local instruction model for voice-directed editing ("bullet this", "make executive email format"). | Deferred |
+| **1** | [Searchable Meeting Catalog Hub](#step-1-searchable-meeting-catalog-hub) | 🟡 **NEXT FOCUS** | **Data & UI Foundation**: Ingests the dual-channel recordings, providing a persistent SQLite/JSON store and a dedicated "Meetings" view in the UI to organize, filter, and review calls. | ~1–2 days |
+| **2** | [Speaker Diarization, Voiceprint Vault & Audio Snippets](#step-2-speaker-diarization-voiceprint-vault--audio-snippets) | ⚪ Planned | **Speaker Intelligence**: Takes dual-channel meeting audio, separates speakers into conversation turns, extracts 3s isolated audio clips for naming, and stores voiceprints. | ~2–3 days |
+| **3** | [Automated Meeting Summarization, Categorization & Action Items](#step-3-automated-meeting-summarization-categorization--action-items) | ⚪ Planned | **Post-Meeting Intelligence**: Runs local LLM on the diarized conversation turns to generate structured titles, categories, summaries, and action items with confirmation modal. | ~1 day |
+| **4** | [Live Floating Capsule with Real-Time Audio Waveform](#step-4-live-floating-capsule-with-real-time-audio-waveform) | ⚪ Planned | **Daily Voice-Typing Polish**: Upgrades the dictation overlay to a Dynamic Island pill tracking the active caret with a 60 FPS audio visualizer without stealing keyboard focus. | ~2–3 days |
+| **5** | [Adaptive In-Situ Correction Learning](#step-5-adaptive-in-situ-correction-learning) | ⚪ Planned | **Self-Improving Flywheel**: Monitors post-paste user edits in the active text field, computes word-level diffs, and auto-ingests technical terms into custom vocabulary for next time. | ~1 day |
+| **6** | [Voice Transformation Commands (Model Fine-Tuning)](#step-6-voice-transformation-commands-model-fine-tuning---deferred) | ⏸️ **DEFERRED** | **Advanced Post-Processing**: Supervised LoRA fine-tuning of a specialized local instruction model for voice-directed editing ("bullet this", "make executive email format"). | Deferred |
 
 ---
 
@@ -223,6 +216,31 @@ Strictly ordered by true architectural dependencies and cumulative user value:
 
 ---
 
+### Foundation 6: Dual-Channel System Loopback & Bot-Free Meeting Detector
+* **Status:** ✅ **COMPLETED & VERIFIED (Zero-Python In-Process Audio Tap & Auto-Detection)**
+* **Strategic Role:** 100% Bot-Free Meeting Audio Capture & Real-Time Call Detection
+* **Target Platforms:** macOS (CoreAudio HAL Process Tap), Windows 10/11 (WASAPI Process Loopback), Linux (PipeWire / CPAL fallback)
+
+#### Delivered Capabilities & Architecture
+1. **Automated Meeting Detection Engine (`meeting_detector.rs`)**:
+   - Zero external cloud bots and zero browser extensions: continuously monitors OS audio activity (`isRunningInput` + `isRunningOutput`) combined with active bundle IDs and window titles/URLs (`meet.google.com`, `teams.microsoft.com`, `zoom.us`, Slack Huddle, Discord, Cisco Webex).
+   - **Pre-Join Heuristic Suppression**: Intelligently suppresses false positives when users are in lobby/waiting rooms (`Zoom Waiting Room`, `Joining Meeting`, `Preview Audio & Video`, `Choose ONE Meeting Option`).
+   - Background event emission: emits `meeting-detected`, `meeting-changed`, and `meeting-ended` events to the frontend.
+2. **Dual-Channel Loopback Audio Engine (`audio_dual_channel.rs`)**:
+   - Captures microphone on **Channel 1 (Left)** and internal computer/call audio on **Channel 2 (Right)**.
+   - Interleaved 32-bit floating-point stereo sample packing `[mic, sys, mic, sys]` saved directly to standard 48 kHz stereo WAV.
+   - Real-time mono mixdown `(mic * 0.5 + sys * 0.5)` fed to live ASR streaming engine so the user still sees live dictation/transcription.
+   - Real-time RMS dual telemetry emitted at 60 Hz (`dual-audio-levels`: `{ mic: f32, system: f32 }`).
+3. **UI Meeting Banner & Controls (`MeetingBanner.tsx`, `RecordingTab.tsx`, `App.tsx`)**:
+   - **`MeetingBanner`**: Sleek pulse-badged alert that appears when an active call is detected, offering 1-click `Record Call` or dismiss. Supports optional automatic recording on detection.
+   - **RecordingTab**: Dedicated "Meeting & Dual-Channel Audio" settings card featuring default recording mode toggle (Mic vs Dual-Channel), auto-detect meetings toggle, auto-record calls toggle, and hardware channel separation routing diagram.
+   - **Live Telemetry Badge**: Renders in the bottom status bar during active dual-channel recording displaying real-time Mic and System audio percentage bars.
+4. **Verification**:
+   - 100% pass on Rust unit tests (`test_is_prejoin_window_title`, `test_meeting_detector_scan`, `test_stereo_interleaving`).
+   - Clean production Vite bundling and TypeScript type checking (`npm run build`).
+
+---
+
 ## 3. Upcoming Strategic Implementation Sequence
 
 ### STEP 1: Searchable Meeting Catalog Hub
@@ -231,47 +249,26 @@ Strictly ordered by true architectural dependencies and cumulative user value:
 * **Estimated Effort:** ~1–2 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
-#### Why Build This First?
-You cannot categorize meetings, assign action items, or display diarized speakers if there is no database schema or UI view to hold them. Building the Catalog view first gives a permanent visual home for recorded audio, transcripts, and subsequent meeting intelligence features.
-
-#### Implementation Architecture
-1. **Local Meeting Store** (`meetings.json` or SQLite table in AppData):
-   - Fields: `id`, `title`, `category`, `tags`, `timestamp`, `duration_secs`, `audio_path`, `speakers`, `transcript_segments`, `summary`, `action_items`.
-2. **Dedicated Meetings Tab (`MeetingsTab.tsx`)**:
-   - Category filter pills (`Engineering`, `1-on-1`, `Client Call`, etc.).
-   - Speaker filter pills (`All`, `Sarah`, `Abdullah`).
-   - Full-text search bar searching both speech text and action items.
-   - Export button (Markdown `.md` with timestamps and checklist action items).
+#### Why Build This Next?
+With dual-channel audio capture and automated meeting detection now fully live, we need a permanent visual home and queryable database to index, catalog, and playback the recorded meetings:
+- **Local Meeting Store** (`meetings.json` or SQLite table in AppData):
+  - Fields: `id`, `title`, `category`, `tags`, `timestamp`, `duration_secs`, `audio_path`, `speakers`, `transcript_segments`, `summary`, `action_items`.
+- **Dedicated Meetings Tab (`MeetingsTab.tsx`)**:
+  - Category filter pills (`Engineering`, `1-on-1`, `Client Call`, etc.).
+  - Speaker filter pills (`All`, `Sarah`, `Abdullah`).
+  - Full-text search bar searching both speech text and action items.
+  - Export button (Markdown `.md` with timestamps and checklist action items).
 
 ---
 
-### STEP 2: Dual-Channel System Loopback & Mic Recorder
-* **Status:** ⚪ Planned
-* **Strategic Role:** Bot-Free Complete Meeting Audio Capture
-* **Estimated Effort:** ~2–3 days
-* **Target Platforms:** All Platforms (macOS, Windows, Linux)
-
-#### Why Build This Second?
-With the meeting catalog ready to receive data, we unlock direct internal system audio capture so users can record **Zoom, Google Meet, Microsoft Teams, and podcasts directly without invasive meeting bots**:
-- **Channel 1 (Mic)**: Captures your microphone clearly.
-- **Channel 2 (System Audio)**: Captures remote participants via OS loopback with zero external bots.
-
-#### Implementation Architecture
-- **macOS**: `ScreenCaptureKit` (`SCStream`) audio tap (macOS 13+).
-- **Windows**: `WASAPI` Loopback (`AUDCLNT_STREAMFLAGS_LOOPBACK`).
-- **Linux**: PipeWire monitor source (`pw_stream`).
-- Automatically routes the dual-stream audio into the catalog and sets up the diarization pipeline.
-
----
-
-### STEP 3: Speaker Diarization, Voiceprint Vault & Audio Snippets
+### STEP 2: Speaker Diarization, Voiceprint Vault & Audio Snippets
 * **Status:** ⚪ Planned
 * **Strategic Role:** Conversational Speaker Intelligence (Who Spoke When)
 * **Estimated Effort:** ~2–3 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
-#### Why Build This Third?
-With dual-channel audio captured and stored, we turn the audio into distinct, conversational speech turns:
+#### Why Build This Second?
+With dual-channel audio captured and cataloged, we turn the audio into distinct, conversational speech turns:
 - **Channel 1** is instantly labeled as "You".
 - **Channel 2** is clustered using offline neural speaker embeddings.
 - Users can listen to isolated 3-second audio snippets of unknown speakers and name them.
@@ -289,13 +286,13 @@ With dual-channel audio captured and stored, we turn the audio into distinct, co
 
 ---
 
-### STEP 4: Automated Meeting Summarization, Categorization & Action Items
+### STEP 3: Automated Meeting Summarization, Categorization & Action Items
 * **Status:** ⚪ Planned
 * **Strategic Role:** Post-Meeting Local LLM Intelligence Layer
 * **Estimated Effort:** ~1 day
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
-#### Why Build This Fourth?
+#### Why Build This Third?
 Now that the transcript is fully separated into speaker turns, the local LLM has the rich conversational context needed to attribute action items and generate accurate summaries.
 
 #### Implementation Architecture
@@ -310,13 +307,13 @@ Now that the transcript is fully separated into speaker turns, the local LLM has
 
 ---
 
-### STEP 5: Live Floating Capsule with Real-Time Audio Waveform
+### STEP 4: Live Floating Capsule with Real-Time Audio Waveform
 * **Status:** ⚪ Planned
 * **Strategic Role:** Daily Dictation UI/UX Polish
 * **Estimated Effort:** ~2–3 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
-#### Why Build This Fifth?
+#### Why Build This Fourth?
 With the meeting intelligence pipeline complete, this step circles back to polish the **day-to-day push-to-talk dictation experience**:
 - Upgrades the static overlay into an ultra-sleek, frosted-glass Dynamic Island pill.
 - Tracks active text cursor/caret in whatever app you are typing into.
@@ -324,7 +321,7 @@ With the meeting intelligence pipeline complete, this step circles back to polis
 
 ---
 
-### STEP 6: Adaptive In-Situ Correction Learning
+### STEP 5: Adaptive In-Situ Correction Learning
 * **Status:** ⚪ Planned (Self-Improving Flywheel)
 * **Estimated Effort:** ~1 day
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
@@ -338,7 +335,7 @@ Users should not need to manually open Settings and type every technical term or
 
 ---
 
-### STEP 7: Voice Transformation Commands (Model Fine-Tuning - Deferred)
+### STEP 6: Voice Transformation Commands (Model Fine-Tuning - Deferred)
 * **Status:** ⏸️ **DEFERRED**
 * **Strategic Role:** Advanced Post-Processing Research Cycle
 * **Estimated Effort:** Multi-Week Research & Training Cycle
@@ -358,20 +355,20 @@ Unlike standard prompting, zero-latency voice transformation commands (*"bullet 
 │   ✓ Foundation 3: Qwen3-ASR Engine: Zero Python, 0 Quant, 3.4x MLX speedup  │
 │   ✓ Foundation 4: Cross-Platform Emulation: 5/5 hardware tiers validated    │
 │   ✓ Foundation 5: Appium E2E Automation: 100% pass, 19 UI screenshots       │
+│   ✓ Foundation 6: Dual-Channel Loopback & Bot-Free Meeting Detector (Live)  │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 1: Storage Hub & Audio Capture (Days 1–4)                             │
+│ PHASE 1: Storage Hub & Catalog (Days 1–2)                                   │
 │   🟡 Step 1: Searchable Meeting Catalog Hub & Local Store (NEXT FOCUS)      │
-│   ⚪ Step 2: Dual-Channel System Loopback & Mic Recorder (Zoom/Teams)       │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 2: Meeting Intelligence & Diarization (Days 5–8)                      │
-│   ⚪ Step 3: Speaker Diarization + Voiceprint Vault & Audio Snippets        │
-│   ⚪ Step 4: Automated Meeting Summarization, Categorization & Action Items │
+│ PHASE 2: Meeting Intelligence & Diarization (Days 3–6)                      │
+│   ⚪ Step 2: Speaker Diarization + Voiceprint Vault & Audio Snippets        │
+│   ⚪ Step 3: Automated Meeting Summarization, Categorization & Action Items │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 3: Dictation Polish & Self-Improvement (Week 2–3)                     │
-│   ⚪ Step 5: Live Floating Capsule with Waveform Visualizer                 │
-│   ⚪ Step 6: Adaptive In-Situ Correction Learning (Post-Paste Auto-Learn)   │
+│   ⚪ Step 4: Live Floating Capsule with Waveform Visualizer                 │
+│   ⚪ Step 5: Adaptive In-Situ Correction Learning (Post-Paste Auto-Learn)   │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 4: Advanced Fine-Tuning (Post-v2.0)                                   │
-│   ⏸️ Step 7: Voice Transformation Commands (Model Fine-Tuning Deferred)     │
+│   ⏸️ Step 6: Voice Transformation Commands (Model Fine-Tuning Deferred)     │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```

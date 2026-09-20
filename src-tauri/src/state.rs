@@ -91,6 +91,18 @@ pub struct AudioState {
 
     // UNIX epoch seconds of the last user transcription or model load activity.
     pub last_activity_timestamp: Arc<AtomicU64>,
+
+    // Meeting Detection manager
+    pub meeting_detector: Arc<crate::meeting_detector::MeetingDetectorManager>,
+
+    // Active audio recording mode: "mic" or "dual_channel"
+    pub audio_source_mode: Arc<Mutex<String>>,
+
+    // Auto-record calls when a meeting is detected
+    pub auto_record_meetings: Arc<AtomicBool>,
+
+    // Tracks if the most recent recording was in dual-channel mode
+    pub last_recording_is_dual_channel: Arc<AtomicBool>,
 }
 
 impl AudioState {
@@ -122,6 +134,10 @@ impl AudioState {
             engine_loading: Arc::new(AtomicBool::new(false)),
             auto_unload_seconds: Arc::new(AtomicU64::new(1800)),
             last_activity_timestamp: Arc::new(AtomicU64::new(0)),
+            meeting_detector: Arc::new(crate::meeting_detector::MeetingDetectorManager::new()),
+            audio_source_mode: Arc::new(Mutex::new("mic".to_string())),
+            auto_record_meetings: Arc::new(AtomicBool::new(false)),
+            last_recording_is_dual_channel: Arc::new(AtomicBool::new(false)),
         }
     }
 

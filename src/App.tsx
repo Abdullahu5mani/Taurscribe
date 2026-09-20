@@ -19,6 +19,7 @@ import { TranscriptFeed } from "./components/TranscriptFeed";
 import { FileTranscriptionPanel } from "./components/FileTranscriptionPanel";
 import { QuickSettings } from "./components/QuickSettings";
 import { EnginePicker } from "./components/EnginePicker";
+import { MeetingBanner } from "./components/MeetingBanner";
 import { SessionNoticeCard } from "./components/SessionNoticeCard";
 import { useDownloads } from "./hooks/useDownloads";
 import { useInitialLoad } from "./hooks/useInitialLoad";
@@ -383,6 +384,7 @@ function App() {
   const {
     isRecording, isRecordingRef, isPaused, isProcessingTranscript,
     latestLatency,
+    isDualChannelRecording, dualLevels,
     handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk, handlePartialChunk,
   } = useRecording({
     activeEngineRef: activeEngineForwarded,
@@ -1133,6 +1135,11 @@ function App() {
                 </button>
               </div>
             )}
+
+            <MeetingBanner
+              isRecording={isRecording}
+              onStartDualRecording={() => handleStartRecording(false, "dual_channel")}
+            />
           </div>
 
           {/* Mic / File mode toggle — top-left, directly under the header */}
@@ -1312,6 +1319,26 @@ function App() {
                   </select>
                 </div>
 
+                {isDualChannelRecording && isRecording && (
+                  <div
+                    id="dual-channel-active-badge"
+                    data-testid="dual-channel-active-badge"
+                    className="dual-channel-active-badge"
+                    title="Recording Dual-Channel: Mic (CH1) + System Loopback (CH2)"
+                    role="status"
+                    aria-label="Dual-Channel Audio Active"
+                  >
+                    <span className="dual-channel-dot" />
+                    <span className="dual-channel-text">DUAL-CH</span>
+                    <span className="dual-channel-levels">
+                      <span className="dual-ch-tag">M</span>
+                      <span className="dual-ch-val">{Math.round((dualLevels?.mic ?? 0) * 100)}%</span>
+                      <span className="dual-ch-sep">·</span>
+                      <span className="dual-ch-tag">S</span>
+                      <span className="dual-ch-val">{Math.round((dualLevels?.system ?? 0) * 100)}%</span>
+                    </span>
+                  </div>
+                )}
               </div>
 
               <button

@@ -135,6 +135,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSScreen",
 ] }
 objc2-foundation = "0.3"
+meeting-record = "0.1"
 
 # 2b. Apple Silicon Specific (M1/M2/M3/M4)
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
@@ -154,6 +155,7 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = [
     "api-20",
 ] }
 [target.'cfg(windows)'.dependencies]
+meeting-record = "0.1"
 windows = { version = "0.58", features = [
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",

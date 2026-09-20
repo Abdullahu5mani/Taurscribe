@@ -219,6 +219,7 @@ pub async fn start_recording(
     app_handle: AppHandle,
     state: State<'_, AudioState>,
     denoise: Option<bool>,
+    audio_source: Option<String>,
 ) -> Result<CommandResult<String>, String> {
     // Guard: reject if already recording (e.g. spam hotkey)
     if state.recording_handle.lock().unwrap().is_some() {
@@ -228,7 +229,7 @@ pub async fn start_recording(
     // Clone the whole state — every field is Arc<…> so this is just ref-count bumps.
     let state = (*state).clone();
     tauri::async_runtime::spawn_blocking(move || {
-        start_recording_blocking(app_handle, state, denoise)
+        start_recording_blocking(app_handle, state, denoise, audio_source)
     })
     .await
     .map(|result| match result {
@@ -259,112 +260,128 @@ fn start_recording_blocking(
     app_handle: AppHandle,
     state: AudioState,
     denoise: Option<bool>,
+    audio_source: Option<String>,
 ) -> Result<String, String> {
     let denoise_enabled = denoise.unwrap_or(true);
     state.recording_paused.store(false, Ordering::Relaxed);
 
-    // 1. Setup Microphone
-    let host = cpal::default_host();
-    let preferred = state.selected_input_device.lock().unwrap().clone();
+    let is_dual_channel = audio_source
+        .as_deref()
+        .map(|s| s == "dual_channel")
+        .unwrap_or_else(|| *state.audio_source_mode.lock().unwrap() == "dual_channel");
 
-    let mut device_opt = None;
-    let mut fallback_triggered = false;
+    state.last_recording_is_dual_channel.store(is_dual_channel, Ordering::SeqCst);
 
-    if let Some(ref name) = preferred {
-        device_opt = host
-            .input_devices()
-            .ok()
-            .and_then(|mut iter| iter.find(|d| d.name().ok().as_deref() == Some(name.as_str())));
+    // 1. Setup Audio Config & Device
+    let (config_channels, config_sample_rate, cpal_device, cpal_config) = if is_dual_channel {
+        println!("[INFO] Dual-Channel System Loopback & Mic Recorder selected (stereo 48 kHz)");
+        (2u16, 48000u32, None, None)
+    } else {
+        let host = cpal::default_host();
+        let preferred = state.selected_input_device.lock().unwrap().clone();
 
-        if device_opt.is_none() {
-            println!(
-                "[WARNING] Preferred input device '{}' not found, falling back to default",
-                name
-            );
-            fallback_triggered = true;
+        let mut device_opt = None;
+        let mut fallback_triggered = false;
+
+        if let Some(ref name) = preferred {
+            device_opt = host
+                .input_devices()
+                .ok()
+                .and_then(|mut iter| iter.find(|d| d.name().ok().as_deref() == Some(name.as_str())));
+
+            if device_opt.is_none() {
+                println!(
+                    "[WARNING] Preferred input device '{}' not found, falling back to default",
+                    name
+                );
+                fallback_triggered = true;
+            }
         }
-    }
 
-    #[cfg(target_os = "linux")]
-    {
-        // On Linux, detect if PipeWire / PulseAudio is active
-        let is_pipewire = std::env::var("PIPEWIRE_REMOTE").is_ok()
-            || std::env::var("XDG_RUNTIME_DIR")
-                .map(|p| {
-                    std::path::Path::new(&p).join("pipewire-0").exists()
-                        || std::path::Path::new(&p).join("pulse/native").exists()
-                })
-                .unwrap_or(false);
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, detect if PipeWire / PulseAudio is active
+            let is_pipewire = std::env::var("PIPEWIRE_REMOTE").is_ok()
+                || std::env::var("XDG_RUNTIME_DIR")
+                    .map(|p| {
+                        std::path::Path::new(&p).join("pipewire-0").exists()
+                            || std::path::Path::new(&p).join("pulse/native").exists()
+                    })
+                    .unwrap_or(false);
 
-        // If no preferred device, or if preferred device is a raw hardware "hw:X,Y" PCM while PipeWire is active,
-        // prioritize the virtual ALSA/PipeWire PCM ("default" or "pipewire") to eliminate EBUSY device lock contention.
-        let prefer_virtual = device_opt.is_none()
-            || (is_pipewire
-                && preferred
-                    .as_deref()
-                    .map(|s| s.starts_with("hw:") || s.contains("hw:"))
-                    .unwrap_or(false));
+            // If no preferred device, or if preferred device is a raw hardware "hw:X,Y" PCM while PipeWire is active,
+            // prioritize the virtual ALSA/PipeWire PCM ("default" or "pipewire") to eliminate EBUSY device lock contention.
+            let prefer_virtual = device_opt.is_none()
+                || (is_pipewire
+                    && preferred
+                        .as_deref()
+                        .map(|s| s.starts_with("hw:") || s.contains("hw:"))
+                        .unwrap_or(false));
 
-        if prefer_virtual {
-            if let Ok(devices) = host.input_devices() {
-                let dev_list: Vec<_> = devices.collect();
-                if let Some(d) = dev_list.into_iter().find(|d| {
-                    if let Ok(name) = d.name() {
-                        name == "default"
-                            || name.to_lowercase().contains("pipewire")
-                            || name == "pulse"
-                    } else {
-                        false
+            if prefer_virtual {
+                if let Ok(devices) = host.input_devices() {
+                    let dev_list: Vec<_> = devices.collect();
+                    if let Some(d) = dev_list.into_iter().find(|d| {
+                        if let Ok(name) = d.name() {
+                            name == "default"
+                                || name.to_lowercase().contains("pipewire")
+                                || name == "pulse"
+                        } else {
+                            false
+                        }
+                    }) {
+                        println!("[INFO] Linux PipeWire audio: Selected virtual PCM '{}' to eliminate EBUSY device lock contention", d.name().unwrap_or_default());
+                        device_opt = Some(d);
                     }
-                }) {
-                    println!("[INFO] Linux PipeWire audio: Selected virtual PCM '{}' to eliminate EBUSY device lock contention", d.name().unwrap_or_default());
-                    device_opt = Some(d);
                 }
             }
         }
-    }
 
-    if device_opt.is_none() {
-        device_opt = host.default_input_device();
-    }
+        if device_opt.is_none() {
+            device_opt = host.default_input_device();
+        }
 
-    let device =
-        device_opt.ok_or("No input device found. Check that a microphone is connected.")?;
-    let device_name = device
-        .name()
-        .unwrap_or_else(|_| "Unknown Device".to_string());
+        let device =
+            device_opt.ok_or("No input device found. Check that a microphone is connected.")?;
+        let device_name = device
+            .name()
+            .unwrap_or_else(|_| "Unknown Device".to_string());
 
-    println!("[INFO] Using input device: {}", device_name);
+        println!("[INFO] Using input device: {}", device_name);
 
-    if fallback_triggered {
-        let _ = app_handle.emit("audio-fallback", device_name);
-    }
+        if fallback_triggered {
+            let _ = app_handle.emit("audio-fallback", device_name);
+        }
 
-    let config: cpal::StreamConfig = device
-        .default_input_config()
-        .or_else(|e| {
-            println!("[WARNING] default_input_config failed: {}, falling back to iterating supported configs", e);
-            device.supported_input_configs()
-                .map_err(|_err| cpal::DefaultStreamConfigError::DeviceNotAvailable)?
-                .find(|c| c.sample_format() == cpal::SampleFormat::F32 || c.sample_format() == cpal::SampleFormat::I16)
-                .map(|c| c.with_max_sample_rate())
-                .ok_or(cpal::DefaultStreamConfigError::StreamTypeNotSupported)
-        })
-        .map_err(|e| {
-            // macOS: permission denial often surfaces as a vague
-            // CoreAudio error during config or stream creation.
-            let msg = e.to_string();
-            if msg.contains("permission") || msg.contains("denied") || msg.contains("not supported") {
-                "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
-            } else {
-                format!("Failed to get audio config: {}", msg)
-            }
-        })?
-        .into();
+        let cfg: cpal::StreamConfig = device
+            .default_input_config()
+            .or_else(|e| {
+                println!("[WARNING] default_input_config failed: {}, falling back to iterating supported configs", e);
+                device.supported_input_configs()
+                    .map_err(|_err| cpal::DefaultStreamConfigError::DeviceNotAvailable)?
+                    .find(|c| c.sample_format() == cpal::SampleFormat::F32 || c.sample_format() == cpal::SampleFormat::I16)
+                    .map(|c| c.with_max_sample_rate())
+                    .ok_or(cpal::DefaultStreamConfigError::StreamTypeNotSupported)
+            })
+            .map_err(|e| {
+                // macOS: permission denial often surfaces as a vague
+                // CoreAudio error during config or stream creation.
+                let msg = e.to_string();
+                if msg.contains("permission") || msg.contains("denied") || msg.contains("not supported") {
+                    "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+                } else {
+                    format!("Failed to get audio config: {}", msg)
+                }
+            })?
+            .into();
+
+        (cfg.channels, cfg.sample_rate.0, Some(device), Some(cfg))
+    };
 
     // 2. Prepare Output File
     let recordings_dir = get_recordings_dir()?;
-    let filename = format!("recording_{}.wav", chrono::Utc::now().timestamp());
+    let prefix = if is_dual_channel { "meeting" } else { "recording" };
+    let filename = format!("{}_{}.wav", prefix, chrono::Utc::now().timestamp());
     let path = recordings_dir.join(&filename);
 
     println!("[INFO] Saving recording to: {}", path.display());
@@ -393,8 +410,8 @@ fn start_recording_blocking(
 
     // 4. Create proper WAV header settings
     let spec = hound::WavSpec {
-        channels: config.channels,
-        sample_rate: config.sample_rate.0,
+        channels: config_channels,
+        sample_rate: config_sample_rate,
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
@@ -431,7 +448,7 @@ fn start_recording_blocking(
     let transcriber_dropped_callbacks_writer = transcriber_dropped_callbacks.clone();
     let transcriber_dropped_samples_writer = transcriber_dropped_samples.clone();
 
-    let sample_rate = config.sample_rate.0;
+    let sample_rate = config_sample_rate;
 
     let level_stop = Arc::new(AtomicBool::new(false));
     let level_stop_clone1 = level_stop.clone();
@@ -1132,7 +1149,7 @@ fn start_recording_blocking(
         println!("[INFO] Transcriber thread finished");
     });
 
-    let channels = config.channels as usize;
+    let channels = config_channels as usize;
 
     // Audio level metering: the cpal callback writes a float (as AtomicU32 bits)
     // and a dedicated thread reads it every 50ms to emit the Tauri event.
@@ -1153,6 +1170,36 @@ fn start_recording_blocking(
             let _ = app_for_level.emit("audio-level", level);
         }
     });
+
+    if is_dual_channel {
+        let dual_stop = Arc::new(AtomicBool::new(false));
+        let dc_handle = crate::audio_dual_channel::start_dual_channel_capture(
+            crate::audio_dual_channel::DualChannelTarget::System,
+            48000,
+            file_tx_clone,
+            whisper_tx_clone,
+            app_handle.clone(),
+            dual_stop.clone(),
+        )?;
+
+        *recording_handle_arc.lock().unwrap() = Some(RecordingHandle {
+            stream: None,
+            file_tx,
+            whisper_tx,
+            writer_thread,
+            transcriber_thread,
+            level_stop,
+            level_thread,
+            is_dual_channel: true,
+            dual_channel_stop: Some(dc_handle.stop_signal),
+        });
+
+        println!("[INFO] Dual-channel recording started: {}", path.display());
+        return Ok(format!("Recording started: {}", path.display()));
+    }
+
+    let device = cpal_device.ok_or("No input device available for standard recording")?;
+    let config = cpal_config.ok_or("No input audio configuration available")?;
 
     let app_for_error = app_handle.clone();
     let stream = device
@@ -1226,13 +1273,15 @@ fn start_recording_blocking(
     })?;
 
     *recording_handle_arc.lock().unwrap() = Some(RecordingHandle {
-        stream: SendStream(stream),
+        stream: Some(SendStream(stream)),
         file_tx,
         whisper_tx,
         writer_thread,
         transcriber_thread,
         level_stop,
         level_thread,
+        is_dual_channel: false,
+        dual_channel_stop: None,
     });
 
     Ok(format!("Recording started: {}", path.display()))
@@ -1249,15 +1298,21 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) {
         transcriber_thread,
         level_stop,
         level_thread,
-        ..
+        is_dual_channel: _,
+        dual_channel_stop,
     } = recording;
 
     if tail_capture_ms > 0 {
         std::thread::sleep(std::time::Duration::from_millis(tail_capture_ms));
     }
 
-    let _ = stream.0.pause();
-    drop(stream);
+    if let Some(stream) = stream {
+        let _ = stream.0.pause();
+        drop(stream);
+    }
+    if let Some(dc_stop) = dual_channel_stop {
+        dc_stop.store(true, Ordering::Relaxed);
+    }
     drop(file_tx);
     drop(whisper_tx);
 
@@ -1283,11 +1338,12 @@ pub fn pause_recording(state: State<'_, AudioState>) -> Result<CommandResult<Str
         return Ok(CommandResult::err("not_recording", "Not recording"));
     };
 
-    handle
-        .stream
-        .0
-        .pause()
-        .map_err(|e| format!("Failed to pause recording: {}", e))?;
+    if let Some(ref stream) = handle.stream {
+        stream
+            .0
+            .pause()
+            .map_err(|e| format!("Failed to pause recording: {}", e))?;
+    }
     state.recording_paused.store(true, Ordering::Relaxed);
     Ok(CommandResult::ok("Recording paused".to_string()))
 }
@@ -1299,11 +1355,12 @@ pub fn resume_recording(state: State<'_, AudioState>) -> Result<CommandResult<St
         return Ok(CommandResult::err("not_recording", "Not recording"));
     };
 
-    handle
-        .stream
-        .0
-        .play()
-        .map_err(|e| format!("Failed to resume recording: {}", e))?;
+    if let Some(ref stream) = handle.stream {
+        stream
+            .0
+            .play()
+            .map_err(|e| format!("Failed to resume recording: {}", e))?;
+    }
     state.recording_paused.store(false, Ordering::Relaxed);
     Ok(CommandResult::ok("Recording resumed".to_string()))
 }

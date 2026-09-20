@@ -1,5 +1,6 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { ModelInfo, ParakeetModelInfo, CohereModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
@@ -188,6 +189,8 @@ export function useRecording({
         isPausedRef.current = false;
         pausedAtRef.current = null;
         totalPausedMsRef.current = 0;
+        setIsDualChannelRecording(false);
+        setDualLevels({ mic: 0, system: 0 });
     };
 
     const showNotice = (notice: SessionNotice | null) => {
@@ -202,8 +205,30 @@ export function useRecording({
         sticky: true,
     });
 
-    const handleStartRecording = async (fromHotkey = false) => {
+    const [isDualChannelRecording, setIsDualChannelRecording] = useState(false);
+    const [dualLevels, setDualLevels] = useState<{ mic: number; system: number }>({ mic: 0, system: 0 });
+
+    useEffect(() => {
+        const unlistenPromise = listen<{ mic: number; system: number }>("dual-audio-levels", (event) => {
+            setDualLevels(event.payload);
+        });
+        return () => {
+            unlistenPromise.then((unlisten) => unlisten());
+        };
+    }, []);
+
+    const handleStartRecording = async (fromHotkey = false, audioSource?: string) => {
         hotkeySessionRef.current = fromHotkey; // tracks hotkey session independent of overlay toggle
+        let effectiveAudioSource = audioSource;
+        if (!effectiveAudioSource) {
+            try {
+                effectiveAudioSource = await invoke<string>("get_audio_source_mode");
+            } catch {
+                effectiveAudioSource = "mic";
+            }
+        }
+        const isDual = effectiveAudioSource === "dual_channel";
+        setIsDualChannelRecording(isDual);
         if (fromHotkey) {
             overlaySessionIdRef.current += 1;
             overlayTerminalRef.current = false;
@@ -368,10 +393,13 @@ export function useRecording({
             resetRecordingSession();
             // Play start sound before muting so the app's own audio isn't silenced.
             playStart?.();
-            if (muteBackgroundAudioRef.current) {
+            if (muteBackgroundAudioRef.current && !isDual) {
                 await invoke("mute_system_audio").catch(e => console.warn("mute_system_audio failed:", e));
             }
-            const result = await invoke<CommandResult<string>>("start_recording", { denoise: enableDenoiseRef.current });
+            const result = await invoke<CommandResult<string>>("start_recording", {
+                denoise: enableDenoiseRef.current,
+                audioSource: isDual ? "dual_channel" : "mic",
+            });
             if (!result.ok) throw result.error ?? new Error("Failed to start recording");
             setHeaderStatus(result.data ?? "Recording started");
             recordingStartTimeRef.current = Date.now();
@@ -410,6 +438,8 @@ export function useRecording({
             await setTrayState("ready");
             setIsRecording(false);
             isRecordingRef.current = false;
+            setIsDualChannelRecording(false);
+            setDualLevels({ mic: 0, system: 0 });
             setSessionPhase?.("error");
             showNotice(commandErrorToNotice(error, "Recording failed to start"));
             if (fromHotkey) hideOverlay();
@@ -787,6 +817,8 @@ export function useRecording({
         isPaused,
         isProcessingTranscript,
         latestLatency,
+        isDualChannelRecording,
+        dualLevels,
         handleStartRecording,
         handlePauseRecording,
         handleResumeRecording,

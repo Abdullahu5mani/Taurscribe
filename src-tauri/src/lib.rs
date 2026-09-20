@@ -1,6 +1,7 @@
 // Module declarations
 mod audio;
 pub mod audio_decode;
+pub mod audio_dual_channel;
 pub mod audio_preprocess;
 pub mod cohere;
 pub mod commands;
@@ -16,6 +17,7 @@ mod hotkeys;
 pub mod librispeech_wer;
 mod llm;
 pub mod memory;
+pub mod meeting_detector;
 mod ort_session;
 mod overlay;
 pub mod parakeet;
@@ -185,6 +187,13 @@ pub fn run() {
             let watcher_handle = app.handle().clone();
             if let Err(e) = watcher::start_models_watcher(watcher_handle) {
                 eprintln!("[WARN] Failed to start models watcher: {}", e);
+            }
+
+            // Start Automated Meeting Detection Watcher
+            let meeting_handle = app.handle().clone();
+            let state = app.state::<AudioState>();
+            if let Err(e) = state.meeting_detector.start_watching(meeting_handle) {
+                eprintln!("[WARN] Failed to start meeting detector: {}", e);
             }
 
             // Start Inactivity Auto-Unload Watchdog Background Thread
@@ -357,6 +366,14 @@ pub fn run() {
             commands::cancel_recording,
             commands::transcribe_file,
             commands::cancel_file_transcription,
+            commands::scan_active_meetings,
+            commands::get_meeting_detection_status,
+            commands::start_meeting_detection,
+            commands::stop_meeting_detection,
+            commands::set_audio_source_mode,
+            commands::get_audio_source_mode,
+            commands::set_auto_record_meetings,
+            commands::get_auto_record_meetings,
             crate::context::get_active_context_preview
         ])
         .build(tauri::generate_context!())

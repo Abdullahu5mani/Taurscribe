@@ -1110,6 +1110,64 @@ body.is-resizing .model-item {
   outline: none;
 }
 
+.dual-channel-active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #34d399;
+  flex-shrink: 0;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.dual-channel-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.8);
+  animation: dualPulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes dualPulse {
+  0% { transform: scale(0.85); opacity: 0.6; }
+  100% { transform: scale(1.15); opacity: 1; }
+}
+
+.dual-channel-text {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.dual-channel-levels {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.dual-ch-tag {
+  color: #6ee7b7;
+  font-weight: 700;
+}
+
+.dual-ch-val {
+  color: var(--text-primary);
+  min-width: 20px;
+}
+
+.dual-ch-sep {
+  opacity: 0.4;
+}
+
 .engine-chip {
   min-width: 0;
   flex-shrink: 1;

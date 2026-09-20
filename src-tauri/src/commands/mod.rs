@@ -19,3 +19,5 @@ pub use settings::*;
 
 pub mod downloader;
 pub use downloader::*;
+pub mod meetings;
+pub use meetings::*;
