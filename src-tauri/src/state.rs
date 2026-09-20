@@ -2,10 +2,14 @@ use crate::audio::RecordingHandle;
 use crate::cohere::CohereManager;
 use crate::denoise::Denoiser;
 use crate::parakeet::ParakeetManager;
+use crate::qwen3::Qwen3Manager;
 use crate::types::{ASREngine, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
-use std::sync::{atomic::{AtomicBool, AtomicU64}, Arc, Mutex, RwLock};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64},
+    Arc, Mutex, RwLock,
+};
 
 /// The Global "Brain" of the application.
 /// This struct holds all the data that needs to live as long as the app runs.
@@ -61,6 +65,9 @@ pub struct AudioState {
     // Field name remains `cohere` temporarily for compatibility with the old manager shim.
     pub cohere: Arc<Mutex<CohereManager>>,
 
+    // Official Qwen3-ASR Transformers worker, loaded on demand.
+    pub qwen3: Arc<Mutex<Qwen3Manager>>,
+
     // When true the global hotkey listener ignores all key events.
     // Used to prevent accidental recording while the user is re-binding
     // the hotkey inside the Settings modal.
@@ -92,6 +99,7 @@ impl AudioState {
         parakeet: ParakeetManager,
         vad: VADManager,
         cohere: CohereManager,
+        qwen3: Qwen3Manager,
     ) -> Self {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
@@ -107,6 +115,7 @@ impl AudioState {
             denoiser: Arc::new(Mutex::new(None)),
             close_behavior: Arc::new(Mutex::new("tray".to_string())),
             cohere: Arc::new(Mutex::new(cohere)),
+            qwen3: Arc::new(Mutex::new(qwen3)),
             hotkey_suppressed: Arc::new(AtomicBool::new(false)),
             recording_paused: Arc::new(AtomicBool::new(false)),
             model_loaded: Arc::new(AtomicBool::new(false)),
@@ -150,6 +159,9 @@ impl AudioState {
                     &models_dir.join("granite-speech-4.1-2b-nar-portable"),
                 )
             }
+            ASREngine::Qwen3 => crate::qwen3::Qwen3Manager::list_available_models()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
         }
     }
 
@@ -177,6 +189,13 @@ impl AudioState {
             if g.get_status().loaded {
                 g.unload();
                 unloaded.push("granite");
+            }
+        }
+        {
+            let mut q = self.qwen3.lock().map_err(|e| e.to_string())?;
+            if q.get_status().loaded {
+                q.unload();
+                unloaded.push("qwen3");
             }
         }
 

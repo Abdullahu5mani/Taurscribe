@@ -14,6 +14,7 @@ interface UseHotkeyListenersParams {
         whisper: number;
         parakeet: number;
         granite: number;
+        qwen3: number;
     }>;
 
     // Stable handler refs (always point to latest closure)
@@ -148,7 +149,8 @@ export function useHotkeyListeners({
                 const noModelsForEngine =
                     (eng === "whisper" && counts.whisper === 0) ||
                     (eng === "parakeet" && counts.parakeet === 0) ||
-                    (eng === "granite" && counts.granite === 0);
+                    (eng === "granite" && counts.granite === 0) ||
+                    (eng === "qwen3" && counts.qwen3 === 0);
                 if (noModelsForEngine) {
                     playErrorRef.current?.();
                     triggerNoModelAttentionRef.current?.();

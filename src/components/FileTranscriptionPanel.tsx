@@ -38,11 +38,12 @@ interface FileTranscriptionPanelProps {
     currentModel?: string | null;
     currentParakeetModel?: string | null;
     currentCohereModel?: string | null;
+    currentQwen3Model?: string | null;
     isModelLoading?: boolean;
     onFileProcessingChange?: (processing: boolean) => void;
 }
 
-function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentParakeetModel, currentCohereModel, isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
+function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentParakeetModel, currentCohereModel, currentQwen3Model, isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
     const isParakeet = activeEngine === "parakeet";
     const isParakeetRef = useRef(isParakeet);
     const isModelLoadingRef = useRef(isModelLoading);
@@ -55,7 +56,8 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
     const currentActiveModelId =
         activeEngine === "whisper" ? (currentModel ?? null) :
         activeEngine === "parakeet" ? (currentParakeetModel ?? null) :
-        (currentCohereModel ?? null);
+        activeEngine === "granite" ? (currentCohereModel ?? null) :
+        (currentQwen3Model ?? null);
     useEffect(() => { activeModelIdRef.current = currentActiveModelId; }, [currentActiveModelId]);
     useEffect(() => { activeEngineRef.current = activeEngine; }, [activeEngine]);
 
@@ -302,6 +304,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
     const engineLabel = (engine: string, modelId?: string | null) => {
         const base = engine === "parakeet" ? "Parakeet"
             : engine === "granite" ? "Granite"
+            : engine === "qwen3" ? "Qwen3-ASR"
             : "Whisper";
         const variant = formatModelDisplay(modelId ?? null);
         return variant ? `${base} · ${variant}` : base;

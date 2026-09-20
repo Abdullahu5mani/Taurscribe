@@ -3,7 +3,7 @@
 export interface DownloadableModel {
     id: string;
     name: string;
-    type: 'Whisper' | 'Parakeet' | 'LLM' | 'CoreML' | 'Granite';
+    type: 'Whisper' | 'Parakeet' | 'LLM' | 'CoreML' | 'Granite' | 'Qwen3';
     size: string;
     description: string;
     downloaded: boolean;
@@ -69,6 +69,10 @@ export const MODELS: DownloadableModel[] = [
     { id: 'granite-speech-4.1-2b-nar-cuda', name: 'NVIDIA CUDA', type: 'Granite', size: '~2.2 GB', description: 'Fastest Granite INT4 ONNX bundle for NVIDIA CUDA GPUs. All four model graphs run on CUDA.', downloaded: false, windowsOnly: true },
     { id: 'granite-speech-4.1-2b-nar-mlx', name: 'Apple Silicon (MLX)', type: 'Granite', size: '~4.3 GB', description: 'Runs Granite on the Apple GPU through MLX instead of ONNX. Roughly 16x faster than the CPU bundle on Apple silicon, and the same transcripts. macOS only.', downloaded: false, macosOnly: true },
     { id: 'granite-speech-4.1-2b-nar-portable', name: 'AMD / Intel / CPU', type: 'Granite', size: '~2.2 GB', description: 'Portable Granite INT4 ONNX bundle. Uses DirectML first on Windows AMD or Intel GPUs, then falls back to multi-threaded CPU.', downloaded: false },
+
+    // --- Qwen3-ASR ---
+    { id: 'qwen3-asr-1.7b-mlx', name: 'Apple Silicon (MLX)', type: 'Qwen3', size: '~3.6 GB', description: 'Runs Qwen3-ASR natively on Metal GPU through pure-Rust MLX. macOS Apple Silicon only.', downloaded: false, macosOnly: true },
+    { id: 'qwen3-asr-1.7b-onnx', name: 'Universal (ONNX)', type: 'Qwen3', size: '~4.2 GB', description: 'Universal pure-Rust Qwen3-ASR INT8 ONNX bundle. Runs on NVIDIA CUDA, DirectML, or multi-threaded CPU.', downloaded: false },
 
     // --- LLM ---
     { id: 'flowscribe-qwen2.5-0.5b-v2', name: 'FlowScribe Qwen 2.5 0.5B V2', type: 'LLM', size: '398 MB', description: 'Fine-tuned Q4_K_M GGUF for speech-to-text grammar correction.', downloaded: false },

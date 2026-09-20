@@ -14,18 +14,41 @@ The testing suite has three purposes:
 4. **Offline batch evaluation** — standalone CLI (`librispeech_eval`) for bulk WER benchmarking, outputting CSV for analysis.
 5. **Audio pipeline benchmark** — standalone CLI (`audio_pipeline_bench`) for decode/downmix/resample speed checks without ASR models.
 
-All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. Opt in with `cargo test -- --ignored`. Add `--nocapture` to print per-utterance WER lines and summaries in the terminal.
+Model-dependent integration tests are marked `#[ignore]` so normal `cargo test` stays fast. Opt in with `cargo test -- --ignored`. Add `--nocapture` to print per-utterance WER lines and summaries in the terminal.
 
 ### If you do not have models or eval data yet
 
 | What you have | What you can run |
 | --- | --- |
-| **Nothing extra** (fresh clone) | From `src-tauri`: `cargo test` **without** `--ignored`. That runs library unit tests only (e.g. WER math, preprocess sanity). No ASR weights or LibriSpeech required. |
+| **Nothing extra** (fresh clone) | From `src-tauri`: `cargo test` **without** `--ignored`. That runs non-model unit and integration tests (for example platform contracts, WER math, and preprocessing). No ASR weights or LibriSpeech required. |
 | **No ASR models** | `librispeech_eval` and the ignored integration tests **need** at least one engine's weights under the [model locations](#model-locations) path, or they error / skip. To **mark ignored tests as passed without running inference** (e.g. CI): set `TAURSCRIBE_ASR_SMOKE_SKIP=1` when running `cargo test -- --ignored`. |
 | **No LibriSpeech** | You cannot build a manifest from `test-clean` or run `mic_accuracy` / `file_drop_accuracy` / full `librispeech_eval` on real audio until you [download the dataset](#downloading-the-librispeech-test-clean-dataset). |
 | **No `jfk.wav`** | The JFK smoke test and memory regression test fail unless you add `src-tauri/tests/fixtures/jfk.wav`, set `JFK_WAV`, or use `TAURSCRIBE_ASR_SMOKE_SKIP=1`. |
 
 **Summary:** day-to-day development without GPUs or large downloads is still possible with plain `cargo test`. Full WER / smoke / memory workflows need models (via **Settings → Downloads** in the app) and, for LibriSpeech-based tests, the dataset plus a manifest.
+
+## Cross-Platform E2E Gates
+
+These commands validate the shared UI automation contract on every build-matrix target. They do not claim native GPU, microphone, or desktop-session execution.
+
+```bash
+# Stable IDs, accessible names, and ARIA state contracts
+npm run test:accessibility
+
+# Compile the configurable Appium harness
+npm run check:e2e
+
+# Run the macOS native UI flow when Appium/mac2, the app bundle, permissions,
+# model assets, and the JFK fixture are available
+npm run test:appium
+```
+
+The Appium harness accepts `TAURSCRIBE_APP_PATH`, `TAURSCRIBE_APPIUM_HOST`,
+`TAURSCRIBE_APPIUM_PORT`, `TAURSCRIBE_APPIUM_BIN`, `TAURSCRIBE_PLATFORM_NAME`,
+`TAURSCRIBE_AUTOMATION_NAME`, and `TAURSCRIBE_BUNDLE_ID` so platform runners can
+provide their own native driver session. GPU provider execution and hardware
+audio capture still require native hardware jobs; these contract gates cannot
+replace those tests.
 
 ---
 
@@ -45,7 +68,7 @@ All integration tests are marked `#[ignore]` so normal `cargo test` stays fast. 
 | `src-tauri/src/commands/recording.rs` | Library / command | Live mic capture orchestration, Parakeet live chunking, and CTC/TDT saved-recording final pass |
 | `src-tauri/tests/jfk_asr_smoke.rs` | Integration | JFK WAV → all three engines must return non-empty text |
 | `src-tauri/tests/memory_engine_regression.rs` | Integration | Load/transcribe/unload cycles + cross-engine switch sequences; snapshots RAM at each step |
-| `src-tauri/tests/parakeet_context_reset.rs` | Integration | Verifies `clear_context()` restores Parakeet to a fresh-session baseline (same audio → same transcript) |
+| `src-tauri/tests/platform_optimizations.rs` | Integration | Platform contracts and `clear_context()` lifecycle coverage without requiring model assets |
 | `src-tauri/tests/file_drop_accuracy.rs` | Integration | Same pipeline as file drag-and-drop (energy VAD assembly + chunking) |
 | `src-tauri/tests/mic_accuracy.rs` | Integration | Same pipeline as live mic (chunking + energy VAD gate) |
 | `scripts/download_librispeech_test_clean.sh` | Script | Download + verify + extract LibriSpeech test-clean (macOS / Linux) |
@@ -145,11 +168,11 @@ cargo test memory_engine_regression -- --ignored --nocapture
 
 ### `parakeet_clear_context_restores_session_baseline` — context reset regression
 
-Verifies that calling `ParakeetManager::clear_context()` (which `stop_recording` calls at the end of every Parakeet recording) fully resets the streaming session state. The test transcribes JFK audio, calls `clear_context()`, transcribes the same audio again, and asserts both transcripts are identical. A mismatch means accumulated decoder state is bleeding between recordings.
+The former dedicated `parakeet_context_reset.rs` integration test is not present in the repository. The current non-model lifecycle coverage for `clear_context()` lives in `platform_optimizations.rs`; model-backed reset behavior should be treated as part of the optional Parakeet hardware/model test profile rather than a guaranteed default test.
 
 ```bash
 cd src-tauri
-cargo test parakeet_clear_context_restores_session_baseline -- --ignored --nocapture
+cargo test --test platform_optimizations -- --nocapture
 ```
 
 **Requires:** `jfk.wav` + at least one Parakeet/Nemotron ONNX bundle.

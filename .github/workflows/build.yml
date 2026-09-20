@@ -365,6 +365,19 @@ jobs:
           Get-ChildItem -Path C:\bld -Recurse -Filter CMakeFiles -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 
       # --- Build Process ---
+
+      # Cross-platform E2E prerequisites: validate the shared accessibility
+      # contract and compile the driver harness before expensive native builds.
+      - name: Validate E2E accessibility contract
+        if: runner.os == 'Windows'
+        run: python -m unittest scripts/tests/test_appium_accessibility.py
+
+      - name: Validate E2E accessibility contract (Unix)
+        if: runner.os != 'Windows'
+        run: python3 -m unittest scripts/tests/test_appium_accessibility.py
+
+      - name: Type-check E2E harness
+        run: bun run check:e2e
       
       # Enable Long File Paths in Registry: 
       # Even with git config, Windows OS limits paths to 260 chars unless this Registry key is set.

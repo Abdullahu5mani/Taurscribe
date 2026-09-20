@@ -160,7 +160,7 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEnginePickerOpen, setIsEnginePickerOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<string | undefined>(undefined);
-  const [settingsScrollTarget, setSettingsScrollTarget] = useState<'whisper' | 'parakeet' | 'granite' | null>(null);
+  const [settingsScrollTarget, setSettingsScrollTarget] = useState<ASREngine | null>(null);
   /** null = not yet loaded from store; true = show wizard (first run); false = show main app */
   const [showSetupWizard, setShowSetupWizard] = useState<boolean | null>(null);
   /** Incremented after each successful save_transcript_history; tells TranscriptFeed to reload. */
@@ -292,6 +292,7 @@ function App() {
     models, setModels, currentModel, setCurrentModel,
     parakeetModels, setParakeetModels, currentParakeetModel, setCurrentParakeetModel,
     cohereModels, setCohereModels, currentCohereModel, setCurrentCohereModel,
+    qwen3Models, setQwen3Models, currentQwen3Model, setCurrentQwen3Model,
     refreshModels,
   } = useModels(setHeaderStatus);
 
@@ -385,7 +386,7 @@ function App() {
     handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk, handlePartialChunk,
   } = useRecording({
     activeEngineRef: activeEngineForwarded,
-    models, parakeetModels, cohereModels, currentModel, currentParakeetModel, currentCohereModel,
+    models, parakeetModels, cohereModels, qwen3Models, currentModel, currentParakeetModel, currentCohereModel, currentQwen3Model,
     asrBackend,
     setCurrentModel, setLoadedEngine: (e) => setLoadedEngineForwarded.current(e), enableGrammarLMRef,
     enableDenoiseRef, enableOverlayRef, muteBackgroundAudioRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
@@ -403,12 +404,12 @@ function App() {
     loadedEngine, setLoadedEngine,
     isLoading, setIsLoading, isLoadingRef,
     loadingTargetEngine,
-    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToCohere,
+    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToCohere, handleSwitchToQwen3,
     handleToggleAsrBackend,
   } = useEngineSwitch({
-    models, parakeetModels, cohereModels,
-    currentModel, currentParakeetModel, currentCohereModel,
-    setCurrentModel, setCurrentParakeetModel, setCurrentCohereModel,
+    models, parakeetModels, cohereModels, qwen3Models,
+    currentModel, currentParakeetModel, currentCohereModel, currentQwen3Model,
+    setCurrentModel, setCurrentParakeetModel, setCurrentCohereModel, setCurrentQwen3Model,
     setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
     setAsrBackend,
     cohereGpuOnlyLocked: cohereGpuOnlyLoaded,
@@ -461,7 +462,7 @@ function App() {
 
   // handleDeleteModel moved here so setLoadedEngine is in scope
   const handleDeleteModel = async (id: string, _name: string) => {
-    const isActiveModel = id === currentModel || id === currentParakeetModel || id === currentCohereModel;
+    const isActiveModel = id === currentModel || id === currentParakeetModel || id === currentCohereModel || id === currentQwen3Model;
     if (isFileTranscribing && isActiveModel) {
       throw new Error("Cannot delete the active model while a file is being transcribed.");
     }
@@ -471,7 +472,7 @@ function App() {
         throw new Error(result.error?.message ?? "Failed to delete model");
       }
       setSettingsModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false, verified: false } : m));
-      if (currentModel === id || currentParakeetModel === id || currentCohereModel === id) {
+      if (currentModel === id || currentParakeetModel === id || currentCohereModel === id || currentQwen3Model === id) {
         setLoadedEngine(null);
         setSessionNotice({
           level: "warning",
@@ -484,6 +485,7 @@ function App() {
       if (currentModel === id) setCurrentModel(null);
       if (currentParakeetModel === id) setCurrentParakeetModel(null);
       if (currentCohereModel === id) setCurrentCohereModel(null);
+      if (currentQwen3Model === id) setCurrentQwen3Model(null);
       await refreshModels(false);
     } catch (e) {
       console.error("Failed to delete model", e);
@@ -503,11 +505,13 @@ function App() {
     whisper: 0,
     parakeet: 0,
     granite: 0,
+    qwen3: 0,
   });
   asrModelCountsRef.current = {
     whisper: models.length,
     parakeet: parakeetModels.length,
     granite: cohereModels.length,
+    qwen3: qwen3Models.length,
   };
   const isFileTranscribingRef = useSyncedRef(isFileTranscribing);
   const playErrorRef = useSyncedRef(playError);
@@ -562,6 +566,7 @@ function App() {
     setModels, setCurrentModel,
     setParakeetModels, setCurrentParakeetModel,
     setCohereModels, setCurrentCohereModel,
+    setQwen3Models, setCurrentQwen3Model,
     setSettingsModels,
     setLoadedEngine, setActiveEngine, activeEngineRef,
     isLoadingRef, setIsLoading, setLoadingMessage,
@@ -640,7 +645,8 @@ function App() {
   const handleLoadActiveEngine = () => {
     if (activeEngine === "whisper") void handleSwitchToWhisper();
     else if (activeEngine === "parakeet") void handleSwitchToParakeet();
-    else void handleSwitchToCohere();
+    else if (activeEngine === "granite") void handleSwitchToCohere();
+    else void handleSwitchToQwen3();
   };
 
   const refreshEngineSelectionState = useCallback(() => {
@@ -664,6 +670,7 @@ function App() {
     currentModel,
     currentParakeetModel,
     currentCohereModel,
+    currentQwen3Model,
     backendInfo,
     isLoading,
     isRecording,
@@ -685,16 +692,18 @@ function App() {
         if (isExplicitSelection) {
           if (engineForModel === 'whisper') await handleModelChange(id);
           else if (engineForModel === 'parakeet') await handleSwitchToParakeet(id);
-          else await handleSwitchToCohere(id);
+          else if (engineForModel === 'granite') await handleSwitchToCohere(id);
+          else await handleSwitchToQwen3(id);
           return;
         }
         if (loadedEngine) return;
         if (engineForModel === 'whisper') handleModelChange(id);
         else if (engineForModel === 'parakeet') handleSwitchToParakeet(id);
-        else handleSwitchToCohere(id);
+        else if (engineForModel === 'granite') handleSwitchToCohere(id);
+        else handleSwitchToQwen3(id);
       }
     };
-  }, [getEngineForModelId, handleModelChange, handleSwitchToCohere, handleSwitchToParakeet, loadedEngine, refreshModels]);
+  }, [handleModelChange, handleSwitchToCohere, handleSwitchToParakeet, handleSwitchToQwen3, loadedEngine, refreshModels]);
 
 
 
@@ -716,11 +725,13 @@ function App() {
   const noWhisperModel = models.length === 0;
   const noParakeetModel = parakeetModels.length === 0;
   const noCohereModel = cohereModels.length === 0;
-  const noAnyAsrModel = noWhisperModel && noParakeetModel && noCohereModel;
+  const noQwen3Model = qwen3Models.length === 0;
+  const noAnyAsrModel = noWhisperModel && noParakeetModel && noCohereModel && noQwen3Model;
   const activeEngineHasNoModel =
     (activeEngine === "whisper" && noWhisperModel) ||
     (activeEngine === "parakeet" && noParakeetModel) ||
-    (activeEngine === "granite" && noCohereModel);
+    (activeEngine === "granite" && noCohereModel) ||
+    (activeEngine === "qwen3" && noQwen3Model);
   const noModel = activeEngineHasNoModel;
   const noLlm = llmStatus === "Not Downloaded";
   const downloadProgressKeys = useMemo(() => Object.keys(downloadProgress), [downloadProgress]);
@@ -734,6 +745,10 @@ function App() {
   );
   const isCohereDownloading = useMemo(
     () => downloadProgressKeys.some((key) => key.startsWith("granite") || key.startsWith("cohere")),
+    [downloadProgressKeys],
+  );
+  const isQwen3Downloading = useMemo(
+    () => downloadProgressKeys.some((key) => key.startsWith("qwen3")),
     [downloadProgressKeys],
   );
   const recordBtnBusy = isLoading || isProcessingTranscript;
@@ -775,15 +790,24 @@ function App() {
       const m = parakeetModels.find(x => x.id === currentParakeetModel) ?? parakeetModels[0];
       return { label, color, model: beautifyModelName(m.display_name) };
     }
-    const label = "Granite";
-    const color = "var(--cohere-color)";
-    if (isLoading && loadingTargetEngine === "granite") return { label, color, model: "Loading…" };
-    if (isCohereDownloading) return { label, color, model: "Downloading…" };
-    if (cohereModels.length === 0) return { label, color, model: "No model" };
-    const m = cohereModels.find(x => x.id === currentCohereModel) ?? cohereModels[0];
+    if (activeEngine === "granite") {
+      const label = "Granite";
+      const color = "var(--cohere-color)";
+      if (isLoading && loadingTargetEngine === "granite") return { label, color, model: "Loading…" };
+      if (isCohereDownloading) return { label, color, model: "Downloading…" };
+      if (cohereModels.length === 0) return { label, color, model: "No model" };
+      const m = cohereModels.find(x => x.id === currentCohereModel) ?? cohereModels[0];
+      return { label, color, model: m.display_name };
+    }
+    const label = "Qwen3-ASR";
+    const color = "#a78bfa";
+    if (isLoading && loadingTargetEngine === "qwen3") return { label, color, model: "Loading…" };
+    if (isQwen3Downloading) return { label, color, model: "Downloading…" };
+    if (qwen3Models.length === 0) return { label, color, model: "No model" };
+    const m = qwen3Models.find(x => x.id === currentQwen3Model) ?? qwen3Models[0];
     return { label, color, model: m.display_name };
-  }, [activeEngine, isLoading, loadingTargetEngine, isWhisperDownloading, isParakeetDownloading, isCohereDownloading,
-      models, currentModel, parakeetModels, currentParakeetModel, cohereModels, currentCohereModel]);
+  }, [activeEngine, isLoading, loadingTargetEngine, isWhisperDownloading, isParakeetDownloading, isCohereDownloading, isQwen3Downloading,
+      models, currentModel, parakeetModels, currentParakeetModel, cohereModels, currentCohereModel, qwen3Models, currentQwen3Model]);
 
   const recordReadinessMeta = useMemo(() => {
     const loadedEngineName = engineSelectionState?.loaded_engine as ASREngine | null | undefined;
@@ -799,6 +823,10 @@ function App() {
       }
       if (activeEngine === "parakeet") {
         const m = parakeetModels.find(x => x.id === selectedOrLoadedModelId) ?? parakeetModels.find(x => x.id === currentParakeetModel) ?? parakeetModels[0];
+        return m ? beautifyModelName(m.display_name) : engineChipMeta.model;
+      }
+      if (activeEngine === "qwen3") {
+        const m = qwen3Models.find(x => x.id === selectedOrLoadedModelId) ?? qwen3Models.find(x => x.id === currentQwen3Model) ?? qwen3Models[0];
         return m ? beautifyModelName(m.display_name) : engineChipMeta.model;
       }
       const m = cohereModels.find(x => x.id === selectedOrLoadedModelId) ?? cohereModels.find(x => x.id === currentCohereModel) ?? cohereModels[0];
@@ -839,6 +867,8 @@ function App() {
     currentParakeetModel,
     cohereModels,
     currentCohereModel,
+    qwen3Models,
+    currentQwen3Model,
     engineChipMeta.model,
     backendInfo,
     asrBackend,
@@ -853,7 +883,7 @@ function App() {
     setIsSettingsOpen(true);
   }, []);
 
-  const openModelSettingsForEngine = useCallback((engine: 'whisper' | 'parakeet' | 'granite') => {
+  const openModelSettingsForEngine = useCallback((engine: ASREngine) => {
     setSettingsInitialTab('models');
     setSettingsScrollTarget(engine);
     setIsSettingsOpen(true);
@@ -1173,6 +1203,7 @@ function App() {
                 currentModel={currentModel}
                 currentParakeetModel={currentParakeetModel}
                 currentCohereModel={currentCohereModel}
+                currentQwen3Model={currentQwen3Model}
                 isModelLoading={isLoading}
                 onFileProcessingChange={setIsFileTranscribing}
               />
@@ -1189,17 +1220,19 @@ function App() {
                       ? "No Whisper model downloaded"
                       : activeEngine === "parakeet"
                         ? "Parakeet not downloaded"
-                        : "Granite not downloaded"}
+                        : activeEngine === "granite" ? "Granite not downloaded" : "Qwen3-ASR not downloaded"}
                 </h2>
                 <p className="empty-state-body">
                   {noAnyAsrModel ? (
-                    <>Download a <strong>Whisper</strong>, <strong>Parakeet</strong>, or <strong>Granite</strong> model to start transcribing. Whisper Base is a good starting point — it's fast and accurate.</>
+                    <>Download a <strong>Whisper</strong>, <strong>Parakeet</strong>, <strong>Granite</strong>, or <strong>Qwen3-ASR</strong> model to start transcribing. Whisper Base is a good starting point.</>
                   ) : activeEngine === "whisper" ? (
                     <>You're on the <strong>Whisper</strong> engine but haven't downloaded a model yet. Try <strong>Whisper Base</strong> — it's small and accurate. Or switch to Parakeet if you already have it.</>
                   ) : activeEngine === "parakeet" ? (
                     <>You're on the <strong>Parakeet</strong> engine but the Nemotron Streaming model isn't downloaded yet. Switch to Whisper if you already have a model, or download Parakeet from Settings.</>
-                  ) : (
+                  ) : activeEngine === "granite" ? (
                     <>You're on the <strong>Granite</strong> engine but the model isn't downloaded yet. Switch to Whisper or Parakeet if you already have a model, or download Granite from Settings.</>
+                  ) : (
+                    <>You're on the <strong>Qwen3-ASR</strong> engine but the model isn't downloaded yet. Download Qwen3-ASR from Settings or switch to another installed engine.</>
                   )}
                 </p>
                 {!noAnyAsrModel && (
@@ -1220,7 +1253,7 @@ function App() {
                   className={`empty-state-cta${noModelCtaAttention ? " empty-state-cta--attention" : ""}`}
                   onClick={() => {
                     setNoModelCtaAttention(false);
-                    openModelSettingsForEngine(activeEngine as 'whisper' | 'parakeet' | 'granite');
+                    openModelSettingsForEngine(activeEngine);
                   }}
                   aria-label="Open Settings to download models"
                 >
@@ -1281,7 +1314,7 @@ function App() {
                 data-testid="engine-chip-button"
                 className="engine-chip"
                 onClick={() => setIsEnginePickerOpen(o => !o)}
-                aria-label="Switch engine or model"
+                aria-label={`Switch engine or model; status ${recordReadinessMeta.phase}`}
                 aria-expanded={isEnginePickerOpen}
                 aria-haspopup="dialog"
               >
@@ -1346,6 +1379,8 @@ function App() {
                           onClick={() => setIsAutoUnloadMenuOpen(false)}
                         />
                         <div
+                          id="auto-unload-menu"
+                          data-testid="auto-unload-menu"
                           className="auto-unload-menu"
                           role="menu"
                           aria-label="Model memory retention options"
@@ -1361,6 +1396,8 @@ function App() {
 
                           <button
                             type="button"
+                            id="auto-unload-eject-btn"
+                            data-testid="auto-unload-eject-btn"
                             className="auto-unload-eject-action"
                             onClick={() => {
                               setIsAutoUnloadMenuOpen(false);
@@ -1378,6 +1415,8 @@ function App() {
                             <button
                               key={opt.value}
                               type="button"
+                              id={`auto-unload-option-${opt.value}`}
+                              data-testid={`auto-unload-option-${opt.value}`}
                               className={`auto-unload-menu-item${autoUnloadTimeout === opt.value ? " auto-unload-menu-item--selected" : ""}`}
                               onClick={() => {
                                 void handleUpdateAutoUnloadTimeout(opt.value);
@@ -1400,7 +1439,8 @@ function App() {
                 ) : (
                   (activeEngine === "whisper" ? !noWhisperModel :
                    activeEngine === "parakeet" ? !noParakeetModel :
-                   !noCohereModel) && (
+                   activeEngine === "granite" ? !noCohereModel :
+                   !noQwen3Model) && (
                     <button
                       type="button"
                       id="load-eject-btn"
@@ -1427,14 +1467,18 @@ function App() {
                   currentParakeetModel={currentParakeetModel}
                   cohereModels={cohereModels}
                   currentCohereModel={currentCohereModel}
+                  qwen3Models={qwen3Models}
+                  currentQwen3Model={currentQwen3Model}
                   downloadProgress={downloadProgress}
                   isWhisperDownloading={isWhisperDownloading}
                   isParakeetDownloading={isParakeetDownloading}
                   isCohereDownloading={isCohereDownloading}
+                  isQwen3Downloading={isQwen3Downloading}
                   disabled={isRecording || isFileTranscribing}
                   onSelectWhisperModel={(id) => handleModelChange(id)}
                   onSelectParakeetModel={(id) => { void handleSwitchToParakeet(id); }}
                   onSelectCohereModel={(id) => { void handleSwitchToCohere(id); }}
+                  onSelectQwen3Model={(id) => { void handleSwitchToQwen3(id); }}
                   onUnload={handleEjectModel}
                   onOpenDownloads={openModelSettingsForEngine}
                   onClose={() => setIsEnginePickerOpen(false)}

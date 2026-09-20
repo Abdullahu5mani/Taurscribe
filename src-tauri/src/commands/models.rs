@@ -1,4 +1,5 @@
 use crate::parakeet;
+use crate::qwen3;
 use crate::state::AudioState;
 use crate::tray;
 use crate::types::{ASREngine, CommandResult};
@@ -65,6 +66,7 @@ pub async fn switch_model(
 
     let parakeet_arc = state.parakeet.clone();
     let cohere_arc = state.cohere.clone();
+    let qwen3_arc = state.qwen3.clone();
     let whisper_arc = state.whisper.clone();
     let active_engine_arc = state.active_engine.clone();
     let mid = model_id.clone();
@@ -74,6 +76,7 @@ pub async fn switch_model(
         let whisper_current = whisper_arc.lock().unwrap().get_current_model().cloned();
         let parakeet_loaded = parakeet_arc.lock().unwrap().get_status().loaded;
         let cohere_loaded = cohere_arc.lock().unwrap().get_status().loaded;
+        let qwen3_loaded = qwen3_arc.lock().unwrap().get_status().loaded;
         let active = *active_engine_arc.lock().unwrap();
 
         let whisper_on_cpu = {
@@ -86,6 +89,7 @@ pub async fn switch_model(
             && active == ASREngine::Whisper
             && !parakeet_loaded
             && !cohere_loaded
+            && !qwen3_loaded
             && whisper_on_cpu == force_cpu
         {
             println!(
@@ -103,6 +107,10 @@ pub async fn switch_model(
         if cohere_loaded {
             println!("[INFO] Unloading Granite before switching to Whisper");
             cohere_arc.lock().unwrap().unload();
+        }
+        if qwen3_loaded {
+            println!("[INFO] Unloading Qwen3 before switching to Whisper");
+            qwen3_arc.lock().unwrap().unload();
         }
 
         // 6. Load the requested Whisper model.
@@ -181,6 +189,7 @@ pub async fn init_parakeet(
     let whisper_arc = state.whisper.clone();
     let parakeet_arc = state.parakeet.clone();
     let cohere_arc = state.cohere.clone();
+    let qwen3_arc = state.qwen3.clone();
     let active_engine_arc = state.active_engine.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -188,6 +197,7 @@ pub async fn init_parakeet(
         let parakeet_status = parakeet_arc.lock().unwrap().get_status();
         let whisper_loaded = whisper_arc.lock().unwrap().get_current_model().is_some();
         let cohere_loaded = cohere_arc.lock().unwrap().get_status().loaded;
+        let qwen3_loaded = qwen3_arc.lock().unwrap().get_status().loaded;
         let active = *active_engine_arc.lock().unwrap();
 
         // 3. Skip if the same Parakeet model is already active on the same CPU/GPU preference.
@@ -197,6 +207,7 @@ pub async fn init_parakeet(
             && active == ASREngine::Parakeet
             && !whisper_loaded
             && !cohere_loaded
+            && !qwen3_loaded
             && (target_id.is_none() || parakeet_status.model_id.as_deref() == target_id)
             && parakeet_on_cpu == force_cpu;
         if already_loaded {
@@ -212,6 +223,10 @@ pub async fn init_parakeet(
         if cohere_loaded {
             println!("[INFO] Unloading Granite before switching to Parakeet");
             cohere_arc.lock().unwrap().unload();
+        }
+        if qwen3_loaded {
+            println!("[INFO] Unloading Qwen3 before switching to Parakeet");
+            qwen3_arc.lock().unwrap().unload();
         }
 
         // Free any existing Parakeet sessions before acquiring the lock for a fresh load
@@ -264,4 +279,72 @@ pub async fn init_parakeet(
 pub fn get_parakeet_status(state: State<AudioState>) -> Result<parakeet::ParakeetStatus, String> {
     let parakeet = state.parakeet.lock().unwrap();
     Ok(parakeet.get_status())
+}
+
+#[tauri::command]
+pub fn list_qwen3_models() -> Result<Vec<qwen3::Qwen3ModelInfo>, String> {
+    qwen3::Qwen3Manager::list_available_models()
+}
+
+#[tauri::command]
+pub fn get_qwen3_status(state: State<AudioState>) -> Result<qwen3::Qwen3Status, String> {
+    Ok(state.qwen3.lock().map_err(|e| e.to_string())?.get_status())
+}
+
+#[tauri::command]
+pub async fn init_qwen3(
+    state: State<'_, AudioState>,
+    app: tauri::AppHandle,
+    model_id: Option<String>,
+    use_gpu: Option<bool>,
+) -> Result<CommandResult<String>, String> {
+    if state.recording_handle.lock().unwrap().is_some() {
+        return Ok(CommandResult::err(
+            "already_recording",
+            "Cannot switch models while recording",
+        ));
+    }
+    if state
+        .engine_loading
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return Ok(CommandResult::err(
+            "engine_loading",
+            "A model is already loading — please wait",
+        ));
+    }
+    let whisper = state.whisper.clone();
+    let parakeet = state.parakeet.clone();
+    let granite = state.cohere.clone();
+    let qwen3 = state.qwen3.clone();
+    let active = state.active_engine.clone();
+    let force_cpu = !use_gpu.unwrap_or(true);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        whisper.lock().map_err(|e| e.to_string())?.unload();
+        parakeet.lock().map_err(|e| e.to_string())?.unload();
+        granite.lock().map_err(|e| e.to_string())?.unload();
+        let message = qwen3
+            .lock()
+            .map_err(|e| e.to_string())?
+            .initialize(model_id.as_deref(), force_cpu)?;
+        *active.lock().map_err(|e| e.to_string())? = ASREngine::Qwen3;
+        Ok::<_, String>(message)
+    })
+    .await
+    .map_err(|e| e.to_string());
+    state.engine_loading.store(false, Ordering::Relaxed);
+    match result {
+        Ok(Ok(message)) => {
+            state.model_loaded.store(true, Ordering::Relaxed);
+            state.touch_activity();
+            tray::update_tray_model_item(&app, true);
+            Ok(CommandResult::ok(message))
+        }
+        Ok(Err(error)) => {
+            tray::reconcile_model_loaded_tray(&app, &state);
+            Ok(CommandResult::err("model_load_failed", error))
+        }
+        Err(error) => Ok(CommandResult::err("model_load_failed", error)),
+    }
 }

@@ -6,6 +6,7 @@ use taurscribe_lib::audio_decode;
 use taurscribe_lib::audio_preprocess;
 use taurscribe_lib::parakeet::ParakeetManager;
 use taurscribe_lib::parakeet_loaders::ParakeetLoadPath;
+use taurscribe_lib::qwen3::Qwen3Manager;
 use taurscribe_lib::whisper::WhisperManager;
 use taurscribe_lib::utils::clean_transcript;
 
@@ -91,6 +92,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut full = String::new();
             // 180-second chunks
             for chunk in mono.chunks(16000 * 180) {
+                let part = mgr.transcribe_audio_data(chunk, None)?;
+                if !part.trim().is_empty() {
+                    full.push_str(&part);
+                    full.push(' ');
+                }
+            }
+            clean_transcript(&full)
+        }
+        "qwen3" => {
+            let qwen_model = if model_id.is_empty() {
+                None
+            } else {
+                Some(model_id.as_str())
+            };
+            let mut mgr = Qwen3Manager::new();
+            mgr.initialize(qwen_model, force_cpu)?;
+            let mut full = String::new();
+            // 15-second chunks mirrors live Qwen3 rolling window in recording.rs
+            for chunk in mono.chunks(16000 * 15) {
                 let part = mgr.transcribe_audio_data(chunk, None)?;
                 if !part.trim().is_empty() {
                     full.push_str(&part);

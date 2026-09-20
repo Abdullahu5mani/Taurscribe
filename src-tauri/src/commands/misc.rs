@@ -540,6 +540,11 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
             let status = cohere.get_status();
             ("granite".to_string(), status.model_id, status.backend)
         }
+        ASREngine::Qwen3 => {
+            let qwen3 = state.qwen3.lock().unwrap();
+            let status = qwen3.get_status();
+            ("qwen3".to_string(), status.model_id, status.backend)
+        }
     };
 
     HardwareDiagnostics {
@@ -1423,6 +1428,7 @@ mod hardware_diagnostics_tests {
     use super::*;
     use crate::cohere::CohereManager;
     use crate::parakeet::ParakeetManager;
+    use crate::qwen3::Qwen3Manager;
     use crate::vad::VADManager;
     use crate::whisper::WhisperManager;
 
@@ -1433,6 +1439,7 @@ mod hardware_diagnostics_tests {
             ParakeetManager::new(),
             VADManager::new().expect("vad init"),
             CohereManager::new(),
+            Qwen3Manager::new(),
         );
         let diag = get_hardware_diagnostics_blocking(&state);
         println!("\n=== HARDWARE DIAGNOSTICS REPORT ===");
@@ -1470,6 +1477,7 @@ mod auto_unload_tests {
     use super::*;
     use crate::cohere::CohereManager;
     use crate::parakeet::ParakeetManager;
+    use crate::qwen3::Qwen3Manager;
     use crate::vad::VADManager;
     use crate::whisper::WhisperManager;
     use std::sync::atomic::Ordering;
@@ -1480,6 +1488,7 @@ mod auto_unload_tests {
             ParakeetManager::new(),
             VADManager::new().expect("vad init"),
             CohereManager::new(),
+            Qwen3Manager::new(),
         )
     }
 

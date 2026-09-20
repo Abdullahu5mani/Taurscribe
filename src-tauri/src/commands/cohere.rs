@@ -77,6 +77,7 @@ pub async fn init_granite(
     let whisper_arc = state.whisper.clone();
     let parakeet_arc = state.parakeet.clone();
     let cohere_arc = state.cohere.clone();
+    let qwen3_arc = state.qwen3.clone();
     let active_engine_arc = state.active_engine.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -87,6 +88,7 @@ pub async fn init_granite(
             .get_status();
         let whisper_loaded = whisper_arc.lock().unwrap().get_current_model().is_some();
         let parakeet_loaded = parakeet_arc.lock().unwrap().get_status().loaded;
+        let qwen3_loaded = qwen3_arc.lock().unwrap().get_status().loaded;
         let active = *active_engine_arc.lock().unwrap();
 
         // 3. Skip only if the same on-disk bundle + CPU/GPU mode is already active.
@@ -100,6 +102,7 @@ pub async fn init_granite(
             && active == ASREngine::Granite
             && !whisper_loaded
             && !parakeet_loaded
+            && !qwen3_loaded
             && cohere_on_cpu == want_cpu
             && target_logical.is_some()
             && cohere_status.model_id.as_deref() == target_logical.as_deref()
@@ -116,6 +119,10 @@ pub async fn init_granite(
         if parakeet_loaded {
             println!("[GRANITE] Unloading Parakeet before switching to Granite");
             parakeet_arc.lock().unwrap().unload();
+        }
+        if qwen3_loaded {
+            println!("[GRANITE] Unloading Qwen3 before switching to Granite");
+            qwen3_arc.lock().unwrap().unload();
         }
 
         // 5. Load Granite Speech.

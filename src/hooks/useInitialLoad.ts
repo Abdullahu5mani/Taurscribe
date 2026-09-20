@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import { MODELS } from "../components/settings/types";
 import type { DownloadableModel } from "../components/settings/types";
-import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "./useModels";
+import type { ModelInfo, ParakeetModelInfo, CohereModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import type { CommandResult, EngineSelectionState } from "../types/session";
 
@@ -15,6 +15,8 @@ interface UseInitialLoadParams {
     setCurrentParakeetModel: (id: string | null) => void;
     setCohereModels: (models: CohereModelInfo[]) => void;
     setCurrentCohereModel: (id: string | null) => void;
+    setQwen3Models: (models: Qwen3ModelInfo[]) => void;
+    setCurrentQwen3Model: (id: string | null) => void;
     setSettingsModels: React.Dispatch<React.SetStateAction<DownloadableModel[]>>;
 
     // Engine/loading state setters
@@ -50,6 +52,8 @@ export function useInitialLoad({
     setCurrentParakeetModel,
     setCohereModels,
     setCurrentCohereModel,
+    setQwen3Models,
+    setCurrentQwen3Model,
     setSettingsModels,
     setLoadedEngine,
     setActiveEngine,
@@ -102,6 +106,10 @@ export function useInitialLoad({
                 if (cancelled) return;
                 setCohereModels(gModels);
 
+                const qModels = (await invoke("list_qwen3_models")) as Qwen3ModelInfo[];
+                if (cancelled) return;
+                setQwen3Models(qModels);
+
                 const engineState = await invoke<EngineSelectionState>("get_engine_selection_state");
                 if (cancelled) return;
 
@@ -114,10 +122,14 @@ export function useInitialLoad({
                 const validCohereModel = engineState.active_engine === "granite" && engineState.selected_model_id && gModels.some((m) => m.id === engineState.selected_model_id)
                     ? engineState.selected_model_id
                     : gModels[0]?.id ?? null;
+                const validQwen3Model = engineState.active_engine === "qwen3" && engineState.selected_model_id && qModels.some((m) => m.id === engineState.selected_model_id)
+                    ? engineState.selected_model_id
+                    : qModels[0]?.id ?? null;
 
                 setCurrentModel(validWhisperModel);
                 setCurrentParakeetModel(validParakeetModel);
                 setCurrentCohereModel(validCohereModel);
+                setCurrentQwen3Model(validQwen3Model);
                 if (engineState.loaded_engine) {
                     setLoadedEngine(engineState.loaded_engine);
                 }
@@ -240,6 +252,33 @@ export function useInitialLoad({
                         } catch (e) {
                             if (cancelled) return;
                             setHeaderStatus(`Failed to auto-load Granite Speech: ${e}`, 5000);
+                        } finally {
+                            if (!cancelled) {
+                                isLoadingRef.current = false;
+                                setIsLoading(false);
+                                setLoadingMessage("");
+                            }
+                        }
+                    } else if (savedEngine === "qwen3" && qModels.length > 0) {
+                        const savedQwen3 = await loadedStore.get<string>("qwen3_model");
+                        const target = savedQwen3 && qModels.some(model => model.id === savedQwen3)
+                            ? savedQwen3
+                            : qModels[0].id;
+                        isLoadingRef.current = true;
+                        setIsLoading(true);
+                        setLoadingMessage("Loading Qwen3-ASR...");
+                        try {
+                            const result = await invoke<CommandResult<string>>("init_qwen3", {
+                                modelId: target,
+                                useGpu: useGpuPref,
+                            });
+                            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Qwen3-ASR");
+                            if (cancelled) return;
+                            setCurrentQwen3Model(target);
+                            setLoadedEngine("qwen3");
+                            setHeaderStatus("Qwen3-ASR model loaded");
+                        } catch (e) {
+                            if (!cancelled) setHeaderStatus(`Failed to auto-load Qwen3-ASR: ${e}`, 5000);
                         } finally {
                             if (!cancelled) {
                                 isLoadingRef.current = false;

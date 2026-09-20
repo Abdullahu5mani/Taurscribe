@@ -73,15 +73,20 @@ pub async fn transcribe_file(
     state: State<'_, AudioState>,
     path: String,
 ) -> Result<FileTranscriptionResult, String> {
+    if state.engine_loading.load(Ordering::Acquire) {
+        return Err("ASR model is still loading; wait until the engine is ready before transcribing a file".to_string());
+    }
+
     let cancel = register_cancel_flag(&path);
     let whisper = state.whisper.clone();
     let parakeet = state.parakeet.clone();
     let cohere = state.cohere.clone();
+    let qwen3 = state.qwen3.clone();
     let active_engine = state.active_engine.lock().unwrap().clone();
     let path_for_task = path.clone();
     let app_for_task = app.clone();
 
-    let join_result = tauri::async_runtime::spawn_blocking(move || {
+    let res = tauri::async_runtime::spawn_blocking(move || {
         transcribe_file_blocking(
             &app_for_task,
             &path_for_task,
@@ -89,20 +94,23 @@ pub async fn transcribe_file(
             whisper,
             parakeet,
             cohere,
+            qwen3,
             cancel,
         )
     })
-    .await;
+    .await
+    .map_err(|e| format!("transcribe_file task failed: {}", e))
+    .and_then(|r| r);
 
     unregister_cancel_flag(&path);
 
-    let res = join_result
-        .map_err(|e| format!("transcribe_file task failed: {}", e))
-        .and_then(|r| r);
-
     state.touch_activity();
 
-    if state.auto_unload_seconds.load(std::sync::atomic::Ordering::Relaxed) == 1 {
+    if state
+        .auto_unload_seconds
+        .load(std::sync::atomic::Ordering::Relaxed)
+        == 1
+    {
         if let Ok(unloaded) = state.unload_all_loaded_asr() {
             if !unloaded.is_empty() {
                 crate::memory::trim_process_memory();
@@ -161,6 +169,7 @@ fn transcribe_file_blocking(
     whisper: Arc<Mutex<crate::whisper::WhisperManager>>,
     parakeet: Arc<Mutex<crate::parakeet::ParakeetManager>>,
     cohere: Arc<Mutex<crate::cohere::CohereManager>>,
+    qwen3: Arc<Mutex<crate::qwen3::Qwen3Manager>>,
     cancel: Arc<AtomicBool>,
 ) -> Result<FileTranscriptionResult, String> {
     let transcribe_start = std::time::Instant::now();
@@ -266,8 +275,17 @@ fn transcribe_file_blocking(
 
     emit_progress(app, path, 50, "transcribing", None);
 
-    let (custom_vocab, context_bias_enabled) = crate::context::load_custom_vocabulary_from_settings();
-    let dynamic_prompt = crate::context::build_dynamic_prompt(&custom_vocab, context_bias_enabled);
+    let (custom_vocab, context_bias_enabled) =
+        crate::context::load_custom_vocabulary_from_settings();
+    emit_progress(app, path, 51, "transcribing", None);
+    // File jobs run on a worker thread. On macOS, active-window context uses
+    // the Accessibility API and must not be queried from this thread. Custom
+    // vocabulary remains safe and still provides the intended decoder bias.
+    let dynamic_prompt = crate::context::build_dynamic_prompt(&custom_vocab, false);
+    if context_bias_enabled {
+        println!("[FILE_TRANSCRIBE] Active-window context bias skipped for worker-thread file transcription");
+    }
+    emit_progress(app, path, 52, "transcribing", None);
 
     let text = match active_engine {
         // Whisper: chunked so the user can cancel between segments (long files).
@@ -295,9 +313,18 @@ fn transcribe_file_blocking(
                         ),
                     ],
                 );
-                let mut w = whisper
-                    .lock()
-                    .map_err(|_| "Whisper lock poisoned".to_string())?;
+                let mut w = whisper.try_lock().map_err(|_| {
+                    "Whisper engine is busy loading or processing another request".to_string()
+                })?;
+                emit_progress(app, path, 53, "transcribing", None);
+                #[cfg(target_os = "macos")]
+                let t = {
+                    if i == 0 {
+                        w.clear_context();
+                    }
+                    w.transcribe_chunk(raw_chunk, 16000)?
+                };
+                #[cfg(not(target_os = "macos"))]
                 let t = w.transcribe_audio_data(raw_chunk, dynamic_prompt.as_deref())?;
                 if !t.trim().is_empty() {
                     parts.push(t.trim().to_string());
@@ -307,12 +334,15 @@ fn transcribe_file_blocking(
             parts.join(" ")
         }
 
-        // Parakeet and Granite are chunk-based engines - feed in engine-sized windows.
-        ASREngine::Parakeet | ASREngine::Granite => {
+        // Chunk-based engines use bounded windows so cancellation stays responsive.
+        ASREngine::Parakeet | ASREngine::Granite | ASREngine::Qwen3 => {
             const PARAKEET_CHUNK_SAMPLES: usize = 16000 * 15;
             const COHERE_CHUNK_SAMPLES: usize = 16000 * 35;
+            const QWEN3_CHUNK_SAMPLES: usize = 16000 * 60;
             let chunk_samples = if matches!(active_engine, ASREngine::Granite) {
                 COHERE_CHUNK_SAMPLES
+            } else if matches!(active_engine, ASREngine::Qwen3) {
+                QWEN3_CHUNK_SAMPLES
             } else {
                 PARAKEET_CHUNK_SAMPLES
             };
@@ -340,16 +370,22 @@ fn transcribe_file_blocking(
 
                 let t = match active_engine {
                     ASREngine::Parakeet => {
-                        let mut p = parakeet
-                            .lock()
-                            .map_err(|_| "Parakeet lock poisoned".to_string())?;
+                        let mut p = parakeet.try_lock().map_err(|_| {
+                            "Parakeet engine is busy loading or processing another request".to_string()
+                        })?;
                         p.transcribe_chunk(raw_chunk, 16000)?
                     }
                     ASREngine::Granite => {
-                        let mut g = cohere
-                            .lock()
-                            .map_err(|_| "Granite lock poisoned".to_string())?;
+                        let mut g = cohere.try_lock().map_err(|_| {
+                            "Granite engine is busy loading or processing another request".to_string()
+                        })?;
                         g.transcribe_chunk(raw_chunk, 16000)?
+                    }
+                    ASREngine::Qwen3 => {
+                        let mut q = qwen3.try_lock().map_err(|_| {
+                            "Qwen3 engine is busy loading or processing another request".to_string()
+                        })?;
+                        q.transcribe_chunk(raw_chunk, 16000, dynamic_prompt.as_deref())?
                     }
                     _ => unreachable!(),
                 };

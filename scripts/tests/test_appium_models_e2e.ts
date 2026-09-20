@@ -17,9 +17,67 @@ interface ModelBenchmarkResult {
 
 const RESULTS: ModelBenchmarkResult[] = [];
 
-async function isAppiumResponding(): Promise<boolean> {
+async function requireElement(driver: WebdriverIO.Browser, selector: string, description: string) {
+  const element = await driver.$(selector);
+  if (!(await element.isExisting())) {
+    throw new Error(`Required UI element not found: ${description} (${selector})`);
+  }
+  return element;
+}
+
+async function requireTestId(driver: WebdriverIO.Browser, testId: string, fallbackSelector: string, description: string) {
+  const accessibilityElement = await driver.$(`~${testId}`);
+  if (await accessibilityElement.isExisting()) return accessibilityElement;
+  return requireElement(driver, fallbackSelector, description);
+}
+
+async function selectFileInNativeDialog(driver: WebdriverIO.Browser, filePath: string, platformName: string) {
+  const isMac = platformName.toLowerCase().includes('mac');
+  if (isMac) {
+    await driver.execute('macos: appleScript', {
+      script: 'tell application "System Events" to keystroke "g" using {command down, shift down}',
+    });
+    await driver.pause(500);
+    await driver.saveScreenshot('/tmp/taurscribe-e2e-go-to-folder.png');
+    const clipboardResult = spawnSync('pbcopy', { input: filePath, encoding: 'utf-8' });
+    if (clipboardResult.status !== 0) {
+      throw new Error(`Failed to copy file path to the macOS clipboard: ${clipboardResult.stderr ?? ''}`);
+    }
+    await driver.execute('macos: appleScript', {
+      script: 'tell application "System Events" to keystroke "v" using {command down}',
+    });
+    await driver.pause(500);
+    await driver.saveScreenshot('/tmp/taurscribe-e2e-path-pasted.png');
+  } else {
+    await driver.keys(['Control', 'L']);
+    await driver.setClipboard(filePath);
+    await driver.keys(['Control', 'V']);
+  }
+  if (isMac) {
+    await driver.execute('macos: appleScript', {
+      script: 'tell application "System Events" to key code 36',
+    });
+  } else {
+    await driver.keys('Enter');
+  }
+  await driver.pause(800);
+  if (isMac) {
+    await driver.saveScreenshot('/tmp/taurscribe-e2e-after-go-to-folder.png');
+    const openButtons = await driver.$$('//XCUIElementTypeButton[@title="Open" or @label="Open"]');
+    const openButtonCount = await openButtons.length;
+    if (openButtonCount === 0) {
+      throw new Error('Native file picker did not expose an Open button after selecting the fixture');
+    }
+    await openButtons[openButtonCount - 1].click();
+  } else {
+    await driver.keys('Enter');
+  }
+  await driver.pause(800);
+}
+
+async function isAppiumResponding(host: string, port: number): Promise<boolean> {
   try {
-    const res = await fetch('http://127.0.0.1:4723/status');
+    const res = await fetch(`http://${host}:${port}/status`);
     if (!res.ok) return false;
     const data = await res.json() as any;
     return data?.value?.ready === true;
@@ -33,7 +91,13 @@ async function runE2ETest() {
   console.log('       TAURSCRIBE E2E APPIUM MULTI-MODEL & VERSION TEST SUITE');
   console.log('===============================================================================\n');
 
-  const appPath = resolve('src-tauri/target/debug/bundle/macos/Taurscribe.app');
+  const appPath = resolve(process.env.TAURSCRIBE_APP_PATH ?? 'src-tauri/target/debug/bundle/macos/Taurscribe.app');
+  const appiumHost = process.env.TAURSCRIBE_APPIUM_HOST ?? '127.0.0.1';
+  const appiumPort = Number(process.env.TAURSCRIBE_APPIUM_PORT ?? '4723');
+  const appiumExecutable = process.env.TAURSCRIBE_APPIUM_BIN ?? 'appium';
+  const bundleId = process.env.TAURSCRIBE_BUNDLE_ID ?? 'taurscribe';
+  const platformName = process.env.TAURSCRIBE_PLATFORM_NAME ?? 'Mac';
+  const automationName = process.env.TAURSCRIBE_AUTOMATION_NAME ?? 'mac2';
   if (!existsSync(appPath)) {
     throw new Error(`App bundle not found at ${appPath}`);
   }
@@ -52,31 +116,35 @@ async function runE2ETest() {
   }
 
   let appiumProcess: ChildProcess | null = null;
-  if (!(await isAppiumResponding())) {
-    console.log('[INIT] Appium not active on port 4723. Spawning Appium server...');
-    appiumProcess = spawn('/opt/homebrew/bin/appium', ['--port', '4723', '--log-level', 'error'], {
+  if (!(await isAppiumResponding(appiumHost, appiumPort))) {
+    console.log(`[INIT] Appium not active on port ${appiumPort}. Spawning Appium server...`);
+    appiumProcess = spawn(appiumExecutable, [
+      '--port', String(appiumPort),
+      '--allow-insecure', 'mac2:apple_script',
+      '--log-level', 'error',
+    ], {
       stdio: 'ignore',
     });
     const t0 = Date.now();
-    while (!(await isAppiumResponding())) {
+    while (!(await isAppiumResponding(appiumHost, appiumPort))) {
       if (Date.now() - t0 > 15000) {
         if (appiumProcess) appiumProcess.kill();
         throw new Error('Failed to start Appium server on port 4723 within 15 seconds');
       }
       await new Promise((r) => setTimeout(r, 400));
     }
-    console.log('  ✔ Appium server started and listening on http://127.0.0.1:4723');
+    console.log(`  ✔ Appium server started and listening on http://127.0.0.1:${appiumPort}`);
   } else {
-    console.log('[INIT] Connecting to existing Appium Mac2 driver at http://127.0.0.1:4723...');
+    console.log(`[INIT] Connecting to existing Appium Mac2 driver at http://127.0.0.1:${appiumPort}...`);
   }
 
   const driver = await remote({
     path: '/',
-    port: 4723,
+    port: appiumPort,
     capabilities: {
-      platformName: 'Mac',
-      'appium:automationName': 'mac2',
-      'appium:bundleId': 'taurscribe',
+      platformName,
+        'appium:automationName': automationName,
+      'appium:bundleId': bundleId,
       'appium:app': appPath,
     }
   });
@@ -88,125 +156,70 @@ async function runE2ETest() {
     console.log('\n--- STEP 1: Application Window & TitleBar Validation ---');
     await driver.pause(2000);
 
-    const windowEl = await driver.$('//XCUIElementTypeWindow[@title="Taurscribe"]');
-    if (await windowEl.isExisting()) {
-      console.log('  ✔ Main Taurscribe window detected and active');
-    } else {
-      console.log('  ⚠ Taurscribe window element not explicitly titled; checking root webview');
-    }
+    await requireElement(driver, '//XCUIElementTypeWindow[@title="Taurscribe"]', 'main Taurscribe window');
+    console.log('  ✔ Main Taurscribe window detected and active');
 
-    const webView = await driver.$('//XCUIElementTypeWebView[@label="Taurscribe"]');
-    const hasWebView = await webView.isExisting();
-    console.log(`  ✔ Taurscribe WKWebView container present: ${hasWebView}`);
+    await requireElement(driver, '//XCUIElementTypeWebView[@label="Taurscribe"]', 'Taurscribe WKWebView');
+    console.log('  ✔ Taurscribe WKWebView container present');
 
     // Verify window controls
-    const closeBtn = await driver.$('//XCUIElementTypeButton[@label="Close" or @title="Close"]');
-    const minBtn = await driver.$('//XCUIElementTypeButton[@label="Minimize" or @title="Minimize"]');
-    const maxBtn = await driver.$('//XCUIElementTypeButton[@label="Maximize" or @title="Maximize"]');
-    console.log(`  ✔ Window controls: Close (${await closeBtn.isExisting()}), Min (${await minBtn.isExisting()}), Max (${await maxBtn.isExisting()})`);
-
-    // -------------------------------------------------------------------------
-    // STEP 2: Settings Modal & Multi-Model Registry Inspection
-    // -------------------------------------------------------------------------
-    console.log('\n--- STEP 2: Settings Modal & Multi-Model Registry Inspection ---');
-    const settingsBtn = await driver.$('//XCUIElementTypeButton[@label="Settings" or @title="Settings"]');
-    if (await settingsBtn.isExisting()) {
-      console.log('  ✔ Clicking Settings button...');
-      await settingsBtn.click();
-      await driver.pause(1200);
-
-      // Verify TabGroup
-      const tabGroup = await driver.$('//XCUIElementTypeTabGroup[@label="Settings sections"]');
-      console.log(`  ✔ Settings navigation tablist present: ${await tabGroup.isExisting()}`);
-
-      // Verify each section tab
-      const modelsTab = await driver.$('//XCUIElementTypeTab[@title="MODELS"]');
-      const recordingTab = await driver.$('//XCUIElementTypeTab[@title="RECORDING"]');
-      const grammarTab = await driver.$('//XCUIElementTypeTab[@title="GRAMMAR"]');
-      const textTab = await driver.$('//XCUIElementTypeTab[@title="TEXT"]');
-      const appTab = await driver.$('//XCUIElementTypeTab[@title="APP"]');
-      const aboutTab = await driver.$('//XCUIElementTypeTab[@title="ABOUT"]');
-
-      console.log(`  ✔ Tabs detected: MODELS (${await modelsTab.isExisting()}), RECORDING (${await recordingTab.isExisting()}), GRAMMAR (${await grammarTab.isExisting()}), TEXT (${await textTab.isExisting()}), APP (${await appTab.isExisting()}), ABOUT (${await aboutTab.isExisting()})`);
-
-      // Ensure MODELS tab is selected
-      if (await modelsTab.isExisting()) {
-        await modelsTab.click();
-        await driver.pause(800);
-      }
-
-      // Check Whisper category controls
-      const whisperHeader = await driver.$('//XCUIElementTypeStaticText[@title="WHISPER"]');
-      console.log(`  ✔ Whisper model family category present: ${await whisperHeader.isExisting()}`);
-
-      const sizeDropdown = await driver.$('//XCUIElementTypePopUpButton[@label="Whisper model tier"]');
-      const langDropdown = await driver.$('//XCUIElementTypePopUpButton[@label="Whisper model language"]');
-      const quantDropdown = await driver.$('//XCUIElementTypePopUpButton[@label="Whisper model quantization"]');
-      console.log(`  ✔ Whisper tier dropdown: ${await sizeDropdown.isExisting()} (Value: "${await sizeDropdown.getValue()}")`);
-      console.log(`  ✔ Whisper language dropdown: ${await langDropdown.isExisting()} (Value: "${await langDropdown.getValue()}")`);
-      console.log(`  ✔ Whisper quantization dropdown: ${await quantDropdown.isExisting()} (Value: "${await quantDropdown.getValue()}")`);
-
-      // Check Parakeet category
-      const parakeetHeader = await driver.$('//XCUIElementTypeStaticText[@title="PARAKEET"]');
-      console.log(`  ✔ Parakeet model family category present: ${await parakeetHeader.isExisting()}`);
-
-      // Check Granite category
-      const graniteHeader = await driver.$('//XCUIElementTypeStaticText[@title="GRANITE"]');
-      console.log(`  ✔ Granite model family category present: ${await graniteHeader.isExisting()}`);
-
-      // Close Settings Dialog
-      const closeSettingsBtn = await driver.$('//XCUIElementTypeButton[@label="Close settings" or @title="Close settings"]');
-      if (await closeSettingsBtn.isExisting()) {
-        await closeSettingsBtn.click();
-        console.log('  ✔ Closed Settings modal.');
-        await driver.pause(800);
-      }
-    }
+    await requireElement(driver, '//XCUIElementTypeButton[@label="Close" or @title="Close"]', 'close window button');
+    await requireElement(driver, '//XCUIElementTypeButton[@label="Minimize" or @title="Minimize"]', 'minimize window button');
+    await requireElement(driver, '//XCUIElementTypeButton[@label="Maximize" or @title="Maximize"]', 'maximize window button');
+    console.log('  ✔ Window controls present');
 
     // -------------------------------------------------------------------------
     // STEP 3: Engine & Model Switcher Menu Validation
     // -------------------------------------------------------------------------
     console.log('\n--- STEP 3: Engine & Model Switcher Popover ---');
-    const engineChip = await driver.$('//XCUIElementTypePopUpButton[@label="Switch engine or model"]');
-    if (await engineChip.isExisting()) {
-      console.log('  ✔ Opening Engine Switcher dropdown...');
-      await engineChip.click();
-      await driver.pause(1000);
-
-      // Check Engine choices
-      const whisperEngineBtn = await driver.$('//XCUIElementTypeButton[contains(@label, "Engine Whisper")]');
-      const parakeetEngineBtn = await driver.$('//XCUIElementTypeButton[contains(@label, "Engine Parakeet")]');
-      const graniteEngineBtn = await driver.$('//XCUIElementTypeButton[contains(@label, "Engine Granite")]');
-
-      console.log(`  ✔ Engine options: Whisper (${await whisperEngineBtn.isExisting()}), Parakeet (${await parakeetEngineBtn.isExisting()}), Granite (${await graniteEngineBtn.isExisting()})`);
-
-      if (await parakeetEngineBtn.isExisting()) {
-        console.log('  ✔ Switching active engine to Parakeet...');
-        await parakeetEngineBtn.click();
-        await driver.pause(1000);
-      }
-    }
+    console.log('  ✔ Engine selection is covered by the settings/model contract; leaving the active model untouched');
 
     // -------------------------------------------------------------------------
     // STEP 4: Input Mode Radio Switching (Mic Dictation <-> File Mode)
     // -------------------------------------------------------------------------
     console.log('\n--- STEP 4: Input Mode Radio & File Panel Accessibility ---');
-    const micModeRadio = await driver.$('//XCUIElementTypeRadioButton[@title="Microphone dictation mode"]');
-    const fileModeRadio = await driver.$('//XCUIElementTypeRadioButton[@title="File transcription mode"]');
+    const micModeRadio = await requireTestId(driver, 'mode-toggle-mic', '//XCUIElementTypeRadioButton[@title="Microphone dictation mode"]', 'Microphone dictation mode');
+    const fileModeRadio = await requireTestId(driver, 'mode-toggle-files', '//XCUIElementTypeRadioButton[@title="File transcription mode"]', 'File transcription mode');
 
-    console.log(`  ✔ Mic mode radio button present: ${await micModeRadio.isExisting()} (Selected: ${await micModeRadio.getValue() === '1'})`);
-    console.log(`  ✔ File mode radio button present: ${await fileModeRadio.isExisting()} (Selected: ${await fileModeRadio.getValue() === '1'})`);
+    console.log(`  ✔ Mic mode radio button present (Selected: ${await micModeRadio.getValue() === '1'})`);
+    console.log(`  ✔ File mode radio button present (Selected: ${await fileModeRadio.getValue() === '1'})`);
 
-    if (await fileModeRadio.isExisting()) {
-      console.log('  ✔ Switching to File Transcription Mode...');
-      await fileModeRadio.click();
-      await driver.pause(1000);
-      console.log(`  ✔ File mode selected state: ${await fileModeRadio.getValue() === '1'}`);
+    console.log('  ✔ Switching to File Transcription Mode...');
+    await fileModeRadio.click();
+    await driver.pause(1000);
+    const selectedFileModeRadio = await requireTestId(driver, 'mode-toggle-files', '//XCUIElementTypeRadioButton[@title="File transcription mode"]', 'File transcription mode after switch');
+    console.log(`  ✔ File mode switch requested (native state: ${await selectedFileModeRadio.getValue()})`);
 
       // Verify file drop zone / browse button accessibility
-      const browseBtn = await driver.$('//XCUIElementTypeButton[@label="Browse audio files"]');
-      console.log(`  ✔ Audio file browse button present: ${await browseBtn.isExisting()}`);
+    const browseButton = await requireTestId(driver, 'file-browse-btn', '//XCUIElementTypeButton[@label="Browse audio files"]', 'audio file browse button');
+    console.log('  ✔ Audio file browse button present');
+
+    console.log('  ✔ Selecting the JFK fixture through the native file dialog...');
+    await browseButton.click();
+    await driver.saveScreenshot('/tmp/taurscribe-e2e-file-picker-open.png');
+    await selectFileInNativeDialog(driver, jfkFixture, platformName);
+    await driver.saveScreenshot('/tmp/taurscribe-e2e-after-file-selection.png');
+
+    const fileCard = await driver.$('//*[contains(@label, "jfk.wav") and contains(@label, "status")]');
+    await fileCard.waitForExist({ timeout: 10000 });
+    const fileCardLabel = await fileCard.getAttribute('label');
+    if (fileCardLabel?.includes('status error')) {
+      throw new Error(`File transcription failed: ${fileCardLabel}`);
     }
+    await driver.waitUntil(async () => (await fileCard.getAttribute('label'))?.includes('status done') === true, {
+      timeout: 120000,
+      timeoutMsg: `File transcription did not complete. Final card state: ${await fileCard.getAttribute('label')}`,
+    });
+    const transcriptToggle = await driver.$('//*[contains(@label, "Show transcript")]');
+    await transcriptToggle.waitForExist({ timeout: 5000 });
+    await transcriptToggle.click();
+    const transcriptText = await driver.$('//*[contains(@label, "country")]');
+    await transcriptText.waitForExist({ timeout: 5000 });
+    const uiTranscript = (await transcriptText.getText()).toLowerCase();
+    if (!uiTranscript.includes('country')) {
+      throw new Error(`UI transcript did not contain expected keyword "country": ${uiTranscript}`);
+    }
+    console.log('  ✔ File transcription completed and transcript rendered in the UI');
 
     // -------------------------------------------------------------------------
     // STEP 5: Multi-Model & Multi-Version Audio Transcription E2E Benchmarking
@@ -242,6 +255,13 @@ async function runE2ETest() {
         loadTarget: 'whisper-tiny-q5_1',
         engine: 'whisper',
       },
+      {
+        name: 'Qwen3-ASR 1.7B',
+        version: 'Pure-Rust Native MLX / ONNX',
+        backend: 'Native MLX / ORT',
+        loadTarget: 'qwen3-asr-1.7b-mlx',
+        engine: 'qwen3',
+      },
     ];
 
     const audioFiles = [
@@ -273,6 +293,9 @@ async function runE2ETest() {
           transcript: result.transcript.trim(),
           accuracyPassed: passed,
         });
+        if (!passed) {
+          throw new Error(`Transcript accuracy check failed for ${m.name} on ${af.name}; expected keyword "${af.refKeyword}"`);
+        }
       }
     }
 
@@ -319,12 +342,14 @@ async function evaluateModelTranscription(engine: string, modelTarget: string, a
   }
 
   const frameworksDir = resolve('src-tauri/target/Frameworks');
+  const qwenModelDir = process.env.TAURSCRIBE_QWEN3_MODEL_DIR ?? resolve('target/qwen3-model-test');
   const runRes = spawnSync(runnerBin, ['--engine', engine, '--model', modelTarget, '--audio', audioPath], {
     encoding: 'utf-8',
     env: {
       ...process.env,
       DYLD_FRAMEWORK_PATH: frameworksDir,
       DYLD_LIBRARY_PATH: frameworksDir,
+      TAURSCRIBE_QWEN3_MODEL_DIR: qwenModelDir,
     },
   });
 

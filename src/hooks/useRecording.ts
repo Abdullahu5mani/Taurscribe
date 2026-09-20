@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "./useModels";
+import type { ModelInfo, ParakeetModelInfo, CohereModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
@@ -11,9 +11,11 @@ interface UseRecordingParams {
     models: ModelInfo[];
     parakeetModels: ParakeetModelInfo[];
     cohereModels: CohereModelInfo[];
+    qwen3Models: Qwen3ModelInfo[];
     currentModel: string | null;
     currentParakeetModel: string | null;
     currentCohereModel: string | null;
+    currentQwen3Model: string | null;
     asrBackend: "gpu" | "cpu";
     setCurrentModel: (id: string) => void;
     setLoadedEngine: (engine: ASREngine) => void;
@@ -70,9 +72,11 @@ export function useRecording({
     models,
     parakeetModels,
     cohereModels,
+    qwen3Models,
     currentModel,
     currentParakeetModel,
     currentCohereModel,
+    currentQwen3Model,
     asrBackend,
     setCurrentModel,
     setLoadedEngine,
@@ -333,6 +337,32 @@ export function useRecording({
             }
         }
 
+        if (currentEngine === "qwen3") {
+            if (qwen3Models.length === 0) {
+                setHeaderStatus("No Qwen3-ASR model installed. Download it from Settings.", 5000);
+                setIsSettingsOpen(true);
+                return;
+            }
+            try {
+                const target = currentQwen3Model || qwen3Models[0].id;
+                const status = await invoke<{ loaded: boolean; model_id?: string }>("get_qwen3_status");
+                if (!status.loaded || status.model_id !== target) {
+                    setHeaderStatus("Loading Qwen3-ASR...", 60_000);
+                    setSessionPhase?.("loading_model");
+                    const result = await invoke<CommandResult<string>>("init_qwen3", { modelId: target, useGpu: asrBackend === "gpu" });
+                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Qwen3-ASR");
+                    setLoadedEngine("qwen3");
+                    setHeaderStatus("Qwen3-ASR loaded");
+                    showNotice(null);
+                }
+            } catch (e) {
+                const error = e as { code?: string; message?: string };
+                setHeaderStatus("Failed to initialize Qwen3-ASR: " + error.message, 5000);
+                setSessionPhase?.("error");
+                return;
+            }
+        }
+
         try {
             await setTrayState("recording");
             resetRecordingSession();
@@ -557,7 +587,8 @@ export function useRecording({
                 const activeModelId =
                     currentEngine === "whisper" ? currentModel :
                     currentEngine === "parakeet" ? currentParakeetModel :
-                    currentEngine === "granite" ? currentCohereModel : null;
+                    currentEngine === "granite" ? currentCohereModel :
+                    currentEngine === "qwen3" ? currentQwen3Model : null;
                 await invoke("save_transcript_history", {
                     transcript: finalTrans,
                     engine: currentEngine,

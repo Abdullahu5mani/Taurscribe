@@ -96,6 +96,63 @@ fn local_single_file(
     }
 }
 
+/// Qwen3-ASR ONNX bundle (cross-platform: CPU, CUDA, DirectML).
+///
+/// Hosted on Abdullahu5mani/qwen3-asr-1.7b-onnx — exported from the official
+/// `Qwen/Qwen3-ASR-1.7B` checkpoint via `optimum-cli export onnx`.
+/// Contains `encoder.onnx` (AuT audio transformer) and `decoder.onnx`
+/// (Qwen3-1.4B autoregressive LLM), plus the tiktoken-compatible tokenizer.
+fn qwen3_asr_onnx_files() -> Vec<ModelFile> {
+    vec![
+        ModelFile {
+            filename: "encoder.onnx",
+            remote_path: "encoder.onnx",
+            // SHA-256 to be filled in once the ONNX export is hosted.
+            sha1: "",
+        },
+        ModelFile {
+            filename: "decoder.onnx",
+            remote_path: "decoder.onnx",
+            sha1: "",
+        },
+        ModelFile {
+            filename: "tokenizer.json",
+            remote_path: "tokenizer.json",
+            sha1: "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05",
+        },
+        ModelFile {
+            filename: "config.json",
+            remote_path: "config.json",
+            sha1: "117ac8e63e2af7cae3665e5a632d6eb03f5f384915519ceb6403c15ec6533f63",
+        },
+    ]
+}
+
+/// Qwen3-ASR MLX bundle (Apple Silicon only).
+///
+/// Served straight from the official `Qwen/Qwen3-ASR-1.7B` repository — the
+/// safetensors checkpoint is identical, and the MLX runtime remaps the layout
+/// at load time, so there is nothing to re-host.
+fn qwen3_asr_mlx_files() -> Vec<ModelFile> {
+    vec![
+        ModelFile {
+            filename: "model.safetensors",
+            remote_path: "model.safetensors",
+            sha1: "2db53c7d81bd9b8cbc6a074e89be2c968a0d373fb4ee68bb1b1e14f7042dfee1",
+        },
+        ModelFile {
+            filename: "tokenizer.json",
+            remote_path: "tokenizer.json",
+            sha1: "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05",
+        },
+        ModelFile {
+            filename: "config.json",
+            remote_path: "config.json",
+            sha1: "117ac8e63e2af7cae3665e5a632d6eb03f5f384915519ceb6403c15ec6533f63",
+        },
+    ]
+}
+
 /// Apple-silicon MLX bundle. These are IBM's own weights, unmodified — the MLX
 /// runtime remaps the layout while loading, so there is nothing for us to
 /// re-host and the download comes straight from the upstream repository.
@@ -742,6 +799,18 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             files: granite_portable_files(),
             subdirectory: Some("granite-speech-4.1-2b-nar-portable"),
         }),
+        "qwen3-asr-1.7b-onnx" => Some(ModelConfig {
+            repo: "Abdullahu5mani/qwen3-asr-1.7b-onnx",
+            branch: "main",
+            files: qwen3_asr_onnx_files(),
+            subdirectory: Some("qwen3-asr-1.7b-onnx"),
+        }),
+        "qwen3-asr-1.7b-mlx" => Some(ModelConfig {
+            repo: "Qwen/Qwen3-ASR-1.7B",
+            branch: "main",
+            files: qwen3_asr_mlx_files(),
+            subdirectory: Some("qwen3-asr-1.7b-mlx"),
+        }),
         _ => None,
     }
 }
@@ -785,6 +854,32 @@ mod tests {
             "granite-speech-4.1-2b-nar-portable",
         );
     }
+
+    #[test]
+    fn qwen3_onnx_bundle_is_registered_with_expected_graphs() {
+        let config = get_model_config("qwen3-asr-1.7b-onnx").expect("Qwen3 ONNX registry entry");
+        assert_eq!(config.repo, "Abdullahu5mani/qwen3-asr-1.7b-onnx");
+        assert_eq!(config.subdirectory, Some("qwen3-asr-1.7b-onnx"));
+        for required in ["encoder.onnx", "decoder.onnx", "tokenizer.json"] {
+            assert!(
+                config.files.iter().any(|f| f.filename == required),
+                "qwen3-asr-1.7b-onnx bundle is missing {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn qwen3_mlx_bundle_points_to_official_upstream() {
+        let config = get_model_config("qwen3-asr-1.7b-mlx").expect("Qwen3 MLX registry entry");
+        assert_eq!(config.repo, "Qwen/Qwen3-ASR-1.7B");
+        assert_eq!(config.subdirectory, Some("qwen3-asr-1.7b-mlx"));
+        for required in ["model.safetensors", "tokenizer.json", "config.json"] {
+            assert!(
+                config.files.iter().any(|f| f.filename == required),
+                "qwen3-asr-1.7b-mlx bundle is missing {required}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -793,8 +888,7 @@ mod mlx_tests {
 
     #[test]
     fn granite_mlx_pulls_unmodified_upstream_weights() {
-        let config = get_model_config("granite-speech-4.1-2b-nar-mlx")
-            .expect("MLX registry entry");
+        let config = get_model_config("granite-speech-4.1-2b-nar-mlx").expect("MLX registry entry");
         // Served from IBM directly; re-hosting an unmodified copy buys nothing.
         assert_eq!(config.repo, "ibm-granite/granite-speech-4.1-2b-nar");
         assert_eq!(config.subdirectory, Some("granite-speech-4.1-2b-nar-mlx"));
@@ -814,7 +908,10 @@ mod mlx_tests {
     fn parakeet_mlx_8bit_is_registered_with_expected_files() {
         let config = get_model_config("parakeet-nemotron-mlx-8bit")
             .expect("parakeet-nemotron-mlx-8bit must be registered");
-        assert_eq!(config.repo, "Abdullahu5mani/parakeet-nemotron-0.6b-mlx-8bit");
+        assert_eq!(
+            config.repo,
+            "Abdullahu5mani/parakeet-nemotron-0.6b-mlx-8bit"
+        );
         assert_eq!(config.subdirectory, Some("parakeet-nemotron-mlx-8bit"));
         for required in ["model.safetensors", "tokenizer.model"] {
             assert!(
@@ -823,13 +920,25 @@ mod mlx_tests {
             );
         }
         // Tokenizer has verified upstream hash; model weights hash is empty pending upstream LFS retrieval
-        let tokenizer = config.files.iter().find(|f| f.filename == "tokenizer.model").unwrap();
-        assert_eq!(tokenizer.sha1, "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9");
+        let tokenizer = config
+            .files
+            .iter()
+            .find(|f| f.filename == "tokenizer.model")
+            .unwrap();
+        assert_eq!(
+            tokenizer.sha1,
+            "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9"
+        );
 
-        let model_weights = config.files.iter().find(|f| f.filename == "model.safetensors").unwrap();
+        let model_weights = config
+            .files
+            .iter()
+            .find(|f| f.filename == "model.safetensors")
+            .unwrap();
         assert!(
             model_weights.sha1.is_empty()
-                || (model_weights.sha1.len() == 64 && model_weights.sha1.chars().all(|c| c.is_ascii_hexdigit()))
+                || (model_weights.sha1.len() == 64
+                    && model_weights.sha1.chars().all(|c| c.is_ascii_hexdigit()))
         );
         assert_eq!(model_weights.sha1, "");
         assert!(!model_weights.sha1.contains("123456789abcdef"));
@@ -839,15 +948,24 @@ mod mlx_tests {
     fn granite_mlx_8bit_is_registered_with_valid_checksums() {
         let config = get_model_config("granite-speech-4.1-2b-nar-mlx-8bit")
             .expect("granite-speech-4.1-2b-nar-mlx-8bit must be registered");
-        assert_eq!(config.repo, "Abdullahu5mani/granite-speech-4.1-2b-nar-mlx-8bit");
-        assert_eq!(config.subdirectory, Some("granite-speech-4.1-2b-nar-mlx-8bit"));
+        assert_eq!(
+            config.repo,
+            "Abdullahu5mani/granite-speech-4.1-2b-nar-mlx-8bit"
+        );
+        assert_eq!(
+            config.subdirectory,
+            Some("granite-speech-4.1-2b-nar-mlx-8bit")
+        );
         for required in ["model.safetensors", "config.json", "tokenizer.json"] {
             assert!(
                 config.files.iter().any(|f| f.filename == required),
                 "missing {required}"
             );
         }
-        assert!(config.files.iter().all(|f| f.sha1.len() == 64 && f.sha1.chars().all(|c| c.is_ascii_hexdigit())));
+        assert!(config
+            .files
+            .iter()
+            .all(|f| f.sha1.len() == 64 && f.sha1.chars().all(|c| c.is_ascii_hexdigit())));
     }
 }
 
@@ -858,15 +976,51 @@ mod ane_tests {
     /// Full-precision Whisper models must bundle the ANE encoder so one
     /// click downloads both the weights and the `.mlmodelc` companion.
     const ANE_BUNDLED: &[(&str, &str, &str)] = &[
-        ("whisper-tiny", "ggml-tiny.bin", "ggml-tiny-encoder.mlmodelc"),
-        ("whisper-tiny-en", "ggml-tiny.en.bin", "ggml-tiny.en-encoder.mlmodelc"),
-        ("whisper-base", "ggml-base.bin", "ggml-base-encoder.mlmodelc"),
-        ("whisper-base-en", "ggml-base.en.bin", "ggml-base.en-encoder.mlmodelc"),
-        ("whisper-small", "ggml-small.bin", "ggml-small-encoder.mlmodelc"),
-        ("whisper-small-en", "ggml-small.en.bin", "ggml-small.en-encoder.mlmodelc"),
-        ("whisper-medium", "ggml-medium.bin", "ggml-medium-encoder.mlmodelc"),
-        ("whisper-medium-en", "ggml-medium.en.bin", "ggml-medium.en-encoder.mlmodelc"),
-        ("whisper-large-v3", "ggml-large-v3.bin", "ggml-large-v3-encoder.mlmodelc"),
+        (
+            "whisper-tiny",
+            "ggml-tiny.bin",
+            "ggml-tiny-encoder.mlmodelc",
+        ),
+        (
+            "whisper-tiny-en",
+            "ggml-tiny.en.bin",
+            "ggml-tiny.en-encoder.mlmodelc",
+        ),
+        (
+            "whisper-base",
+            "ggml-base.bin",
+            "ggml-base-encoder.mlmodelc",
+        ),
+        (
+            "whisper-base-en",
+            "ggml-base.en.bin",
+            "ggml-base.en-encoder.mlmodelc",
+        ),
+        (
+            "whisper-small",
+            "ggml-small.bin",
+            "ggml-small-encoder.mlmodelc",
+        ),
+        (
+            "whisper-small-en",
+            "ggml-small.en.bin",
+            "ggml-small.en-encoder.mlmodelc",
+        ),
+        (
+            "whisper-medium",
+            "ggml-medium.bin",
+            "ggml-medium-encoder.mlmodelc",
+        ),
+        (
+            "whisper-medium-en",
+            "ggml-medium.en.bin",
+            "ggml-medium.en-encoder.mlmodelc",
+        ),
+        (
+            "whisper-large-v3",
+            "ggml-large-v3.bin",
+            "ggml-large-v3-encoder.mlmodelc",
+        ),
         (
             "whisper-large-v3-turbo",
             "ggml-large-v3-turbo.bin",
@@ -908,7 +1062,11 @@ mod ane_tests {
             "whisper-large-v3-turbo-q5_0",
         ] {
             let config = get_model_config(model_id).expect("quantized registry entry");
-            assert_eq!(config.files.len(), 1, "{model_id} must not auto-pull ANE bundle");
+            assert_eq!(
+                config.files.len(),
+                1,
+                "{model_id} must not auto-pull ANE bundle"
+            );
             assert!(!is_coreml_bundle_file(
                 config.files[0].filename,
                 config.files[0].remote_path

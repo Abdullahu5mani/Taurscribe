@@ -108,6 +108,8 @@ export function TextTab({
                     <label className="toggle-switch">
                         <input
                             type="checkbox"
+                            id="context-bias-toggle"
+                            data-testid="context-bias-toggle"
                             checked={contextBiasEnabled}
                             onChange={(e) => setContextBiasEnabled?.(e.target.checked)}
                             aria-label="Toggle active app contextual biasing"
@@ -150,6 +152,8 @@ export function TextTab({
                     <div className="vocab-presets-row">
                         <button
                             type="button"
+                            id="vocab-preset-developer"
+                            data-testid="vocab-preset-developer"
                             className="vocab-preset-btn"
                             onClick={() => addVocabPreset?.("developer")}
                             title="Add Developer keywords (TypeScript, Rust, Docker, etc.)"
@@ -158,6 +162,8 @@ export function TextTab({
                         </button>
                         <button
                             type="button"
+                            id="vocab-preset-medical"
+                            data-testid="vocab-preset-medical"
                             className="vocab-preset-btn"
                             onClick={() => addVocabPreset?.("medical")}
                             title="Add Medical keywords (hypertension, tachycardia, etc.)"
@@ -166,6 +172,8 @@ export function TextTab({
                         </button>
                         <button
                             type="button"
+                            id="vocab-preset-legal"
+                            data-testid="vocab-preset-legal"
                             className="vocab-preset-btn"
                             onClick={() => addVocabPreset?.("legal")}
                             title="Add Legal keywords (affidavit, indemnification, etc.)"
@@ -175,6 +183,8 @@ export function TextTab({
                         {customVocabulary.length > 0 && (
                             <button
                                 type="button"
+                                id="vocab-clear-all"
+                                data-testid="vocab-clear-all"
                                 className="vocab-preset-btn vocab-preset-btn--clear"
                                 onClick={() => clearVocab?.()}
                                 title="Remove all custom vocabulary terms"
@@ -198,6 +208,8 @@ export function TextTab({
                                 <span className="vocab-tag-text">{word}</span>
                                 <button
                                     type="button"
+                                    id={`vocab-remove-${word}`}
+                                    data-testid={`vocab-remove-${word}`}
                                     className="vocab-tag-remove"
                                     onClick={() => removeVocabWord?.(word)}
                                     aria-label={`Remove term ${word}`}
@@ -216,6 +228,8 @@ export function TextTab({
                         <span className="vocab-preview-title">Live Decoder Prompt Preview</span>
                         <button
                             type="button"
+                            id="vocab-preview-refresh"
+                            data-testid="vocab-preview-refresh"
                             className="vocab-preview-refresh-btn"
                             onClick={handleRefreshPreview}
                             disabled={loadingPreview}

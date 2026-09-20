@@ -112,6 +112,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const whisperGroupRef = useRef<HTMLDivElement>(null);
     const parakeetGroupRef = useRef<HTMLDivElement>(null);
     const cohereGroupRef = useRef<HTMLDivElement>(null);
+    const qwen3GroupRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         invoke<string>('get_platform').then(setPlatform).catch(() => { });
@@ -157,6 +158,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             && (!m.macosOnly || isMac)
             && (!m.windowsOnly || isWindows),
     );
+    const qwen3Models = models.filter(m => m.type === 'Qwen3');
     const llmModels = models.filter(m => m.type === 'LLM');
     const coremlModels = models.filter(m => m.type === 'CoreML');
 
@@ -203,6 +205,9 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
         } else if (scrollTarget === 'granite') {
             groupRef = cohereGroupRef;
             targetModelId = models.find(m => m.type === 'Granite' && !m.downloaded)?.id;
+        } else if (scrollTarget === 'qwen3') {
+            groupRef = qwen3GroupRef;
+            targetModelId = models.find(m => m.type === 'Qwen3' && !m.downloaded)?.id;
         } else {
             return;
         }
@@ -286,11 +291,13 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     Keep speech models loaded in VRAM/RAM between dictations for zero cold-start latency.
                     Automatically unloads the model to free memory after a period of inactivity.
                 </p>
-                <div className="auto-unload-options-grid" role="radiogroup" aria-label="Model memory retention timeout">
+                <div id="model-memory-retention-options" data-testid="model-memory-retention-options" className="auto-unload-options-grid" role="radiogroup" aria-label="Model memory retention timeout">
                     {AUTO_UNLOAD_OPTIONS.map((opt) => (
                         <button
                             key={opt.value}
                             type="button"
+                            id={`model-memory-retention-${opt.value}`}
+                            data-testid={`model-memory-retention-${opt.value}`}
                             className={`auto-unload-option-pill${autoUnloadTimeout === opt.value ? ' auto-unload-option-pill--active' : ''}`}
                             onClick={() => handleUpdateAutoUnload(opt.value)}
                             title={opt.description}
@@ -442,6 +449,22 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                             key={m.id}
                             className={`model-item-wrapper${pulseModelIds.has(m.id) ? ' model-item-wrapper--pulse' : ''}`}
                         >
+                            <ModelRow model={m} {...rowProps} />
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* ── Qwen3-ASR ───────────────────────────────────────── */}
+            <div className="model-group" id="models-group-qwen3" data-testid="models-group-qwen3" ref={qwen3GroupRef}>
+                <div className="model-group-header">
+                    <h3 className="settings-section-title">Qwen3-ASR</h3>
+                    <span className="model-group-badge model-group-badge--warn">Experimental</span>
+                    <span className="model-group-sub">by Qwen · multilingual · Transformers</span>
+                </div>
+                <div className="model-list">
+                    {qwen3Models.map(m => (
+                        <div key={m.id} className={`model-item-wrapper${pulseModelIds.has(m.id) ? ' model-item-wrapper--pulse' : ''}`}>
                             <ModelRow model={m} {...rowProps} />
                         </div>
                     ))}

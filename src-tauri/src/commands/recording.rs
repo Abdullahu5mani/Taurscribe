@@ -290,20 +290,29 @@ fn start_recording_blocking(
         // On Linux, detect if PipeWire / PulseAudio is active
         let is_pipewire = std::env::var("PIPEWIRE_REMOTE").is_ok()
             || std::env::var("XDG_RUNTIME_DIR")
-                .map(|p| std::path::Path::new(&p).join("pipewire-0").exists() || std::path::Path::new(&p).join("pulse/native").exists())
+                .map(|p| {
+                    std::path::Path::new(&p).join("pipewire-0").exists()
+                        || std::path::Path::new(&p).join("pulse/native").exists()
+                })
                 .unwrap_or(false);
 
         // If no preferred device, or if preferred device is a raw hardware "hw:X,Y" PCM while PipeWire is active,
         // prioritize the virtual ALSA/PipeWire PCM ("default" or "pipewire") to eliminate EBUSY device lock contention.
         let prefer_virtual = device_opt.is_none()
-            || (is_pipewire && preferred.as_deref().map(|s| s.starts_with("hw:") || s.contains("hw:")).unwrap_or(false));
+            || (is_pipewire
+                && preferred
+                    .as_deref()
+                    .map(|s| s.starts_with("hw:") || s.contains("hw:"))
+                    .unwrap_or(false));
 
         if prefer_virtual {
             if let Ok(devices) = host.input_devices() {
                 let dev_list: Vec<_> = devices.collect();
                 if let Some(d) = dev_list.into_iter().find(|d| {
                     if let Ok(name) = d.name() {
-                        name == "default" || name.to_lowercase().contains("pipewire") || name == "pulse"
+                        name == "default"
+                            || name.to_lowercase().contains("pipewire")
+                            || name == "pulse"
                     } else {
                         false
                     }
@@ -366,6 +375,7 @@ fn start_recording_blocking(
         ASREngine::Whisper => state.whisper.lock().unwrap().clear_context(),
         ASREngine::Parakeet => state.parakeet.lock().unwrap().clear_context(),
         ASREngine::Granite => { /* Granite is stateless per chunk */ }
+        ASREngine::Qwen3 => state.qwen3.lock().unwrap().clear_context(),
     }
     // Reset Silero VAD LSTM state so prior session context doesn't bleed in
     state.vad.lock().unwrap().reset_state();
@@ -410,6 +420,7 @@ fn start_recording_blocking(
         ASREngine::Granite => 512,
         ASREngine::Parakeet => 512,
         ASREngine::Whisper => 32,
+        ASREngine::Qwen3 => 512,
     };
     let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(transcriber_channel_bound);
 
@@ -467,6 +478,7 @@ fn start_recording_blocking(
     let whisper = state.whisper.clone();
     let parakeet_manager = state.parakeet.clone();
     let cohere = state.cohere.clone();
+    let qwen3 = state.qwen3.clone();
     let vad = state.vad.clone();
     let active_engine = *state.active_engine.lock().unwrap();
     let session_transcript = state.session_transcript.clone();
@@ -595,6 +607,7 @@ fn start_recording_blocking(
         };
         let chunk_size = match active_engine {
             ASREngine::Granite => (sample_rate * 15) as usize,
+            ASREngine::Qwen3 => (sample_rate * 15) as usize,
             _ => (sample_rate * 6) as usize,
         };
         let max_buffer_size = chunk_size * 2;
@@ -613,7 +626,7 @@ fn start_recording_blocking(
             };
 
             match active_engine {
-                ASREngine::Whisper | ASREngine::Granite => {
+                ASREngine::Whisper | ASREngine::Granite | ASREngine::Qwen3 => {
                     buffer.extend(samples);
                     while buffer.len() >= chunk_size {
                         if buffer.len() > max_buffer_size {
@@ -649,7 +662,7 @@ fn start_recording_blocking(
                                 denoise_enabled_thread,
                                 &denoiser_arc,
                             );
-                        } else {
+                        } else if active_engine == ASREngine::Granite {
                             crate::memory::maybe_log_process_memory_with_sizes(
                                 "recording granite live chunk start",
                                 &[
@@ -672,6 +685,26 @@ fn start_recording_blocking(
                                 &mut transcribe,
                                 "Granite",
                                 "🪨",
+                                &app_clone,
+                                &session_transcript,
+                                denoise_enabled_thread,
+                                &denoiser_arc,
+                            );
+                        } else {
+                            let mut manager = qwen3.lock().unwrap();
+                            let prompt = crate::context::load_custom_vocabulary_from_settings();
+                            let dynamic_prompt =
+                                crate::context::build_dynamic_prompt(&prompt.0, prompt.1);
+                            let mut transcribe = |c: &[f32], sr| {
+                                manager.transcribe_chunk(c, sr, dynamic_prompt.as_deref())
+                            };
+                            vad_gated_transcribe(
+                                &mut chunk,
+                                sample_rate,
+                                &vad,
+                                &mut transcribe,
+                                "Qwen3",
+                                "🔊",
                                 &app_clone,
                                 &session_transcript,
                                 denoise_enabled_thread,
@@ -772,6 +805,7 @@ fn start_recording_blocking(
         let flush_chunk_size = match active_engine {
             ASREngine::Parakeet => parakeet_live_chunk_samples(sample_rate, parakeet_live.unwrap()),
             ASREngine::Granite => (sample_rate * 15) as usize,
+            ASREngine::Qwen3 => (sample_rate * 15) as usize,
             _ => (sample_rate * 6) as usize,
         };
         while buffer.len() >= flush_chunk_size {
@@ -819,6 +853,25 @@ fn start_recording_blocking(
                         &mut t,
                         "Granite",
                         "🪨",
+                        &app_clone,
+                        &session_transcript,
+                        denoise_enabled_thread,
+                        &denoiser_arc,
+                    );
+                }
+                ASREngine::Qwen3 => {
+                    let mut manager = qwen3.lock().unwrap();
+                    let vocab = crate::context::load_custom_vocabulary_from_settings();
+                    let prompt = crate::context::build_dynamic_prompt(&vocab.0, vocab.1);
+                    let mut transcribe =
+                        |c: &[f32], sr| manager.transcribe_chunk(c, sr, prompt.as_deref());
+                    vad_gated_transcribe(
+                        &mut chunk,
+                        sample_rate,
+                        &vad,
+                        &mut transcribe,
+                        "Qwen3",
+                        "🔊",
                         &app_clone,
                         &session_transcript,
                         denoise_enabled_thread,
@@ -992,6 +1045,25 @@ fn start_recording_blocking(
                             }
                         }
                     }
+                }
+                ASREngine::Qwen3 => {
+                    let mut manager = qwen3.lock().unwrap();
+                    let vocab = crate::context::load_custom_vocabulary_from_settings();
+                    let prompt = crate::context::build_dynamic_prompt(&vocab.0, vocab.1);
+                    let mut transcribe =
+                        |c: &[f32], sr| manager.transcribe_chunk(c, sr, prompt.as_deref());
+                    vad_gated_transcribe(
+                        &mut tail,
+                        sample_rate,
+                        &vad,
+                        &mut transcribe,
+                        "Qwen3",
+                        "🔊",
+                        &app_clone,
+                        &session_transcript,
+                        denoise_enabled_thread,
+                        &denoiser_arc,
+                    );
                 }
                 ASREngine::Parakeet => {
                     crate::memory::maybe_log_process_memory_with_sizes(
@@ -1458,7 +1530,9 @@ fn should_prefer_clipboard_paste() -> bool {
 /// On Linux, executes the multi-tier Wayland/X11 injection strategy.
 /// On macOS/Windows, delegates to the platform-specific clipboard paste routine.
 #[allow(dead_code)]
-pub fn inject_transcription(text: &str) -> Result<crate::text_injection::TextInjectionBackend, String> {
+pub fn inject_transcription(
+    text: &str,
+) -> Result<crate::text_injection::TextInjectionBackend, String> {
     crate::text_injection::inject_text_or_paste(text)
 }
 
@@ -1468,11 +1542,16 @@ fn clipboard_paste(text: &str) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         let backend = inject_transcription(text)?;
-        println!("[INSERT] Linux text injection succeeded using backend {:?}", backend);
+        println!(
+            "[INSERT] Linux text injection succeeded using backend {:?}",
+            backend
+        );
         return Ok(());
     }
 
-    let _guard = crate::text_injection::CLIPBOARD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::text_injection::CLIPBOARD_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
 
     use arboard::Clipboard;
 
@@ -1785,8 +1864,10 @@ fn stop_recording_blocking(
                 {
                     Ok(raw_text) => {
                         let cleaned = clean_transcript(&raw_text);
-                        let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
-                        let final_text = crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
+                        let (custom_vocab, _) =
+                            crate::context::load_custom_vocabulary_from_settings();
+                        let final_text =
+                            crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
                         println!(
                             "[FINAL_TRANSCRIPT] (Parakeet {} final)\n{}",
                             model_type, final_text
@@ -1842,10 +1923,15 @@ fn stop_recording_blocking(
         );
 
         // Build dynamic decoder prompt combining user custom vocabulary and active window context
-        let (custom_vocab, context_bias_enabled) = crate::context::load_custom_vocabulary_from_settings();
+        let (custom_vocab, context_bias_enabled) =
+            crate::context::load_custom_vocabulary_from_settings();
         let prompt = crate::context::build_dynamic_prompt(&custom_vocab, context_bias_enabled);
         if let Some(ref p) = prompt {
-            println!("[CONTEXT] Dynamic decoder prompt ({} chars): \"{}\"", p.len(), p);
+            println!(
+                "[CONTEXT] Dynamic decoder prompt ({} chars): \"{}\"",
+                p.len(),
+                p
+            );
         }
 
         let whisper = whisper_arc.lock().unwrap();
@@ -1906,7 +1992,8 @@ fn stop_recording_blocking(
             Ok(raw_text) => {
                 println!("[FINAL_TRANSCRIPT] (Raw)\n{}", raw_text);
                 let cleaned = clean_transcript(&raw_text);
-                let final_text = crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
+                let final_text =
+                    crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
                 Ok(final_text)
             }
             Err(e) => {

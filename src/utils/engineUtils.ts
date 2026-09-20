@@ -14,5 +14,6 @@ export function getEngineForModelId(id: string): ASREngine | null {
     if (id.startsWith("cohere")) return "granite";
     if (id.startsWith("granite")) return "granite";
     if (id.startsWith("whisper")) return "whisper";
+    if (id.startsWith("qwen3")) return "qwen3";
     return null;
 }

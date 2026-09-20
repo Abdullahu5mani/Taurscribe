@@ -15,6 +15,7 @@ pub enum ASREngine {
     Parakeet,
     #[serde(alias = "cohere")]
     Granite,
+    Qwen3,
 }
 
 /// Recording mode: hold keys down the whole time, or press once to start / again to stop.

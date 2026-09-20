@@ -1,23 +1,26 @@
 import { useState, useRef, startTransition } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
-import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "./useModels";
+import type { ModelInfo, ParakeetModelInfo, CohereModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { DownloadProgress } from "../components/settings/types";
 import type { CommandResult, SessionNotice } from "../types/session";
 import { GRANITE_MODEL_ID } from "../utils/engineUtils";
 
-export type ASREngine = "whisper" | "parakeet" | "granite";
+export type ASREngine = "whisper" | "parakeet" | "granite" | "qwen3";
 
 interface UseEngineSwitchParams {
     models: ModelInfo[];
     parakeetModels: ParakeetModelInfo[];
     cohereModels: CohereModelInfo[];
+    qwen3Models: Qwen3ModelInfo[];
     currentModel: string | null;
     currentParakeetModel: string | null;
     currentCohereModel: string | null;
+    currentQwen3Model: string | null;
     setCurrentModel: (id: string) => void;
     setCurrentParakeetModel: (id: string) => void;
     setCurrentCohereModel: (id: string) => void;
+    setCurrentQwen3Model: (id: string) => void;
     setBackendInfo: (info: string) => void;
     storeRef: React.RefObject<Store | null>;
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
@@ -40,12 +43,15 @@ export function useEngineSwitch({
     models,
     parakeetModels,
     cohereModels,
+    qwen3Models,
     currentModel,
     currentParakeetModel,
     currentCohereModel,
+    currentQwen3Model,
     setCurrentModel,
     setCurrentParakeetModel,
     setCurrentCohereModel,
+    setCurrentQwen3Model,
     setBackendInfo,
     storeRef,
     setHeaderStatus,
@@ -322,6 +328,47 @@ export function useEngineSwitch({
         });
     };
 
+    const handleSwitchToQwen3 = async (targetModelOverride?: string) => {
+        const progress = downloadProgressRef.current ?? {};
+        if (Object.keys(progress).some(key => key.startsWith("qwen3"))) {
+            setHeaderStatus("Qwen3-ASR is still downloading — please wait", 3000);
+            return;
+        }
+        if (qwen3Models.length === 0) {
+            setActiveEngine("qwen3");
+            activeEngineRef.current = "qwen3";
+            return;
+        }
+        if (isLoading || isLoadingRef.current) return;
+        const targetModel = targetModelOverride || currentQwen3Model || qwen3Models[0].id;
+        if (activeEngine === "qwen3") {
+            const status = await invoke<{ loaded: boolean; model_id?: string }>("get_qwen3_status").catch(() => null);
+            if (status?.loaded && status.model_id === targetModel) return;
+        }
+        await withEngineLoad("qwen3", "Loading Qwen3-ASR...", async () => {
+            const result = await invoke<CommandResult<string>>("init_qwen3", {
+                modelId: targetModel,
+                useGpu: asrBackend === "gpu",
+            });
+            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Qwen3-ASR");
+            setCurrentQwen3Model(targetModel);
+            setActiveEngine("qwen3");
+            activeEngineRef.current = "qwen3";
+            setLoadedEngine("qwen3");
+            setSessionNotice?.(null);
+            if (storeRef.current) {
+                await storeRef.current.set("qwen3_model", targetModel);
+                await storeRef.current.set("active_engine", "qwen3");
+                await storeRef.current.save();
+            }
+            setBackendInfo(await invoke<string>("get_backend_info"));
+            setHeaderStatus("Switched to Qwen3-ASR");
+        }).catch(error => {
+            setHeaderStatus(`Error switching to Qwen3-ASR: ${error}`, 5000);
+            setSessionPhase?.("error");
+        });
+    };
+
     // ── CPU / GPU hot-swap ────────────────────────────────────────────────
     const handleToggleAsrBackend = async (newBackend: "gpu" | "cpu") => {
         if (newBackend === asrBackend) return;
@@ -339,7 +386,8 @@ export function useEngineSwitch({
         const hasModel =
             (engine === "whisper" && !!currentModel) ||
             (engine === "parakeet" && !!(currentParakeetModel || parakeetModels.length > 0)) ||
-            (engine === "granite" && cohereModels.length > 0);
+            (engine === "granite" && cohereModels.length > 0) ||
+            (engine === "qwen3" && qwen3Models.length > 0);
 
         if (!hasModel) {
             setHeaderStatus(`ASR backend set to ${label}`);
@@ -379,6 +427,13 @@ export function useEngineSwitch({
                 setBackendInfo(info as string);
                 setHeaderStatus(`Granite Speech running on ${label}`);
                 setSessionNotice?.(null);
+            } else if (engine === "qwen3") {
+                const qid = currentQwen3Model || qwen3Models[0]?.id;
+                const result = await invoke<CommandResult<string>>("init_qwen3", { modelId: qid, useGpu });
+                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Qwen3-ASR to ${label}`);
+                setLoadedEngine("qwen3");
+                setBackendInfo(await invoke<string>("get_backend_info"));
+                setHeaderStatus(`Qwen3-ASR running on ${label}`);
             }
         }).catch(e => {
             setHeaderStatus(`Failed to switch to ${label}: ${e}`, 5000);
@@ -410,6 +465,7 @@ export function useEngineSwitch({
         handleSwitchToWhisper,
         handleSwitchToParakeet,
         handleSwitchToCohere,
+        handleSwitchToQwen3,
         handleToggleAsrBackend,
     };
 }

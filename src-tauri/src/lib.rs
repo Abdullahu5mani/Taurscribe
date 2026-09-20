@@ -12,9 +12,6 @@ pub mod granite_features;
 /// Native MLX backend, Apple silicon only.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub mod granite_mlx;
-/// Native MLX backend for Parakeet FastConformer, Apple silicon only.
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub mod parakeet_mlx;
 mod hotkeys;
 pub mod librispeech_wer;
 mod llm;
@@ -23,8 +20,16 @@ mod ort_session;
 mod overlay;
 pub mod parakeet;
 pub mod parakeet_loaders;
+/// Native MLX backend for Parakeet FastConformer, Apple silicon only.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub mod parakeet_mlx;
 mod parakeet_runtime;
 pub mod platform_tuning;
+pub mod qwen3;
+pub mod qwen3_mel;
+/// Native MLX backend for Qwen3-ASR, Apple silicon only.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub mod qwen3_mlx;
 mod state;
 mod system_audio;
 pub mod text_injection;
@@ -40,6 +45,7 @@ pub use commands::misc::sort_audio_devices_by_priority;
 // Imports
 use cohere::CohereManager;
 use parakeet::ParakeetManager;
+use qwen3::Qwen3Manager;
 use state::AudioState;
 use tauri::Manager;
 use vad::VADManager;
@@ -69,6 +75,9 @@ fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
         }
         if let Ok(mut cohere) = state.cohere.lock() {
             cohere.unload();
+        }
+        if let Ok(mut qwen3) = state.qwen3.lock() {
+            qwen3.unload();
         }
         if let Ok(mut llm) = state.llm.lock() {
             *llm = None;
@@ -116,6 +125,8 @@ pub fn run() {
     // 3b. Initialize Granite Speech (lazy-loaded on demand)
     println!("[INFO] Initializing Granite Speech ASR manager...");
     let cohere = CohereManager::new();
+    println!("[INFO] Initializing Qwen3-ASR manager...");
+    let qwen3 = Qwen3Manager::new();
 
     // 4. Build the Tauri App
     tauri::Builder::default()
@@ -129,7 +140,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .manage(AudioState::new(whisper, parakeet, vad, cohere))
+        .manage(AudioState::new(whisper, parakeet, vad, cohere, qwen3))
         .setup(move |app| {
             // Clean up any partial model files left over from a previous download
             // that was interrupted by a crash or force-quit.
@@ -281,6 +292,9 @@ pub fn run() {
             commands::list_parakeet_models,
             commands::init_parakeet,
             commands::get_parakeet_status,
+            commands::list_qwen3_models,
+            commands::init_qwen3,
+            commands::get_qwen3_status,
             commands::set_active_engine,
             commands::get_active_engine,
             commands::set_tray_state,

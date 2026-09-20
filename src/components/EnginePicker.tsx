@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ASREngine } from "../hooks/useEngineSwitch";
-import type { ModelInfo, ParakeetModelInfo, CohereModelInfo } from "../hooks/useModels";
+import type { ModelInfo, ParakeetModelInfo, CohereModelInfo, Qwen3ModelInfo } from "../hooks/useModels";
 import type { DownloadProgress } from "./settings/types";
 import { beautifyModelName, formatSize } from "../utils/modelDisplay";
 import { AUTO_UNLOAD_OPTIONS } from "../hooks/useAutoUnload";
@@ -15,16 +15,20 @@ interface EnginePickerProps {
   currentParakeetModel: string | null;
   cohereModels: CohereModelInfo[];
   currentCohereModel: string | null;
+  qwen3Models: Qwen3ModelInfo[];
+  currentQwen3Model: string | null;
   downloadProgress: Record<string, DownloadProgress>;
   isWhisperDownloading: boolean;
   isParakeetDownloading: boolean;
   isCohereDownloading: boolean;
+  isQwen3Downloading: boolean;
   disabled: boolean;
   onSelectWhisperModel: (id: string) => void;
   onSelectParakeetModel: (id: string) => void;
   onSelectCohereModel: (id: string) => void;
+  onSelectQwen3Model: (id: string) => void;
   onUnload: () => void;
-  onOpenDownloads: (engine: "whisper" | "parakeet" | "granite") => void;
+  onOpenDownloads: (engine: ASREngine) => void;
   onClose: () => void;
   autoUnloadTimeout?: number;
   onUpdateAutoUnloadTimeout?: (seconds: number) => void;
@@ -34,17 +38,18 @@ const ENGINE_META: Record<ASREngine, { label: string; color: string; pill?: stri
   whisper: { label: "Whisper", color: "var(--whisper-color)" },
   parakeet: { label: "Parakeet", color: "var(--parakeet-color)" },
   granite: { label: "Granite", color: "var(--cohere-color)", pill: "Experimental" },
+  qwen3: { label: "Qwen3-ASR", color: "#a78bfa", pill: "Experimental" },
 };
 
-const ENGINES: ASREngine[] = ["whisper", "parakeet", "granite"];
+const ENGINES: ASREngine[] = ["whisper", "parakeet", "granite", "qwen3"];
 
 export function EnginePicker(props: EnginePickerProps) {
   const {
     activeEngine, loadedEngine, loadingTargetEngine,
-    models, currentModel, parakeetModels, currentParakeetModel, cohereModels, currentCohereModel,
-    isWhisperDownloading, isParakeetDownloading, isCohereDownloading,
+    models, currentModel, parakeetModels, currentParakeetModel, cohereModels, currentCohereModel, qwen3Models, currentQwen3Model,
+    isWhisperDownloading, isParakeetDownloading, isCohereDownloading, isQwen3Downloading,
     disabled,
-    onSelectWhisperModel, onSelectParakeetModel, onSelectCohereModel,
+    onSelectWhisperModel, onSelectParakeetModel, onSelectCohereModel, onSelectQwen3Model,
     onUnload, onOpenDownloads, onClose,
     autoUnloadTimeout, onUpdateAutoUnloadTimeout,
   } = props;
@@ -58,9 +63,11 @@ export function EnginePicker(props: EnginePickerProps) {
       ? models.map(m => ({ id: m.id, name: beautifyModelName(m.display_name), size: formatSize(m.size_mb), selected: m.id === currentModel }))
       : drilled === "parakeet"
         ? parakeetModels.map(m => ({ id: m.id, name: beautifyModelName(m.display_name), size: formatSize(m.size_mb), selected: m.id === (currentParakeetModel ?? parakeetModels[0]?.id) }))
-        : cohereModels.map(m => ({ id: m.id, name: m.display_name, size: formatSize(m.size_mb), selected: m.id === (currentCohereModel ?? cohereModels[0]?.id) }));
+        : drilled === "granite"
+          ? cohereModels.map(m => ({ id: m.id, name: m.display_name, size: formatSize(m.size_mb), selected: m.id === (currentCohereModel ?? cohereModels[0]?.id) }))
+          : qwen3Models.map(m => ({ id: m.id, name: m.display_name, size: formatSize(m.size_mb), selected: m.id === (currentQwen3Model ?? qwen3Models[0]?.id) }));
 
-    const isDownloading = drilled === "whisper" ? isWhisperDownloading : drilled === "parakeet" ? isParakeetDownloading : isCohereDownloading;
+    const isDownloading = drilled === "whisper" ? isWhisperDownloading : drilled === "parakeet" ? isParakeetDownloading : drilled === "granite" ? isCohereDownloading : isQwen3Downloading;
     const isLoadingThis = loadingTargetEngine === drilled;
 
     return (
@@ -112,7 +119,8 @@ export function EnginePicker(props: EnginePickerProps) {
               onClick={() => {
                 if (drilled === "whisper") onSelectWhisperModel(r.id);
                 else if (drilled === "parakeet") onSelectParakeetModel(r.id);
-                else onSelectCohereModel(r.id);
+                else if (drilled === "granite") onSelectCohereModel(r.id);
+                else onSelectQwen3Model(r.id);
                 onClose();
               }}
             >
@@ -142,11 +150,13 @@ export function EnginePicker(props: EnginePickerProps) {
               {onUpdateAutoUnloadTimeout && (
                 <div className="ep-auto-unload-row">
                   <span className="ep-auto-unload-label">Auto-unload:</span>
-                  <div className="ep-auto-unload-chips" role="group" aria-label="Auto-unload inactivity options">
+                  <div id="engine-picker-auto-unload-options" data-testid="engine-picker-auto-unload-options" className="ep-auto-unload-chips" role="group" aria-label="Auto-unload inactivity options">
                     {AUTO_UNLOAD_OPTIONS.map((opt) => (
                       <button
                         key={opt.value}
                         type="button"
+                        id={`engine-picker-auto-unload-${opt.value}`}
+                        data-testid={`engine-picker-auto-unload-${opt.value}`}
                         className={`ep-auto-unload-chip${autoUnloadTimeout === opt.value ? " ep-auto-unload-chip--selected" : ""}`}
                         onClick={() => onUpdateAutoUnloadTimeout(opt.value)}
                         title={opt.description}

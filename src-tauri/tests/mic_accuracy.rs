@@ -346,8 +346,7 @@ fn mic_accuracy() {
     // ── Summary ───────────────────────────────────────────────────────────────
     eprintln!("\n=== mic_accuracy summary ===");
     if results.is_empty() {
-        eprintln!("No engines produced results — check model installation.");
-        return;
+        panic!("No engines produced results. Install at least one model or set TAURSCRIBE_ASR_SMOKE_SKIP=1 for an intentional skip.");
     }
     for (engine, wers) in &results {
         let mean = wers.iter().sum::<f64>() / wers.len() as f64;

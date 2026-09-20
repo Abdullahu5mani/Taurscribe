@@ -12,6 +12,8 @@
     "build:windows": "bun scripts/build-windows.ts --bundles nsis",
     "build:windows-portable": "npm run tauri build -- --target x86_64-pc-windows-msvc --config '{\"bundle\":{\"targets\":[\"nsis\"],\"windows\":{\"nsis\":{\"installMode\":\"portable\"}}}}'",
     "check": "cd src-tauri && cargo check",
+    "test:accessibility": "python3 scripts/tests/test_appium_accessibility.py",
+    "check:e2e": "npx tsc --noEmit --target ES2020 --module ESNext --moduleResolution bundler --skipLibCheck --esModuleInterop scripts/tests/test_appium_models_e2e.ts",
     "test:appium": "bun scripts/tests/test_appium_models_e2e.ts",
     "reset": "rm -rf ~/Library/Application\\ Support/taurscribe/settings.json ~/Library/Application\\ Support/Taurscribe/transcripts.db && echo 'Settings and history reset.'"
   },

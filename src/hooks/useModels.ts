@@ -24,6 +24,13 @@ export interface CohereModelInfo {
     requires_gpu?: boolean;
 }
 
+export interface Qwen3ModelInfo {
+    id: string;
+    display_name: string;
+    size_mb: number;
+    requires_gpu?: boolean;
+}
+
 export interface ParakeetStatus {
     loaded: boolean;
     model_id: string | null;
@@ -41,19 +48,23 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
     const [currentParakeetModel, setCurrentParakeetModel] = useState<string | null>(null);
     const [cohereModels, setCohereModels] = useState<CohereModelInfo[]>([]);
     const [currentCohereModel, setCurrentCohereModel] = useState<string | null>(null);
+    const [qwen3Models, setQwen3Models] = useState<Qwen3ModelInfo[]>([]);
+    const [currentQwen3Model, setCurrentQwen3Model] = useState<string | null>(null);
 
     const refreshModels = useCallback(async (showToast = true) => {
         try {
             console.log("[INFO] Refreshing model lists...");
-            const [modelList, pModels, gModels] = await Promise.all([
+            const [modelList, pModels, gModels, qModels] = await Promise.all([
                 invoke<ModelInfo[]>("list_models"),
                 invoke<ParakeetModelInfo[]>("list_parakeet_models"),
                 invoke<CohereModelInfo[]>("list_granite_models"),
+                invoke<Qwen3ModelInfo[]>("list_qwen3_models"),
             ]);
 
             setModels(modelList);
             setParakeetModels(pModels);
             setCohereModels(gModels);
+            setQwen3Models(qModels);
 
             setCurrentModel(prev => {
                 if (modelList.length === 0) return null;
@@ -69,6 +80,11 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
                 if (gModels.length === 0) return null;
                 if (prev && gModels.some(model => model.id === prev)) return prev;
                 return gModels[0].id;
+            });
+            setCurrentQwen3Model(prev => {
+                if (qModels.length === 0) return null;
+                if (prev && qModels.some(model => model.id === prev)) return prev;
+                return qModels[0].id;
             });
 
             if (showToast) {
@@ -92,6 +108,10 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
         setCohereModels,
         currentCohereModel,
         setCurrentCohereModel,
+        qwen3Models,
+        setQwen3Models,
+        currentQwen3Model,
+        setCurrentQwen3Model,
         refreshModels,
     };
 }

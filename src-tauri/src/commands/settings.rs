@@ -24,6 +24,7 @@ pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
             let status = gs.get_status();
             Ok(status.backend)
         }
+        ASREngine::Qwen3 => Ok(state.qwen3.lock().unwrap().get_status().backend),
     }
 }
 
@@ -36,12 +37,14 @@ pub fn get_engine_selection_state(
         ASREngine::Whisper => "whisper",
         ASREngine::Parakeet => "parakeet",
         ASREngine::Granite => "granite",
+        ASREngine::Qwen3 => "qwen3",
     }
     .to_string();
 
     let whisper_model = state.whisper.lock().unwrap().get_current_model().cloned();
     let parakeet_status = state.parakeet.lock().unwrap().get_status();
     let cohere_status = state.cohere.lock().unwrap().get_status();
+    let qwen3_status = state.qwen3.lock().unwrap().get_status();
 
     let (selected_model_id, loaded_engine, loaded_model_id, backend) = match active {
         ASREngine::Whisper => {
@@ -83,6 +86,18 @@ pub fn get_engine_selection_state(
                 cohere_status.backend,
             )
         }
+        ASREngine::Qwen3 => {
+            let loaded = qwen3_status
+                .loaded
+                .then(|| qwen3_status.model_id.clone())
+                .flatten();
+            (
+                qwen3_status.model_id.clone(),
+                loaded.as_ref().map(|_| "qwen3".to_string()),
+                loaded,
+                qwen3_status.backend,
+            )
+        }
     };
 
     Ok(EngineSelectionState {
@@ -107,6 +122,7 @@ pub fn set_active_engine(
         "parakeet" => ASREngine::Parakeet,
         "granite" | "granitespeech" | "granite_speech" | "granite-speech" => ASREngine::Granite,
         "cohere" | "coherespeech" | "cohere_speech" | "cohere-speech" => ASREngine::Granite,
+        "qwen3" | "qwen3-asr" | "qwen3_asr" => ASREngine::Qwen3,
         _ => return Err(format!("Unknown engine: {}", engine)),
     };
 

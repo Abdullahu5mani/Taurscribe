@@ -732,12 +732,15 @@ impl WhisperManager {
             .create_state()
             .map_err(|e| format!("Failed to create state: {:?}", e))?;
 
-        // Beam search matches Python whisper's default (beam_size=5) — used here because
-        // file transcription and the post-recording final pass have no latency constraint,
-        // so we can trade speed for accuracy. Live chunk transcription stays greedy.
+        // CoreML file decoding can hang in the BeamSearch path on macOS even
+        // though the same context works with the live Greedy decoder. Keep the
+        // higher-accuracy BeamSearch path on other platforms.
+        #[cfg(target_os = "macos")]
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        #[cfg(not(target_os = "macos"))]
         let mut params = FullParams::new(SamplingStrategy::BeamSearch {
             beam_size: 5,
-            patience: -1.0, // -1.0 = use whisper.cpp default (1.0)
+            patience: -1.0,
         });
         // Cap at 8 threads — memory-bandwidth saturation means no benefit beyond that.
         let n_threads = std::thread::available_parallelism()
