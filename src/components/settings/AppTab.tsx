@@ -48,11 +48,11 @@ export function AppTab({
                             type="radio"
                             id="close-behavior-tray"
                             data-testid="close-behavior-tray"
+                            aria-label="Minimise to tray"
                             name="close_behavior"
                             value="tray"
                             checked={closeBehavior === 'tray'}
                             onChange={() => handleCloseBehavior('tray')}
-                            aria-label="Minimise to tray"
                         />
                         <div className="close-behavior-option-content">
                             <span className="close-behavior-option-title">Minimise to tray</span>
@@ -66,11 +66,11 @@ export function AppTab({
                             type="radio"
                             id="close-behavior-quit"
                             data-testid="close-behavior-quit"
+                            aria-label="Quit app"
                             name="close_behavior"
                             value="quit"
                             checked={closeBehavior === 'quit'}
                             onChange={() => handleCloseBehavior('quit')}
-                            aria-label="Quit app"
                         />
                         <div className="close-behavior-option-content">
                             <span className="close-behavior-option-title">Quit app</span>
@@ -89,6 +89,7 @@ export function AppTab({
                 <div className="setting-card-header">
                     <span className="setting-card-label-plain">Playback</span>
                     <button
+                        type="button"
                         id="app-sound-mute-btn"
                         data-testid="app-sound-mute-btn"
                         className={`ghost-btn ${soundMuted ? 'ghost-btn--danger' : 'ghost-btn--ok'}`}

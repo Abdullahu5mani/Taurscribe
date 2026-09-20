@@ -763,6 +763,12 @@ function App() {
       isFileTranscribing ? "BUSY" :
         isRecording ? "STOP" :
           recordBtnBusy ? "..." : "REC";
+  const recordBtnAriaLabel =
+    noModel ? "Download a model first in Settings" :
+      isFileTranscribing ? "Cannot record while a file is being transcribed" :
+        isRecording ? "Stop recording" :
+          recordBtnBusy ? "Please wait…" :
+            "Start recording (REC)";
   const recordBtnDisabled = isFileTranscribing || (isLoading && !isRecording) || isProcessingTranscript;
 
   const onRecordClick = () => {
@@ -1340,8 +1346,8 @@ function App() {
                   <div className="load-eject-group">
                     <button
                       type="button"
-                      id="load-eject-btn"
-                      data-testid="load-eject-btn"
+                      id="model-eject-btn"
+                      data-testid="model-eject-btn"
                       className="load-eject-btn"
                       onClick={handleEjectModel}
                       title="Unload model (free VRAM immediately)"
@@ -1443,8 +1449,8 @@ function App() {
                    !noQwen3Model) && (
                     <button
                       type="button"
-                      id="load-eject-btn"
-                      data-testid="load-eject-btn"
+                      id="model-load-btn"
+                      data-testid="model-load-btn"
                       className="load-eject-btn load-eject-btn--load"
                       onClick={handleLoadActiveEngine}
                       title="Load model"
@@ -1494,7 +1500,7 @@ function App() {
                 id="record-button"
                 data-testid="record-button"
                 aria-pressed={isRecording}
-                aria-label={recordBtnLabel}
+                aria-label={recordBtnAriaLabel}
                 className={recordBtnClass}
                 disabled={!noModel && recordBtnDisabled}
                 onClick={onRecordClick}

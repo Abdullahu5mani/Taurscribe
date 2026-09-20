@@ -247,6 +247,7 @@ export function SettingsModal({
                     <div className="settings-header">
                         <h2 id="settings-modal-title">Settings</h2>
                         <button
+                            type="button"
                             id="settings-close-btn"
                             data-testid="settings-close-btn"
                             className="close-btn"
@@ -267,10 +268,12 @@ export function SettingsModal({
                         >
                             {TABS.map(tab => (
                                 <button
+                                    type="button"
                                     key={tab.id}
                                     id={`settings-tab-${tab.id}`}
                                     data-testid={`settings-tab-${tab.id}`}
                                     role="tab"
+                                    aria-label={tab.label}
                                     aria-selected={activeTab === tab.id}
                                     aria-controls={`settings-tabpanel-${tab.id}`}
                                     className={`settings-tab-btn ${activeTab === tab.id ? 'active' : ''}`}

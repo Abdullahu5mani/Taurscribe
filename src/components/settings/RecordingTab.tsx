@@ -214,6 +214,7 @@ export function RecordingTab({
                     style={{ marginBottom: '16px' }}
                 >
                     <button
+                        type="button"
                         id="hotkey-mode-hold-btn"
                         data-testid="hotkey-mode-hold-btn"
                         role="radio"
@@ -223,6 +224,7 @@ export function RecordingTab({
                         onClick={() => handleModeChange('hold')}
                     >Hold to Record</button>
                     <button
+                        type="button"
                         id="hotkey-mode-toggle-btn"
                         data-testid="hotkey-mode-toggle-btn"
                         role="radio"
@@ -240,6 +242,7 @@ export function RecordingTab({
                         <div className="hotkey-current-actions">
                             {hotkeySaved && <span className="saved-confirm">Saved ✓</span>}
                             <button
+                                type="button"
                                 id="hotkey-change-btn"
                                 data-testid="hotkey-change-btn"
                                 className="ghost-btn"
@@ -267,6 +270,7 @@ export function RecordingTab({
                         </div>
                         <div className="hotkey-capture-actions">
                             <button
+                                type="button"
                                 id="hotkey-save-btn"
                                 data-testid="hotkey-save-btn"
                                 className={`ghost-btn ghost-btn--confirm ${pendingKeys.length !== 2 ? 'ghost-btn--disabled' : ''}`}
@@ -275,6 +279,7 @@ export function RecordingTab({
                                 aria-label="Save hotkey binding"
                             >Save</button>
                             <button
+                                type="button"
                                 id="hotkey-cancel-btn"
                                 data-testid="hotkey-cancel-btn"
                                 className="ghost-btn"
@@ -376,12 +381,12 @@ export function RecordingTab({
                     <select
                         id="recording-device-select"
                         data-testid="recording-device-select"
+                        aria-label="Microphone input device"
                         className="select-input select-input--full"
                         value={selected}
                         onChange={e => handleDeviceChange(e.target.value)}
                         onFocus={() => invoke<string[]>('list_input_devices').then(setDevices).catch(() => {})}
                         onMouseEnter={() => invoke<string[]>('list_input_devices').then(setDevices).catch(() => {})}
-                        aria-label="Microphone input device"
                     >
                         <option value="">System Default</option>
                         {devices.map(name => (

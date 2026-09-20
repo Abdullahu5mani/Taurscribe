@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ASREngine } from "../hooks/useEngineSwitch";
 import type { ModelInfo, ParakeetModelInfo, CohereModelInfo, Qwen3ModelInfo } from "../hooks/useModels";
 import type { DownloadProgress } from "./settings/types";
@@ -56,6 +56,18 @@ export function EnginePicker(props: EnginePickerProps) {
 
   const [drilled, setDrilled] = useState<ASREngine | null>(null);
   const graniteBadgeForId = (id: string) => id.includes("cuda") ? "CUDA" : id.includes("portable") ? "PORTABLE" : null;
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
 
   const content = drilled ? (() => {
     const meta = ENGINE_META[drilled];

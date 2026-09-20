@@ -310,6 +310,7 @@ export function AboutTab() {
                 </p>
                 <div className="about-reset-actions">
                     <button
+                        type="button"
                         id={confirmReset ? "factory-reset-confirm-btn" : "factory-reset-btn"}
                         data-testid={confirmReset ? "factory-reset-confirm-btn" : "factory-reset-btn"}
                         className={`ghost-btn ghost-btn--danger ${resetting ? 'ghost-btn--disabled' : ''}`}
@@ -321,6 +322,7 @@ export function AboutTab() {
                     </button>
                     {confirmReset && !resetting && (
                         <button
+                            type="button"
                             id="factory-reset-cancel-btn"
                             data-testid="factory-reset-cancel-btn"
                             className="ghost-btn"

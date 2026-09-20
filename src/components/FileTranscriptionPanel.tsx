@@ -120,6 +120,11 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                 const payload = updatesByPath.get(file.path);
                 if (!payload) return file;
 
+                // Never regress a completed, cancelled, or errored file back to processing
+                if (file.status === "done" || file.status === "cancelled" || file.status === "error") {
+                    return file;
+                }
+
                 const nextStatus: FileItem["status"] = payload.status === "done"
                     ? "done"
                     : payload.status === "error"
@@ -128,7 +133,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                         ? "cancelled"
                         : "processing";
 
-                const nextProgress = payload.status === "cancelled" ? 0 : payload.percent;
+                const nextProgress = payload.status === "cancelled" ? 0 : Math.max(file.progress, payload.percent);
                 const nextError = payload.status === "cancelled"
                     ? payload.error ?? "Cancelled"
                     : payload.error;
@@ -209,6 +214,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
 
         try {
             const result = await invoke<FileTranscriptionResult>("transcribe_file", { path: queued.path });
+            pendingProgressRef.current.delete(queued.path);
             setFiles(prev =>
                 prev.map(f =>
                     f.id === queued.id
@@ -423,6 +429,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                         <p className="file-drop-title">Drop audio files here</p>
                         <p className="file-drop-hint">Drop one or more files · WAV, MP3, M4A, FLAC, OGG</p>
                         <button
+                            type="button"
                             id="file-browse-btn"
                             data-testid="file-browse-btn"
                             className="file-browse-btn"
@@ -438,6 +445,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                             {isDragOver ? "Drop to add more files" : "Drop more files or"}
                         </p>
                         <button
+                            type="button"
                             id="file-browse-btn-compact"
                             data-testid="file-browse-btn-compact"
                             className="file-browse-btn file-browse-btn--compact"
@@ -497,6 +505,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                                     {item.status === "done" && (
                                         <>
                                             <button
+                                                type="button"
                                                 id={`file-copy-${item.id}`}
                                                 data-testid={`file-copy-${item.id}`}
                                                 className="file-card-btn"
@@ -507,6 +516,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                                                 Copy
                                             </button>
                                             <button
+                                                type="button"
                                                 id={`file-rerun-${item.id}`}
                                                 data-testid={`file-rerun-${item.id}`}
                                                 className="file-card-btn file-card-btn--secondary"
@@ -520,6 +530,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                                     )}
                                     {item.status === "error" && (
                                         <button
+                                            type="button"
                                             id={`file-retry-${item.id}`}
                                             data-testid={`file-retry-${item.id}`}
                                             className="file-card-btn file-card-btn--error"
@@ -532,6 +543,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                                     )}
                                     {item.status === "cancelled" && (
                                         <button
+                                            type="button"
                                             id={`file-run-${item.id}`}
                                             data-testid={`file-run-${item.id}`}
                                             className="file-card-btn file-card-btn--secondary"
@@ -543,6 +555,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentPa
                                         </button>
                                     )}
                                     <button
+                                        type="button"
                                         id={`file-remove-${item.id}`}
                                         data-testid={`file-remove-${item.id}`}
                                         className={`file-card-btn file-card-btn--remove${item.status === "queued" ? " file-card-btn--remove-queued" : ""}`}

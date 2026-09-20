@@ -229,5 +229,119 @@ class TestAppiumAccessibility(unittest.TestCase):
         self.assertEqual(len(missing), 0, f"Found tabs without aria-selected:\n" + "\n".join(missing))
 
 
+    def test_dialog_modals_have_aria_modal_and_label(self):
+        missing = []
+
+        for rel_path, raw_content in self.tsx_files:
+            cleaned = strip_jsx_comments(raw_content)
+            for match in TAG_PATTERN.finditer(cleaned):
+                attrs = match.group("attrs")
+                role_val = extract_attribute(attrs, "role")
+                if role_val not in ("dialog", "alertdialog"):
+                    continue
+
+                has_label = bool(extract_attribute(attrs, "aria-label")) or bool(extract_attribute(attrs, "aria-labelledby"))
+                has_modal = extract_attribute(attrs, "aria-modal")
+                if not has_label or not has_modal:
+                    line_no = get_line_number(cleaned, match.start())
+                    snippet = match.group(0).strip().replace("\n", " ")[:90]
+                    missing.append(f"{rel_path}:{line_no} role='{role_val}' missing aria-label or aria-modal='true': {snippet}")
+
+        self.assertEqual(len(missing), 0, f"Found dialogs without aria-modal or accessible label:\n" + "\n".join(missing))
+
+    def test_buttons_have_explicit_type(self):
+        missing = []
+
+        for rel_path, raw_content in self.tsx_files:
+            cleaned = strip_jsx_comments(raw_content)
+            for match in TAG_PATTERN.finditer(cleaned):
+                tag = match.group("tag")
+                if tag != "button":
+                    continue
+
+                attrs = match.group("attrs")
+                btn_type = extract_attribute(attrs, "type")
+                if not btn_type:
+                    line_no = get_line_number(cleaned, match.start())
+                    snippet = match.group(0).strip().replace("\n", " ")[:90]
+                    missing.append(f"{rel_path}:{line_no} <button> missing explicit type='button': {snippet}")
+
+        self.assertEqual(len(missing), 0, f"Found <button> elements missing explicit type:\n" + "\n".join(missing))
+
+    def test_form_inputs_have_accessible_labels(self):
+        missing = []
+
+        for rel_path, raw_content in self.tsx_files:
+            cleaned = strip_jsx_comments(raw_content)
+            for match in TAG_PATTERN.finditer(cleaned):
+                tag = match.group("tag")
+                if tag not in ("input", "select", "textarea"):
+                    continue
+
+                attrs = match.group("attrs")
+                input_type = extract_attribute(attrs, "type")
+                if input_type == "hidden":
+                    continue
+
+                has_label = (
+                    bool(extract_attribute(attrs, "aria-label"))
+                    or bool(extract_attribute(attrs, "aria-labelledby"))
+                    or bool(extract_attribute(attrs, "title"))
+                    or bool(extract_attribute(attrs, "placeholder"))
+                )
+                if not has_label:
+                    line_no = get_line_number(cleaned, match.start())
+                    snippet = match.group(0).strip().replace("\n", " ")[:90]
+                    missing.append(f"{rel_path}:{line_no} <{tag}> missing accessible label or placeholder: {snippet}")
+
+        self.assertEqual(len(missing), 0, f"Found form inputs without accessible labels:\n" + "\n".join(missing))
+
+    def test_no_duplicate_static_ids_within_file(self):
+        duplicates = []
+
+        for rel_path, raw_content in self.tsx_files:
+            cleaned = strip_jsx_comments(raw_content)
+            seen_ids = set()
+            for match in TAG_PATTERN.finditer(cleaned):
+                attrs = match.group("attrs")
+                id_val = extract_attribute(attrs, "id")
+                # Only check static IDs (without template literals or JSX expressions)
+                if id_val and not any(c in id_val for c in "${}"):
+                    if id_val in seen_ids:
+                        line_no = get_line_number(cleaned, match.start())
+                        duplicates.append(f"{rel_path}:{line_no} duplicate static id='{id_val}'")
+                    else:
+                        seen_ids.add(id_val)
+
+        self.assertEqual(len(duplicates), 0, f"Found duplicate static element IDs within the same file:\n" + "\n".join(duplicates))
+
+    def test_critical_appium_navigation_anchors_exist(self):
+        required_anchors = [
+            "mode-toggle-mic",
+            "mode-toggle-files",
+            "engine-chip-button",
+            "settings-open-btn",
+            "settings-modal",
+            "settings-tab-models",
+            "settings-tab-recording",
+            "settings-tab-text",
+            "file-browse-btn",
+            "record-button",
+        ]
+        all_text = " ".join(raw for _, raw in self.tsx_files)
+        def anchor_exists(anchor: str) -> bool:
+            if f'data-testid="{anchor}"' in all_text or f"data-testid='{anchor}'" in all_text:
+                return True
+            if anchor.startswith("settings-tab-"):
+                tab_id = anchor.replace("settings-tab-", "")
+                if "settings-tab-${tab.id}" in all_text and f"id: '{tab_id}'" in all_text:
+                    return True
+            return False
+
+        missing_anchors = [anchor for anchor in required_anchors if not anchor_exists(anchor)]
+        self.assertEqual(len(missing_anchors), 0, f"Missing critical Appium navigation anchors: {missing_anchors}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

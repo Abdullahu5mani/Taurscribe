@@ -291,6 +291,7 @@ function StepWelcome({ onNext, logoSrc }: { onNext: () => void; logoSrc: string 
 
       <div className="setup-nav">
         <button
+          type="button"
           id="wizard-welcome-begin-btn"
           data-testid="wizard-welcome-begin-btn"
           className="setup-btn setup-btn--primary"
@@ -390,6 +391,7 @@ function StepHardware({
 
       <div className="setup-nav setup-nav--spread">
         <button
+          type="button"
           id="wizard-hardware-back-btn"
           data-testid="wizard-hardware-back-btn"
           className="setup-btn setup-btn--ghost"
@@ -397,6 +399,7 @@ function StepHardware({
           aria-label="Back to welcome step"
         >← Back</button>
         <button
+          type="button"
           id="wizard-hardware-next-btn"
           data-testid="wizard-hardware-next-btn"
           className="setup-btn setup-btn--primary"
@@ -552,6 +555,7 @@ function StepEngines({
 
       <div className="setup-nav setup-nav--spread">
         <button
+          type="button"
           id="wizard-engines-back-btn"
           data-testid="wizard-engines-back-btn"
           className="setup-btn setup-btn--ghost"
@@ -559,6 +563,7 @@ function StepEngines({
           aria-label="Back to hardware step"
         >← Back</button>
         <button
+          type="button"
           id="wizard-engines-next-btn"
           data-testid="wizard-engines-next-btn"
           className="setup-btn setup-btn--primary"
@@ -653,6 +658,7 @@ function StepFlowScribe({
 
       <div className="setup-nav setup-nav--spread">
         <button
+          type="button"
           id="wizard-flowscribe-back-btn"
           data-testid="wizard-flowscribe-back-btn"
           className="setup-btn setup-btn--ghost"
@@ -660,6 +666,7 @@ function StepFlowScribe({
           aria-label="Back to engines step"
         >← Back</button>
         <button
+          type="button"
           id="wizard-flowscribe-next-btn"
           data-testid="wizard-flowscribe-next-btn"
           className="setup-btn setup-btn--primary"
@@ -712,6 +719,7 @@ function StepHotkey({ onNext, onBack, platform, totalSteps }: { onNext: () => vo
 
       <div className="setup-nav setup-nav--spread">
         <button
+          type="button"
           id="wizard-hotkey-back-btn"
           data-testid="wizard-hotkey-back-btn"
           className="setup-btn setup-btn--ghost"
@@ -719,6 +727,7 @@ function StepHotkey({ onNext, onBack, platform, totalSteps }: { onNext: () => vo
           aria-label="Back to FlowScribe step"
         >← Back</button>
         <button
+          type="button"
           id="wizard-hotkey-next-btn"
           data-testid="wizard-hotkey-next-btn"
           className="setup-btn setup-btn--primary"
@@ -821,6 +830,7 @@ function StepRecordingSettings({
 
       <div className="setup-nav setup-nav--spread">
         <button
+          type="button"
           id="wizard-recording-back-btn"
           data-testid="wizard-recording-back-btn"
           className="setup-btn setup-btn--ghost"
@@ -828,6 +838,7 @@ function StepRecordingSettings({
           aria-label="Back to hotkey step"
         >← Back</button>
         <button
+          type="button"
           id="wizard-recording-next-btn"
           data-testid="wizard-recording-next-btn"
           className="setup-btn setup-btn--primary"
@@ -976,6 +987,7 @@ function StepPermissions({
                 ? <span id="wizard-perm-mic-restricted" data-testid="wizard-perm-mic-restricted" className="perm-badge perm-badge--denied" role="status">Restricted by policy</span>
                 : micStatus === 'denied'
                   ? <button
+                      type="button"
                       id="wizard-perm-mic-settings-btn"
                       data-testid="wizard-perm-mic-settings-btn"
                       className="setup-btn setup-btn--primary perm-btn"
@@ -985,6 +997,7 @@ function StepPermissions({
                       Open Settings
                     </button>
                   : <button
+                      type="button"
                       id="wizard-perm-mic-grant-btn"
                       data-testid="wizard-perm-mic-grant-btn"
                       className="setup-btn setup-btn--primary perm-btn"
@@ -1014,6 +1027,7 @@ function StepPermissions({
             {accOk
               ? <span id="wizard-perm-acc-ok" data-testid="wizard-perm-acc-ok" className="perm-badge perm-badge--ok" role="status">Granted</span>
               : <button
+                  type="button"
                   id="wizard-perm-accessibility-grant-btn"
                   data-testid="wizard-perm-accessibility-grant-btn"
                   className="setup-btn setup-btn--primary perm-btn"
@@ -1041,6 +1055,7 @@ function StepPermissions({
             {inputOk
               ? <span id="wizard-perm-input-ok" data-testid="wizard-perm-input-ok" className="perm-badge perm-badge--ok" role="status">Granted</span>
               : <button
+                  type="button"
                   id="wizard-perm-input-grant-btn"
                   data-testid="wizard-perm-input-grant-btn"
                   className="setup-btn setup-btn--primary perm-btn"
@@ -1063,6 +1078,7 @@ function StepPermissions({
         >
           <strong>Restart required.</strong> Permissions changed — restart so the hotkey and text insertion activate.
           <button
+            type="button"
             id="wizard-perm-restart-btn"
             data-testid="wizard-perm-restart-btn"
             className="setup-btn setup-btn--primary perm-restart-btn"
@@ -1076,6 +1092,7 @@ function StepPermissions({
 
       <div className="setup-nav setup-nav--spread">
         <button
+          type="button"
           id="wizard-perm-back-btn"
           data-testid="wizard-perm-back-btn"
           className="setup-btn setup-btn--ghost"
@@ -1083,6 +1100,7 @@ function StepPermissions({
           aria-label="Back to previous step"
         >← Back</button>
         <button
+          type="button"
           id="wizard-perm-next-btn"
           data-testid="wizard-perm-next-btn"
           className="setup-btn setup-btn--primary"
@@ -1209,6 +1227,7 @@ function StepReady({
               />
             </div>
             <button
+              type="button"
               id="wizard-ready-cancel-download-btn"
               data-testid="wizard-ready-cancel-download-btn"
               className="ready-download-cancel"
@@ -1224,6 +1243,7 @@ function StepReady({
               Download your recommended model to start recording immediately.
             </p>
             <button
+              type="button"
               id="wizard-ready-download-model-btn"
               data-testid="wizard-ready-download-model-btn"
               className="setup-btn setup-btn--primary setup-btn--full"
@@ -1239,6 +1259,7 @@ function StepReady({
 
       <div className="setup-nav--ready">
         <button
+          type="button"
           id="wizard-ready-launch-btn"
           data-testid="wizard-ready-launch-btn"
           className="setup-btn setup-btn--primary setup-btn--full"
@@ -1250,6 +1271,7 @@ function StepReady({
           Launch App →
         </button>
         <button
+          type="button"
           id="wizard-ready-skip-btn"
           data-testid="wizard-ready-skip-btn"
           className="ready-skip-btn"

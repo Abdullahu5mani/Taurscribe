@@ -198,6 +198,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                 <div className="delete-confirm-row">
                                     <span className="delete-confirm-label">Delete?</span>
                                     <button
+                                        type="button"
                                         id={`model-confirm-delete-yes-${model.id}`}
                                         data-testid={`model-confirm-delete-yes-${model.id}`}
                                         className="delete-confirm-btn delete-confirm-btn--yes"
@@ -207,6 +208,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                         Yes
                                     </button>
                                     <button
+                                        type="button"
                                         id={`model-confirm-delete-no-${model.id}`}
                                         data-testid={`model-confirm-delete-no-${model.id}`}
                                         className="delete-confirm-btn delete-confirm-btn--no"
@@ -219,6 +221,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                             ) : (
                                 <>
                                     <button
+                                        type="button"
                                         id={`model-delete-btn-${model.id}`}
                                         data-testid={`model-delete-btn-${model.id}`}
                                         className="model-delete-icon-btn"
@@ -230,6 +233,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                     </button>
 
                                     <button
+                                        type="button"
                                         id={`model-status-badge-${model.id}`}
                                         data-testid={`model-status-badge-${model.id}`}
                                         className={`download-btn downloaded${!model.verified ? ' download-btn--unverified' : ''}`}
@@ -247,6 +251,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                             )
                         ) : (
                             <button
+                                type="button"
                                 id={`model-download-btn-${model.id}`}
                                 data-testid={`model-download-btn-${model.id}`}
                                 className="download-btn"

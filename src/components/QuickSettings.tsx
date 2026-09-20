@@ -340,6 +340,7 @@ function QuickSettingsComponent({
                         type="range"
                         id="qs-volume-slider"
                         data-testid="qs-volume-slider"
+                        aria-label="Sound volume"
                         role="slider"
                         aria-valuemin={0}
                         aria-valuemax={100}
@@ -351,7 +352,6 @@ function QuickSettingsComponent({
                         step={0.01}
                         value={soundMuted ? 0 : soundVolume}
                         onChange={e => onVolumeChange(Number(e.target.value))}
-                        aria-label="Sound volume"
                     />
                     <span className="qs-volume-label">{volumeLabel}</span>
                 </div>

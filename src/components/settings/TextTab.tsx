@@ -110,9 +110,9 @@ export function TextTab({
                             type="checkbox"
                             id="context-bias-toggle"
                             data-testid="context-bias-toggle"
+                            aria-label="Toggle active app contextual biasing"
                             checked={contextBiasEnabled}
                             onChange={(e) => setContextBiasEnabled?.(e.target.checked)}
-                            aria-label="Toggle active app contextual biasing"
                         />
                         <span className="toggle-slider"></span>
                     </label>
@@ -135,6 +135,7 @@ export function TextTab({
                         />
                     </div>
                     <button
+                        type="button"
                         id="vocab-add-btn"
                         data-testid="vocab-add-btn"
                         className="ghost-btn ghost-btn--confirm"
@@ -299,6 +300,7 @@ export function TextTab({
                         </div>
                     </div>
                     <button
+                        type="button"
                         id="dict-add-btn"
                         data-testid="dict-add-btn"
                         className="ghost-btn ghost-btn--confirm"
@@ -321,10 +323,10 @@ export function TextTab({
                                     type="text"
                                     id={`dict-entry-sounds-like-${entry.id}`}
                                     data-testid={`dict-entry-sounds-like-${entry.id}`}
+                                    aria-label={`Sounds like for ${entry.soundsLike}`}
                                     className="dict-input dict-input--inline"
                                     value={entry.soundsLike}
                                     onChange={e => updateDictEntry(entry.id, { soundsLike: e.target.value })}
-                                    aria-label={`Sounds like for ${entry.soundsLike}`}
                                     title="What it sounds like"
                                 />
                                 <span className="dict-arrow-sm">→</span>
@@ -332,13 +334,14 @@ export function TextTab({
                                     type="text"
                                     id={`dict-entry-correct-${entry.id}`}
                                     data-testid={`dict-entry-correct-${entry.id}`}
+                                    aria-label={`Correct spelling for ${entry.correct}`}
                                     className="dict-input dict-input--inline"
                                     value={entry.correct}
                                     onChange={e => updateDictEntry(entry.id, { correct: e.target.value })}
-                                    aria-label={`Correct spelling for ${entry.correct}`}
                                     title="Correct spelling"
                                 />
                                 <button
+                                    type="button"
                                     id={`dict-delete-btn-${entry.id}`}
                                     data-testid={`dict-delete-btn-${entry.id}`}
                                     className="dict-delete"
@@ -397,6 +400,7 @@ export function TextTab({
                         </div>
                     </div>
                     <button
+                        type="button"
                         id="snippet-add-btn"
                         data-testid="snippet-add-btn"
                         className="ghost-btn ghost-btn--confirm"
@@ -422,14 +426,15 @@ export function TextTab({
                                             type="text"
                                             id={`snippet-entry-trigger-${snippet.id}`}
                                             data-testid={`snippet-entry-trigger-${snippet.id}`}
+                                            aria-label={`Trigger phrase for ${snippet.trigger}`}
                                             className="dict-input dict-input--inline snippet-trigger-input"
                                             value={snippet.trigger}
                                             onChange={e => updateSnippet(snippet.id, { trigger: e.target.value })}
-                                            aria-label={`Trigger phrase for ${snippet.trigger}`}
                                             title="Trigger phrase"
                                         />
                                     </div>
                                     <button
+                                        type="button"
                                         id={`snippet-delete-btn-${snippet.id}`}
                                         data-testid={`snippet-delete-btn-${snippet.id}`}
                                         className="dict-delete"
@@ -444,11 +449,11 @@ export function TextTab({
                                     <textarea
                                         id={`snippet-entry-expansion-${snippet.id}`}
                                         data-testid={`snippet-entry-expansion-${snippet.id}`}
+                                        aria-label={`Expansion text for ${snippet.trigger}`}
                                         className="snippet-textarea snippet-textarea--inline"
                                         value={snippet.expansion}
                                         onChange={e => updateSnippet(snippet.id, { expansion: e.target.value })}
                                         rows={2}
-                                        aria-label={`Expansion text for ${snippet.trigger}`}
                                         title="Expansion text"
                                     />
                                 </div>

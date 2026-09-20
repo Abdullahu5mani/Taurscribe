@@ -271,6 +271,10 @@ impl WhisperManager {
         self.current_model.as_ref()
     }
 
+    pub fn is_loaded(&self) -> bool {
+        self.context.is_some()
+    }
+
     /// Get which GPU backend we are using
     pub fn get_backend(&self) -> &GpuBackend {
         &self.backend

@@ -316,15 +316,11 @@ fn transcribe_file_blocking(
                 let mut w = whisper.try_lock().map_err(|_| {
                     "Whisper engine is busy loading or processing another request".to_string()
                 })?;
+                if !w.is_loaded() {
+                    emit_progress(app, path, 45, "loading model", None);
+                    w.initialize(None, false)?;
+                }
                 emit_progress(app, path, 53, "transcribing", None);
-                #[cfg(target_os = "macos")]
-                let t = {
-                    if i == 0 {
-                        w.clear_context();
-                    }
-                    w.transcribe_chunk(raw_chunk, 16000)?
-                };
-                #[cfg(not(target_os = "macos"))]
                 let t = w.transcribe_audio_data(raw_chunk, dynamic_prompt.as_deref())?;
                 if !t.trim().is_empty() {
                     parts.push(t.trim().to_string());
@@ -373,18 +369,30 @@ fn transcribe_file_blocking(
                         let mut p = parakeet.try_lock().map_err(|_| {
                             "Parakeet engine is busy loading or processing another request".to_string()
                         })?;
+                        if !p.get_status().loaded {
+                            emit_progress(app, path, 45, "loading model", None);
+                            p.initialize(None, false)?;
+                        }
                         p.transcribe_chunk(raw_chunk, 16000)?
                     }
                     ASREngine::Granite => {
                         let mut g = cohere.try_lock().map_err(|_| {
                             "Granite engine is busy loading or processing another request".to_string()
                         })?;
+                        if !g.get_status().loaded {
+                            emit_progress(app, path, 45, "loading model", None);
+                            g.initialize(None, false)?;
+                        }
                         g.transcribe_chunk(raw_chunk, 16000)?
                     }
                     ASREngine::Qwen3 => {
                         let mut q = qwen3.try_lock().map_err(|_| {
                             "Qwen3 engine is busy loading or processing another request".to_string()
                         })?;
+                        if !q.get_status().loaded {
+                            emit_progress(app, path, 45, "loading model", None);
+                            q.initialize(None, false)?;
+                        }
                         q.transcribe_chunk(raw_chunk, 16000, dynamic_prompt.as_deref())?
                     }
                     _ => unreachable!(),

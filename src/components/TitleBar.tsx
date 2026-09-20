@@ -117,8 +117,8 @@ export function TitleBar({
           >
             <button
               type="button"
-              id="titlebar-minimize-btn"
-              data-testid="titlebar-minimize-btn"
+              id="titlebar-minimize-btn-win"
+              data-testid="titlebar-minimize-btn-win"
               className="titlebar-btn titlebar-btn--minimize"
               onClick={handleMinimize}
               aria-label="Minimize"
@@ -127,8 +127,8 @@ export function TitleBar({
             </button>
             <button
               type="button"
-              id="titlebar-maximize-btn"
-              data-testid="titlebar-maximize-btn"
+              id="titlebar-maximize-btn-win"
+              data-testid="titlebar-maximize-btn-win"
               className="titlebar-btn titlebar-btn--maximize"
               onClick={handleMaximize}
               aria-label="Maximize"
@@ -137,8 +137,8 @@ export function TitleBar({
             </button>
             <button
               type="button"
-              id="titlebar-close-btn"
-              data-testid="titlebar-close-btn"
+              id="titlebar-close-btn-win"
+              data-testid="titlebar-close-btn-win"
               className="titlebar-btn titlebar-btn--close"
               onClick={handleClose}
               aria-label="Close"

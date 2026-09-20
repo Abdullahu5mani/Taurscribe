@@ -105,6 +105,7 @@ export function PostProcessingTab({
                             aria-label="Grammar LLM hardware backend"
                         >
                             <button
+                                type="button"
                                 id="pp-llm-backend-gpu"
                                 data-testid="pp-llm-backend-gpu"
                                 className={`backend-toggle-btn ${llmBackend === 'gpu' ? 'active' : ''}`}
@@ -116,6 +117,7 @@ export function PostProcessingTab({
                                 <IconBolt size={12} style={{ color: '#facc15' }} /> GPU
                             </button>
                             <button
+                                type="button"
                                 id="pp-llm-backend-cpu"
                                 data-testid="pp-llm-backend-cpu"
                                 className={`backend-toggle-btn ${llmBackend === 'cpu' ? 'active' : ''}`}
@@ -151,6 +153,7 @@ export function PostProcessingTab({
                 >
                     {STYLES.map(s => (
                         <button
+                            type="button"
                             key={s.value}
                             id={`pp-style-btn-${s.value.toLowerCase()}`}
                             data-testid={`pp-style-btn-${s.value.toLowerCase()}`}
