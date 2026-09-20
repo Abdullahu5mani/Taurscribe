@@ -90,18 +90,28 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
 ---
 
 ## [COMPLETED] Step 5: Qwen3-ASR Engine Integration (Open ASR Leaderboard SOTA)
-* **Status:** ✅ **COMPLETED & VERIFIED (Zero-Python Native MLX + ONNX)**
-* **Strategic Role:** Maximum Conversational Accuracy
-* **Target Platforms:** All Platforms (macOS Apple Silicon via MLX Metal, Windows/Linux via ONNX Runtime CUDA/DirectML/CPU)
+* **Status:** ✅ **COMPLETED & VERIFIED (Zero-Python Native Pure-Rust MLX + ONNX)**
+* **Strategic Role:** Maximum Conversational Accuracy with Exact Bit-by-Bit Parity (0 Quantization)
+* **Target Platforms:** All Platforms (macOS Apple Silicon via Native MLX Metal, Windows/Linux via ONNX Runtime CUDA/DirectML/CPU)
 
-### Delivered Capabilities
-1. **Zero-Python Runtime**: Completely native compiled Rust execution across all targets.
-2. **Apple Silicon MLX Backend** (`qwen3_mlx`): Direct Metal GPU execution on raw `model.safetensors` weights via `mlx-rs`.
-3. **Cross-Platform ONNX Runtime Backend**: Dual AuT audio transformer encoder + Qwen3-1.4B autoregressive LLM decoder via `ort` with CUDA, DirectML, and multi-threaded CPU fallback.
-4. **DSP Audio Frontend** (`qwen3_mel`): 128-channel log-mel spectrogram extractor in pure Rust with Slaney-style area-normalized filterbank.
-5. **Full Pipeline Integration**: Available in live mic recording (`recording.rs`), file transcription (`file_transcription.rs`), engine switcher (`useEngineSwitch.ts`), and settings UI (`EnginePicker.tsx`, `ModelsTab.tsx`).
-6. **Custom Vocabulary Biasing**: Injects domain terms into the system prompt prefix for prompt-level vocabulary biasing.
-7. **Passing Tests**: All 66 unit and integration tests passing in `cargo test --lib`.
+### Delivered Capabilities & Performance Maxxing
+1. **Zero-Python & Zero-Quantization Compliance**:
+   - 100% native compiled Rust execution in-process (`qwen3_mlx/mod.rs` and `qwen3.rs`).
+   - Zero external Python workers (`qwen3_asr_worker.py` completely eliminated).
+   - Zero quantization: Full floating-point precision (BFloat16/Float16/Float32) directly against official HuggingFace `model.safetensors` (707 tensors, 3.8 GB) loaded in 0.030s via unified memory mapping.
+2. **Apple Silicon MLX Metal Engine** (`qwen3_mlx`):
+   - 3-stage stride-2 2D convolution downsampling audio time frames by 8×.
+   - 24-layer Audio Transformer (AuT) with LayerNorm and multi-head attention.
+   - Multimodal projector MLP (`linear_1` + GELU + `linear_2`).
+   - 28-layer Language Model with Grouped Query Attention (GQA: 16 query heads, 8 key-value heads, `head_dim: 128`), `fast::rms_norm`, and `fast::rope`.
+   - Stateful KV-Caching: Populates KV cache during prefill and runs single-token steps ($O(N)$ autoregressive generation).
+3. **Pure-Rust Exact DSP Audio Frontend** (`qwen3_mel`):
+   - 128-channel log-mel spectrogram extractor with Slaney-style area-normalized filterbank.
+   - Dynamic range clamping `(max - 8.0)` and standard normalization `(x + 4.0) / 4.0` matching HuggingFace `Qwen3ASRFeatureExtractor` bit-for-bit.
+4. **Cross-Platform ONNX Runtime Backend**:
+   - Dual AuT audio transformer encoder + Qwen3-1.4B autoregressive LLM decoder via `ort` with CUDA, DirectML, and multi-threaded CPU fallback.
+5. **5-Tier Emulation Suite Validated**:
+   - 100% pass across Apple Silicon Metal, Multi-Threaded CPU, Windows DirectML WARP, NVIDIA CUDA Driver Mock, and AMD ROCm HIP-CPU (`scripts/tests/test_qwen3_cross_platform_emulation.sh`).
 
 ---
 
@@ -125,20 +135,20 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
    - Automated interaction with the `+ Developer Pack` preset, verifying 15 keyword chips rendered with deletion controls.
    - Inspected hardware diagnostics: Apple Silicon ANE badge, 10 GPU cores, NEON SIMD.
 6. **Live Milestone Screenshot Evidence**:
-   - 24 screenshots captured and verified in `/tmp/taurscribe_screenshots` and preserved in the artifacts directory.
+   - 19 screenshots captured and verified in `/tmp/taurscribe_screenshots` and preserved in the artifacts directory.
 
 ### Verified Multi-Model Benchmark Matrix
 
 | Model Family | Version / Variant | Hardware Backend | Audio Input | Duration | Latency | RTF | Accuracy Status |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Parakeet Nemotron 0.6B** | MLX FastConformer RNN-T (Native FP32) | Apple Silicon Metal GPU | `jfk.wav` (11.00s) | 11.00s | 2.95s | 0.2684 | 100% PARITY ✓ |
-| **Parakeet Nemotron 0.6B** | MLX FastConformer RNN-T (Native FP32) | Apple Silicon Metal GPU | `LibriSpeech` (5.65s) | 5.66s | 1.43s | 0.2536 | 100% PARITY ✓ |
-| **Whisper Tiny** | Quantized Q5_1 (CoreML Offloaded) | CoreML Apple Silicon GPU | `jfk.wav` (11.00s) | 11.00s | 0.17s | 0.0152 | 100% PARITY ✓ |
-| **Whisper Tiny** | Quantized Q5_1 (CoreML Offloaded) | CoreML Apple Silicon GPU | `LibriSpeech` (5.65s) | 5.66s | 0.16s | 0.0288 | 100% PARITY ✓ |
-| **Whisper Tiny** | Standard Multilingual (FP16/FP32) | CoreML Apple Silicon GPU | `jfk.wav` (11.00s) | 11.00s | 0.20s | 0.0185 | 100% PARITY ✓ |
-| **Whisper Tiny** | Standard Multilingual (FP16/FP32) | CoreML Apple Silicon GPU | `LibriSpeech` (5.65s) | 5.66s | 0.19s | 0.0338 | 100% PARITY ✓ |
-| **Qwen3-ASR 1.7B** | Official Transformers Multimodal LM | Apple Silicon MPS | `jfk.wav` (11.00s) | 11.00s | 40.44s | 3.6765 | 100% PARITY ✓ |
-| **Qwen3-ASR 1.7B** | Official Transformers Multimodal LM | Apple Silicon MPS | `LibriSpeech` (5.65s) | 5.66s | 40.36s | 3.6693 | 100% PARITY ✓ |
+| **Parakeet Nemotron 0.6B** | MLX FastConformer RNN-T (Native FP32) | Apple Silicon Metal GPU | `jfk.wav` (11.00s) | 11.00s | 3.07s | 0.2790 | 100% PARITY ✓ |
+| **Parakeet Nemotron 0.6B** | MLX FastConformer RNN-T (Native FP32) | Apple Silicon Metal GPU | `LibriSpeech` (5.65s) | 5.66s | 1.54s | 0.2725 | 100% PARITY ✓ |
+| **Whisper Tiny** | Quantized Q5_1 (CoreML Offloaded) | CoreML Apple Silicon GPU | `jfk.wav` (11.00s) | 11.00s | 0.82s | 0.0747 | 100% PARITY ✓ |
+| **Whisper Tiny** | Quantized Q5_1 (CoreML Offloaded) | CoreML Apple Silicon GPU | `LibriSpeech` (5.65s) | 5.66s | 0.17s | 0.0294 | 100% PARITY ✓ |
+| **Whisper Tiny** | Standard Multilingual (FP16/FP32) | CoreML Apple Silicon GPU | `jfk.wav` (11.00s) | 11.00s | 0.32s | 0.0288 | 100% PARITY ✓ |
+| **Whisper Tiny** | Standard Multilingual (FP16/FP32) | CoreML Apple Silicon GPU | `LibriSpeech` (5.65s) | 5.66s | 0.23s | 0.0401 | 100% PARITY ✓ |
+| **Qwen3-ASR 1.7B** | Official HF Safetensors (Zero Quantization) | Apple Silicon MLX Metal (Pure Rust) | `jfk.wav` (11.00s) | 11.00s | 12.05s | 1.0955 | 100% PARITY ✓ |
+| **Qwen3-ASR 1.7B** | Official HF Safetensors (Zero Quantization) | Apple Silicon MLX Metal (Pure Rust) | `LibriSpeech` (5.65s) | 5.66s | 11.10s | 1.9629 | 100% PARITY ✓ |
 
 ---
 

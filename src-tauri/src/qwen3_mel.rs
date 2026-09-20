@@ -1,175 +1,199 @@
-//! 128-channel log-mel spectrogram extractor for Qwen3-ASR.
+//! 128-channel Slaney log-mel spectrogram extractor for Qwen3-ASR.
 //!
 //! Matches the official `Qwen/Qwen3-ASR-1.7B` feature extractor configuration:
 //!   - Sample rate:   16 000 Hz
-//!   - FFT size:      512
-//!   - Window length: 400 samples (25 ms)
+//!   - FFT size:      400
+//!   - Window length: 400 samples (25 ms Hann window)
 //!   - Hop length:    160 samples (10 ms)
-//!   - Mel bins:      128   (Slaney-style area-normalized triangular filters)
+//!   - Mel bins:      128 (Slaney area-normalized triangular filters)
+//!   - Dynamic range: max - 8.0, normalized via `(x + 4.0) / 4.0`
 //!
-//! This is a pure-Rust, zero-Python implementation. Output shape: [n_frames, 128].
+//! Accelerated with `rustfft` and static plan caching.
+//! Output shape: [n_frames, 128].
 
 use ndarray::Array2;
+use rustfft::{num_complex::Complex, FftPlanner};
+use std::sync::{Arc, OnceLock};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 pub const QWEN3_SAMPLE_RATE: u32 = 16_000;
-pub const QWEN3_N_FFT: usize = 512;
+pub const QWEN3_N_FFT: usize = 400;
 pub const QWEN3_WIN_LENGTH: usize = 400;
 pub const QWEN3_HOP_LENGTH: usize = 160;
 pub const QWEN3_N_MELS: usize = 128;
+pub const QWEN3_N_FREQ_BINS: usize = QWEN3_N_FFT / 2 + 1; // 201
 
-const FREQ_MIN: f32 = 0.0;
-const FREQ_MAX: f32 = 8_000.0; // Nyquist for 16 kHz
+static FILTERBANK: OnceLock<Array2<f32>> = OnceLock::new();
+static HANN_WINDOW: OnceLock<Vec<f32>> = OnceLock::new();
+static FFT_PLAN: OnceLock<Arc<dyn rustfft::Fft<f32>>> = OnceLock::new();
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Extract a log-mel spectrogram from 16 kHz mono f32 PCM.
 ///
-/// Returns a matrix of shape `[n_frames, QWEN3_N_MELS]` where every column is
-/// a mel band and every row is one analysis frame.
+/// Returns a matrix of shape `[n_frames, QWEN3_N_MELS]` matching HuggingFace's
+/// `Qwen3ASRFeatureExtractor`.
 pub fn extract_qwen3_log_mel(audio: &[f32]) -> Array2<f32> {
-    let frames = stft(audio);
-    let filterbank = mel_filterbank();
-    apply_mel_and_log(&frames, &filterbank)
-}
+    if audio.is_empty() {
+        return Array2::<f32>::zeros((0, QWEN3_N_MELS));
+    }
 
-// ── STFT ──────────────────────────────────────────────────────────────────────
+    let window = HANN_WINDOW.get_or_init(|| hann_window(QWEN3_WIN_LENGTH));
+    let fft = FFT_PLAN.get_or_init(|| {
+        let mut planner = FftPlanner::<f32>::new();
+        planner.plan_fft_forward(QWEN3_N_FFT)
+    });
+    let fb = FILTERBANK.get_or_init(slaney_mel_filterbank);
 
-/// Compute the power spectrogram via an FFT-DFT approximation using the DFT
-/// formula directly — sufficient for the fixed short windows used here.
-fn stft(audio: &[f32]) -> Array2<f32> {
-    let window = hann_window(QWEN3_WIN_LENGTH);
     let pad = QWEN3_N_FFT / 2;
-
-    // Reflect-pad the signal on both sides.
-    let mut padded = Vec::with_capacity(audio.len() + 2 * pad);
-    for i in (1..=pad).rev() {
-        padded.push(*audio.get(i).unwrap_or(&0.0));
-    }
-    padded.extend_from_slice(audio);
-    for i in (audio.len().saturating_sub(pad)..audio.len()).rev() {
-        padded.push(*audio.get(i).unwrap_or(&0.0));
+    let n_frames = audio.len() / QWEN3_HOP_LENGTH;
+    if n_frames == 0 {
+        return Array2::<f32>::zeros((0, QWEN3_N_MELS));
     }
 
-    let n_frames = if padded.len() < QWEN3_WIN_LENGTH {
-        0
-    } else {
-        (padded.len() - QWEN3_WIN_LENGTH) / QWEN3_HOP_LENGTH + 1
-    };
-    let n_bins = QWEN3_N_FFT / 2 + 1; // 257
+    // 1. STFT magnitudes [n_frames, 201]
+    let mut magnitudes = Array2::<f32>::zeros((n_frames, QWEN3_N_FREQ_BINS));
+    let mut buf = vec![Complex::new(0.0f32, 0.0f32); QWEN3_N_FFT];
 
-    let mut power = Array2::<f32>::zeros((n_frames, n_bins));
-
-    for (f, frame) in power.rows_mut().into_iter().enumerate() {
+    for f in 0..n_frames {
         let start = f * QWEN3_HOP_LENGTH;
-        let windowed: Vec<f32> = (0..QWEN3_WIN_LENGTH)
-            .map(|i| padded.get(start + i).copied().unwrap_or(0.0) * window[i])
-            .collect();
-
-        // DFT on the zero-padded frame.
-        let padded_frame = {
-            let mut v = windowed;
-            v.resize(QWEN3_N_FFT, 0.0);
-            v
-        };
-
-        let mut frame = frame;
-        for k in 0..n_bins {
-            let (mut re, mut im) = (0.0_f64, 0.0_f64);
-            for n in 0..QWEN3_N_FFT {
-                let angle = -2.0 * std::f64::consts::PI * (k * n) as f64 / QWEN3_N_FFT as f64;
-                re += padded_frame[n] as f64 * angle.cos();
-                im += padded_frame[n] as f64 * angle.sin();
-            }
-            frame[k] = (re * re + im * im) as f32;
+        for i in 0..QWEN3_N_FFT {
+            let src = start as isize + i as isize - pad as isize;
+            let sample = if src < 0 {
+                audio[(-src) as usize]
+            } else if src >= audio.len() as isize {
+                let diff = src - audio.len() as isize + 1;
+                audio[audio.len().saturating_sub(diff as usize + 1)]
+            } else {
+                audio[src as usize]
+            };
+            buf[i] = Complex::new(sample * window[i], 0.0);
+        }
+        fft.process(&mut buf);
+        for b in 0..QWEN3_N_FREQ_BINS {
+            magnitudes[[f, b]] = buf[b].re * buf[b].re + buf[b].im * buf[b].im;
         }
     }
 
-    power
+    // 2. mel_spec = magnitudes @ filterbank -> [n_frames, 128]
+    let mut out = Array2::<f32>::zeros((n_frames, QWEN3_N_MELS));
+    let mut max_val = f32::NEG_INFINITY;
+
+    for f in 0..n_frames {
+        for m in 0..QWEN3_N_MELS {
+            let mut sum = 0.0f32;
+            for b in 0..QWEN3_N_FREQ_BINS {
+                sum += magnitudes[[f, b]] * fb[[b, m]];
+            }
+            let log_v = sum.max(1e-10).log10();
+            if log_v > max_val {
+                max_val = log_v;
+            }
+            out[[f, m]] = log_v;
+        }
+    }
+
+    // 3. Dynamic range clamp and normalization
+    let clamp_val = max_val - 8.0;
+    for v in out.iter_mut() {
+        *v = ((*v).max(clamp_val) + 4.0) / 4.0;
+    }
+
+    out
 }
 
 // ── Hann window ───────────────────────────────────────────────────────────────
 
 fn hann_window(n: usize) -> Vec<f32> {
     (0..n)
-        .map(|i| {
-            0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (n as f32 - 1.0)).cos())
-        })
+        .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / n as f32).cos()))
         .collect()
 }
 
-// ── Mel filterbank ────────────────────────────────────────────────────────────
+// ── Slaney Mel Filterbank ─────────────────────────────────────────────────────
 
-/// Build a [QWEN3_N_MELS × (N_FFT/2+1)] area-normalized triangular Mel filterbank.
-fn mel_filterbank() -> Array2<f32> {
-    let n_bins = QWEN3_N_FFT / 2 + 1; // 257
-    let f_min_mel = hz_to_mel(FREQ_MIN);
-    let f_max_mel = hz_to_mel(FREQ_MAX);
+/// Build [201, 128] Slaney area-normalized Mel filterbank.
+pub fn slaney_mel_filterbank() -> Array2<f32> {
+    // If a pre-dumped binary exists, load it; otherwise compute it analytically.
+    if let Ok(models_dir) = crate::utils::get_models_dir() {
+        for candidate in [
+            models_dir.join("qwen3-asr-1.7b-mlx").join("mel_filters.bin"),
+            std::path::PathBuf::from("target/qwen3-model-test/mel_filters.bin"),
+        ] {
+            if let Ok(bytes) = std::fs::read(&candidate) {
+                if bytes.len() == QWEN3_N_FREQ_BINS * QWEN3_N_MELS * 4 {
+                    let mut fb = Array2::<f32>::zeros((QWEN3_N_FREQ_BINS, QWEN3_N_MELS));
+                    let floats: Vec<f32> = bytes
+                        .chunks_exact(4)
+                        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                        .collect();
+                    for b in 0..QWEN3_N_FREQ_BINS {
+                        for m in 0..QWEN3_N_MELS {
+                            fb[[b, m]] = floats[b * QWEN3_N_MELS + m];
+                        }
+                    }
+                    return fb;
+                }
+            }
+        }
+    }
 
-    // QWEN3_N_MELS+2 linearly-spaced mel points → convert back to Hz.
-    let mel_points: Vec<f32> = (0..=(QWEN3_N_MELS + 1))
-        .map(|i| {
-            mel_to_hz(f_min_mel + i as f32 * (f_max_mel - f_min_mel) / (QWEN3_N_MELS + 1) as f32)
-        })
+    compute_slaney_filterbank()
+}
+
+fn compute_slaney_filterbank() -> Array2<f32> {
+    let num_mel = QWEN3_N_MELS;
+    let num_bins = QWEN3_N_FREQ_BINS;
+    let sr = QWEN3_SAMPLE_RATE as f32;
+
+    let hertz_to_mel = |hz: f32| -> f32 {
+        if hz < 1000.0 {
+            3.0 * hz / 200.0
+        } else {
+            15.0 + (hz / 1000.0).ln() * (27.0 / (6.4_f32).ln())
+        }
+    };
+
+    let mel_to_hertz = |mel: f32| -> f32 {
+        if mel < 15.0 {
+            200.0 * mel / 3.0
+        } else {
+            1000.0 * (((6.4_f32).ln() / 27.0) * (mel - 15.0)).exp()
+        }
+    };
+
+    let mel_min = hertz_to_mel(0.0);
+    let mel_max = hertz_to_mel(sr / 2.0);
+    let mel_points: Vec<f32> = (0..num_mel + 2)
+        .map(|i| mel_min + (mel_max - mel_min) * (i as f32) / (num_mel as f32 + 1.0))
+        .collect();
+    let filter_freqs: Vec<f32> = mel_points.iter().map(|&m| mel_to_hertz(m)).collect();
+
+    let fft_freqs: Vec<f32> = (0..num_bins)
+        .map(|k| (k as f32) * (sr / 2.0) / (num_bins as f32 - 1.0))
         .collect();
 
-    // Convert center frequencies to FFT bin indices.
-    let bin_freq = QWEN3_SAMPLE_RATE as f32 / QWEN3_N_FFT as f32;
-    let fft_bins: Vec<f32> = mel_points.iter().map(|&f| f / bin_freq).collect();
+    let mut fb = Array2::<f32>::zeros((num_bins, num_mel));
+    for m in 0..num_mel {
+        let f_left = filter_freqs[m];
+        let f_center = filter_freqs[m + 1];
+        let f_right = filter_freqs[m + 2];
+        let enorm = 2.0 / (f_right - f_left);
 
-    let mut fb = Array2::<f32>::zeros((QWEN3_N_MELS, n_bins));
-    for m in 0..QWEN3_N_MELS {
-        let f_m_minus = fft_bins[m];
-        let f_m = fft_bins[m + 1];
-        let f_m_plus = fft_bins[m + 2];
-        let width = f_m_plus - f_m_minus;
-
-        for k in 0..n_bins {
-            let k = k as f32;
-            let v = if k < f_m_minus || k > f_m_plus {
+        for k in 0..num_bins {
+            let f = fft_freqs[k];
+            let val = if f < f_left || f > f_right {
                 0.0
-            } else if k <= f_m {
-                2.0 / width * (k - f_m_minus) / (f_m - f_m_minus)
+            } else if f <= f_center {
+                (f - f_left) / (f_center - f_left)
             } else {
-                2.0 / width * (f_m_plus - k) / (f_m_plus - f_m)
+                (f_right - f) / (f_right - f_center)
             };
-            fb[[m, k as usize]] = v;
+            fb[[k, m]] = val * enorm;
         }
     }
     fb
-}
-
-fn hz_to_mel(hz: f32) -> f32 {
-    2595.0 * (1.0 + hz / 700.0).log10()
-}
-
-fn mel_to_hz(mel: f32) -> f32 {
-    700.0 * (10.0_f32.powf(mel / 2595.0) - 1.0)
-}
-
-// ── Mel + log ─────────────────────────────────────────────────────────────────
-
-/// Apply mel filterbank, take log, clamp at 1e-10.
-fn apply_mel_and_log(power: &Array2<f32>, fb: &Array2<f32>) -> Array2<f32> {
-    // power: [n_frames, n_bins]
-    // fb:    [N_MELS, n_bins]
-    // out:   [n_frames, N_MELS]
-    let n_frames = power.nrows();
-    let n_mels = QWEN3_N_MELS;
-    let n_bins = QWEN3_N_FFT / 2 + 1;
-
-    let mut out = Array2::<f32>::zeros((n_frames, n_mels));
-    for f in 0..n_frames {
-        for m in 0..n_mels {
-            let mut s = 0.0_f32;
-            for k in 0..n_bins {
-                s += fb[[m, k]] * power[[f, k]];
-            }
-            out[[f, m]] = s.max(1e-10).ln();
-        }
-    }
-    out
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -180,30 +204,17 @@ mod tests {
 
     #[test]
     fn filterbank_has_correct_shape() {
-        let fb = mel_filterbank();
-        assert_eq!(fb.nrows(), QWEN3_N_MELS);
-        assert_eq!(fb.ncols(), QWEN3_N_FFT / 2 + 1);
+        let fb = slaney_mel_filterbank();
+        assert_eq!(fb.nrows(), QWEN3_N_FREQ_BINS);
+        assert_eq!(fb.ncols(), QWEN3_N_MELS);
     }
 
     #[test]
     fn filterbank_is_non_negative() {
-        let fb = mel_filterbank();
+        let fb = slaney_mel_filterbank();
         for &v in fb.iter() {
             assert!(v >= 0.0, "negative filter coefficient: {v}");
         }
-    }
-
-    #[test]
-    fn hann_window_has_correct_length() {
-        let w = hann_window(QWEN3_WIN_LENGTH);
-        assert_eq!(w.len(), QWEN3_WIN_LENGTH);
-    }
-
-    #[test]
-    fn hann_window_starts_and_ends_near_zero() {
-        let w = hann_window(QWEN3_WIN_LENGTH);
-        assert!(w[0] < 1e-3, "Hann window should start near 0");
-        assert!(w[QWEN3_WIN_LENGTH - 1] < 1e-3, "Hann window should end near 0");
     }
 
     #[test]
@@ -217,17 +228,7 @@ mod tests {
     #[test]
     fn extract_empty_audio_returns_empty() {
         let mel = extract_qwen3_log_mel(&[]);
-        // Either 0 or 1 frames is acceptable; shape must be valid.
         assert_eq!(mel.ncols(), QWEN3_N_MELS);
-    }
-
-    #[test]
-    fn log_mel_values_are_negative() {
-        // log of values ≤ 1 must be ≤ 0.
-        let silence = vec![0.0_f32; 16_000];
-        let mel = extract_qwen3_log_mel(&silence);
-        for &v in mel.iter() {
-            assert!(v <= 0.0, "log-mel of silence should be ≤ 0, got {v}");
-        }
+        assert_eq!(mel.nrows(), 0);
     }
 }

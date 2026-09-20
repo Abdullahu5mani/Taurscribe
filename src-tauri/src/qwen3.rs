@@ -491,10 +491,7 @@ impl Qwen3Manager {
     fn run_mlx_inference(&mut self, audio: &[f32], prompt: Option<&str>) -> Result<String, String> {
         let engine = self.mlx.as_mut().ok_or("Qwen3 MLX not loaded")?;
         let tokenizer = self.tokenizer.as_ref().ok_or("Qwen3 tokenizer not loaded")?;
-        let token_ids = engine.transcribe(audio, prompt, tokenizer)?;
-        tokenizer
-            .decode(&token_ids, true)
-            .map_err(|e| format!("Qwen3 tokenizer decode: {e}"))
+        engine.transcribe_to_string(audio, prompt, tokenizer)
     }
 
     // ── ONNX encoder + greedy decoder ─────────────────────────────────────
@@ -548,14 +545,15 @@ impl Qwen3Manager {
         //      - `input_ids`:             [1, seq_len]   (growing)
         //    and returns:
         //      - `logits`:                [1, seq_len, vocab_size]
+        let enc_hidden_tensor =
+            ort::value::Value::from_array((vec![1usize, enc_t, enc_d], enc_data))
+                .map(|t| t.into_dyn())
+                .map_err(|e| format!("Qwen3 enc hidden tensor: {e}"))?;
+
         let mut generated_ids: Vec<i64> = prompt_ids;
+        generated_ids.reserve(MAX_NEW_TOKENS);
 
         for _ in 0..MAX_NEW_TOKENS {
-            let enc_hidden_tensor =
-                ort::value::Value::from_array((vec![1usize, enc_t, enc_d], enc_data.clone()))
-                    .map(|t| t.into_dyn())
-                    .map_err(|e| format!("Qwen3 enc hidden tensor: {e}"))?;
-
             let seq_len = generated_ids.len();
             let ids_tensor =
                 ort::value::Value::from_array((vec![1usize, seq_len], generated_ids.clone()))
@@ -565,7 +563,7 @@ impl Qwen3Manager {
             let dec_outputs = runtime
                 .decoder
                 .run(ort::inputs![
-                    "encoder_hidden_states" => enc_hidden_tensor,
+                    "encoder_hidden_states" => &enc_hidden_tensor,
                     "input_ids" => ids_tensor
                 ])
                 .map_err(|e| format!("Qwen3 decoder step: {e}"))?;
