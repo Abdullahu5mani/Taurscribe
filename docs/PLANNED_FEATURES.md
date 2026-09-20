@@ -14,9 +14,7 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
             │
 [ ✓ COMPLETED: Custom Jargon  ] ──► +50% term accuracy & 59% WER error reduction in transcripts
             │
-[ STEP 1.1: Adaptive Learning ] ──► Auto-injects words corrected by user in pasted area
-            │
-[ STEP 2: Meeting Catalog     ] ──► Builds the database & UI home where meetings live
+[ STEP 2: Meeting Catalog     ] ──► Builds the database & UI home where meetings live (NEXT)
             │
 [ STEP 3: Auto-Categorize     ] ──► Hooks post-meeting LLM classification into that catalog
             │
@@ -28,7 +26,9 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
             │
 [ STEP 7: Floating HUD        ] ──► Polishes daily voice typing with a Dynamic Island floating capsule
             │
-[ STEP 8: Model Tuning        ] ──► (Deferred) Fine-tunes custom model for voice transform commands
+[ LATER: In-Situ Learning     ] ──► Auto-injects words corrected by user in pasted area
+            │
+[ LATER: Model Tuning         ] ──► (Deferred) Fine-tunes custom model for voice transform commands
 ```
 
 ---
@@ -39,13 +39,13 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
 |:---:|:---|:---:|:---|:---:|
 | **—** | [1-Click Whisper CoreML ANE Auto-Downloader](#completed-1-click-whisper-coreml-ane-auto-downloader) | ✅ **COMPLETE** | **Already Live & Verified**: Automatically bundles `.bin` + companion `.mlmodelc.zip` for 85x real-time inference on Apple Silicon. | Done |
 | **1** | [Custom Vocabulary & Context Jargon Injection](#step-1-custom-vocabulary--context-jargon-injection) | ✅ **COMPLETE** | **Empirically Verified**: +50% proper noun accuracy gain and 59% relative WER reduction on LibriSpeech corpus. Integrated across recording, file transcription, and settings UI. | Done |
-| **1.1** | [Adaptive In-Situ Correction Learning](#step-11-adaptive-in-situ-correction-learning) | 🟡 **NEXT** | **Self-Improving Flywheel**: When a user corrects a mistranscribed word in the area where text was pasted, smartly ingest that word into custom vocabulary to bias decoder prompts automatically next time. | ~1 day |
-| **2** | [Searchable Meeting Catalog Hub](#step-2-searchable-meeting-catalog-hub) | ⚪ Planned | **Data & UI Foundation**: You cannot categorize or diarize meetings until there is a database store and a dedicated "Meetings" view in the UI to hold them. | ~1–2 days |
+| **2** | [Searchable Meeting Catalog Hub](#step-2-searchable-meeting-catalog-hub) | 🟡 **NEXT** | **Data & UI Foundation**: You cannot categorize or diarize meetings until there is a database store and a dedicated "Meetings" view in the UI to hold them. | ~1–2 days |
 | **3** | [Automated Meeting Categorization + Confirmation](#step-3-automated-meeting-categorization--confirmation) | ⚪ Planned | **First Meeting Intelligence Layer**: Hooks into the end of recordings to classify meetings (Engineering, 1-on-1, etc.), generate titles, and save into the Catalog. | ~1 day |
 | **4** | [Speaker Diarization + Voiceprint Vault & Audio Snippets](#step-4-speaker-diarization-voiceprint-vault--audio-snippets) | ⚪ Planned | **Speaker Intelligence**: Layers on top of meeting recording: separates speakers, extracts 3s isolated audio clips for user labeling, and remembers voiceprints. | ~2–3 days |
 | **5** | [Qwen3-ASR Engine Integration (Open ASR SOTA)](#step-5-qwen3-asr-engine-integration-open-asr-leaderboard-sota) | ⚪ Planned | **Conversational Speech Champion**: Integrates the #1 model from the Open ASR Leaderboard to handle overlapping, accented, and jargon-dense meetings. | ~1–2 days |
 | **6** | [Dual-Channel System Loopback & Mic Recorder](#step-6-dual-channel-system-loopback--mic-recorder) | ⚪ Planned | **Bot-Free Call Capture**: Feeds computer speaker audio (Zoom, Teams, Meet) directly into the now-complete diarization, categorization, and cataloging pipeline. | ~3–4 days |
 | **7** | [Live Floating Capsule with Audio Waveform](#step-7-live-floating-capsule-with-audio-waveform) | ⚪ Planned | **Daily UX Polish**: Replaces the static overlay with a sleek Dynamic Island-style floating pill tracking the active caret with a 60 FPS visualizer. | ~2–3 days |
+| **Later** | [Adaptive In-Situ Correction Learning](#later-adaptive-in-situ-correction-learning) | ⚪ Planned (Later) | **Self-Improving Flywheel**: When a user corrects a mistranscribed word in the area where text was pasted, smartly ingest that word into custom vocabulary to bias decoder prompts automatically next time. | ~1 day |
 | **8** | [Voice Transformation Commands (Fine-Tuning)](#step-8-voice-transformation-commands-specialized-model-fine-tuning) | ⏸️ **DEFERRED** | **Advanced Post-Processing**: Curates dataset and fine-tunes a specialized instruction model for voice-directed editing (*"bullet this"*, *"make formal"*). | Deferred |
 
 ---
@@ -83,28 +83,6 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
      - **+50.0% proper noun accuracy gain** (16.7% baseline -> 66.7% with custom vocab).
      - **59.0% relative WER error reduction** on difficult names.
      - 100% target accuracy on Gibbon, Edison, and classical literature terms (`Gamewell`, `Ambrose`, `electrolytic`, `vicissitudes`).
-
----
-
-## STEP 1.1: Adaptive In-Situ Correction Learning
-* **Strategic Role:** Self-Improving Accuracy Flywheel
-* **Estimated Effort:** ~1 day
-* **Target Platforms:** All Platforms (macOS, Windows, Linux)
-
-### Why Build This Next?
-Users should not need to manually open Settings and type every technical term or proper noun into a list. When Taurscribe pastes a transcript into the user's active editor, document, or chat window and the user immediately backspaces or edits a mistranscribed word, Taurscribe can detect the user's manual correction in-situ and automatically learn it.
-
-### Implementation Architecture
-1. **Pasted Range Fingerprint**:
-   - When `type_text` or clipboard paste executes, save a lightweight snapshot of the emitted text snippet, target process, and timestamp.
-2. **In-Situ Edit Detection**:
-   - Monitor short-window post-paste text edits (via Accessibility API / active field inspection / clipboard diff if the user copies their corrected text).
-   - Compute the Levenshtein / word-level diff between what Taurscribe pasted and the user's immediate correction (e.g. pasted: `"Montelet"`, corrected to: `"Montalais"`).
-3. **Smart Ingestion Flow**:
-   - Filter out ordinary English typos; identify high-entropy terms, capitalized proper nouns, camelCase identifiers, and technical acronyms.
-   - Automatically append the corrected term to `custom_vocabulary` in `settings.json` (with an optional subtle toast / notification in the floating overlay: *"Added 'Montalais' to custom vocabulary"*).
-4. **Immediate Continuous Improvement**:
-   - The very next time the user dictates, that learned word is already injected into the Whisper decoder prompt—ensuring that the same mistake is never made twice.
 
 ---
 
@@ -217,6 +195,21 @@ With the meeting intelligence pipeline complete, this step circles back to polis
 
 ---
 
+## [LATER ENHANCEMENT] Adaptive In-Situ Correction Learning
+* **Strategic Role:** Self-Improving Accuracy Flywheel (Post-Core Meetings)
+* **Estimated Effort:** ~1 day
+* **Status:** ⚪ **Planned (After Core Features Complete)**
+* **Target Platforms:** All Platforms (macOS, Windows, Linux)
+
+### Purpose & Architecture
+Users should not need to manually open Settings and type every technical term or proper noun into a list. After shipping the primary meeting catalog and diarization workflows, this feature will monitor when Taurscribe pastes a transcript into the user's active editor, document, or chat window:
+1. **Pasted Range Fingerprint**: Snapshot the emitted text snippet, target process, and timestamp.
+2. **In-Situ Edit Detection**: Observe short-window manual edits or backspaces in the active text field.
+3. **Smart Correction Delta**: Compute the word-level diff (e.g. user corrected `"Montelet"` → `"Montalais"` or `"electromagnetic"` → `"electrolytic"`).
+4. **Auto-Ingestion into Prompt**: Ingest the corrected term directly into `custom_vocabulary` in `settings.json`, ensuring the word is automatically biased in the Whisper decoder prompt on the very next recording.
+
+---
+
 ## STEP 8: Voice Transformation Commands (Specialized Model Fine-Tuning)
 * **Strategic Role:** Advanced Future Milestone (Deferred)
 * **Estimated Effort:** Multi-Week Research & Training Cycle
@@ -235,8 +228,8 @@ Unlike standard prompting, zero-latency voice transformation commands (*"bullet 
 │   ✓ Whisper CoreML ANE Bundling: 85x Real-Time offload on Apple Silicon     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 1: Jargon & Meeting Catalog Backbone (Days 1–3)                       │
-│   🟡 Step 1: Custom Vocabulary & Context Jargon Injection                   │
-│   ⚪ Step 2: Searchable Meeting Catalog Hub & Storage                       │
+│   ✓ Step 1: Custom Vocabulary & Context Jargon Injection (VERIFIED)         │
+│   🟡 Step 2: Searchable Meeting Catalog Hub & Storage (NEXT)                │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 2: Meeting Intelligence & Diarization (Days 4–8)                      │
 │   ⚪ Step 3: Automated Meeting Categorization & Confirmation Modal          │
@@ -246,8 +239,9 @@ Unlike standard prompting, zero-latency voice transformation commands (*"bullet 
 │   ⚪ Step 5: Qwen3-ASR Engine Integration (Open ASR #1 SOTA)                │
 │   ⚪ Step 6: Dual-Channel System Loopback & Mic Meeting Recorder            │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 4: UI Polish & Future ML (Week 3+)                                    │
+│ PHASE 4: UI Polish & Future Enhancements (Week 3+)                          │
 │   ⚪ Step 7: Live Floating Capsule with Waveform Visualizer                 │
+│   ⚪ Later: Adaptive In-Situ Correction Learning (Post-Paste Auto-Learn)    │
 │   ⏸️ Step 8: Voice Transformation Commands (Model Fine-Tuning Deferred)     │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
