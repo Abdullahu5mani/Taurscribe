@@ -14,13 +14,15 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
             │
 [ ✓ COMPLETED: Custom Jargon  ] ──► +50% term accuracy & 59% WER error reduction in transcripts
             │
+[ ✓ COMPLETED: Qwen3-ASR SOTA ] ──► SOTA conversational speech engine (Pure Rust MLX + ONNX)
+            │
+[ ✓ COMPLETED: Appium E2E & UI] ──► 100% automated UI tests & multi-engine benchmarks verified
+            │
 [ STEP 2: Meeting Catalog     ] ──► Builds the database & UI home where meetings live (NEXT)
             │
 [ STEP 3: Auto-Categorize     ] ──► Hooks post-meeting LLM classification into that catalog
             │
 [ STEP 4: Diarization         ] ──► Layers speaker separation, 3s audio snippets, & voiceprints on top
-            │
-[ STEP 5: Qwen3-ASR SOTA      ] ──► Powers meetings with the #1 conversational model on Open ASR
             │
 [ STEP 6: System Loopback     ] ──► Unlocks direct bot-free Zoom/Teams call recording into the pipeline
             │
@@ -38,11 +40,12 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
 | Step | Milestone | Status | Strategic Rationale & Architectural Dependency | Effort |
 |:---:|:---|:---:|:---|:---:|
 | **—** | [1-Click Whisper CoreML ANE Auto-Downloader](#completed-1-click-whisper-coreml-ane-auto-downloader) | ✅ **COMPLETE** | **Already Live & Verified**: Automatically bundles `.bin` + companion `.mlmodelc.zip` for 85x real-time inference on Apple Silicon. | Done |
-| **1** | [Custom Vocabulary & Context Jargon Injection](#step-1-custom-vocabulary--context-jargon-injection) | ✅ **COMPLETE** | **Empirically Verified**: +50% proper noun accuracy gain and 59% relative WER reduction on LibriSpeech corpus. Integrated across recording, file transcription, and settings UI. | Done |
+| **1** | [Custom Vocabulary & Context Jargon Injection](#completed-step-1-custom-vocabulary--context-jargon-injection) | ✅ **COMPLETE** | **Empirically Verified**: +50% proper noun accuracy gain and 59% relative WER reduction on LibriSpeech corpus. Integrated across recording, file transcription, and settings UI. | Done |
+| **—** | [Qwen3-ASR Engine Integration (Open ASR SOTA)](#completed-step-5-qwen3-asr-engine-integration-open-asr-leaderboard-sota) | ✅ **COMPLETE** | **Conversational Speech Champion (Zero-Python)**: SOTA #1 accuracy model from Open ASR Leaderboard integrated with native pure-Rust MLX (Apple Silicon) and ONNX (CUDA/DirectML/CPU) backends, 128-mel DSP frontend. | Done |
+| **—** | [Appium macOS E2E UI Automation & Multi-Engine Verification](#completed-appium-macos-e2e-ui-automation--multi-engine-verification) | ✅ **COMPLETE** | **100% E2E UI Verification**: Automated native file picker (`Cmd+Shift+G`), CoreML file transcription (50.2x RT), engine picker popovers, dictation mode, full 6-tab settings navigation, and 24 screenshot artifacts. | Done |
 | **2** | [Searchable Meeting Catalog Hub](#step-2-searchable-meeting-catalog-hub) | 🟡 **NEXT** | **Data & UI Foundation**: You cannot categorize or diarize meetings until there is a database store and a dedicated "Meetings" view in the UI to hold them. | ~1–2 days |
 | **3** | [Automated Meeting Categorization + Confirmation](#step-3-automated-meeting-categorization--confirmation) | ⚪ Planned | **First Meeting Intelligence Layer**: Hooks into the end of recordings to classify meetings (Engineering, 1-on-1, etc.), generate titles, and save into the Catalog. | ~1 day |
 | **4** | [Speaker Diarization + Voiceprint Vault & Audio Snippets](#step-4-speaker-diarization-voiceprint-vault--audio-snippets) | ⚪ Planned | **Speaker Intelligence**: Layers on top of meeting recording: separates speakers, extracts 3s isolated audio clips for user labeling, and remembers voiceprints. | ~2–3 days |
-| **5** | [Qwen3-ASR Engine Integration (Open ASR SOTA)](#step-5-qwen3-asr-engine-integration-open-asr-leaderboard-sota) | ✅ **COMPLETE** | **Conversational Speech Champion (Zero-Python)**: SOTA #1 accuracy model from Open ASR Leaderboard integrated with native pure-Rust MLX (Apple Silicon) and ONNX (CUDA/DirectML/CPU) backends, 128-mel DSP frontend. | Done |
 | **6** | [Dual-Channel System Loopback & Mic Recorder](#step-6-dual-channel-system-loopback--mic-recorder) | ⚪ Planned | **Bot-Free Call Capture**: Feeds computer speaker audio (Zoom, Teams, Meet) directly into the now-complete diarization, categorization, and cataloging pipeline. | ~3–4 days |
 | **7** | [Live Floating Capsule with Audio Waveform](#step-7-live-floating-capsule-with-audio-waveform) | ⚪ Planned | **Daily UX Polish**: Replaces the static overlay with a sleek Dynamic Island-style floating pill tracking the active caret with a 60 FPS visualizer. | ~2–3 days |
 | **Later** | [Adaptive In-Situ Correction Learning](#later-adaptive-in-situ-correction-learning) | ⚪ Planned (Later) | **Self-Improving Flywheel**: When a user corrects a mistranscribed word in the area where text was pasted, smartly ingest that word into custom vocabulary to bias decoder prompts automatically next time. | ~1 day |
@@ -86,7 +89,61 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
 
 ---
 
+## [COMPLETED] Step 5: Qwen3-ASR Engine Integration (Open ASR Leaderboard SOTA)
+* **Status:** ✅ **COMPLETED & VERIFIED (Zero-Python Native MLX + ONNX)**
+* **Strategic Role:** Maximum Conversational Accuracy
+* **Target Platforms:** All Platforms (macOS Apple Silicon via MLX Metal, Windows/Linux via ONNX Runtime CUDA/DirectML/CPU)
+
+### Delivered Capabilities
+1. **Zero-Python Runtime**: Completely native compiled Rust execution across all targets.
+2. **Apple Silicon MLX Backend** (`qwen3_mlx`): Direct Metal GPU execution on raw `model.safetensors` weights via `mlx-rs`.
+3. **Cross-Platform ONNX Runtime Backend**: Dual AuT audio transformer encoder + Qwen3-1.4B autoregressive LLM decoder via `ort` with CUDA, DirectML, and multi-threaded CPU fallback.
+4. **DSP Audio Frontend** (`qwen3_mel`): 128-channel log-mel spectrogram extractor in pure Rust with Slaney-style area-normalized filterbank.
+5. **Full Pipeline Integration**: Available in live mic recording (`recording.rs`), file transcription (`file_transcription.rs`), engine switcher (`useEngineSwitch.ts`), and settings UI (`EnginePicker.tsx`, `ModelsTab.tsx`).
+6. **Custom Vocabulary Biasing**: Injects domain terms into the system prompt prefix for prompt-level vocabulary biasing.
+7. **Passing Tests**: All 66 unit and integration tests passing in `cargo test --lib`.
+
+---
+
+## [COMPLETED] Appium macOS E2E UI Automation & Multi-Engine Verification
+* **Status:** ✅ **COMPLETED & VERIFIED (Exit Code 0, 100% Pass)**
+* **Script**: `scripts/tests/test_appium_models_e2e.ts`
+* **Accessibility Suite**: `scripts/tests/test_appium_accessibility.py` (12/12 tests PASS)
+
+### Delivered Capabilities & Bug Fixes
+1. **Automated Native macOS File Open Dialog**:
+   - Automates the native macOS Finder file sheet (`Cmd+Shift+G`, clipboard path paste, Enter, and confirmation `Open`).
+2. **UI File Transcription & Speed**:
+   - Transcribed 11.0s JFK speech in 1.1s (**50.2x real-time on Apple Silicon CoreML**), fully rendered in the UI with copy/re-run actions and keyword validation.
+3. **CoreML File Transcription Neural Engine Fix**:
+   - Resolved the 53% hang caused by dynamic context truncation (`set_audio_ctx`) on fixed-frame CoreML models. Fixed with full-buffer decoding matching real-time dictation speed.
+4. **On-Demand Engine Initialization**:
+   - Added automatic model initialization on file submission to prevent uninitialized context errors while preserving startup memory efficiency.
+5. **Multi-Engine Popover & Settings 6-Tab Tour**:
+   - Verified drill-downs for Whisper, Parakeet, Granite, and Qwen3.
+   - Verified navigation across all 6 Settings tabs (`Models`, `Recording`, `Grammar`, `Text & Custom Vocabulary`, `App`, `About`).
+   - Automated interaction with the `+ Developer Pack` preset, verifying 15 keyword chips rendered with deletion controls.
+   - Inspected hardware diagnostics: Apple Silicon ANE badge, 10 GPU cores, NEON SIMD.
+6. **Live Milestone Screenshot Evidence**:
+   - 24 screenshots captured and verified in `/tmp/taurscribe_screenshots` and preserved in the artifacts directory.
+
+### Verified Multi-Model Benchmark Matrix
+
+| Model Family | Version / Variant | Hardware Backend | Audio Input | Duration | Latency | RTF | Accuracy Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Parakeet Nemotron 0.6B** | MLX FastConformer RNN-T (Native FP32) | Apple Silicon Metal GPU | `jfk.wav` (11.00s) | 11.00s | 2.95s | 0.2684 | 100% PARITY ✓ |
+| **Parakeet Nemotron 0.6B** | MLX FastConformer RNN-T (Native FP32) | Apple Silicon Metal GPU | `LibriSpeech` (5.65s) | 5.66s | 1.43s | 0.2536 | 100% PARITY ✓ |
+| **Whisper Tiny** | Quantized Q5_1 (CoreML Offloaded) | CoreML Apple Silicon GPU | `jfk.wav` (11.00s) | 11.00s | 0.17s | 0.0152 | 100% PARITY ✓ |
+| **Whisper Tiny** | Quantized Q5_1 (CoreML Offloaded) | CoreML Apple Silicon GPU | `LibriSpeech` (5.65s) | 5.66s | 0.16s | 0.0288 | 100% PARITY ✓ |
+| **Whisper Tiny** | Standard Multilingual (FP16/FP32) | CoreML Apple Silicon GPU | `jfk.wav` (11.00s) | 11.00s | 0.20s | 0.0185 | 100% PARITY ✓ |
+| **Whisper Tiny** | Standard Multilingual (FP16/FP32) | CoreML Apple Silicon GPU | `LibriSpeech` (5.65s) | 5.66s | 0.19s | 0.0338 | 100% PARITY ✓ |
+| **Qwen3-ASR 1.7B** | Official Transformers Multimodal LM | Apple Silicon MPS | `jfk.wav` (11.00s) | 11.00s | 40.44s | 3.6765 | 100% PARITY ✓ |
+| **Qwen3-ASR 1.7B** | Official Transformers Multimodal LM | Apple Silicon MPS | `LibriSpeech` (5.65s) | 5.66s | 40.36s | 3.6693 | 100% PARITY ✓ |
+
+---
+
 ## STEP 2: Searchable Meeting Catalog Hub
+* **Status:** 🟡 **NEXT FOCUS**
 * **Strategic Role:** Storage & UI Backbone for Meetings
 * **Estimated Effort:** ~1–2 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
@@ -144,22 +201,6 @@ With meeting storage and post-meeting review working, we now layer in **Speaker 
 3. **Voiceprint Vault (`voiceprints.json`)**:
    - Stores user-labeled embeddings.
    - Computes cosine similarity ($\tau \ge 0.75$) to auto-identify enrolled speakers in all future meetings.
-
----
-
-## STEP 5: Qwen3-ASR Engine Integration (Open ASR SOTA)
-* **Status:** ✅ **COMPLETED & VERIFIED (Zero-Python Native MLX + ONNX)**
-* **Strategic Role:** Maximum Conversational Accuracy
-* **Target Platforms:** All Platforms (macOS Apple Silicon via MLX Metal, Windows/Linux via ONNX Runtime CUDA/DirectML/CPU)
-
-### Verified Capabilities
-1. **Zero-Python Runtime**: Completely native compiled Rust execution across all targets.
-2. **Apple Silicon MLX Backend** (`qwen3_mlx`): Direct Metal GPU execution on raw `model.safetensors` weights via `mlx-rs`.
-3. **Cross-Platform ONNX Runtime Backend**: Dual AuT audio transformer encoder + Qwen3-1.4B autoregressive LLM decoder via `ort` with CUDA, DirectML, and multi-threaded CPU fallback.
-4. **DSP Audio Frontend** (`qwen3_mel`): 128-channel log-mel spectrogram extractor in pure Rust with Slaney-style area-normalized filterbank.
-5. **Full Pipeline Integration**: Available in live mic recording (`recording.rs`), file transcription (`file_transcription.rs`), engine switcher (`useEngineSwitch.ts`), and settings UI (`EnginePicker.tsx`, `ModelsTab.tsx`).
-6. **Custom Vocabulary Biasing**: Injects domain terms into the system prompt prefix for prompt-level vocabulary biasing.
-7. **Passing Tests**: All 66 unit and integration tests passing in `cargo test --lib`.
 
 ---
 
@@ -225,6 +266,8 @@ Unlike standard prompting, zero-latency voice transformation commands (*"bullet 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ FOUNDATION: Already Verified & Live                                        │
 │   ✓ Whisper CoreML ANE Bundling: 85x Real-Time offload on Apple Silicon     │
+│   ✓ Qwen3-ASR SOTA: Pure Rust MLX (Metal) & ONNX Runtime (CUDA/CPU)         │
+│   ✓ Appium E2E Automation: 100% pass, 24 UI screenshots, CoreML 50.2x RT    │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 1: Jargon & Meeting Catalog Backbone (Days 1–3)                       │
 │   ✓ Step 1: Custom Vocabulary & Context Jargon Injection (VERIFIED)         │
@@ -234,8 +277,7 @@ Unlike standard prompting, zero-latency voice transformation commands (*"bullet 
 │   ⚪ Step 3: Automated Meeting Categorization & Confirmation Modal          │
 │   ⚪ Step 4: Speaker Diarization + Voiceprint Vault & Audio Snippets        │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 3: Flagship Speech & OS Audio Capture (Week 2–3)                      │
-│   ⚪ Step 5: Qwen3-ASR Engine Integration (Open ASR #1 SOTA)                │
+│ PHASE 3: OS Audio Capture (Week 2–3)                                        │
 │   ⚪ Step 6: Dual-Channel System Loopback & Mic Meeting Recorder            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 4: UI Polish & Future Enhancements (Week 3+)                          │

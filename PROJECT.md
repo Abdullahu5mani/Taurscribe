@@ -41,7 +41,8 @@ The architecture interfaces with platform-native OS features:
 | M3 | Intel macOS CI Release Matrix Expansion (R3) | `.github/workflows/release.yml` x86_64 target, dylibbundler bundling, `Taurscribe_x64.dmg` artifact production | none | DONE |
 | M4 | Windows P/E-Core Affinity & SIMD Runtime Dispatch (R4) | Windows hybrid P-core affinity pinning (`GetLogicalProcessorInformationEx`), AVX-512/AVX-VNNI/AVX2 detection, GPU LLM retention | none | DONE |
 | M5 | Linux Wayland Input & PipeWire Audio Capture (R5) | Wayland multi-tier text injection, PipeWire audio negotiation, Linux CI build re-enablement with dynamic CUDA stubs | M3 | DONE |
-| M6 | Final Verification & Leftovers Audit | Comprehensive validation across CI syntax, cross-platform cargo checks, test pass, and physical hardware audit | M1, M2, M3, M4, M5 | IN_PROGRESS |
+| M6 | Final Verification & Leftovers Audit | Comprehensive validation across CI syntax, cross-platform cargo checks, test pass, and physical hardware audit | M1, M2, M3, M4, M5 | DONE |
+| M7 | Appium macOS E2E UI Automation & Multi-Engine Benchmarks | Full automated UI test suite across native file picker, CoreML file transcription (50.2x RT), engine picker popover, settings navigation, and multi-model benchmark matrix | M1, M2 | DONE |
 
 ---
 
