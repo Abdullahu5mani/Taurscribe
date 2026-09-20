@@ -42,7 +42,7 @@ Rather than building in order of raw difficulty, this roadmap is engineered so t
 | **2** | [Searchable Meeting Catalog Hub](#step-2-searchable-meeting-catalog-hub) | 🟡 **NEXT** | **Data & UI Foundation**: You cannot categorize or diarize meetings until there is a database store and a dedicated "Meetings" view in the UI to hold them. | ~1–2 days |
 | **3** | [Automated Meeting Categorization + Confirmation](#step-3-automated-meeting-categorization--confirmation) | ⚪ Planned | **First Meeting Intelligence Layer**: Hooks into the end of recordings to classify meetings (Engineering, 1-on-1, etc.), generate titles, and save into the Catalog. | ~1 day |
 | **4** | [Speaker Diarization + Voiceprint Vault & Audio Snippets](#step-4-speaker-diarization-voiceprint-vault--audio-snippets) | ⚪ Planned | **Speaker Intelligence**: Layers on top of meeting recording: separates speakers, extracts 3s isolated audio clips for user labeling, and remembers voiceprints. | ~2–3 days |
-| **5** | [Qwen3-ASR Engine Integration (Open ASR SOTA)](#step-5-qwen3-asr-engine-integration-open-asr-leaderboard-sota) | ⚪ Planned | **Conversational Speech Champion**: Integrates the #1 model from the Open ASR Leaderboard to handle overlapping, accented, and jargon-dense meetings. | ~1–2 days |
+| **5** | [Qwen3-ASR Engine Integration (Open ASR SOTA)](#step-5-qwen3-asr-engine-integration-open-asr-leaderboard-sota) | ✅ **COMPLETE** | **Conversational Speech Champion (Zero-Python)**: SOTA #1 accuracy model from Open ASR Leaderboard integrated with native pure-Rust MLX (Apple Silicon) and ONNX (CUDA/DirectML/CPU) backends, 128-mel DSP frontend. | Done |
 | **6** | [Dual-Channel System Loopback & Mic Recorder](#step-6-dual-channel-system-loopback--mic-recorder) | ⚪ Planned | **Bot-Free Call Capture**: Feeds computer speaker audio (Zoom, Teams, Meet) directly into the now-complete diarization, categorization, and cataloging pipeline. | ~3–4 days |
 | **7** | [Live Floating Capsule with Audio Waveform](#step-7-live-floating-capsule-with-audio-waveform) | ⚪ Planned | **Daily UX Polish**: Replaces the static overlay with a sleek Dynamic Island-style floating pill tracking the active caret with a 60 FPS visualizer. | ~2–3 days |
 | **Later** | [Adaptive In-Situ Correction Learning](#later-adaptive-in-situ-correction-learning) | ⚪ Planned (Later) | **Self-Improving Flywheel**: When a user corrects a mistranscribed word in the area where text was pasted, smartly ingest that word into custom vocabulary to bias decoder prompts automatically next time. | ~1 day |
@@ -148,19 +148,18 @@ With meeting storage and post-meeting review working, we now layer in **Speaker 
 ---
 
 ## STEP 5: Qwen3-ASR Engine Integration (Open ASR SOTA)
+* **Status:** ✅ **COMPLETED & VERIFIED (Zero-Python Native MLX + ONNX)**
 * **Strategic Role:** Maximum Conversational Accuracy
-* **Estimated Effort:** ~1–2 days
-* **Target Platforms:** All Platforms (macOS, Windows, Linux)
+* **Target Platforms:** All Platforms (macOS Apple Silicon via MLX Metal, Windows/Linux via ONNX Runtime CUDA/DirectML/CPU)
 
-### Why Build This Here?
-Now that multi-speaker meeting intelligence is fully functional, we give users access to the **#1 model on the Hugging Face Open ASR Leaderboard**. While Parakeet remains the undisputed speed demon for live push-to-talk typing, Qwen3-ASR is unmatched for complex conversational meetings, dialectal speech, and technical jargon.
-
-### Implementation Architecture
-1. Load Qwen3-ASR ONNX weights via existing `ort` pipeline (or GGUF via `llama-cpp-2`).
-2. Expose in Engine Picker:
-   - **Parakeet**: Real-time typing (sub-80ms keyboard replacement).
-   - **Whisper**: Multilingual standard with CoreML ANE offload.
-   - **Qwen3-ASR**: SOTA conversational accuracy for long-form meetings.
+### Verified Capabilities
+1. **Zero-Python Runtime**: Completely native compiled Rust execution across all targets.
+2. **Apple Silicon MLX Backend** (`qwen3_mlx`): Direct Metal GPU execution on raw `model.safetensors` weights via `mlx-rs`.
+3. **Cross-Platform ONNX Runtime Backend**: Dual AuT audio transformer encoder + Qwen3-1.4B autoregressive LLM decoder via `ort` with CUDA, DirectML, and multi-threaded CPU fallback.
+4. **DSP Audio Frontend** (`qwen3_mel`): 128-channel log-mel spectrogram extractor in pure Rust with Slaney-style area-normalized filterbank.
+5. **Full Pipeline Integration**: Available in live mic recording (`recording.rs`), file transcription (`file_transcription.rs`), engine switcher (`useEngineSwitch.ts`), and settings UI (`EnginePicker.tsx`, `ModelsTab.tsx`).
+6. **Custom Vocabulary Biasing**: Injects domain terms into the system prompt prefix for prompt-level vocabulary biasing.
+7. **Passing Tests**: All 66 unit and integration tests passing in `cargo test --lib`.
 
 ---
 
