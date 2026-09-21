@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { IconVideo, IconX, IconRecord } from "./Icons";
+import { Store } from "@tauri-apps/plugin-store";
+import { MEETING_KEYS, DEFAULT_AUTORECORD_DELAY } from "./settings/types";
 import "./MeetingBanner.css";
 
 export interface MeetingInfo {
@@ -17,89 +17,132 @@ export interface MeetingInfo {
 }
 
 interface MeetingBannerProps {
+    meeting: MeetingInfo | null;
     isRecording: boolean;
     onStartDualRecording: () => void;
+    suppressBanner?: boolean;
 }
 
-export function MeetingBanner({ isRecording, onStartDualRecording }: MeetingBannerProps) {
-    const [meeting, setMeeting] = useState<MeetingInfo | null>(null);
-    const [dismissedPid, setDismissedPid] = useState<number | null>(null);
+export function MeetingBanner({ meeting, isRecording, onStartDualRecording, suppressBanner }: MeetingBannerProps) {
+    const [dismissedMeetingKey, setDismissedMeetingKey] = useState<string | null>(null);
+    const [autoRecordCountdown, setAutoRecordCountdown] = useState<number | null>(null);
+    const [bannerEnabled, setBannerEnabled] = useState(true);
+    const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const isRecordingRef = useRef(isRecording);
     isRecordingRef.current = isRecording;
     const onStartDualRecordingRef = useRef(onStartDualRecording);
     onStartDualRecordingRef.current = onStartDualRecording;
 
-    const checkAutoRecord = () => {
-        invoke<boolean>("get_auto_record_meetings")
-            .then((autoRecord) => {
-                if (autoRecord && !isRecordingRef.current) {
-                    onStartDualRecordingRef.current();
-                }
-            })
-            .catch(() => {});
+    const cancelAutoRecord = () => {
+        if (countdownTimerRef.current) {
+            clearInterval(countdownTimerRef.current);
+            countdownTimerRef.current = null;
+        }
+        setAutoRecordCountdown(null);
     };
 
+    const meetingKey = meeting ? `${meeting.pid}:${meeting.title}` : "";
+    const isDismissed = Boolean(meetingKey && dismissedMeetingKey === meetingKey);
+
     useEffect(() => {
-        // 1. Initial scan on mount
-        invoke<MeetingInfo[]>("scan_active_meetings")
-            .then((meetings) => {
-                const live = meetings.find((m) => m.should_record);
-                if (live && live.pid !== dismissedPid) {
-                    setMeeting(live);
-                    checkAutoRecord();
+        if (!meeting) {
+            setDismissedMeetingKey(null);
+            return;
+        }
+        // Settings → Meetings → "Show meeting banner"; re-read per meeting.
+        Store.load("settings.json")
+            .then((s) => s.get<boolean>(MEETING_KEYS.showBanner))
+            .then((v) => setBannerEnabled(v !== false))
+            .catch(() => {});
+    }, [meetingKey]);
+
+    useEffect(() => {
+        if (!meeting || isDismissed) {
+            cancelAutoRecord();
+            return;
+        }
+
+        Promise.all([
+            invoke<boolean>("get_auto_record_meetings"),
+            Store.load("settings.json").then((s) => s.get<number>(MEETING_KEYS.autoRecordDelay)).catch(() => undefined),
+        ])
+            .then(([autoRecord, savedDelay]) => {
+                if (autoRecord && !isRecordingRef.current) {
+                    cancelAutoRecord();
+                    let timeLeft = savedDelay ?? DEFAULT_AUTORECORD_DELAY;
+                    if (timeLeft <= 0) {
+                        onStartDualRecordingRef.current();
+                        return;
+                    }
+                    setAutoRecordCountdown(timeLeft);
+                    countdownTimerRef.current = setInterval(() => {
+                        timeLeft -= 1;
+                        if (timeLeft <= 0) {
+                            cancelAutoRecord();
+                            if (!isRecordingRef.current) {
+                                onStartDualRecordingRef.current();
+                            }
+                        } else {
+                            setAutoRecordCountdown(timeLeft);
+                        }
+                    }, 1000);
                 }
             })
             .catch(() => {});
 
-        // 2. Listen for real-time meeting detection events
-        const unlistenDetectedPromise = listen<MeetingInfo>("meeting-detected", (event) => {
-            const m = event.payload;
-            if (m.pid !== dismissedPid) {
-                setMeeting(m);
-                checkAutoRecord();
-            }
-        });
-
-        const unlistenEndedPromise = listen<MeetingInfo>("meeting-ended", (event) => {
-            const m = event.payload;
-            setMeeting((curr) => (curr?.pid === m.pid ? null : curr));
-        });
-
         return () => {
-            unlistenDetectedPromise.then((unlisten) => unlisten());
-            unlistenEndedPromise.then((unlisten) => unlisten());
+            cancelAutoRecord();
         };
-    }, [dismissedPid]);
+    }, [meetingKey, isDismissed]);
 
-    if (!meeting || isRecording) {
+    // The meetings view shows its own header pill; the auto-record countdown
+    // above keeps running either way.
+    // Auto-record still counts down when the banner is hidden.
+    if (!meeting || isRecording || suppressBanner || (!bannerEnabled && autoRecordCountdown === null)) {
         return null;
     }
 
+    const platform = (meeting?.platform || "").toLowerCase();
     const platformDisplayName =
-        meeting.platform === "zoom"
+        platform === "zoom"
             ? "Zoom"
-            : meeting.platform === "teams"
+            : platform === "teams"
             ? "Microsoft Teams"
-            : meeting.platform === "meet"
+            : platform === "meet"
             ? "Google Meet"
-            : meeting.platform === "slack"
+            : platform === "slack"
             ? "Slack Huddle"
-            : meeting.platform === "discord"
+            : platform === "discord"
             ? "Discord"
-            : meeting.platform === "webex"
+            : platform === "webex"
             ? "Cisco Webex"
-            : meeting.app_name || "Meeting";
+            : meeting?.app_name || "Meeting";
 
-    const displayTitle = meeting.title.trim()
-        ? meeting.title
-        : `${platformDisplayName} Call`;
+    const titleStr = (meeting?.title || "").trim();
+    const displayTitle = titleStr || `${platformDisplayName} Call`;
 
     return (
-        <div className="meeting-banner-container" role="alert">
+        <div
+            id="meeting-banner"
+            data-testid="meeting-banner"
+            className="meeting-banner-container"
+            style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                background: "linear-gradient(135deg, #1e293b, #0f172a)",
+                border: "1px solid #3b82f6",
+                borderRadius: "8px",
+                padding: "10px 16px",
+                margin: "8px 0 12px 0",
+                color: "#f8fafc"
+            }}
+            role="alert"
+        >
             <div className="meeting-banner-left">
                 <div className="meeting-banner-icon-badge">
-                    <IconVideo size={16} />
+                    <span style={{ fontSize: 16 }}>📹</span>
                     <span className="meeting-banner-pulse" />
                 </div>
                 <div className="meeting-banner-text">
@@ -108,33 +151,41 @@ export function MeetingBanner({ isRecording, onStartDualRecording }: MeetingBann
                         <span className="meeting-title-label">{displayTitle}</span>
                     </div>
                     <div className="meeting-banner-sub">
-                        Active Call Detected • Ready for Dual-Channel Recording (Mic + Call Audio)
+                        {autoRecordCountdown !== null
+                            ? `Auto-recording in ${autoRecordCountdown}s • press ✕ to cancel`
+                            : "Active Call Detected • Ready for Dual-Channel Recording (Mic + Call Audio)"}
                     </div>
                 </div>
             </div>
 
             <div className="meeting-banner-actions">
                 <button
+                    type="button"
+                    data-testid="meeting-banner-record-btn"
+                    id="meeting-banner-record-btn"
                     className="meeting-banner-btn-record"
                     onClick={() => {
+                        cancelAutoRecord();
                         onStartDualRecording();
                     }}
                     title="Record your voice on Channel 1 and call participants on Channel 2"
                 >
-                    <IconRecord size={14} />
                     <span>Record Call</span>
                 </button>
 
                 <button
+                    type="button"
+                    id="meeting-banner-dismiss-btn"
+                    data-testid="meeting-banner-dismiss-btn"
                     className="meeting-banner-btn-dismiss"
                     onClick={() => {
-                        setDismissedPid(meeting.pid);
-                        setMeeting(null);
+                        cancelAutoRecord();
+                        setDismissedMeetingKey(meetingKey);
                     }}
                     title="Dismiss notification"
                     aria-label="Dismiss meeting notification"
                 >
-                    <IconX size={14} />
+                    ✕
                 </button>
             </div>
         </div>
