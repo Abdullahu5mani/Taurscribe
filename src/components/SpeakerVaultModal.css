@@ -1,0 +1,320 @@
+.speaker-vault-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: vaultFadeIn 0.15s ease-out;
+}
+
+@keyframes vaultFadeIn {
+    from { opacity: 0; transform: scale(0.98); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.speaker-vault-modal {
+    width: 580px;
+    max-width: 90vw;
+    max-height: 80vh;
+    background: #141416;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+}
+
+.vault-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 22px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.vault-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.vault-title-wrap h2 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #f3f4f6;
+    margin: 0;
+    letter-spacing: -0.01em;
+}
+
+.vault-subtitle {
+    font-size: 12px;
+    color: #9ca3af;
+    margin: 2px 0 0 0;
+}
+
+.vault-close-btn {
+    background: transparent;
+    border: none;
+    color: #9ca3af;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s, color 0.12s;
+}
+
+.vault-close-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #f3f4f6;
+}
+
+.vault-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.vault-empty {
+    text-align: center;
+    padding: 40px 10px;
+    color: #6b7280;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.vault-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.vault-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.vault-item-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+}
+
+.vault-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #3b82f6, #6366f1);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.vault-speaker-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.vault-speaker-name-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.vault-speaker-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #f3f4f6;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vault-rename-input {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid #3b82f6;
+    color: #fff;
+    font-size: 13px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    outline: none;
+    font-weight: 500;
+    width: 160px;
+}
+
+.vault-speaker-meta {
+    font-size: 11px;
+    color: #9ca3af;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.vault-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.vault-action-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #d1d5db;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.12s;
+}
+
+.vault-action-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.vault-action-btn.active {
+    background: rgba(59, 130, 246, 0.2);
+    border-color: #3b82f6;
+    color: #60a5fa;
+}
+
+.vault-action-btn.danger:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #fca5a5;
+}
+
+.vault-footer {
+    padding: 14px 22px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    justify-content: flex-end;
+}
+
+.vault-done-btn {
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+
+.vault-done-btn:hover {
+    background: #1d4ed8;
+}
+
+@media (max-width: 500px) {
+    .speaker-vault-modal {
+        width: 100vw;
+        max-width: 100vw;
+        height: 100%;
+        max-height: 100vh;
+        border-radius: 0;
+        border: none;
+    }
+
+    .vault-header {
+        padding: 14px 16px;
+    }
+
+    .vault-body {
+        padding: 10px 14px;
+        gap: 8px;
+    }
+
+    .vault-item {
+        padding: 10px 12px;
+        gap: 8px;
+    }
+
+    .vault-avatar {
+        width: 32px;
+        height: 32px;
+        font-size: 11px;
+    }
+
+    .vault-speaker-name {
+        font-size: 13px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    .vault-speaker-meta {
+        font-size: 10.5px;
+        gap: 6px;
+        white-space: nowrap;
+    }
+
+    .vault-action-btn {
+        padding: 6px 8px;
+        font-size: 11px;
+        gap: 4px;
+    }
+
+    /* Icon-only action buttons on compact screens to give max space to speaker details */
+    .vault-action-btn span {
+        display: none;
+    }
+
+    .vault-footer {
+        padding: 10px 14px;
+    }
+}
+
+/* Locked state: the vault needs the speaker recognition model */
+.vault-locked span {
+  max-width: 380px;
+  line-height: 1.5;
+}
+
+.vault-download-btn {
+  margin-top: 14px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.vault-download-btn:hover {
+  background: rgba(59, 130, 246, 0.25);
+}
+
+.vault-clip-missing {
+  font-size: 11px;
+  opacity: 0.6;
+}
