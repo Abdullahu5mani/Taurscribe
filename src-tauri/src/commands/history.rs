@@ -13,6 +13,18 @@ fn get_history_db_path() -> Result<PathBuf, String> {
     Ok(base.join("transcript_history.db"))
 }
 
+/// SQL expression deriving `kind` from `audio_source` (used for backfill and by
+/// the MCP server as a fallback for databases it cannot migrate).
+pub const KIND_FROM_SOURCE_SQL: &str =
+    "CASE WHEN audio_source IS NULL OR audio_source = 'microphone' THEN 'dictation' ELSE 'file' END";
+
+fn kind_for_source(audio_source: Option<&str>) -> &'static str {
+    match audio_source {
+        None | Some("microphone") => "dictation",
+        Some(_) => "file",
+    }
+}
+
 fn ensure_history_db() -> Result<Connection, String> {
     let path = get_history_db_path()?;
     let conn = Connection::open(&path)
@@ -29,7 +41,8 @@ fn ensure_history_db() -> Result<Connection, String> {
             grammar_llm_used    INTEGER NOT NULL,
             processing_time_ms  INTEGER,
             model_id            TEXT,
-            audio_source        TEXT
+            audio_source        TEXT,
+            kind                TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at
             ON transcriptions(created_at DESC);
@@ -50,6 +63,13 @@ fn ensure_history_db() -> Result<Connection, String> {
         "ALTER TABLE transcriptions ADD COLUMN audio_source TEXT",
         [],
     );
+    // `kind` = "dictation" (microphone) or "file" (dropped audio file). Rows from
+    // before the column existed are backfilled from audio_source.
+    let _ = conn.execute("ALTER TABLE transcriptions ADD COLUMN kind TEXT", []);
+    let _ = conn.execute(
+        &format!("UPDATE transcriptions SET kind = {KIND_FROM_SOURCE_SQL} WHERE kind IS NULL"),
+        [],
+    );
 
     Ok(conn)
 }
@@ -65,6 +85,7 @@ pub struct TranscriptRecord {
     pub processing_time_ms: Option<i64>,
     pub model_id: Option<String>,
     pub audio_source: Option<String>,
+    pub kind: String,
 }
 
 /// Save a single transcription entry to the history database.
@@ -127,9 +148,9 @@ fn save_transcript_history_blocking(
     );
 
     conn.execute(
-        "INSERT INTO transcriptions (created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![created_at, transcript, engine, duration_ms, grammar_flag, processing_time_ms, model_id, audio_source],
+        "INSERT INTO transcriptions (created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![created_at, transcript, engine, duration_ms, grammar_flag, processing_time_ms, model_id, audio_source.as_deref(), kind_for_source(audio_source.as_deref())],
     )
     .map_err(|e| {
         eprintln!("[HISTORY] Failed to insert history row: {}", e);
@@ -162,7 +183,7 @@ fn list_transcript_history_blocking(
 
     let mut stmt = conn
         .prepare(
-            "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source
+            "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind
              FROM transcriptions
              ORDER BY datetime(created_at) DESC
              LIMIT ?1 OFFSET ?2",
@@ -185,6 +206,7 @@ fn list_transcript_history_blocking(
                 processing_time_ms: row.get(6)?,
                 model_id: row.get(7)?,
                 audio_source: row.get(8)?,
+                kind: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "dictation".into()),
             })
         })
         .map_err(|e| {
@@ -230,4 +252,33 @@ fn delete_transcript_history_blocking(id: i64) -> Result<(), String> {
         })?;
     println!("[HISTORY] Deleted {} row(s) for id={}", affected, id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kind_backfill_matches_insert_rule() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE transcriptions (id INTEGER PRIMARY KEY, audio_source TEXT);
+             INSERT INTO transcriptions (audio_source) VALUES (NULL), ('microphone'), ('talk.mp3');
+             ALTER TABLE transcriptions ADD COLUMN kind TEXT;",
+        )
+        .unwrap();
+        conn.execute(&format!("UPDATE transcriptions SET kind = {KIND_FROM_SOURCE_SQL} WHERE kind IS NULL"), [])
+            .unwrap();
+        let rows: Vec<(Option<String>, String)> = conn
+            .prepare("SELECT audio_source, kind FROM transcriptions ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for (source, kind) in rows {
+            assert_eq!(kind, kind_for_source(source.as_deref()));
+        }
+        assert_eq!(kind_for_source(Some("talk.mp3")), "file");
+    }
 }

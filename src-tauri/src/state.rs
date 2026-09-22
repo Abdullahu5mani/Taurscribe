@@ -1,8 +1,6 @@
 use crate::audio::RecordingHandle;
-use crate::cohere::CohereManager;
 use crate::denoise::Denoiser;
-use crate::parakeet::ParakeetManager;
-use crate::qwen3::Qwen3Manager;
+use crate::gguf_asr::{GgufAsrManager, GRANITE_MODELS, QWEN3_MODELS};
 use crate::types::{ASREngine, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
@@ -10,6 +8,30 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64},
     Arc, Mutex, RwLock,
 };
+
+#[derive(Default)]
+struct ModelActivity {
+    active_operations: usize,
+    exclusive: bool,
+}
+
+/// Keeps model weights resident while a recording or transcription uses them.
+pub struct ModelOperationGuard {
+    activity: Arc<Mutex<ModelActivity>>,
+    exclusive: bool,
+}
+
+impl Drop for ModelOperationGuard {
+    fn drop(&mut self) {
+        if let Ok(mut activity) = self.activity.lock() {
+            if self.exclusive {
+                activity.exclusive = false;
+            } else {
+                activity.active_operations -= 1;
+            }
+        }
+    }
+}
 
 /// The Global "Brain" of the application.
 /// This struct holds all the data that needs to live as long as the app runs.
@@ -27,8 +49,8 @@ pub struct AudioState {
     // The Whisper AI engine. Wrapped in Arc<Mutex<>> so it can be shared and used by multiple threads.
     pub whisper: Arc<Mutex<WhisperManager>>,
 
-    // The Parakeet AI engine (alternative to Whisper). Also shared across threads.
-    pub parakeet: Arc<Mutex<ParakeetManager>>,
+    // Granite Speech 5 (GGUF through transcribe.cpp). Also shared across threads.
+    pub granite: Arc<Mutex<GgufAsrManager>>,
 
     // The Voice Activity Detector. Also shared.
     pub vad: Arc<Mutex<VADManager>>,
@@ -39,7 +61,7 @@ pub struct AudioState {
     // macOS fix: Arc-wrapped for async command access.
     pub active_engine: Arc<Mutex<ASREngine>>,
 
-    // Accumulates the full transcript during a recording session (for Parakeet streaming reuse)
+    // Accumulates the live transcript during a recording session
     pub session_transcript: Arc<Mutex<String>>,
 
     // The Gemma LLM engine (optional, loaded on demand)
@@ -61,12 +83,8 @@ pub struct AudioState {
     // "quit"  → exit the process
     pub close_behavior: Arc<Mutex<String>>,
 
-    // The Granite Speech ONNX engine (alternative to Whisper/Parakeet).
-    // Field name remains `cohere` temporarily for compatibility with the old manager shim.
-    pub cohere: Arc<Mutex<CohereManager>>,
-
-    // Official Qwen3-ASR Transformers worker, loaded on demand.
-    pub qwen3: Arc<Mutex<Qwen3Manager>>,
+    // Qwen3-ASR (GGUF through transcribe.cpp), loaded on demand.
+    pub qwen3: Arc<Mutex<GgufAsrManager>>,
 
     // When true the global hotkey listener ignores all key events.
     // Used to prevent accidental recording while the user is re-binding
@@ -82,6 +100,7 @@ pub struct AudioState {
 
     // True while an ASR engine is actively loading (blocks unload attempts).
     pub engine_loading: Arc<AtomicBool>,
+    model_activity: Arc<Mutex<ModelActivity>>,
 
     // Inactivity timeout in seconds before loaded ASR models are automatically unloaded.
     // 0 = never / disabled
@@ -106,17 +125,36 @@ pub struct AudioState {
 }
 
 impl AudioState {
+    pub fn begin_model_operation(&self) -> Result<ModelOperationGuard, String> {
+        let mut activity = self.model_activity.lock().map_err(|e| e.to_string())?;
+        if activity.exclusive {
+            return Err("A model switch is in progress".into());
+        }
+        activity.active_operations += 1;
+        Ok(ModelOperationGuard { activity: self.model_activity.clone(), exclusive: false })
+    }
+
+    pub fn begin_exclusive_model_operation(&self) -> Result<ModelOperationGuard, String> {
+        let mut activity = self.model_activity.lock().map_err(|e| e.to_string())?;
+        if activity.exclusive || activity.active_operations > 0
+            || self.recording_handle.lock().map_err(|e| e.to_string())?.is_some()
+        {
+            return Err("An audio or model operation is in progress".into());
+        }
+        activity.exclusive = true;
+        Ok(ModelOperationGuard { activity: self.model_activity.clone(), exclusive: true })
+    }
+
     pub fn new(
         whisper: WhisperManager,
-        parakeet: ParakeetManager,
+        granite: GgufAsrManager,
         vad: VADManager,
-        cohere: CohereManager,
-        qwen3: Qwen3Manager,
+        qwen3: GgufAsrManager,
     ) -> Self {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
             whisper: Arc::new(Mutex::new(whisper)),
-            parakeet: Arc::new(Mutex::new(parakeet)),
+            granite: Arc::new(Mutex::new(granite)),
             vad: Arc::new(Mutex::new(vad)),
             last_recording_path: Arc::new(Mutex::new(None)),
             active_engine: Arc::new(Mutex::new(ASREngine::Whisper)),
@@ -126,12 +164,12 @@ impl AudioState {
             selected_input_device: Arc::new(Mutex::new(None)),
             denoiser: Arc::new(Mutex::new(None)),
             close_behavior: Arc::new(Mutex::new("tray".to_string())),
-            cohere: Arc::new(Mutex::new(cohere)),
             qwen3: Arc::new(Mutex::new(qwen3)),
             hotkey_suppressed: Arc::new(AtomicBool::new(false)),
             recording_paused: Arc::new(AtomicBool::new(false)),
             model_loaded: Arc::new(AtomicBool::new(false)),
             engine_loading: Arc::new(AtomicBool::new(false)),
+            model_activity: Arc::new(Mutex::new(ModelActivity::default())),
             auto_unload_seconds: Arc::new(AtomicU64::new(1800)),
             last_activity_timestamp: Arc::new(AtomicU64::new(0)),
             meeting_detector: Arc::new(crate::meeting_detector::MeetingDetectorManager::new()),
@@ -162,28 +200,36 @@ impl AudioState {
             ASREngine::Whisper => crate::whisper::WhisperManager::list_available_models()
                 .map(|v| !v.is_empty())
                 .unwrap_or(false),
-            ASREngine::Parakeet => crate::parakeet::ParakeetManager::list_available_models()
+            ASREngine::Granite => crate::gguf_asr::list_available(GRANITE_MODELS)
                 .map(|v| !v.is_empty())
                 .unwrap_or(false),
-            ASREngine::Granite => {
-                let Ok(models_dir) = crate::utils::get_models_dir() else {
-                    return false;
-                };
-                crate::cohere::cohere_onnx_bundle_ready(
-                    &models_dir.join("granite-speech-4.1-2b-nar-cuda"),
-                ) || crate::cohere::cohere_onnx_bundle_ready(
-                    &models_dir.join("granite-speech-4.1-2b-nar-portable"),
-                )
-            }
-            ASREngine::Qwen3 => crate::qwen3::Qwen3Manager::list_available_models()
+            ASREngine::Qwen3 => crate::gguf_asr::list_available(QWEN3_MODELS)
                 .map(|v| !v.is_empty())
                 .unwrap_or(false),
+        }
+    }
+
+    /// The GGUF manager behind `engine` (Granite or Qwen3); None for Whisper.
+    pub fn gguf_manager(&self, engine: ASREngine) -> Option<Arc<Mutex<GgufAsrManager>>> {
+        match engine {
+            ASREngine::Granite => Some(self.granite.clone()),
+            ASREngine::Qwen3 => Some(self.qwen3.clone()),
+            ASREngine::Whisper => None,
         }
     }
 
     /// Drops weights for every ASR engine that still has a model in memory.
     /// Used by unload UI / tray so we never rely on `active_engine` alone (it can desync).
     pub fn unload_all_loaded_asr(&self) -> Result<Vec<&'static str>, String> {
+        // Keep this gate locked through the entire unload. New operations cannot
+        // start between the idle check and dropping the weights.
+        let activity = self.model_activity.lock().map_err(|e| e.to_string())?;
+        if activity.active_operations > 0 || activity.exclusive
+            || self.recording_handle.lock().map_err(|e| e.to_string())?.is_some()
+            || self.engine_loading.load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("An audio or model operation is in progress".into());
+        }
         let mut unloaded = Vec::new();
 
         {
@@ -194,14 +240,7 @@ impl AudioState {
             }
         }
         {
-            let mut p = self.parakeet.lock().map_err(|e| e.to_string())?;
-            if p.get_status().loaded {
-                p.unload();
-                unloaded.push("parakeet");
-            }
-        }
-        {
-            let mut g = self.cohere.lock().map_err(|e| e.to_string())?;
+            let mut g = self.granite.lock().map_err(|e| e.to_string())?;
             if g.get_status().loaded {
                 g.unload();
                 unloaded.push("granite");
@@ -216,5 +255,28 @@ impl AudioState {
         }
 
         Ok(unloaded)
+    }
+}
+
+#[cfg(test)]
+mod model_activity_tests {
+    use super::*;
+
+    #[test]
+    fn unload_waits_until_active_transcription_finishes() {
+        let state = AudioState::new(
+            WhisperManager::new(),
+            GgufAsrManager::granite(),
+            VADManager::new().unwrap(),
+            GgufAsrManager::qwen3(),
+        );
+        let operation = state.begin_model_operation().unwrap();
+        assert!(state.unload_all_loaded_asr().is_err());
+        assert!(state.begin_exclusive_model_operation().is_err());
+        drop(operation);
+        let switch = state.begin_exclusive_model_operation().unwrap();
+        assert!(state.begin_model_operation().is_err());
+        drop(switch);
+        assert!(state.unload_all_loaded_asr().is_ok());
     }
 }

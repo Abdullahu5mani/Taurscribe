@@ -28,7 +28,7 @@ rustflags = [
 [target.x86_64-apple-darwin]
 rustflags = [
     "-C",
-    "link-arg=-mmacosx-version-min=13.4",
+    "link-arg=-mmacosx-version-min=14.0",
     "-lc++",
     "-l",
     "framework=Accelerate",
@@ -38,7 +38,7 @@ rustflags = [
 [target.aarch64-apple-darwin]
 rustflags = [
     "-C",
-    "link-arg=-mmacosx-version-min=13.4",
+    "link-arg=-mmacosx-version-min=14.0",
     "-lc++",
     "-l",
     "framework=Accelerate",
@@ -49,7 +49,13 @@ rustflags = [
 rustflags = ["-C", "link-arg=/FORCE:MULTIPLE", "-C", "link-arg=/ignore:4006"]
 
 [env]
-MACOSX_DEPLOYMENT_TARGET = "13.4"
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+# Meeting playback (opus crate): always build the bundled libopus statically,
+# never a system copy that users would not have.
+LIBOPUS_NO_PKG = "1"
+LIBOPUS_STATIC = "1"
+# The bundled libopus declares cmake_minimum_required < 3.5, which CMake 4 rejects.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 # WHISPER_LIB_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/bin"
 # GRAMMAR_LLM_DIR = "C:/Users/abdul/OneDrive/Desktop/Taurscribe/taurscribe-runtime/models/qwen_finetuned_gguf"
 # VULKAN_SDK = "C:/VulkanSDK/1.4.335.0"

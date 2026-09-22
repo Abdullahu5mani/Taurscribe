@@ -121,15 +121,10 @@ pub fn start_hotkey_listener(
                                 }
                             }
                             RecordingMode::Toggle => {
-                                if recording_active_c.load(Ordering::SeqCst) {
-                                    recording_active_c.store(false, Ordering::SeqCst);
-                                    println!("[HOTKEY] Toggle — stopping recording");
-                                    let _ = app_c.emit("hotkey-stop-recording", ());
-                                } else {
-                                    recording_active_c.store(true, Ordering::SeqCst);
-                                    println!("[HOTKEY] Toggle — starting recording");
-                                    let _ = app_c.emit("hotkey-start-recording", ());
-                                }
+                                // React resolves this against the actual recording lifecycle.
+                                // A speculative native flag diverges after a failed start or
+                                // when recording is stopped from the UI.
+                                let _ = app_c.emit("hotkey-toggle-recording", ());
                             }
                         }
                     }

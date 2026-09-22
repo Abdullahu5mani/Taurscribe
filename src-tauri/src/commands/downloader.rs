@@ -13,23 +13,46 @@ use zip::ZipArchive;
 
 // ── Cancellation registry ─────────────────────────────────────────────────────
 
-static CANCEL_FLAGS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+struct DownloadCancelState {
+    flag: Arc<AtomicBool>,
+    finishing: bool,
+}
 
-fn cancel_flags() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+static CANCEL_FLAGS: OnceLock<Mutex<HashMap<String, DownloadCancelState>>> = OnceLock::new();
+
+fn cancel_flags() -> &'static Mutex<HashMap<String, DownloadCancelState>> {
     CANCEL_FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn register_cancel_flag(model_id: &str) -> Arc<AtomicBool> {
+fn register_cancel_flag(model_id: &str) -> Result<Arc<AtomicBool>, String> {
     let flag = Arc::new(AtomicBool::new(false));
-    cancel_flags()
-        .lock()
-        .unwrap()
-        .insert(model_id.to_string(), Arc::clone(&flag));
-    flag
+    let mut flags = cancel_flags().lock().unwrap();
+    if flags.contains_key(model_id) {
+        return Err(format!("A download is already active for {}", model_id));
+    }
+    flags.insert(model_id.to_string(), DownloadCancelState {
+        flag: Arc::clone(&flag),
+        finishing: false,
+    });
+    Ok(flag)
 }
 
-fn unregister_cancel_flag(model_id: &str) {
-    cancel_flags().lock().unwrap().remove(model_id);
+fn begin_finish_cancel_flag(model_id: &str, flag: &Arc<AtomicBool>) -> bool {
+    let mut flags = cancel_flags().lock().unwrap();
+    if let Some(active) = flags.get_mut(model_id) {
+        if Arc::ptr_eq(&active.flag, flag) {
+            active.finishing = true;
+            return flag.load(Ordering::Relaxed);
+        }
+    }
+    false
+}
+
+fn unregister_cancel_flag(model_id: &str, flag: &Arc<AtomicBool>) {
+    let mut flags = cancel_flags().lock().unwrap();
+    if flags.get(model_id).is_some_and(|active| Arc::ptr_eq(&active.flag, flag)) {
+        flags.remove(model_id);
+    }
 }
 
 /// Delete all files/directories belonging to a model (used on cancel or hash mismatch).
@@ -119,47 +142,30 @@ pub fn scan_and_clean_stale_downloads() {
     }
 }
 
-/// Cancel an in-progress download. Deletes all partial files for that model.
+/// Signal an in-progress download to stop. The worker owns file cleanup.
 #[tauri::command]
-pub async fn cancel_download(app: AppHandle, model_id: String) -> Result<(), String> {
-    if let Some(flag) = cancel_flags().lock().unwrap().get(&model_id) {
-        flag.store(true, Ordering::Relaxed);
-    }
-    // Proactively clean up partial model files and sentinel lock file
-    if let Some(config) = super::model_registry::get_model_config(&model_id) {
-        if let Ok(models_dir) = crate::utils::get_models_dir() {
-            let base_dir = if let Some(subdir) = config.subdirectory {
-                models_dir.join(subdir)
-            } else {
-                models_dir.clone()
-            };
-            delete_model_files(&config, &base_dir);
-            remove_download_lock(&model_id);
-            let mut store = load_verified_store();
-            if store.remove(&model_id).is_some() {
-                save_verified_store(&store);
-            }
+pub async fn cancel_download(model_id: String) -> Result<bool, String> {
+    if let Some(active) = cancel_flags().lock().unwrap().get(&model_id) {
+        if !active.finishing {
+            active.flag.store(true, Ordering::Relaxed);
+            return Ok(true);
         }
     }
-    let _ = app.emit(
-        "download-progress",
-        DownloadProgressPayload {
-            model_id: model_id.clone(),
-            total_bytes: 0,
-            downloaded_bytes: 0,
-            status: "cancelled".to_string(),
-            current_file: 0,
-            total_files: 0,
-        },
-    );
-    Ok(())
+    Ok(false)
+}
+
+/// True while any model download is running.
+pub fn any_download_active() -> bool {
+    !cancel_flags().lock().unwrap().is_empty()
 }
 
 /// Cancel all in-progress downloads. Called before factory reset so tasks get
 /// a clean cancellation signal before the process is killed.
 pub fn cancel_all_downloads() {
-    for flag in cancel_flags().lock().unwrap().values() {
-        flag.store(true, Ordering::Relaxed);
+    for active in cancel_flags().lock().unwrap().values() {
+        if !active.finishing {
+            active.flag.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -168,10 +174,15 @@ use super::model_registry::{get_model_config, ModelConfig, ModelFile};
 enum ModelSource<'a> {
     HuggingFace,
     GitHub(&'a str),
+    /// A GitHub release asset: `config.branch` holds the release tag.
+    GitHubRelease(&'a str),
     Local(std::path::PathBuf),
 }
 
 fn model_source(config: &ModelConfig) -> Result<ModelSource<'_>, String> {
+    if let Some(repo_path) = config.repo.strip_prefix("github-release:") {
+        return Ok(ModelSource::GitHubRelease(repo_path));
+    }
     if let Some(repo_path) = config.repo.strip_prefix("github:") {
         return Ok(ModelSource::GitHub(repo_path));
     }
@@ -505,12 +516,36 @@ pub async fn get_download_status(
 
 #[tauri::command]
 pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, String> {
-    let cancel_flag = register_cancel_flag(&model_id);
+    let cancel_flag = register_cancel_flag(&model_id)?;
     write_download_lock(&model_id);
     let result = download_model_inner(&app, &model_id, &cancel_flag).await;
+    let cancelled = begin_finish_cancel_flag(&model_id, &cancel_flag);
+    if cancelled {
+        if let (Some(config), Ok(models_dir)) =
+            (get_model_config(&model_id), crate::utils::get_models_dir())
+        {
+            let base_dir = config.subdirectory.map_or(models_dir.clone(), |subdir| models_dir.join(subdir));
+            delete_model_files(&config, &base_dir);
+            let mut store = load_verified_store();
+            if store.remove(&model_id).is_some() {
+                save_verified_store(&store);
+            }
+        }
+    }
     remove_download_lock(&model_id);
-    unregister_cancel_flag(&model_id);
-    result
+    let status = if cancelled { "cancelled" } else if result.is_ok() { "done" } else { "error" };
+    if cancelled || result.is_ok() {
+        let _ = app.emit("download-progress", DownloadProgressPayload {
+            model_id: model_id.clone(),
+            total_bytes: if cancelled { 0 } else { 100 },
+            downloaded_bytes: if cancelled { 0 } else { 100 },
+            status: status.to_string(),
+            current_file: 0,
+            total_files: 0,
+        });
+    }
+    unregister_cancel_flag(&model_id, &cancel_flag);
+    if cancelled { Err("Download cancelled by user".to_string()) } else { result }
 }
 
 /// Fetches the LFS pointer for a HuggingFace file and returns its SHA-256 hash.
@@ -643,23 +678,16 @@ async fn download_model_inner(
             );
             if cancel_flag.load(Ordering::Relaxed) {
                 delete_model_files(&config, &base_dir);
-                let _ = app.emit(
-                    "download-progress",
-                    DownloadProgressPayload {
-                        model_id: model_id.to_string(),
-                        total_bytes: 0,
-                        downloaded_bytes: 0,
-                        status: "cancelled".to_string(),
-                        current_file: (i + 1) as u32,
-                        total_files: files_count as u32,
-                    },
-                );
                 return Err("Download cancelled by user".to_string());
             }
         } else {
             let url = match &source {
                 ModelSource::GitHub(repo_path) => format!(
                     "https://raw.githubusercontent.com/{}/{}/{}",
+                    repo_path, config.branch, file_spec.remote_path
+                ),
+                ModelSource::GitHubRelease(repo_path) => format!(
+                    "https://github.com/{}/releases/download/{}/{}",
                     repo_path, config.branch, file_spec.remote_path
                 ),
                 ModelSource::HuggingFace => format!(
@@ -711,18 +739,6 @@ async fn download_model_inner(
                     drop(file);
                     let _ = std::fs::remove_file(&download_path);
                     delete_model_files(&config, &base_dir);
-                    remove_download_lock(model_id);
-                    let _ = app.emit(
-                        "download-progress",
-                        DownloadProgressPayload {
-                            model_id: model_id.to_string(),
-                            total_bytes: 0,
-                            downloaded_bytes: 0,
-                            status: "cancelled".to_string(),
-                            current_file: (i + 1) as u32,
-                            total_files: files_count as u32,
-                        },
-                    );
                     return Err("Download cancelled by user".to_string());
                 }
 
@@ -841,17 +857,6 @@ async fn download_model_inner(
                 if cancel_flag.load(Ordering::Relaxed) {
                     let _ = std::fs::remove_file(&download_path);
                     delete_model_files(&config, &base_dir);
-                    let _ = app.emit(
-                        "download-progress",
-                        DownloadProgressPayload {
-                            model_id: model_id.to_string(),
-                            total_bytes: 0,
-                            downloaded_bytes: 0,
-                            status: "cancelled".to_string(),
-                            current_file: (i + 1) as u32,
-                            total_files: files_count as u32,
-                        },
-                    );
                     return Err("Download cancelled by user".to_string());
                 }
             }
@@ -869,17 +874,6 @@ async fn download_model_inner(
     // Only skip verification entirely for non-HuggingFace repos with no hashes.
     // HuggingFace entries without pinned hashes use live LFS pointer metadata.
     if fingerprint_is_empty(&expected_fp) && !is_hf_repo {
-        let _ = app.emit(
-            "download-progress",
-            DownloadProgressPayload {
-                model_id: model_id.to_string(),
-                total_bytes: 100,
-                downloaded_bytes: 100,
-                status: "done".to_string(),
-                current_file: files_count as u32,
-                total_files: files_count as u32,
-            },
-        );
         return Ok(format!("Downloaded to {:?}", base_dir));
     }
 
@@ -1058,19 +1052,38 @@ async fn download_model_inner(
 
     println!("[VERIFY] {} — all files verified ✅", model_id);
 
-    let _ = app.emit(
-        "download-progress",
-        DownloadProgressPayload {
-            model_id: model_id.to_string(),
-            total_bytes: 100,
-            downloaded_bytes: 100,
-            status: "done".to_string(),
-            current_file: files_count as u32,
-            total_files: files_count as u32,
-        },
-    );
-
     Ok(format!("Downloaded and verified {:?}", base_dir))
+}
+
+fn encoder_has_other_weights(
+    models_dir: &std::path::Path,
+    encoder_name: &str,
+    deleting: &ModelConfig,
+) -> Result<bool, String> {
+    let base = encoder_name.trim_end_matches("-encoder.mlmodelc");
+    let entries = std::fs::read_dir(models_dir)
+        .map_err(|e| format!("Could not inspect models directory: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let is_variant = name == format!("{base}.bin")
+            || (name.starts_with(&format!("{base}-q")) && name.ends_with(".bin"));
+        if is_variant && !deleting.files.iter().any(|f| f.filename == name) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn encoder_has_standalone_owner(encoder_name: &str, deleting_id: &str) -> bool {
+    load_verified_store().keys().any(|id| {
+        id != deleting_id
+            && id.ends_with("-coreml")
+            && get_model_config(id).is_some_and(|config| {
+                config.files.iter().any(|file| file.filename == encoder_name)
+            })
+    })
 }
 
 #[tauri::command]
@@ -1095,6 +1108,16 @@ pub async fn delete_model(
     } else {
         models_dir.clone()
     };
+
+    // A bundled encoder is shared by full and quantized weights. A standalone
+    // encoder cannot be removed while any installed weights still reference it.
+    if model_id.ends_with("-coreml") {
+        if let Some(encoder) = config.files.iter().find(|f| f.filename.ends_with("-encoder.mlmodelc")) {
+            if encoder_has_other_weights(&models_dir, encoder.filename, &config)? {
+                return Ok(CommandResult::err("model_in_use", "Other installed Whisper models use this CoreML encoder"));
+            }
+        }
+    }
 
     // Pre-calculate total size for progress reporting.
     let mut total_size: u64 = 0;
@@ -1126,48 +1149,34 @@ pub async fn delete_model(
 
         let file_path = base_dir.join(file_spec.filename);
         if file_path.exists() {
+            if file_spec.filename.ends_with("-encoder.mlmodelc")
+                && (encoder_has_other_weights(&models_dir, file_spec.filename, &config)?
+                    || encoder_has_standalone_owner(file_spec.filename, &model_id))
+            {
+                continue;
+            }
             let size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
             if file_path.is_dir() {
-                let _ = std::fs::remove_dir_all(&file_path);
+                std::fs::remove_dir_all(&file_path)
+                    .map_err(|e| format!("Could not delete {}: {e}", file_path.display()))?;
             } else {
-                let _ = std::fs::remove_file(&file_path);
+                std::fs::remove_file(&file_path)
+                    .map_err(|e| format!("Could not delete {}: {e}", file_path.display()))?;
             }
             deleted_bytes += size;
         }
     }
 
     if config.subdirectory.is_some() {
-        let _ = std::fs::remove_dir(&base_dir);
-    }
-
-    // Delete the paired CoreML encoder directory (.mlmodelc) if one exists.
-    // Convention: ggml-{base}-encoder.mlmodelc, where {base} is the .bin stem
-    // with any quantization suffix stripped (e.g. "ggml-tiny.en-q5_1.bin" → "ggml-tiny.en").
-    let mut coreml_encoder_stem: Option<String> = None;
-    for file_spec in &config.files {
-        if file_spec.filename.ends_with(".bin") {
-            let stem = file_spec.filename.trim_end_matches(".bin");
-            let base = if let Some(pos) = stem.find("-q") {
-                &stem[..pos]
-            } else {
-                stem
-            };
-            let encoder_dir = models_dir.join(format!("{}-encoder.mlmodelc", base));
-            if encoder_dir.is_dir() {
-                let _ = std::fs::remove_dir_all(&encoder_dir);
-                println!("[DELETE] Removed CoreML encoder: {}", encoder_dir.display());
-                coreml_encoder_stem = Some(base["ggml-".len()..].to_string());
-            }
-            break;
+        if base_dir.exists() {
+            std::fs::remove_dir(&base_dir)
+                .map_err(|e| format!("Could not delete {}: {e}", base_dir.display()))?;
         }
     }
 
-    // Remove verification records (the model itself + its CoreML encoder if deleted).
+    // Verification of other models is independent, including shared encoders.
     let mut store = load_verified_store();
     store.remove(&model_id);
-    if let Some(stem) = coreml_encoder_stem {
-        store.retain(|k, _| !(k.ends_with("-coreml") && k.contains(&stem)));
-    }
     save_verified_store(&store);
 
     // Emit final progress so frontend can clean up.
@@ -1190,6 +1199,38 @@ pub async fn delete_model(
 mod tests {
     use super::*;
     use crate::commands::model_registry::ModelFile;
+
+    #[test]
+    fn encoder_owner_check_respects_installed_quantized_weights() {
+        let dir = std::env::temp_dir().join(format!("taurscribe-encoder-owners-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ggml-small.en.bin"), b"full").unwrap();
+        std::fs::write(dir.join("ggml-small.en-q5_1.bin"), b"quantized").unwrap();
+        let full = get_model_config("whisper-small-en").unwrap();
+        assert!(encoder_has_other_weights(&dir, "ggml-small.en-encoder.mlmodelc", &full).unwrap());
+        std::fs::remove_file(dir.join("ggml-small.en-q5_1.bin")).unwrap();
+        assert!(!encoder_has_other_weights(&dir, "ggml-small.en-encoder.mlmodelc", &full).unwrap());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn download_cancellation_is_scoped_to_an_active_worker() {
+        let id = format!("cancel-test-{}", rand::random::<u64>());
+        assert!(!cancel_download(id.clone()).await.unwrap());
+        let first = register_cancel_flag(&id).unwrap();
+        assert!(register_cancel_flag(&id).is_err());
+        assert!(cancel_download(id.clone()).await.unwrap());
+        assert!(begin_finish_cancel_flag(&id, &first));
+        assert!(cancel_flags().lock().unwrap().get(&id).unwrap().finishing);
+        assert!(!cancel_download(id.clone()).await.unwrap());
+        unregister_cancel_flag(&id, &first);
+        assert!(!cancel_download(id.clone()).await.unwrap());
+
+        let second = register_cancel_flag(&id).unwrap();
+        assert!(!second.load(Ordering::Relaxed));
+        assert!(!begin_finish_cancel_flag(&id, &second));
+        unregister_cancel_flag(&id, &second);
+    }
 
     #[test]
     fn existing_install_verification_accepts_match_and_rejects_mismatch() {

@@ -8,6 +8,36 @@ default-run = "taurscribe"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# Benchmark / eval tools live in tools/ (not src/bin, which Tauri would bundle).
+# They need `--features dev-tools`, so `cargo build --release` (and the app bundle) only produce the app itself.
+[features]
+dev-tools = []
+
+[[bin]]
+name = "audio_pipeline_bench"
+path = "tools/audio_pipeline_bench.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "custom_vocab_eval"
+path = "tools/custom_vocab_eval.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "librispeech_eval"
+path = "tools/librispeech_eval.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "flowscribe_compare"
+path = "tools/flowscribe_compare.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "librispeech_manifest"
+path = "tools/librispeech_manifest.rs"
+required-features = ["dev-tools"]
+
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
@@ -19,7 +49,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"                                           # Prevent multiple instances
@@ -43,24 +73,23 @@ tauri-plugin-store = "2.4.2"
 enigo = "0.6.1"
 arboard = { version = "3", features = ["image-data"] }
 sysinfo = "0.32"
+libc = "0.2"
 # llama-cpp-2: llama.cpp bindings for Rust (replaces Candle)
 # dynamic-link builds ggml/llama as shared libs (DLLs) to avoid LNK2005
 # diamond-dependency with whisper-rs which also statically links ggml.
 # Use crates.io so CI can build without private repo access.
 # PINNED: v0.1.137 sys crate has a broken CMake install step on Windows.
 # Pin both the wrapper AND sys crate to the last known working version.
-llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
+llama-cpp-2 = { version = "=0.1.157", default-features = false, features = [
     "dynamic-link",
 ] }
-llama-cpp-sys-2 = "=0.1.134"
+llama-cpp-sys-2 = "=0.1.157"
 encoding_rs = "0.8"
 anyhow = "1.0"
 ndarray = "0.17"
-# FFT for Cohere mel-spectrogram computation
+# FFT for the speaker-embedding fbank front-end
 rustfft = "6.2"
-# HuggingFace tokenizer for Cohere BPE token encoding/decoding
-tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
-# True random dither for Cohere mel-spectrogram preprocessing
+# Random ids for speaker profiles and meetings
 rand = "0.9"
 
 
@@ -79,7 +108,6 @@ symphonia = { version = "0.5", features = ["mp3", "aac", "flac", "ogg", "wav", "
 # 1. Base / CPU Fallback (ARM Windows/Linux)
 # -------------------------------------------------------------------------
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
-parakeet-rs = { path = "vendor/parakeet-rs" }
 ort = { version = "2.0.0-rc.12", default-features = false, features = [
     "std",
     "ndarray",
@@ -98,7 +126,14 @@ reqwest = { version = "0.13.1", default-features = false, features = [
 sha2 = "0.10.9"
 hex = "0.4.3"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
-# llama-cpp-2: llama.cpp bindings for Rust (replaces Candle)
+axum = "0.8"
+tokio = { version = "1", features = ["net", "rt", "sync", "macros", "time", "io-util"] }
+opus = "0.3"
+# transcribe.cpp: GGUF speech models (Granite Speech 5, Qwen3-ASR, Nemotron-3
+# Diarization) on CPU, Metal, Vulkan, CUDA and ROCm. Pinned to the Glimpse fork:
+# upstream main at ed3468f plus Nemotron-3 Diarization, which upstream lacks.
+transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false }
+tauri-plugin-autostart = "2"
 
 
 # 2. macOS Configuration
@@ -111,10 +146,10 @@ whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = 
     "coreml",
 ] }
 # llama-cpp-2: Uses Metal automatically on macOS (no special feature needed)
-llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
+llama-cpp-2 = { version = "=0.1.157", default-features = false, features = [
     "dynamic-link",
 ] }
-llama-cpp-sys-2 = "=0.1.134"
+llama-cpp-sys-2 = "=0.1.157"
 # macOS Accessibility API for native text insertion (kAXSelectedTextAttribute)
 accessibility-sys = "0.1"
 core-foundation = "0.9"
@@ -139,7 +174,13 @@ meeting-record = "0.1"
 
 # 2b. Apple Silicon Specific (M1/M2/M3/M4)
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-mlx-rs = "0.25.3"
+# MLX: Nemotron-3 Diarization runs faster than its GGUF on Metal (see SUPPORT_MATRIX §5).
+# mlx-sys always links MLX's gguflib, whose gguf_* C symbols collide with ggml's
+# (transcribe.cpp). The linker keeps ggml's copy (verified with `nm`: neighbours are
+# ggml's gguf_find_key/gguf_kv), which is the one Granite/Qwen3 need. Never load a
+# .gguf through MLX: it would call ggml's functions with MLX's argument types.
+mlx-rs = "0.32.0"
+transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false, features = ["metal"] }
 ort = { version = "2.0.0-rc.12", features = [
     "download-binaries",
     "coreml",
@@ -172,6 +213,7 @@ windows = { version = "0.58", features = [
 # XNNPACK: CPU optimization
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
+transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false, features = ["cuda", "vulkan"] }
 windows = { version = "0.58", features = [
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
@@ -184,7 +226,6 @@ windows = { version = "0.58", features = [
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "cuda",
 ] }
-parakeet-rs = { path = "vendor/parakeet-rs", features = ["cuda", "directml"] }
 ort = { version = "2.0.0-rc.12", features = [
     "download-binaries",
     "cuda",
@@ -194,10 +235,10 @@ ort = { version = "2.0.0-rc.12", features = [
     "half",
 ] }
 # llama-cpp-2 with dynamic-link (CPU-only LLM on Windows to avoid CUDA build issues)
-llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
+llama-cpp-2 = { version = "=0.1.157", default-features = false, features = [
     "dynamic-link",
 ] }
-llama-cpp-sys-2 = "=0.1.134"
+llama-cpp-sys-2 = "=0.1.157"
 # 3b. Linux (x86_64) — CPU / GPU build
 # -------------------------------------------------------------------------
 # DEFAULT: CPU-only. Works on any Linux machine (AMD, Intel, NVIDIA without CUDA).
@@ -209,13 +250,13 @@ llama-cpp-sys-2 = "=0.1.134"
 #   Then: export CARGO_FEATURES="cuda" before running tauri build
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false, features = ["cuda", "vulkan"] }
 
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
     "cuda",
     "vulkan",
 ] }
 
-parakeet-rs = { path = "vendor/parakeet-rs", features = ["cuda"] }
 
 ort = { version = "2.0.0-rc.12", features = [
     "download-binaries",
@@ -225,12 +266,12 @@ ort = { version = "2.0.0-rc.12", features = [
     "half",
 ] }
 
-llama-cpp-2 = { version = "=0.1.134", default-features = false, features = [
+llama-cpp-2 = { version = "=0.1.157", default-features = false, features = [
     "dynamic-link",
     "cuda",
 ] }
 
-llama-cpp-sys-2 = "=0.1.134"
+llama-cpp-sys-2 = "=0.1.157"
 # 4. Windows (ARM64) -> DirectML + XNNPACK# DirectML: Hardware-accelerated on Qualcomm Snapdragon X ARM processors
 # XNNPACK: Cross-platform CPU optimization
 # -------------------------------------------------------------------------
@@ -248,14 +289,12 @@ ort = { version = "2.0.0-rc.12", features = [
     "xnnpack",
     "half",
 ] }
-parakeet-rs = { path = "vendor/parakeet-rs", features = ["directml"] }
 
 # 5. Linux (ARM64) -> XNNPACK
 # XNNPACK: CPU optimization for ARM processors (Raspberry Pi, etc.)
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
-parakeet-rs = { path = "vendor/parakeet-rs" }
 ort = { version = "2.0.0-rc.12", features = ["download-binaries", "xnnpack", "half"] }
 
 [dev-dependencies]

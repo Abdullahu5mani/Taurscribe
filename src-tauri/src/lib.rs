@@ -3,36 +3,32 @@ mod audio;
 pub mod audio_decode;
 pub mod audio_dual_channel;
 pub mod audio_preprocess;
-pub mod cohere;
 pub mod commands;
 pub mod context;
 pub mod cpu_features;
 mod denoise;
-pub mod granite;
-pub mod granite_features;
-/// Native MLX backend, Apple silicon only.
+pub mod diarization;
+pub mod neural_diarizer;
+pub mod meeting_continuation;
+pub mod mcp_server;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub mod granite_mlx;
+pub mod nemotron_diar_mlx;
+/// Granite Speech 5 and Qwen3-ASR (GGUF, transcribe.cpp).
+pub mod gguf_asr;
 mod hotkeys;
 pub mod librispeech_wer;
-mod llm;
+pub mod llm;
 pub mod memory;
+pub mod meeting_audio;
 pub mod meeting_detector;
+pub mod meeting_summary;
+pub mod control_server;
 mod ort_session;
 mod overlay;
-pub mod parakeet;
-pub mod parakeet_loaders;
-/// Native MLX backend for Parakeet FastConformer, Apple silicon only.
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub mod parakeet_mlx;
-mod parakeet_runtime;
 pub mod platform_tuning;
-pub mod qwen3;
-pub mod qwen3_mel;
-/// Native MLX backend for Qwen3-ASR, Apple silicon only.
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-pub mod qwen3_mlx;
 mod state;
+pub mod storage;
+pub mod speaker_embedding;
 mod system_audio;
 pub mod text_injection;
 mod tray;
@@ -45,17 +41,22 @@ pub mod whisper;
 pub use commands::misc::sort_audio_devices_by_priority;
 
 // Imports
-use cohere::CohereManager;
-use parakeet::ParakeetManager;
-use qwen3::Qwen3Manager;
+use gguf_asr::GgufAsrManager;
 use state::AudioState;
 use tauri::Manager;
 use vad::VADManager;
 use whisper::WhisperManager;
 
+/// A boolean from settings.json (written by the frontend's store), if set.
+fn saved_setting(key: &str) -> Option<bool> {
+    let text = std::fs::read_to_string(mcp_server::settings_path()?).ok()?;
+    serde_json::from_str::<serde_json::Value>(&text).ok()?.get(key)?.as_bool()
+}
+
 fn focus_main_window(app_handle: &tauri::AppHandle) {
     let windows = app_handle.webview_windows();
-    if let Some(window) = windows.values().next() {
+    // Prefer "main": on Windows/Linux the overlay is a webview window too.
+    if let Some(window) = windows.get("main").or_else(|| windows.values().next()) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -72,11 +73,8 @@ fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
         if let Ok(mut whisper) = state.whisper.lock() {
             whisper.unload();
         }
-        if let Ok(mut parakeet) = state.parakeet.lock() {
-            parakeet.unload();
-        }
-        if let Ok(mut cohere) = state.cohere.lock() {
-            cohere.unload();
+        if let Ok(mut granite) = state.granite.lock() {
+            granite.unload();
         }
         if let Ok(mut qwen3) = state.qwen3.lock() {
             qwen3.unload();
@@ -117,18 +115,9 @@ pub fn run() {
     });
     println!("[SUCCESS] VAD initialized successfully");
 
-    // 3. Initialize Parakeet & Load Model
-    println!("[INFO] Initializing Parakeet ASR manager...");
-    let parakeet = ParakeetManager::new();
-
-    // NOTE: Parakeet is NOT lazy-loaded at startup anymore to save VRAM.
-    // It will be loaded on demand when the user switches to it.
-
-    // 3b. Initialize Granite Speech (lazy-loaded on demand)
-    println!("[INFO] Initializing Granite Speech ASR manager...");
-    let cohere = CohereManager::new();
-    println!("[INFO] Initializing Qwen3-ASR manager...");
-    let qwen3 = Qwen3Manager::new();
+    // 3. Granite Speech 5 and Qwen3-ASR managers (models load on demand).
+    let granite = GgufAsrManager::granite();
+    let qwen3 = GgufAsrManager::qwen3();
 
     // 4. Build the Tauri App
     tauri::Builder::default()
@@ -139,10 +128,14 @@ pub fn run() {
 
             focus_main_window(app);
         }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .manage(AudioState::new(whisper, parakeet, vad, cohere, qwen3))
+        .manage(AudioState::new(whisper, granite, vad, qwen3))
         .setup(move |app| {
             // Clean up any partial model files left over from a previous download
             // that was interrupted by a crash or force-quit.
@@ -156,14 +149,46 @@ pub fn run() {
                 println!("[INFO] Safety unmute on startup completed");
             }
 
+            // Older meetings kept their raw WAV; convert them to small playback
+            // copies in the background (can take a while for long recordings).
+            std::thread::spawn(|| {
+                if let Ok(conn) = commands::meetings::open_connection() {
+                    let n = commands::meetings::compress_legacy_meeting_audio(&conn);
+                    if n > 0 {
+                        println!("[INFO] Compressed {} older meeting recording(s) for playback", n);
+                    }
+                }
+            });
+
             // Log CPU SIMD features for quantized inference dispatch
             cpu_features::log_simd_capabilities();
 
             // Initialise the native overlay (macOS: creates NSPanel; others: no-op)
             overlay::init(app.handle());
+            #[cfg(debug_assertions)]
+            overlay::debug_demo(app.handle());
 
             // Setup System Tray
+            // The window starts invisible; the frontend shows it once loaded unless
+            // "start hidden" is on. If the frontend never gets that far (a crash
+            // or script error), show it anyway so the app is never stuck unseen.
+            if saved_setting("start_hidden") != Some(true) {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(15));
+                    if !commands::misc::MAIN_WINDOW_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+                        eprintln!("[WARN] Frontend never showed the window; showing it now");
+                        focus_main_window(&handle);
+                    }
+                });
+            }
+
             tray::setup_tray(app)?;
+            if saved_setting("show_tray_icon") == Some(false) {
+                if let Some(tray) = app.tray_by_id("main-tray") {
+                    let _ = tray.set_visible(false);
+                }
+            }
 
             // Sync initial model state with tray menu item (no model loaded at startup).
             use std::sync::atomic::Ordering;
@@ -189,12 +214,21 @@ pub fn run() {
                 eprintln!("[WARN] Failed to start models watcher: {}", e);
             }
 
+            storage::allow_recordings_in_asset_scope(app.handle());
+
+            // A kept recording for continuing a meeting outlives its window if the
+            // app quit meanwhile; drop it now.
+            meeting_continuation::cleanup_expired();
+
             // Start Automated Meeting Detection Watcher
             let meeting_handle = app.handle().clone();
             let state = app.state::<AudioState>();
             if let Err(e) = state.meeting_detector.start_watching(meeting_handle) {
                 eprintln!("[WARN] Failed to start meeting detector: {}", e);
             }
+
+            // Start In-Process Test Control Server (Localhost simulation & test harness)
+            control_server::spawn_control_server(app.handle().clone());
 
             // Start Inactivity Auto-Unload Watchdog Background Thread
             let auto_unload_handle = app.handle().clone();
@@ -288,6 +322,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::show_main_window,
+            commands::set_tray_icon_visible,
             commands::get_system_info,
             commands::get_hardware_diagnostics,
             commands::get_process_memory_stats,
@@ -298,9 +333,9 @@ pub fn run() {
             commands::list_models,
             commands::get_current_model,
             commands::switch_model,
-            commands::list_parakeet_models,
-            commands::init_parakeet,
-            commands::get_parakeet_status,
+            commands::list_granite_models,
+            commands::init_granite,
+            commands::get_granite_status,
             commands::list_qwen3_models,
             commands::init_qwen3,
             commands::get_qwen3_status,
@@ -333,6 +368,10 @@ pub fn run() {
             commands::show_overlay,
             commands::hide_overlay,
             commands::set_overlay_state,
+            storage::get_storage_locations,
+            storage::set_storage_location,
+            storage::measure_storage_speed,
+            storage::open_storage_location,
             commands::request_overlay_action,
             commands::mute_system_audio,
             commands::unmute_system_audio,
@@ -355,16 +394,11 @@ pub fn run() {
             commands::set_auto_unload_timeout,
             commands::get_auto_unload_status,
             commands::touch_activity,
-            commands::init_granite,
-            commands::get_granite_status,
-            commands::list_granite_models,
-            commands::init_cohere,
-            commands::get_cohere_status,
-            commands::list_cohere_models,
             commands::pause_recording,
             commands::resume_recording,
             commands::cancel_recording,
             commands::transcribe_file,
+            commands::finish_file_transcription_batch,
             commands::cancel_file_transcription,
             commands::scan_active_meetings,
             commands::get_meeting_detection_status,
@@ -374,6 +408,25 @@ pub fn run() {
             commands::get_audio_source_mode,
             commands::set_auto_record_meetings,
             commands::get_auto_record_meetings,
+            commands::get_speaker_match_threshold,
+            commands::set_speaker_match_threshold,
+            commands::get_meeting_continue_minutes,
+            commands::set_meeting_continue_minutes,
+            commands::get_mcp_setup,
+            commands::list_meetings,
+            commands::get_meeting_platform_counts,
+            commands::get_meeting_detail,
+            commands::update_meeting,
+            commands::save_meeting_review,
+            commands::delete_meeting,
+            commands::rename_speaker,
+            commands::rename_vault_speaker,
+            commands::list_speaker_vault,
+            commands::delete_speaker_from_vault,
+            commands::cycle_speaker_turn_snippet,
+            commands::cycle_vault_speaker_snippet,
+            commands::generate_meeting_summary,
+            commands::export_meeting_notes,
             crate::context::get_active_context_preview
         ])
         .build(tauri::generate_context!())

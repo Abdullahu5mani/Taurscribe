@@ -21,4 +21,5 @@ pub struct RecordingHandle {
     pub level_thread: std::thread::JoinHandle<()>,
     pub is_dual_channel: bool,
     pub dual_channel_stop: Option<Arc<AtomicBool>>,
+    pub dual_channel_thread: Option<std::thread::JoinHandle<()>>,
 }

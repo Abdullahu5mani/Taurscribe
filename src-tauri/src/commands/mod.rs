@@ -1,4 +1,3 @@
-mod cohere;
 mod file_transcription;
 mod history;
 mod llm;
@@ -8,7 +7,6 @@ mod models;
 mod recording;
 mod settings;
 
-pub use cohere::*;
 pub use file_transcription::*;
 pub use history::*;
 pub use llm::*;

@@ -78,291 +78,62 @@ pub fn coreml_companion_supported() -> bool {
     cfg!(all(target_os = "macos", target_arch = "aarch64"))
 }
 
-/// Build a single-file model config from a staged local source directory.
-fn local_single_file(
-    local_source: &'static str,
-    filename: &'static str,
-    sha256: &'static str,
-) -> ModelConfig {
+/// Look up the download configuration for a model by its ID.
+/// Returns `None` if the model ID is not recognised.
+/// Speaker recognition (voiceprints): CAM++ trained on VoxCeleb, from 3D-Speaker,
+/// as published by the sherpa-onnx project. Input: 80-band fbank; output: 192-d.
+pub const SPEAKER_MODEL_ID: &str = "speaker-campplus-en";
+pub const SPEAKER_MODEL_DIR: &str = "speaker";
+pub const SPEAKER_MODEL_FILE: &str = "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx";
+
+/// Speaker diarization ("who spoke when") for the call channel: NVIDIA
+/// Nemotron-3 Diarization. One model choice everywhere; the download is the
+/// MLX BF16 conversion on Apple Silicon and the F16 GGUF (transcribe.cpp)
+/// elsewhere. Neither is quantized.
+pub const DIARIZATION_MODEL_ID: &str = "diarization-nemotron3";
+pub const DIARIZATION_MODEL_DIR: &str = "diarization-nemotron3";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub const DIARIZATION_MODEL_FILE: &str = "model.safetensors";
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+pub const DIARIZATION_MODEL_FILE: &str = "nemotron-3-diarization-F16.gguf";
+
+fn diarization_model_config() -> ModelConfig {
+    // Pinned commits: both conversions are new and may be re-exported.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let (repo, commit, sha) = (
+        "mlx-community/Nemotron-3-Diarization",
+        "59ed2dbfc1346dcea9d423c71306a3a2499c568f",
+        "21e8427d1795c9c46c5800f56b16061734ffd0dcadd71d9bcf0b4d6ef7261da5",
+    );
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    let (repo, commit, sha) = (
+        "Glimpse-Dictation/Nemotron-3-Diarization-gguf",
+        "3bf8566b2a36b54e5951142298f806053865a297",
+        "5513da21cc39fc3ab5a36bd945324aeb013369b63172849b4ef174686e15f27c",
+    );
     ModelConfig {
-        repo: local_source,
-        branch: "main",
-        files: vec![ModelFile {
-            filename,
-            remote_path: filename,
-            sha1: sha256,
-        }],
-        subdirectory: None,
+        repo,
+        branch: commit,
+        files: vec![ModelFile { filename: DIARIZATION_MODEL_FILE, remote_path: DIARIZATION_MODEL_FILE, sha1: sha }],
+        subdirectory: Some(DIARIZATION_MODEL_DIR),
     }
 }
 
-/// Qwen3-ASR ONNX bundle (cross-platform: CPU, CUDA, DirectML).
-///
-/// Hosted on Abdullahu5mani/qwen3-asr-1.7b-onnx — exported from the official
-/// `Qwen/Qwen3-ASR-1.7B` checkpoint via `optimum-cli export onnx`.
-/// Contains `encoder.onnx` (AuT audio transformer) and `decoder.onnx`
-/// (Qwen3-1.4B autoregressive LLM), plus the tiktoken-compatible tokenizer.
-fn qwen3_asr_onnx_files() -> Vec<ModelFile> {
-    vec![
-        ModelFile {
-            filename: "encoder.onnx",
-            remote_path: "encoder.onnx",
-            // SHA-256 to be filled in once the ONNX export is hosted.
-            sha1: "",
-        },
-        ModelFile {
-            filename: "decoder.onnx",
-            remote_path: "decoder.onnx",
-            sha1: "",
-        },
-        ModelFile {
-            filename: "tokenizer.json",
-            remote_path: "tokenizer.json",
-            sha1: "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05",
-        },
-        ModelFile {
-            filename: "config.json",
-            remote_path: "config.json",
-            sha1: "117ac8e63e2af7cae3665e5a632d6eb03f5f384915519ceb6403c15ec6533f63",
-        },
-    ]
-}
-
-/// Qwen3-ASR MLX bundle (Apple Silicon only).
-///
-/// Served straight from the official `Qwen/Qwen3-ASR-1.7B` repository — the
-/// safetensors checkpoint is identical, and the MLX runtime remaps the layout
-/// at load time, so there is nothing to re-host.
-fn qwen3_asr_mlx_files() -> Vec<ModelFile> {
-    vec![
-        ModelFile {
-            filename: "model.safetensors",
-            remote_path: "model.safetensors",
-            sha1: "2db53c7d81bd9b8cbc6a074e89be2c968a0d373fb4ee68bb1b1e14f7042dfee1",
-        },
-        ModelFile {
-            filename: "tokenizer.json",
-            remote_path: "tokenizer.json",
-            sha1: "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05",
-        },
-        ModelFile {
-            filename: "config.json",
-            remote_path: "config.json",
-            sha1: "117ac8e63e2af7cae3665e5a632d6eb03f5f384915519ceb6403c15ec6533f63",
-        },
-    ]
-}
-
-/// Apple-silicon MLX bundle. These are IBM's own weights, unmodified — the MLX
-/// runtime remaps the layout while loading, so there is nothing for us to
-/// re-host and the download comes straight from the upstream repository.
-fn granite_mlx_files() -> Vec<ModelFile> {
-    vec![
-        ModelFile {
-            filename: "model.safetensors",
-            remote_path: "model.safetensors",
-            sha1: "a187681b05e9598028b6177bba4588a27a76b97ab6840870877d69e1770a5094",
-        },
-        ModelFile {
-            filename: "config.json",
-            remote_path: "config.json",
-            sha1: "d6c760e672df122eedd873adb77a318b785221b06f9fbe9db08c51a1f8302936",
-        },
-        ModelFile {
-            filename: "tokenizer.json",
-            remote_path: "tokenizer.json",
-            sha1: "64c10a88b2495872bd7da5a885861a1757d9c23590c40fd378546ae176d280f6",
-        },
-        ModelFile {
-            filename: "tokenizer_config.json",
-            remote_path: "tokenizer_config.json",
-            sha1: "c7e48adce9bdf6cfe3524759067b5dfa2428de9ccba2fd257502bf0246161c2f",
-        },
-        ModelFile {
-            filename: "preprocessor_config.json",
-            remote_path: "preprocessor_config.json",
-            sha1: "e12be1e9d4ec5c459741328f28d9d8c00c3c688e8fe4230a6ec28df5470db8b3",
-        },
-    ]
-}
-
-/// Apple-silicon MLX 8-bit quantized bundle. Weights are quantized via MLX groupwise
-/// affine quantization (bits=8, group_size=64) for memory reduction (~2.5 GB vs 4.6 GB FP16)
-/// on unified-memory Apple Silicon devices while retaining exact 0-token-drift parity.
-fn granite_mlx_8bit_files() -> Vec<ModelFile> {
-    vec![
-        ModelFile {
-            filename: "model.safetensors",
-            remote_path: "model.safetensors",
-            sha1: "b52c0f4e389d419a71a5c687e35b7194f107ea6984e4f2167d4325a7201c9ba8",
-        },
-        ModelFile {
-            filename: "config.json",
-            remote_path: "config.json",
-            sha1: "d6c760e672df122eedd873adb77a318b785221b06f9fbe9db08c51a1f8302936",
-        },
-        ModelFile {
-            filename: "tokenizer.json",
-            remote_path: "tokenizer.json",
-            sha1: "64c10a88b2495872bd7da5a885861a1757d9c23590c40fd378546ae176d280f6",
-        },
-        ModelFile {
-            filename: "tokenizer_config.json",
-            remote_path: "tokenizer_config.json",
-            sha1: "c7e48adce9bdf6cfe3524759067b5dfa2428de9ccba2fd257502bf0246161c2f",
-        },
-        ModelFile {
-            filename: "preprocessor_config.json",
-            remote_path: "preprocessor_config.json",
-            sha1: "e12be1e9d4ec5c459741328f28d9d8c00c3c688e8fe4230a6ec28df5470db8b3",
-        },
-    ]
-}
-
-fn granite_cuda_files() -> Vec<ModelFile> {
-    vec![
-        ModelFile {
-            filename: "encoder.onnx",
-            remote_path: "encoder.onnx",
-            sha1: "580b6314367feee1f1b9d0ecb22131d46d61544f20775b4c95c7c650e15e9b64",
-        },
-        ModelFile {
-            filename: "encoder.onnx.data",
-            remote_path: "encoder.onnx.data",
-            sha1: "038e259276a1119ad03afcd8fce16ff50cd3a98db535cd68be0b5a71bbcf3318",
-        },
-        ModelFile {
-            filename: "projector.onnx",
-            remote_path: "projector.onnx",
-            sha1: "0641d423a5700d6b16c0d8a47a25b58e750b1e2d065f26a670b72a78930968b2",
-        },
-        ModelFile {
-            filename: "projector.onnx.data",
-            remote_path: "projector.onnx.data",
-            sha1: "d660a66a75178c1b111d154de6b6cfe6a8183111c68ada33948e42ba0acefc19",
-        },
-        ModelFile {
-            filename: "embed_tokens.onnx",
-            remote_path: "embed_tokens.onnx",
-            sha1: "10f33a9646ea843d65c761c5295d8487e1091bf66de587f395ccec5b44c71ad3",
-        },
-        ModelFile {
-            filename: "editor.onnx",
-            remote_path: "editor.onnx",
-            sha1: "40dc0e1eafa152fd6fdcb0ca8030128469906501a63ea4d4ae83df195d23d792",
-        },
-        ModelFile {
-            filename: "editor.onnx.data",
-            remote_path: "editor.onnx.data",
-            sha1: "72704971b72bf00c281a859825cb72b25b7768239d009abe52fb4fbc6ddc009b",
-        },
-        ModelFile {
-            filename: "tokenizer.json",
-            remote_path: "tokenizer.json",
-            sha1: "64c10a88b2495872bd7da5a885861a1757d9c23590c40fd378546ae176d280f6",
-        },
-        ModelFile {
-            filename: "preprocessor_config.json",
-            remote_path: "preprocessor_config.json",
-            sha1: "e12be1e9d4ec5c459741328f28d9d8c00c3c688e8fe4230a6ec28df5470db8b3",
-        },
-        ModelFile {
-            filename: "processor_config.json",
-            remote_path: "processor_config.json",
-            sha1: "74d21364b507dcbe465420152d48edd9276f94a84d22a78d0da371e716a79374",
-        },
-        ModelFile {
-            filename: "tokenizer_config.json",
-            remote_path: "tokenizer_config.json",
-            sha1: "c7e48adce9bdf6cfe3524759067b5dfa2428de9ccba2fd257502bf0246161c2f",
-        },
-        ModelFile {
-            filename: "generation_config.json",
-            remote_path: "generation_config.json",
-            sha1: "af7cd9bbb214dea4f6a37756c2c133d002f6325ed4f497efc991f02b4d486dad",
-        },
-        ModelFile {
-            filename: "taurscribe_granite_nar_manifest.json",
-            remote_path: "taurscribe_granite_nar_manifest.json",
-            sha1: "94bbb6fcc6e4c0aa0f544a5c76c0fed92c27692efa049719a98455dfb81d59f4",
-        },
-    ]
-}
-
-fn granite_portable_files() -> Vec<ModelFile> {
-    vec![
-        ModelFile {
-            filename: "encoder.onnx",
-            remote_path: "encoder.onnx",
-            sha1: "e4e34584c2de0ebbf95d318a386bb6f150ae62eb9505837dae3e82190a72859a",
-        },
-        ModelFile {
-            filename: "encoder.onnx.data",
-            remote_path: "encoder.onnx.data",
-            sha1: "038e259276a1119ad03afcd8fce16ff50cd3a98db535cd68be0b5a71bbcf3318",
-        },
-        ModelFile {
-            filename: "projector.onnx",
-            remote_path: "projector.onnx",
-            sha1: "0641d423a5700d6b16c0d8a47a25b58e750b1e2d065f26a670b72a78930968b2",
-        },
-        ModelFile {
-            filename: "projector.onnx.data",
-            remote_path: "projector.onnx.data",
-            sha1: "d660a66a75178c1b111d154de6b6cfe6a8183111c68ada33948e42ba0acefc19",
-        },
-        ModelFile {
-            filename: "embed_tokens.onnx",
-            remote_path: "embed_tokens.onnx",
-            sha1: "10f33a9646ea843d65c761c5295d8487e1091bf66de587f395ccec5b44c71ad3",
-        },
-        ModelFile {
-            filename: "editor.onnx",
-            remote_path: "editor.onnx",
-            sha1: "40dc0e1eafa152fd6fdcb0ca8030128469906501a63ea4d4ae83df195d23d792",
-        },
-        ModelFile {
-            filename: "editor.onnx.data",
-            remote_path: "editor.onnx.data",
-            sha1: "72704971b72bf00c281a859825cb72b25b7768239d009abe52fb4fbc6ddc009b",
-        },
-        ModelFile {
-            filename: "tokenizer.json",
-            remote_path: "tokenizer.json",
-            sha1: "64c10a88b2495872bd7da5a885861a1757d9c23590c40fd378546ae176d280f6",
-        },
-        ModelFile {
-            filename: "preprocessor_config.json",
-            remote_path: "preprocessor_config.json",
-            sha1: "e12be1e9d4ec5c459741328f28d9d8c00c3c688e8fe4230a6ec28df5470db8b3",
-        },
-        ModelFile {
-            filename: "processor_config.json",
-            remote_path: "processor_config.json",
-            sha1: "74d21364b507dcbe465420152d48edd9276f94a84d22a78d0da371e716a79374",
-        },
-        ModelFile {
-            filename: "tokenizer_config.json",
-            remote_path: "tokenizer_config.json",
-            sha1: "c7e48adce9bdf6cfe3524759067b5dfa2428de9ccba2fd257502bf0246161c2f",
-        },
-        ModelFile {
-            filename: "generation_config.json",
-            remote_path: "generation_config.json",
-            sha1: "af7cd9bbb214dea4f6a37756c2c133d002f6325ed4f497efc991f02b4d486dad",
-        },
-        ModelFile {
-            filename: "taurscribe_granite_nar_manifest.json",
-            remote_path: "taurscribe_granite_nar_manifest.json",
-            sha1: "bb59c18cdfa4297ff42d7f76d27911030fb118e04f2291b15e488e32dc92a47e",
-        },
-    ]
-}
-
-/// Look up the download configuration for a model by its ID.
-/// Returns `None` if the model ID is not recognised.
 pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
     match model_id {
+        DIARIZATION_MODEL_ID => Some(diarization_model_config()),
+        SPEAKER_MODEL_ID => Some(ModelConfig {
+            repo: "github-release:k2-fsa/sherpa-onnx",
+            branch: "speaker-recongition-models", // (sic) the release tag's spelling
+            files: vec![ModelFile {
+                filename: SPEAKER_MODEL_FILE,
+                remote_path: SPEAKER_MODEL_FILE,
+                // SHA-256 of the 29,596,978-byte release asset (no digest is published
+                // upstream; pinned from the first download, size matched GitHub's API).
+                sha1: "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
+            }],
+            subdirectory: Some(SPEAKER_MODEL_DIR),
+        }),
         // ── Whisper Tiny ──────────────────────────────────────────────────────
         // Full-precision variants bundle the CoreML ANE encoder so a single
         // "Download Model" click pulls both files on Apple Silicon.
@@ -420,8 +191,7 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             "ggml-base.en-encoder.mlmodelc.zip",
             "8cf860309e2449e2bdc8be834cf838ab2565747ecc8c0ef914ef5975115e192b",
         )),
-        "whisper-base-en-q5_1" => Some(local_single_file(
-            "local:whisper-base-en-q5_1",
+        "whisper-base-en-q5_1" => Some(single_file_whisper(
             "ggml-base.en-q5_1.bin",
             "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f",
         )),
@@ -642,175 +412,51 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
             subdirectory: None,
         }),
 
-        // ── Parakeet ──────────────────────────────────────────────────────────
-        // SHA-256 sourced from HuggingFace LFS metadata (lfs.oid).
-        "parakeet-nemotron" => Some(ModelConfig {
-            repo: "lokkju/nemotron-speech-streaming-en-0.6b-int4",
+        "granite-speech-5-nc" => Some(ModelConfig {
+            repo: "handy-computer/granite-speech-5.0-470m-turboctc-nc-gguf",
             branch: "main",
-            files: vec![
-                ModelFile {
-                    filename: "decoder_joint.onnx",
-                    remote_path: "decoder_joint.onnx",
-                    sha1: "df20ba8ef87083231989fed74aefd79a72a2a95e5f4fac147fd716f2a5c71b87",
-                },
-                ModelFile {
-                    filename: "encoder.onnx",
-                    remote_path: "encoder.onnx",
-                    sha1: "541304b1f563b2ed772be6d4c1c342b5ef96170252e2c860e0d9cd364c23333a",
-                },
-                ModelFile {
-                    filename: "tokenizer.model",
-                    remote_path: "tokenizer.model",
-                    sha1: "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
-                },
-            ],
-            subdirectory: Some("parakeet-nemotron"),
+            files: vec![ModelFile {
+                filename: "granite-speech-5.0-470m-turboctc-nc-F16.gguf",
+                remote_path: "granite-speech-5.0-470m-turboctc-nc-F16.gguf",
+                sha1: "baceebaaf85210f50463dfec059eb46ae6dbea8ea9a090500fbdee4f92b0c302",
+            }],
+            subdirectory: Some("granite-speech-5-nc"),
         }),
-
-        // Parakeet Nemotron 0.6B FastConformer RNN-T native Apple Silicon MLX GPU checkpoint
-        "parakeet-nemotron-mlx" => Some(ModelConfig {
-            repo: "Abdullahu5mani/parakeet-nemotron-0.6b-mlx",
+        "qwen3-asr-1.7b" => Some(ModelConfig {
+            repo: "handy-computer/Qwen3-ASR-1.7B-gguf",
             branch: "main",
-            files: vec![
-                ModelFile {
-                    filename: "model.safetensors",
-                    remote_path: "model.safetensors",
-                    sha1: "fb8e5b00361f0655f5fcbaf6b8d7391472765f1be3004cfc638e93a835890740",
-                },
-                ModelFile {
-                    filename: "tokenizer.model",
-                    remote_path: "tokenizer.model",
-                    sha1: "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
-                },
-            ],
-            subdirectory: Some("parakeet-nemotron-mlx"),
+            files: vec![ModelFile {
+                filename: "Qwen3-ASR-1.7B-F16.gguf",
+                remote_path: "Qwen3-ASR-1.7B-F16.gguf",
+                sha1: "edb09c29b8f73822c639168d5ef72aa2dccdf8b4e48fc4b8518885352ff62c71",
+            }],
+            subdirectory: Some("qwen3-asr-1.7b"),
         }),
-
-        // Parakeet Nemotron 0.6B FastConformer RNN-T native Apple Silicon MLX 8-bit quantized checkpoint
-        // Uses 8-bit groupwise affine quantization (~650 MB vs 1.25 GB FP16) for reduced memory footprint
-        // on unified memory Apple Silicon systems without transcription degradation.
-        // SHA-256 for model weights left empty pending HuggingFace LFS oid retrieval; downloader
-        // skips verification for blank entries or resolves via live LFS metadata.
-        "parakeet-nemotron-mlx-8bit" => Some(ModelConfig {
-            repo: "Abdullahu5mani/parakeet-nemotron-0.6b-mlx-8bit",
+        "qwen3-asr-0.6b" => Some(ModelConfig {
+            repo: "handy-computer/Qwen3-ASR-0.6B-gguf",
             branch: "main",
-            files: vec![
-                ModelFile {
-                    filename: "model.safetensors",
-                    remote_path: "model.safetensors",
-                    sha1: "",
-                },
-                ModelFile {
-                    filename: "tokenizer.model",
-                    remote_path: "tokenizer.model",
-                    sha1: "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
-                },
-            ],
-            subdirectory: Some("parakeet-nemotron-mlx-8bit"),
-        }),
-
-        // Parakeet TDT v3 — multilingual (25 languages), NVIDIA's checkpoint
-        // exported to ONNX by community user `istupakov`. Top of HuggingFace
-        // Open ASR Leaderboard for English; supports auto language detection.
-        // Shipping the INT8 variant (~670 MB) — accuracy delta vs FP is small,
-        // download is ~4x smaller, and parakeet-rs `find_encoder` falls through
-        // to `encoder-model.int8.onnx` when no FP file is present.
-        // SHA-256 left empty pending HuggingFace LFS oid retrieval; downloader
-        // skips verification for blank entries.
-        "parakeet-tdt" => Some(ModelConfig {
-            repo: "local:parakeet-tdt",
-            branch: "main",
-            files: vec![
-                ModelFile {
-                    filename: "encoder-model.int8.onnx",
-                    remote_path: "encoder-model.int8.onnx",
-                    sha1: "",
-                },
-                ModelFile {
-                    filename: "decoder_joint-model.int8.onnx",
-                    remote_path: "decoder_joint-model.int8.onnx",
-                    sha1: "",
-                },
-                ModelFile {
-                    filename: "vocab.txt",
-                    remote_path: "vocab.txt",
-                    sha1: "",
-                },
-                ModelFile {
-                    filename: "config.json",
-                    remote_path: "config.json",
-                    sha1: "",
-                },
-            ],
-            subdirectory: Some("parakeet-tdt"),
+            files: vec![ModelFile {
+                filename: "Qwen3-ASR-0.6B-F16.gguf",
+                remote_path: "Qwen3-ASR-0.6B-F16.gguf",
+                sha1: "5c90e4b1a72a4c59cd12afa5ebb0cc8628848148f2b337d025cc5121ae4d2eea",
+            }],
+            subdirectory: Some("qwen3-asr-0.6b"),
         }),
 
         // ── LLM ───────────────────────────────────────────────────────────────
         // SHA-256 sourced from HuggingFace LFS metadata (lfs.oid).
-        "flowscribe-qwen2.5-0.5b-v2" => Some(ModelConfig {
-            repo: "Abdullahu5mani/flowscribe-qwen2.5-0.5b-v2",
+        // FlowScribe v3: Qwen3.5-0.8B fine-tune, F16 (see scripts/flowscribe_train).
+        "flowscribe-qwen3.5-0.8b-v3" => Some(ModelConfig {
+            repo: "Abdullahu5mani/flowscribe-qwen3.5-0.8b-v3",
             branch: "main",
             files: vec![ModelFile {
-                filename: "model_q4_k_m.gguf",
-                remote_path: "model_q4_k_m.gguf",
-                sha1: "26655766ab6d63ef33a023eb486fb0a020aa8fbcd7041a7fdb3347127fbde5d2",
+                filename: "flowscribe-v3-f16.gguf",
+                remote_path: "flowscribe-v3-f16.gguf",
+                sha1: "56b813fa3572279edef6da6d2e6bce492548d99e894cdef379ff5924ce5b345d",
             }],
-            subdirectory: Some("qwen_finetuned_gguf"),
+            subdirectory: Some("flowscribe_v3"),
         }),
 
-        // ── Granite Speech NAR ONNX slots ────────────────────────────────────
-        // Both product artifacts are published on Hugging Face. The CUDA
-        // bundle targets NVIDIA; portable targets DirectML with CPU fallback.
-        "granite-speech-4.1-2b-nar-cuda"
-        | "granite-speech-4.1-2b-nar"
-        | "cohere-speech-1b-cpu"
-        | "cohere-speech-1b-fp16-cuda" => Some(ModelConfig {
-            repo: "Abdullahu5mani/granite-speech-4.1-2b-nar-cuda",
-            branch: "main",
-            files: granite_cuda_files(),
-            subdirectory: Some("granite-speech-4.1-2b-nar-cuda"),
-        }),
-        // Apple silicon runs Granite on MLX rather than ONNX, which needs the
-        // raw checkpoint instead of the exported graphs. Served from IBM's
-        // repository directly: the weights are unchanged, so re-hosting them
-        // would only add a copy to keep in sync.
-        "granite-speech-4.1-2b-nar-mlx" => Some(ModelConfig {
-            repo: "ibm-granite/granite-speech-4.1-2b-nar",
-            branch: "main",
-            files: granite_mlx_files(),
-            subdirectory: Some("granite-speech-4.1-2b-nar-mlx"),
-        }),
-        // Apple Silicon MLX 8-bit quantized weights for IBM Granite Speech NAR 2B
-        // Uses groupwise affine quantization (bits=8, group_size=64) to halve memory
-        // footprint (~2.5 GB) with 0-token-drift parity relative to dense FP16.
-        "granite-speech-4.1-2b-nar-mlx-8bit" => Some(ModelConfig {
-            repo: "Abdullahu5mani/granite-speech-4.1-2b-nar-mlx-8bit",
-            branch: "main",
-            files: granite_mlx_8bit_files(),
-            subdirectory: Some("granite-speech-4.1-2b-nar-mlx-8bit"),
-        }),
-        // Portable = INT4 argmax bundle with a DirectML-static encoder
-        // (rank-3 attention MatMuls, baked shape chains); built by
-        // scripts/make_granite_portable_dml.py. DirectML is attempted first on
-        // Windows, with multi-threaded CPU fallback.
-        "granite-speech-4.1-2b-nar-portable" => Some(ModelConfig {
-            repo: "Abdullahu5mani/granite-speech-4.1-2b-nar-portable",
-            branch: "main",
-            files: granite_portable_files(),
-            subdirectory: Some("granite-speech-4.1-2b-nar-portable"),
-        }),
-        "qwen3-asr-1.7b-onnx" => Some(ModelConfig {
-            repo: "Abdullahu5mani/qwen3-asr-1.7b-onnx",
-            branch: "main",
-            files: qwen3_asr_onnx_files(),
-            subdirectory: Some("qwen3-asr-1.7b-onnx"),
-        }),
-        "qwen3-asr-1.7b-mlx" => Some(ModelConfig {
-            repo: "Qwen/Qwen3-ASR-1.7B",
-            branch: "main",
-            files: qwen3_asr_mlx_files(),
-            subdirectory: Some("qwen3-asr-1.7b-mlx"),
-        }),
         _ => None,
     }
 }
@@ -819,153 +465,20 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
 mod tests {
     use super::*;
 
-    fn assert_hosted_granite_payload(
-        model_id: &str,
-        expected_repo: &str,
-        expected_subdirectory: &str,
-    ) {
-        let config = get_model_config(model_id).expect("Granite registry entry");
-        assert_eq!(config.repo, expected_repo);
-        assert_eq!(config.subdirectory, Some(expected_subdirectory));
-        assert_eq!(config.files.len(), 13);
-        assert!(config
-            .files
-            .iter()
-            .any(|file| file.filename == "taurscribe_granite_nar_manifest.json"));
-        assert!(config.files.iter().all(|file| {
-            file.sha1.len() == 64 && file.sha1.bytes().all(|byte| byte.is_ascii_hexdigit())
-        }));
-    }
-
     #[test]
-    fn granite_cuda_uses_hosted_verified_payload() {
-        assert_hosted_granite_payload(
-            "granite-speech-4.1-2b-nar-cuda",
-            "Abdullahu5mani/granite-speech-4.1-2b-nar-cuda",
-            "granite-speech-4.1-2b-nar-cuda",
-        );
-    }
-
-    #[test]
-    fn granite_portable_cpu_uses_hosted_verified_payload() {
-        assert_hosted_granite_payload(
-            "granite-speech-4.1-2b-nar-portable",
-            "Abdullahu5mani/granite-speech-4.1-2b-nar-portable",
-            "granite-speech-4.1-2b-nar-portable",
-        );
-    }
-
-    #[test]
-    fn qwen3_onnx_bundle_is_registered_with_expected_graphs() {
-        let config = get_model_config("qwen3-asr-1.7b-onnx").expect("Qwen3 ONNX registry entry");
-        assert_eq!(config.repo, "Abdullahu5mani/qwen3-asr-1.7b-onnx");
-        assert_eq!(config.subdirectory, Some("qwen3-asr-1.7b-onnx"));
-        for required in ["encoder.onnx", "decoder.onnx", "tokenizer.json"] {
-            assert!(
-                config.files.iter().any(|f| f.filename == required),
-                "qwen3-asr-1.7b-onnx bundle is missing {required}"
-            );
+    fn unquantized_gguf_models_have_pinned_downloads() {
+        for (id, repo) in [
+            ("granite-speech-5-nc", "handy-computer/granite-speech-5.0-470m-turboctc-nc-gguf"),
+            ("qwen3-asr-1.7b", "handy-computer/Qwen3-ASR-1.7B-gguf"),
+            ("qwen3-asr-0.6b", "handy-computer/Qwen3-ASR-0.6B-gguf"),
+        ] {
+            let config = get_model_config(id).expect("GGUF registry entry");
+            assert_eq!(config.repo, repo);
+            assert_eq!(config.subdirectory, Some(id));
+            assert_eq!(config.files.len(), 1);
+            assert!(config.files[0].filename.ends_with("-F16.gguf"));
+            assert_eq!(config.files[0].sha1.len(), 64);
         }
-    }
-
-    #[test]
-    fn qwen3_mlx_bundle_points_to_official_upstream() {
-        let config = get_model_config("qwen3-asr-1.7b-mlx").expect("Qwen3 MLX registry entry");
-        assert_eq!(config.repo, "Qwen/Qwen3-ASR-1.7B");
-        assert_eq!(config.subdirectory, Some("qwen3-asr-1.7b-mlx"));
-        for required in ["model.safetensors", "tokenizer.json", "config.json"] {
-            assert!(
-                config.files.iter().any(|f| f.filename == required),
-                "qwen3-asr-1.7b-mlx bundle is missing {required}"
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-mod mlx_tests {
-    use super::*;
-
-    #[test]
-    fn granite_mlx_pulls_unmodified_upstream_weights() {
-        let config = get_model_config("granite-speech-4.1-2b-nar-mlx").expect("MLX registry entry");
-        // Served from IBM directly; re-hosting an unmodified copy buys nothing.
-        assert_eq!(config.repo, "ibm-granite/granite-speech-4.1-2b-nar");
-        assert_eq!(config.subdirectory, Some("granite-speech-4.1-2b-nar-mlx"));
-        // The Rust MLX loader needs these two present to engage at all.
-        for required in ["model.safetensors", "config.json"] {
-            assert!(
-                config.files.iter().any(|f| f.filename == required),
-                "missing {required}"
-            );
-        }
-        // Every file must be checksum-verified, or a truncated download would
-        // surface as garbled audio rather than a clear failure.
-        assert!(config.files.iter().all(|f| f.sha1.len() == 64));
-    }
-
-    #[test]
-    fn parakeet_mlx_8bit_is_registered_with_expected_files() {
-        let config = get_model_config("parakeet-nemotron-mlx-8bit")
-            .expect("parakeet-nemotron-mlx-8bit must be registered");
-        assert_eq!(
-            config.repo,
-            "Abdullahu5mani/parakeet-nemotron-0.6b-mlx-8bit"
-        );
-        assert_eq!(config.subdirectory, Some("parakeet-nemotron-mlx-8bit"));
-        for required in ["model.safetensors", "tokenizer.model"] {
-            assert!(
-                config.files.iter().any(|f| f.filename == required),
-                "missing {required}"
-            );
-        }
-        // Tokenizer has verified upstream hash; model weights hash is empty pending upstream LFS retrieval
-        let tokenizer = config
-            .files
-            .iter()
-            .find(|f| f.filename == "tokenizer.model")
-            .unwrap();
-        assert_eq!(
-            tokenizer.sha1,
-            "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9"
-        );
-
-        let model_weights = config
-            .files
-            .iter()
-            .find(|f| f.filename == "model.safetensors")
-            .unwrap();
-        assert!(
-            model_weights.sha1.is_empty()
-                || (model_weights.sha1.len() == 64
-                    && model_weights.sha1.chars().all(|c| c.is_ascii_hexdigit()))
-        );
-        assert_eq!(model_weights.sha1, "");
-        assert!(!model_weights.sha1.contains("123456789abcdef"));
-    }
-
-    #[test]
-    fn granite_mlx_8bit_is_registered_with_valid_checksums() {
-        let config = get_model_config("granite-speech-4.1-2b-nar-mlx-8bit")
-            .expect("granite-speech-4.1-2b-nar-mlx-8bit must be registered");
-        assert_eq!(
-            config.repo,
-            "Abdullahu5mani/granite-speech-4.1-2b-nar-mlx-8bit"
-        );
-        assert_eq!(
-            config.subdirectory,
-            Some("granite-speech-4.1-2b-nar-mlx-8bit")
-        );
-        for required in ["model.safetensors", "config.json", "tokenizer.json"] {
-            assert!(
-                config.files.iter().any(|f| f.filename == required),
-                "missing {required}"
-            );
-        }
-        assert!(config
-            .files
-            .iter()
-            .all(|f| f.sha1.len() == 64 && f.sha1.chars().all(|c| c.is_ascii_hexdigit())));
     }
 }
 

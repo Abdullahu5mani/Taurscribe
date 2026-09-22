@@ -2,18 +2,36 @@
 /// This helps us decide which icon to show in the tray
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppState {
-    Ready,      // Green: Waiting for user input
-    Recording,  // Red: Mic is active, recording audio
-    Processing, // Yellow: Computing/Transcribing
+    /// Idle. The tray shows ready / model not loaded / no model from the model state.
+    Ready,
+    Recording, // mic (dictation) or a meeting (with meeting info)
+    Paused,
+    Processing, // unspecified; shown as processing spoken audio
+    ProcessingSpeech,  // transcribing a finished dictation
+    ProcessingMeeting, // transcribing + separating speakers of a meeting
+    ProcessingFile,    // transcribing an imported audio file
+    LoadingModel,
+    Downloading,
+    Grammar,      // FlowScribe grammar correction
+    Done,         // short-lived: transcript pasted
+    NothingHeard, // short-lived: no speech / too short
+    PasteFailed,  // short-lived: transcript kept in the app
+    Error,        // short-lived
+    MicBlocked,   // short-lived: microphone permission denied
+    Cancelled,    // short-lived: recording discarded
 }
 
 /// The possible ASR engines we support
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ASREngine {
-    Whisper,
-    Parakeet,
+    // "cohere" was the old Granite Speech 4 engine; settings that still name it
+    // load as Whisper.
     #[serde(alias = "cohere")]
+    Whisper,
+    /// Granite Speech 5. Replaced Parakeet Nemotron, so saved "parakeet"
+    /// settings load as Granite.
+    #[serde(alias = "parakeet")]
     Granite,
     Qwen3,
 }

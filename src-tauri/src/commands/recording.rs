@@ -12,46 +12,30 @@ use crate::audio::{RecordingHandle, SendStream};
 use crate::audio_preprocess;
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
-use crate::types::{ASREngine, CommandResult, TranscriptionChunk};
+use crate::types::{ASREngine, CommandResult};
 use crate::utils::{clean_transcript, get_recordings_dir, strip_whitelisted_sound_captions};
 
-/// Nemotron is a true streaming model and the upstream example feeds it 560 ms windows.
-/// Keep buffered 4 s chunks only for non-streaming Parakeet variants.
-const PARAKEET_BUFFERED_CHUNK_SECS: f32 = 4.0;
-const PARAKEET_NEMOTRON_CHUNK_SAMPLES_16K: usize = 8_960; // 560 ms @ 16 kHz
-const PARAKEET_EOU_CHUNK_SAMPLES_16K: usize = 2_560; // 160 ms @ 16 kHz
-const PARAKEET_BUFFERED_CHUNK_SAMPLES_16K: usize = 16_000 * 4;
-const PARAKEET_FINAL_FULL_MAX_SAMPLES: usize = 16_000 * 240; // 4 minutes
-const PARAKEET_FINAL_CHUNK_SAMPLES: usize = 16_000 * 180; // 3 minutes
-const PARAKEET_FINAL_OVERLAP_SAMPLES: usize = 16_000 * 2;
+/// Granite's final pass transcribes the saved recording in one go up to this
+/// length, and in overlapping windows beyond it.
+const FINAL_PASS_FULL_MAX_SAMPLES: usize = 16_000 * 240; // 4 minutes
+const FINAL_PASS_CHUNK_SAMPLES: usize = 16_000 * 180; // 3 minutes
+const FINAL_PASS_OVERLAP_SAMPLES: usize = 16_000 * 2;
 
-#[derive(Clone, Copy)]
-struct ParakeetLiveConfig {
-    feed_secs: f32,
-    min_samples_16k: usize,
-}
-
-#[inline]
-fn parakeet_live_config(model_type: Option<&str>) -> ParakeetLiveConfig {
-    match model_type {
-        Some("Nemotron") | Some("Nemotron Streaming") => ParakeetLiveConfig {
-            feed_secs: PARAKEET_NEMOTRON_CHUNK_SAMPLES_16K as f32 / 16_000.0,
-            min_samples_16k: PARAKEET_NEMOTRON_CHUNK_SAMPLES_16K,
-        },
-        Some("EOU") => ParakeetLiveConfig {
-            feed_secs: PARAKEET_EOU_CHUNK_SAMPLES_16K as f32 / 16_000.0,
-            min_samples_16k: PARAKEET_EOU_CHUNK_SAMPLES_16K,
-        },
-        _ => ParakeetLiveConfig {
-            feed_secs: PARAKEET_BUFFERED_CHUNK_SECS,
-            min_samples_16k: PARAKEET_BUFFERED_CHUNK_SAMPLES_16K,
-        },
+/// Live chunk length for each engine: Qwen3 needs longer context per decode.
+fn live_chunk_samples(engine: ASREngine, sample_rate: u32) -> usize {
+    match engine {
+        ASREngine::Qwen3 => (sample_rate * 15) as usize,
+        ASREngine::Whisper | ASREngine::Granite => (sample_rate * 6) as usize,
     }
 }
 
-#[inline]
-fn parakeet_live_chunk_samples(sample_rate: u32, config: ParakeetLiveConfig) -> usize {
-    ((sample_rate as f32 * config.feed_secs).round() as usize).max(1)
+/// Name shown in logs and on live transcription chunks.
+fn engine_label(engine: ASREngine) -> &'static str {
+    match engine {
+        ASREngine::Whisper => "Whisper",
+        ASREngine::Granite => "Granite",
+        ASREngine::Qwen3 => "Qwen3",
+    }
 }
 
 fn pop_audio_chunk(buffer: &mut VecDeque<f32>, chunk_size: usize, scratch: &mut Vec<f32>) {
@@ -67,37 +51,7 @@ fn discard_audio_front(buffer: &mut VecDeque<f32>, samples: usize) {
     buffer.drain(..drop_samples).for_each(drop);
 }
 
-/// Universal preprocess → 16 kHz, then pad to the current Parakeet model's minimum
-/// streaming window so short utterances still get one full decode step.
-fn parakeet_preprocess_for_transcribe(
-    buf: &[f32],
-    sample_rate: u32,
-    user_denoise: bool,
-    denoiser_arc: &Arc<Mutex<Option<Denoiser>>>,
-    min_len_16k: usize,
-) -> Vec<f32> {
-    let mut guard = denoiser_arc.lock().unwrap();
-    let mut pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
-        buf,
-        sample_rate,
-        user_denoise,
-        guard.as_mut(),
-    );
-    drop(guard);
-    // Always produce exactly min_len_16k samples: pad short buffers with silence,
-    // and truncate any resampler overrun (rubato SincFixedIn can produce +/-1-2 extra
-    // samples at non-48 kHz rates). An extra chunk caused by overrun would call
-    // Nemotron::transcribe_chunk with near-silence, advancing audio_processed over
-    // nothing and permanently skipping a later real window.
-    pcm16.resize(min_len_16k, 0.0);
-    pcm16
-}
-
-fn needs_parakeet_final_pass(model_type: Option<&str>) -> bool {
-    matches!(model_type, Some("CTC") | Some("TDT"))
-}
-
-fn load_recording_for_parakeet_final(path: &str) -> Result<Vec<f32>, String> {
+fn load_recording_for_final_pass(path: &str) -> Result<Vec<f32>, String> {
     let (mut mono, sample_rate) = crate::audio_decode::decode_audio_mono_f32(Path::new(path))?;
 
     if sample_rate != 16000 {
@@ -106,8 +60,8 @@ fn load_recording_for_parakeet_final(path: &str) -> Result<Vec<f32>, String> {
         mono = resampled;
     }
 
-    // Give offline Parakeet models a clean trailing boundary without asking VAD
-    // to remove anything.
+    // Give the model a clean trailing boundary without asking VAD to remove
+    // anything.
     mono.extend(std::iter::repeat(0.0_f32).take(16000 * 400 / 1000));
     audio_preprocess::preprocess_assembled_speech_16k(&mut mono);
 
@@ -162,49 +116,48 @@ fn append_transcript_with_word_overlap(base: &mut String, next: &str) {
     }
 }
 
-fn transcribe_parakeet_final(
-    parakeet_arc: &Arc<std::sync::Mutex<crate::parakeet::ParakeetManager>>,
+/// Transcribes a whole saved recording (Granite's final pass), in overlapping
+/// windows when it is long, merging the words the windows share.
+fn transcribe_final_pass(
+    manager: &Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>,
     audio: Vec<f32>,
 ) -> Result<String, String> {
     println!(
-        "[PARAKEET] Running final saved-recording pass ({:.2}s)...",
+        "[FINAL_PASS] Transcribing saved recording ({:.2}s)...",
         audio.len() as f32 / 16000.0
     );
+    let mut manager = manager.lock().map_err(|_| "ASR lock poisoned".to_string())?;
 
-    let mut parakeet = parakeet_arc
-        .lock()
-        .map_err(|_| "Parakeet lock poisoned".to_string())?;
-
-    if audio.len() <= PARAKEET_FINAL_FULL_MAX_SAMPLES {
-        return parakeet.transcribe_chunk(&audio, 16000);
+    if audio.len() <= FINAL_PASS_FULL_MAX_SAMPLES {
+        return manager.transcribe_chunk(&audio, 16000, None);
     }
 
     let mut merged = String::new();
     let mut start = 0usize;
-    let total_chunks =
-        (audio.len() + PARAKEET_FINAL_CHUNK_SAMPLES - 1) / PARAKEET_FINAL_CHUNK_SAMPLES;
-    let mut chunk_idx = 1usize;
-
     while start < audio.len() {
-        let end = (start + PARAKEET_FINAL_CHUNK_SAMPLES).min(audio.len());
-        println!(
-            "[PARAKEET] Final chunk {}/{} ({:.2}s..{:.2}s)",
-            chunk_idx,
-            total_chunks,
-            start as f32 / 16000.0,
-            end as f32 / 16000.0
-        );
-        let text = parakeet.transcribe_chunk(&audio[start..end], 16000)?;
+        let end = (start + FINAL_PASS_CHUNK_SAMPLES).min(audio.len());
+        let text = manager.transcribe_chunk(&audio[start..end], 16000, None)?;
         append_transcript_with_word_overlap(&mut merged, &text);
-
         if end == audio.len() {
             break;
         }
-        start = end.saturating_sub(PARAKEET_FINAL_OVERLAP_SAMPLES);
-        chunk_idx += 1;
+        start = end.saturating_sub(FINAL_PASS_OVERLAP_SAMPLES);
     }
-
     Ok(merged)
+}
+
+/// Tells the UI whether a recording is running. Recordings can be started or
+/// stopped outside the UI (control server, tray), and the UI's own flag would
+/// otherwise go stale and keep showing RECORDING.
+fn emit_recording_state(app: &AppHandle, state: &AudioState) {
+    let is_recording = state.recording_handle.lock().map(|h| h.is_some()).unwrap_or(false);
+    let _ = app.emit(
+        "recording-state",
+        serde_json::json!({
+            "is_recording": is_recording,
+            "is_dual_channel": is_recording && state.last_recording_is_dual_channel.load(Ordering::SeqCst),
+        }),
+    );
 }
 
 /// COMMAND: START RECORDING
@@ -221,19 +174,34 @@ pub async fn start_recording(
     denoise: Option<bool>,
     audio_source: Option<String>,
 ) -> Result<CommandResult<String>, String> {
+    let _model_operation = state.begin_model_operation()?;
     // Guard: reject if already recording (e.g. spam hotkey)
     if state.recording_handle.lock().unwrap().is_some() {
         return Ok(CommandResult::err("already_recording", "Already recording"));
     }
 
+    if let Some(key) = crate::meeting_continuation::call_key(
+        state.meeting_detector.get_status().active_meetings.first(),
+    ) {
+        crate::meeting_continuation::claim_for_recording(&key);
+    }
+
     // Clone the whole state — every field is Arc<…> so this is just ref-count bumps.
     let state = (*state).clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let app_for_event = app_handle.clone();
+    let state_for_event = state.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
         start_recording_blocking(app_handle, state, denoise, audio_source)
     })
-    .await
-    .map(|result| match result {
-        Ok(message) => CommandResult::ok(message),
+    .await;
+    if !matches!(&result, Ok(Ok(_))) {
+        crate::meeting_continuation::release_recording_claim();
+    }
+    result.map(|result| match result {
+        Ok(message) => {
+            emit_recording_state(&app_for_event, &state_for_event);
+            CommandResult::ok(message)
+        }
         Err(message) => {
             let lower = message.to_lowercase();
             let code = if lower.contains("microphone permission denied") {
@@ -269,6 +237,11 @@ fn start_recording_blocking(
         .as_deref()
         .map(|s| s == "dual_channel")
         .unwrap_or_else(|| *state.audio_source_mode.lock().unwrap() == "dual_channel");
+
+    #[cfg(target_os = "linux")]
+    if is_dual_channel {
+        return Err("Dual-channel meeting audio capture is not supported on Linux".into());
+    }
 
     state.last_recording_is_dual_channel.store(is_dual_channel, Ordering::SeqCst);
 
@@ -390,8 +363,7 @@ fn start_recording_blocking(
     let active_engine = *state.active_engine.lock().unwrap();
     match active_engine {
         ASREngine::Whisper => state.whisper.lock().unwrap().clear_context(),
-        ASREngine::Parakeet => state.parakeet.lock().unwrap().clear_context(),
-        ASREngine::Granite => { /* Granite is stateless per chunk */ }
+        ASREngine::Granite => state.granite.lock().unwrap().clear_context(),
         ASREngine::Qwen3 => state.qwen3.lock().unwrap().clear_context(),
     }
     // Reset Silero VAD LSTM state so prior session context doesn't bleed in
@@ -422,24 +394,12 @@ fn start_recording_blocking(
     // Bounded: prevents unbounded memory growth if file writer or transcriber falls behind.
     // Audio callback uses try_send so it never blocks the real-time capture thread.
     //
-    // Granite encoder can take 8+ seconds per 15-second chunk. At 48 kHz / 1024-sample
-    // callbacks (~21 ms each) that's ~380 callbacks during one encode pass. A 32-message
-    // bound fills in ~672 ms and then try_send silently drops audio — causing the "whole
-    // last sentence disappeared" symptom. 512 messages ≈ 10.7 s of headroom, enough for
-    // even the slowest Granite runs on CPU. Parakeet uses the same bound because
-    // Nemotron is stateful and dropped audio corrupts its streaming position.
+    // A slow encode pass (Qwen3 on a 15-second chunk, Whisper on CPU) can take several
+    // seconds. At 48 kHz / 1024-sample callbacks (~21 ms each) a 32-message bound fills
+    // in ~672 ms and then try_send silently drops audio — the "whole last sentence
+    // disappeared" symptom. 512 messages ≈ 10.7 s of headroom.
     let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5s headroom at 48kHz/1024
-                                                       // Nemotron is stateful — any audio dropped by try_send() corrupts the streaming
-                                                       // position permanently (audio_processed advances over a silent gap).  Give Parakeet
-                                                       // the same generous headroom as Cohere so inference spikes on CPU never fill the
-                                                       // channel.  512 msgs × 1024 samples × (1/48 kHz) ≈ 10.9 s of headroom.
-    let transcriber_channel_bound = match active_engine {
-        ASREngine::Granite => 512,
-        ASREngine::Parakeet => 512,
-        ASREngine::Whisper => 32,
-        ASREngine::Qwen3 => 512,
-    };
-    let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(transcriber_channel_bound);
+    let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(512);
 
     let file_tx_clone = file_tx.clone();
     let whisper_tx_clone = whisper_tx.clone();
@@ -493,11 +453,11 @@ fn start_recording_blocking(
 
     // Pull shared references out of state for the transcriber thread
     let whisper = state.whisper.clone();
-    let parakeet_manager = state.parakeet.clone();
-    let cohere = state.cohere.clone();
-    let qwen3 = state.qwen3.clone();
-    let vad = state.vad.clone();
     let active_engine = *state.active_engine.lock().unwrap();
+    // Granite / Qwen3 manager (None for Whisper).
+    let gguf = state.gguf_manager(active_engine);
+    let engine_label = engine_label(active_engine);
+    let vad = state.vad.clone();
     let session_transcript = state.session_transcript.clone();
     let denoiser_arc = state.denoiser.clone();
     let recording_handle_arc = state.recording_handle.clone();
@@ -505,7 +465,7 @@ fn start_recording_blocking(
     let transcriber_dropped_callbacks_reader = transcriber_dropped_callbacks.clone();
     let transcriber_dropped_samples_reader = transcriber_dropped_samples.clone();
 
-    /// VAD-gated transcription — shared logic for Whisper and Granite.
+    /// VAD-gated transcription — shared logic for Whisper, Granite and Qwen3.
     /// Both managers expose the same `transcribe_chunk(&[f32], u32) -> Result<String, _>` API,
     /// so the entire accumulate → normalize → VAD-check → transcribe → emit pipeline
     /// lives here once instead of being copy-pasted per engine.
@@ -556,7 +516,7 @@ fn start_recording_blocking(
             let start = std::time::Instant::now();
             match transcribe(&pcm16, 16000) {
                 Ok(text) if !text.trim().is_empty() => {
-                    let text = if matches!(method, "Whisper" | "Granite") {
+                    let text = if matches!(method, "Whisper") {
                         strip_whitelisted_sound_captions(&text)
                     } else {
                         text
@@ -611,22 +571,7 @@ fn start_recording_blocking(
         crate::platform_tuning::apply_thread_performance_affinity();
 
         let mut buffer: VecDeque<f32> = VecDeque::new();
-        let parakeet_live = if active_engine == ASREngine::Parakeet {
-            let status = parakeet_manager.lock().unwrap().get_status();
-            let config = parakeet_live_config(status.model_type.as_deref());
-            println!(
-                "[PARAKEET] Live mic config: model_type={:?} feed_secs={:.2} min_samples_16k={}",
-                status.model_type, config.feed_secs, config.min_samples_16k
-            );
-            Some(config)
-        } else {
-            None
-        };
-        let chunk_size = match active_engine {
-            ASREngine::Granite => (sample_rate * 15) as usize,
-            ASREngine::Qwen3 => (sample_rate * 15) as usize,
-            _ => (sample_rate * 6) as usize,
-        };
+        let chunk_size = live_chunk_samples(active_engine, sample_rate);
         let max_buffer_size = chunk_size * 2;
         // Pre-allocated scratch buffer reused each iteration to avoid per-chunk Vec allocation
         let mut chunk = Vec::with_capacity(chunk_size);
@@ -642,164 +587,52 @@ fn start_recording_blocking(
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             };
 
-            match active_engine {
-                ASREngine::Whisper | ASREngine::Granite | ASREngine::Qwen3 => {
-                    buffer.extend(samples);
-                    while buffer.len() >= chunk_size {
-                        if buffer.len() > max_buffer_size {
-                            println!("[WARNING] Buffer full, dropping old audio to catch up");
-                            discard_audio_front(&mut buffer, chunk_size);
-                        }
-                        pop_audio_chunk(&mut buffer, chunk_size, &mut chunk);
-                        if active_engine == ASREngine::Whisper {
-                            crate::memory::maybe_log_process_memory_with_sizes(
-                                "recording whisper live chunk start",
-                                &[
-                                    ("buffer_len_samples", buffer.len()),
-                                    ("chunk_samples", chunk.len()),
-                                    (
-                                        "chunk_audio_bytes",
-                                        chunk.len() * std::mem::size_of::<f32>(),
-                                    ),
-                                ],
-                            );
-                            let mut wm = whisper.lock().unwrap();
-                            let mut transcribe = |c: &[f32], sr| {
-                                wm.transcribe_chunk(c, sr).map_err(|e| e.to_string())
-                            };
-                            vad_gated_transcribe(
-                                &mut chunk,
-                                sample_rate,
-                                &vad,
-                                &mut transcribe,
-                                "Whisper",
-                                "🎙️",
-                                &app_clone,
-                                &session_transcript,
-                                denoise_enabled_thread,
-                                &denoiser_arc,
-                            );
-                        } else if active_engine == ASREngine::Granite {
-                            crate::memory::maybe_log_process_memory_with_sizes(
-                                "recording granite live chunk start",
-                                &[
-                                    ("buffer_len_samples", buffer.len()),
-                                    ("chunk_samples", chunk.len()),
-                                    (
-                                        "chunk_audio_bytes",
-                                        chunk.len() * std::mem::size_of::<f32>(),
-                                    ),
-                                ],
-                            );
-                            let mut gs = cohere.lock().unwrap();
-                            let mut transcribe = |c: &[f32], sr| {
-                                gs.transcribe_chunk(c, sr).map_err(|e| e.to_string())
-                            };
-                            vad_gated_transcribe(
-                                &mut chunk,
-                                sample_rate,
-                                &vad,
-                                &mut transcribe,
-                                "Granite",
-                                "🪨",
-                                &app_clone,
-                                &session_transcript,
-                                denoise_enabled_thread,
-                                &denoiser_arc,
-                            );
-                        } else {
-                            let mut manager = qwen3.lock().unwrap();
-                            let prompt = crate::context::load_custom_vocabulary_from_settings();
-                            let dynamic_prompt =
-                                crate::context::build_dynamic_prompt(&prompt.0, prompt.1);
-                            let mut transcribe = |c: &[f32], sr| {
-                                manager.transcribe_chunk(c, sr, dynamic_prompt.as_deref())
-                            };
-                            vad_gated_transcribe(
-                                &mut chunk,
-                                sample_rate,
-                                &vad,
-                                &mut transcribe,
-                                "Qwen3",
-                                "🔊",
-                                &app_clone,
-                                &session_transcript,
-                                denoise_enabled_thread,
-                                &denoiser_arc,
-                            );
-                        }
-                    }
+            buffer.extend(samples);
+            while buffer.len() >= chunk_size {
+                if buffer.len() > max_buffer_size {
+                    println!("[WARNING] Buffer full, dropping old audio to catch up");
+                    discard_audio_front(&mut buffer, chunk_size);
                 }
-                ASREngine::Parakeet => {
-                    buffer.extend(samples);
-                    let parakeet_chunk_size =
-                        parakeet_live_chunk_samples(sample_rate, parakeet_live.unwrap());
-                    while buffer.len() >= parakeet_chunk_size {
-                        pop_audio_chunk(&mut buffer, parakeet_chunk_size, &mut chunk);
-                        crate::memory::maybe_log_process_memory_with_sizes(
-                            "recording parakeet live chunk before preprocess",
-                            &[
-                                ("buffer_len_samples", buffer.len()),
-                                ("chunk_samples", chunk.len()),
-                                (
-                                    "chunk_audio_bytes",
-                                    chunk.len() * std::mem::size_of::<f32>(),
-                                ),
-                            ],
-                        );
-                        let buf16 = parakeet_preprocess_for_transcribe(
-                            &chunk,
-                            sample_rate,
-                            denoise_enabled_thread,
-                            &denoiser_arc,
-                            parakeet_live.unwrap().min_samples_16k,
-                        );
-                        crate::memory::maybe_log_process_memory_with_sizes(
-                            "recording parakeet live chunk after preprocess",
-                            &[
-                                ("chunk_samples", chunk.len()),
-                                ("buf16_samples", buf16.len()),
-                                (
-                                    "buf16_audio_bytes",
-                                    buf16.len() * std::mem::size_of::<f32>(),
-                                ),
-                            ],
-                        );
-                        let start_time = std::time::Instant::now();
-                        match parakeet_manager
-                            .lock()
-                            .unwrap()
-                            .transcribe_chunk(&buf16, 16000)
-                        {
-                            Ok(transcript) if !transcript.is_empty() => {
-                                let elapsed = start_time.elapsed().as_millis() as u32;
-                                println!(
-                                    "[TRANSCRIPT] 🦜 \"{}\" (took {}ms)",
-                                    transcript.trim(),
-                                    elapsed
-                                );
-                                let _ = app_clone.emit(
-                                    "transcription-chunk",
-                                    TranscriptionChunk {
-                                        text: transcript.clone(),
-                                        processing_time_ms: elapsed,
-                                        method: "Parakeet".to_string(),
-                                    },
-                                );
-                                {
-                                    let mut st = session_transcript.lock().unwrap();
-                                    // Leading space = SentencePiece word boundary. Chunks that
-                                    // continue the previous word must be joined directly.
-                                    if !st.is_empty() && transcript.starts_with(' ') {
-                                        st.push(' ');
-                                    }
-                                    st.push_str(transcript.trim());
-                                }
-                            }
-                            Ok(_) => {}
-                            Err(e) => eprintln!("[ERROR] Parakeet error: {}", e),
-                        }
-                    }
+                pop_audio_chunk(&mut buffer, chunk_size, &mut chunk);
+                if let Some(gguf) = &gguf {
+                    let mut manager = gguf.lock().unwrap();
+                    let mut transcribe = |c: &[f32], sr| manager.transcribe_chunk(c, sr, None);
+                    vad_gated_transcribe(
+                        &mut chunk,
+                        sample_rate,
+                        &vad,
+                        &mut transcribe,
+                        engine_label,
+                        "🔊",
+                        &app_clone,
+                        &session_transcript,
+                        denoise_enabled_thread,
+                        &denoiser_arc,
+                    );
+                } else {
+                    crate::memory::maybe_log_process_memory_with_sizes(
+                        "recording whisper live chunk start",
+                        &[
+                            ("buffer_len_samples", buffer.len()),
+                            ("chunk_samples", chunk.len()),
+                            ("chunk_audio_bytes", chunk.len() * std::mem::size_of::<f32>()),
+                        ],
+                    );
+                    let mut wm = whisper.lock().unwrap();
+                    let mut transcribe =
+                        |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                    vad_gated_transcribe(
+                        &mut chunk,
+                        sample_rate,
+                        &vad,
+                        &mut transcribe,
+                        "Whisper",
+                        "🎙️",
+                        &app_clone,
+                        &session_transcript,
+                        denoise_enabled_thread,
+                        &denoiser_arc,
+                    );
                 }
             }
         }
@@ -816,139 +649,46 @@ fn start_recording_blocking(
         let silence_samples = (sample_rate as usize) * 400 / 1000;
         buffer.extend(std::iter::repeat(0.0_f32).take(silence_samples));
 
-        // Flush full-sized chunks from the tail buffer.
-        // Use the same chunk size as the live loop for each engine so this loop
-        // actually runs for Parakeet with its selected live cadence instead of the old 6 s default.
-        let flush_chunk_size = match active_engine {
-            ASREngine::Parakeet => parakeet_live_chunk_samples(sample_rate, parakeet_live.unwrap()),
-            ASREngine::Granite => (sample_rate * 15) as usize,
-            ASREngine::Qwen3 => (sample_rate * 15) as usize,
-            _ => (sample_rate * 6) as usize,
-        };
-        while buffer.len() >= flush_chunk_size {
-            pop_audio_chunk(&mut buffer, flush_chunk_size, &mut chunk);
-            match active_engine {
-                ASREngine::Whisper => {
-                    crate::memory::maybe_log_process_memory_with_sizes(
-                        "recording whisper final flush chunk",
-                        &[
-                            ("remaining_buffer_samples", buffer.len()),
-                            ("chunk_samples", chunk.len()),
-                        ],
-                    );
-                    let mut wm = whisper.lock().unwrap();
-                    let mut t =
-                        |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(
-                        &mut chunk,
-                        sample_rate,
-                        &vad,
-                        &mut t,
-                        "Whisper",
-                        "🎙️",
-                        &app_clone,
-                        &session_transcript,
-                        denoise_enabled_thread,
-                        &denoiser_arc,
-                    );
-                }
-                ASREngine::Granite => {
-                    crate::memory::maybe_log_process_memory_with_sizes(
-                        "recording granite final flush chunk",
-                        &[
-                            ("remaining_buffer_samples", buffer.len()),
-                            ("chunk_samples", chunk.len()),
-                        ],
-                    );
-                    let mut gs = cohere.lock().unwrap();
-                    let mut t =
-                        |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(
-                        &mut chunk,
-                        sample_rate,
-                        &vad,
-                        &mut t,
-                        "Granite",
-                        "🪨",
-                        &app_clone,
-                        &session_transcript,
-                        denoise_enabled_thread,
-                        &denoiser_arc,
-                    );
-                }
-                ASREngine::Qwen3 => {
-                    let mut manager = qwen3.lock().unwrap();
-                    let vocab = crate::context::load_custom_vocabulary_from_settings();
-                    let prompt = crate::context::build_dynamic_prompt(&vocab.0, vocab.1);
-                    let mut transcribe =
-                        |c: &[f32], sr| manager.transcribe_chunk(c, sr, prompt.as_deref());
-                    vad_gated_transcribe(
-                        &mut chunk,
-                        sample_rate,
-                        &vad,
-                        &mut transcribe,
-                        "Qwen3",
-                        "🔊",
-                        &app_clone,
-                        &session_transcript,
-                        denoise_enabled_thread,
-                        &denoiser_arc,
-                    );
-                }
-                ASREngine::Parakeet => {
-                    crate::memory::maybe_log_process_memory_with_sizes(
-                        "recording parakeet final flush chunk before preprocess",
-                        &[
-                            ("remaining_buffer_samples", buffer.len()),
-                            ("chunk_samples", chunk.len()),
-                        ],
-                    );
-                    let buf16 = parakeet_preprocess_for_transcribe(
-                        &chunk,
-                        sample_rate,
-                        denoise_enabled_thread,
-                        &denoiser_arc,
-                        parakeet_live.unwrap().min_samples_16k,
-                    );
-                    crate::memory::maybe_log_process_memory_with_sizes(
-                        "recording parakeet final flush chunk after preprocess",
-                        &[
-                            ("buf16_samples", buf16.len()),
-                            (
-                                "buf16_audio_bytes",
-                                buf16.len() * std::mem::size_of::<f32>(),
-                            ),
-                        ],
-                    );
-                    let flush_start = std::time::Instant::now();
-                    if let Ok(transcript) = parakeet_manager
-                        .lock()
-                        .unwrap()
-                        .transcribe_chunk(&buf16, 16000)
-                    {
-                        if !transcript.is_empty() {
-                            let elapsed = flush_start.elapsed().as_millis() as u32;
-                            println!(
-                                "[TRANSCRIPT] 🦜 (Final) \"{}\" (took {}ms)",
-                                transcript.trim(),
-                                elapsed
-                            );
-                            let _ = app_clone.emit(
-                                "transcription-chunk",
-                                TranscriptionChunk {
-                                    text: transcript.clone(),
-                                    processing_time_ms: elapsed,
-                                    method: "Parakeet".to_string(),
-                                },
-                            );
-                            let mut st = session_transcript.lock().unwrap();
-                            if !st.is_empty() && transcript.starts_with(' ') {
-                                st.push(' ');
-                            }
-                            st.push_str(transcript.trim());
-                        }
-                    }
-                }
+        // Flush full-sized chunks from the tail buffer, at the live chunk size.
+        while buffer.len() >= chunk_size {
+            pop_audio_chunk(&mut buffer, chunk_size, &mut chunk);
+            if let Some(gguf) = &gguf {
+                let mut manager = gguf.lock().unwrap();
+                let mut transcribe = |c: &[f32], sr| manager.transcribe_chunk(c, sr, None);
+                vad_gated_transcribe(
+                    &mut chunk,
+                    sample_rate,
+                    &vad,
+                    &mut transcribe,
+                    engine_label,
+                    "🔊",
+                    &app_clone,
+                    &session_transcript,
+                    denoise_enabled_thread,
+                    &denoiser_arc,
+                );
+            } else {
+                crate::memory::maybe_log_process_memory_with_sizes(
+                    "recording whisper final flush chunk",
+                    &[
+                        ("remaining_buffer_samples", buffer.len()),
+                        ("chunk_samples", chunk.len()),
+                    ],
+                );
+                let mut wm = whisper.lock().unwrap();
+                let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+                vad_gated_transcribe(
+                    &mut chunk,
+                    sample_rate,
+                    &vad,
+                    &mut t,
+                    "Whisper",
+                    "🎙️",
+                    &app_clone,
+                    &session_transcript,
+                    denoise_enabled_thread,
+                    &denoiser_arc,
+                );
             }
         }
 
@@ -1012,127 +752,22 @@ fn start_recording_blocking(
                         }
                     }
                 }
-                ASREngine::Granite => {
-                    let mut gs = cohere.lock().unwrap();
-                    if use_vad {
-                        let mut t =
-                            |c: &[f32], sr| gs.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                        vad_gated_transcribe(
-                            &mut tail,
-                            sample_rate,
-                            &vad,
-                            &mut t,
-                            "Granite",
-                            "🪨",
-                            &app_clone,
-                            &session_transcript,
-                            denoise_enabled_thread,
-                            &denoiser_arc,
-                        );
-                    } else {
-                        println!(
-                            "[PROCESSING] 🪨 Short tail ({:.2}s) — bypassing VAD for Granite",
-                            tail_secs
-                        );
-                        let mut dg = denoiser_arc.lock().unwrap();
-                        let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
-                            &tail,
-                            sample_rate,
-                            denoise_enabled_thread,
-                            dg.as_mut(),
-                        );
-                        drop(dg);
-                        if let Ok(text) = gs.transcribe_chunk(&pcm16, 16000) {
-                            let text = strip_whitelisted_sound_captions(&text);
-                            if !text.trim().is_empty() {
-                                println!("[TRANSCRIPT] 🪨 (Tail) \"{}\"", text.trim());
-                                let _ = app_clone.emit(
-                                    "transcription-chunk",
-                                    crate::types::TranscriptionChunk {
-                                        text: text.clone(),
-                                        processing_time_ms: 0,
-                                        method: "Granite".to_string(),
-                                    },
-                                );
-                                let mut st = session_transcript.lock().unwrap();
-                                if !st.is_empty() {
-                                    st.push(' ');
-                                }
-                                st.push_str(text.trim());
-                            }
-                        }
-                    }
-                }
-                ASREngine::Qwen3 => {
-                    let mut manager = qwen3.lock().unwrap();
-                    let vocab = crate::context::load_custom_vocabulary_from_settings();
-                    let prompt = crate::context::build_dynamic_prompt(&vocab.0, vocab.1);
-                    let mut transcribe =
-                        |c: &[f32], sr| manager.transcribe_chunk(c, sr, prompt.as_deref());
+                ASREngine::Granite | ASREngine::Qwen3 => {
+                    let gguf = gguf.as_ref().expect("GGUF engine");
+                    let mut manager = gguf.lock().unwrap();
+                    let mut transcribe = |c: &[f32], sr| manager.transcribe_chunk(c, sr, None);
                     vad_gated_transcribe(
                         &mut tail,
                         sample_rate,
                         &vad,
                         &mut transcribe,
-                        "Qwen3",
+                        engine_label,
                         "🔊",
                         &app_clone,
                         &session_transcript,
                         denoise_enabled_thread,
                         &denoiser_arc,
                     );
-                }
-                ASREngine::Parakeet => {
-                    crate::memory::maybe_log_process_memory_with_sizes(
-                        "recording parakeet tail before preprocess",
-                        &[("tail_buffer_samples", tail.len())],
-                    );
-                    let buf16 = parakeet_preprocess_for_transcribe(
-                        &tail,
-                        sample_rate,
-                        denoise_enabled_thread,
-                        &denoiser_arc,
-                        parakeet_live.unwrap().min_samples_16k,
-                    );
-                    crate::memory::maybe_log_process_memory_with_sizes(
-                        "recording parakeet tail after preprocess",
-                        &[
-                            ("tail_buffer_samples", tail.len()),
-                            ("buf16_samples", buf16.len()),
-                            (
-                                "buf16_audio_bytes",
-                                buf16.len() * std::mem::size_of::<f32>(),
-                            ),
-                        ],
-                    );
-                    let tail_start = std::time::Instant::now();
-                    if let Ok(transcript) = parakeet_manager
-                        .lock()
-                        .unwrap()
-                        .transcribe_chunk(&buf16, 16000)
-                    {
-                        if !transcript.is_empty() {
-                            let elapsed = tail_start.elapsed().as_millis() as u32;
-                            println!(
-                                "[TRANSCRIPT] 🦜 (Tail) \"{}\" (took {}ms)",
-                                transcript.trim(),
-                                elapsed
-                            );
-                            let _ = app_clone.emit(
-                                "transcription-chunk",
-                                TranscriptionChunk {
-                                    text: transcript.clone(),
-                                    processing_time_ms: elapsed,
-                                    method: "Parakeet".to_string(),
-                                },
-                            );
-                            let mut st = session_transcript.lock().unwrap();
-                            if !st.is_empty() && transcript.starts_with(' ') {
-                                st.push(' ');
-                            }
-                            st.push_str(transcript.trim());
-                        }
-                    }
                 }
             }
         }
@@ -1168,19 +803,50 @@ fn start_recording_blocking(
             let bits = audio_level.load(Ordering::Relaxed);
             let level = f32::from_bits(bits);
             let _ = app_for_level.emit("audio-level", level);
+            crate::overlay::push_level(&app_for_level, level);
         }
     });
 
     if is_dual_channel {
+        use crate::audio_dual_channel::DualChannelTarget;
         let dual_stop = Arc::new(AtomicBool::new(false));
-        let dc_handle = crate::audio_dual_channel::start_dual_channel_capture(
-            crate::audio_dual_channel::DualChannelTarget::System,
+
+        // Tap only the detected meeting's app, so other apps' sound (notifications,
+        // music, anything else playing) stays out of the callers channel. Without a
+        // detected meeting (or for the simulator's synthetic pid) fall back to the
+        // whole system mix.
+        let meeting_pid = state
+            .meeting_detector
+            .get_status()
+            .active_meetings
+            .first()
+            .map(|m| m.pid)
+            .filter(|pid| *pid > 0 && *pid != 99999);
+        let target = meeting_pid.map(DualChannelTarget::Process).unwrap_or(DualChannelTarget::System);
+        println!("[INFO] Dual-channel callers track: {:?}", target);
+
+        let dc_handle = match crate::audio_dual_channel::start_dual_channel_capture(
+            target,
             48000,
-            file_tx_clone,
-            whisper_tx_clone,
+            file_tx_clone.clone(),
+            whisper_tx_clone.clone(),
             app_handle.clone(),
             dual_stop.clone(),
-        )?;
+        ) {
+            Ok(handle) => handle,
+            Err(e) if target != DualChannelTarget::System => {
+                eprintln!("[WARN] Meeting-process capture failed ({}); falling back to system audio", e);
+                crate::audio_dual_channel::start_dual_channel_capture(
+                    DualChannelTarget::System,
+                    48000,
+                    file_tx_clone,
+                    whisper_tx_clone,
+                    app_handle.clone(),
+                    dual_stop.clone(),
+                )?
+            }
+            Err(e) => return Err(e),
+        };
 
         *recording_handle_arc.lock().unwrap() = Some(RecordingHandle {
             stream: None,
@@ -1192,6 +858,7 @@ fn start_recording_blocking(
             level_thread,
             is_dual_channel: true,
             dual_channel_stop: Some(dc_handle.stop_signal),
+            dual_channel_thread: Some(dc_handle.capture_thread),
         });
 
         println!("[INFO] Dual-channel recording started: {}", path.display());
@@ -1282,6 +949,7 @@ fn start_recording_blocking(
         level_thread,
         is_dual_channel: false,
         dual_channel_stop: None,
+        dual_channel_thread: None,
     });
 
     Ok(format!("Recording started: {}", path.display()))
@@ -1300,6 +968,7 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) {
         level_thread,
         is_dual_channel: _,
         dual_channel_stop,
+        dual_channel_thread,
     } = recording;
 
     if tail_capture_ms > 0 {
@@ -1312,6 +981,11 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) {
     }
     if let Some(dc_stop) = dual_channel_stop {
         dc_stop.store(true, Ordering::Relaxed);
+    }
+    if let Some(thread) = dual_channel_thread {
+        if let Err(e) = thread.join() {
+            eprintln!("[ERROR] Dual-channel capture thread panicked: {:?}", e);
+        }
     }
     drop(file_tx);
     drop(whisper_tx);
@@ -1367,6 +1041,7 @@ pub fn resume_recording(state: State<'_, AudioState>) -> Result<CommandResult<St
 
 #[tauri::command]
 pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandResult<()>, String> {
+    let _model_operation = state.begin_model_operation()?;
     *state.denoiser.lock().unwrap() = None;
     state.recording_paused.store(false, Ordering::Relaxed);
 
@@ -1376,7 +1051,7 @@ pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandRes
     let last_recording_path = state.last_recording_path.lock().unwrap().clone();
     let session_transcript = state.session_transcript.clone();
 
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         teardown_recording(recording, 0);
         session_transcript.lock().unwrap().clear();
         if let Some(path) = last_recording_path {
@@ -1384,8 +1059,9 @@ pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandRes
         }
         Ok::<CommandResult<()>, String>(CommandResult::ok(()))
     })
-    .await
-    .map_err(|e| format!("cancel_recording task failed: {}", e))?
+    .await;
+    crate::meeting_continuation::release_recording_claim();
+    result.map_err(|e| format!("cancel_recording task failed: {}", e))?
 }
 
 /// COMMAND: Insert text into the focused application.
@@ -1593,19 +1269,21 @@ pub fn inject_transcription(
     crate::text_injection::inject_text_or_paste(text)
 }
 
+/// Linux: insert through the Wayland/X11 text-injection chain.
+#[cfg(target_os = "linux")]
+fn clipboard_paste(text: &str) -> Result<(), String> {
+    let backend = inject_transcription(text)?;
+    println!(
+        "[INSERT] Linux text injection succeeded using backend {:?}",
+        backend
+    );
+    Ok(())
+}
+
 /// Clipboard + simulated paste keystroke (Cmd+V on macOS, Ctrl+V elsewhere).
 /// Saves and restores the previous clipboard content.
+#[cfg(not(target_os = "linux"))]
 fn clipboard_paste(text: &str) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        let backend = inject_transcription(text)?;
-        println!(
-            "[INSERT] Linux text injection succeeded using backend {:?}",
-            backend
-        );
-        return Ok(());
-    }
-
     let _guard = crate::text_injection::CLIPBOARD_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -1882,6 +1560,196 @@ fn get_foreground_window_issue() -> Option<String> {
     }
 }
 
+/// Builds the per-turn transcriber for meeting diarization from the loaded engine.
+/// Each turn is transcribed on its own, without the streaming context of the live
+/// session, so earlier speech cannot bias it.
+fn meeting_turn_transcriber<'a>(
+    active_engine: ASREngine,
+    whisper_arc: &'a Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
+    gguf: Option<&'a Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,
+) -> Option<Box<dyn FnMut(&[f32], u32) -> Option<String> + 'a>> {
+    let to_16k = |samples: &[f32], rate: u32| -> Option<Vec<f32>> {
+        if rate == 16000 {
+            Some(samples.to_vec())
+        } else {
+            audio_preprocess::resample_mono_to_16k(samples, rate).ok()
+        }
+    };
+    match (active_engine, gguf) {
+        (ASREngine::Whisper, _) | (_, None) => Some(Box::new(move |samples: &[f32], rate: u32| {
+            let audio = to_16k(samples, rate)?;
+            let text = whisper_arc.lock().ok()?.transcribe_audio_data(&audio, None).ok()?;
+            Some(clean_transcript(&text))
+        })),
+        (_, Some(gguf)) => Some(Box::new(move |samples: &[f32], rate: u32| {
+            let audio = to_16k(samples, rate)?;
+            let text = gguf.lock().ok()?.transcribe_chunk(&audio, 16000, None).ok()?;
+            Some(clean_transcript(&text))
+        })),
+    }
+}
+
+/// Length of a WAV in milliseconds (0 when unreadable).
+fn wav_duration_ms(path: &std::path::Path) -> u64 {
+    hound::WavReader::open(path)
+        .map(|r| r.duration() as u64 * 1000 / r.spec().sample_rate.max(1) as u64)
+        .unwrap_or(0)
+}
+
+fn process_and_save_meeting_if_applicable(
+    is_meeting: bool,
+    last_recording_path: Option<&str>,
+    final_text: &str,
+    meeting_info: Option<crate::meeting_detector::MeetingInfo>,
+    active_engine: ASREngine,
+    whisper_arc: &Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
+    gguf: Option<&Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,
+) -> Result<Option<i64>, String> {
+    // meeting_info is None for a dual-channel recording with no detected meeting;
+    // it is saved under the "Direct Audio" label below.
+    if !is_meeting {
+        return Ok(None);
+    }
+    let src_path_str = last_recording_path.ok_or("Meeting recording path is missing")?;
+    let src_path = std::path::Path::new(src_path_str);
+    if !src_path.exists() {
+        return Err(format!("Meeting recording is missing: {}", src_path.display()));
+    }
+
+    let meetings_dir = crate::commands::meetings::get_meetings_dir()?;
+    let meeting_timestamp = chrono::Utc::now().timestamp_millis();
+    let dest_filename = format!("meeting_{}.wav", meeting_timestamp);
+    let dest_path = meetings_dir.join("audio").join(dest_filename);
+
+    // Recording the same call again soon after stopping continues that meeting:
+    // join the kept recording and this one, and re-process the whole call.
+    let call_key = crate::meeting_continuation::call_key(meeting_info.as_ref());
+    let src_ms = wav_duration_ms(src_path);
+    let mut continued = None;
+    if let Some(p) = call_key.as_deref().and_then(|k| crate::meeting_continuation::take_match(k, src_ms)) {
+        match crate::meeting_continuation::join_wavs(&p.wav, src_path, &dest_path) {
+            Ok(()) => {
+                println!("[MEETING] Continuing meeting #{} ({} ms + {} ms)", p.meeting_id, p.duration_ms, src_ms);
+                continued = Some(p);
+            }
+            Err(e) => eprintln!("[WARN] Could not continue meeting #{}: {e}; saving a new one", p.meeting_id),
+        }
+    }
+    if continued.is_none() {
+        if let Err(e) = std::fs::copy(src_path, &dest_path) {
+            return Err(format!("Failed to preserve meeting audio to {}: {}", dest_path.display(), e));
+        }
+    }
+
+    let snippets_dir = meetings_dir.join("snippets");
+    let mut turn_transcriber = meeting_turn_transcriber(active_engine, whisper_arc, gguf);
+    let per_turn = turn_transcriber.is_some();
+    let mut turns = crate::diarization::diarize_meeting_recording_with(
+        &dest_path,
+        final_text,
+        &snippets_dir,
+        meeting_timestamp,
+        turn_transcriber.as_mut().map(|t| t.as_mut() as crate::diarization::TurnTranscriber<'_>),
+    );
+    // With per-turn transcription the turns are the complete record (the live
+    // transcript can have gaps where its queue overflowed), so save their text.
+    let turns_text = turns.iter().map(|t| t.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
+    let app_data = dirs::data_local_dir().ok_or("Local data directory is unavailable")?;
+    let db_path = app_data.join("Taurscribe").join("transcript_history.db");
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("Could not open meeting database: {e}"))?;
+    crate::commands::meetings::ensure_meetings_schema(&conn)?;
+
+    // A continued meeting: names from the first part carry over, and without
+    // per-turn text the transcripts of both parts are joined.
+    let joined_text;
+    let final_text: &str = match &continued {
+        Some(p) => {
+            crate::meeting_continuation::carry_names(
+                &mut turns,
+                &crate::commands::meetings::stored_turns(&conn, p.meeting_id),
+                p.duration_ms,
+            );
+            let old_text: String = conn
+                .query_row("SELECT transcript_raw FROM meetings WHERE id = ?1", [p.meeting_id], |r| r.get(0))
+                .unwrap_or_default();
+            joined_text = if per_turn && !turns_text.is_empty() {
+                turns_text.clone()
+            } else {
+                format!("{} {}", old_text.trim(), final_text.trim()).trim().to_string()
+            };
+            &joined_text
+        }
+        None if per_turn && !turns_text.is_empty() => &turns_text,
+        None => final_text,
+    };
+    let duration_ms = if let Ok(reader) = hound::WavReader::open(&dest_path) {
+        let spec = reader.spec();
+        let total_samples = reader.duration();
+        ((total_samples as f64 / spec.sample_rate as f64) * 1000.0) as i64
+    } else {
+        turns.last().map(|t| t.end_ms as i64).unwrap_or(1000)
+    };
+
+    let (title, platform, app_name, url) = if let Some(info) = meeting_info {
+        (
+            info.title,
+            info.platform,
+            info.app_name,
+            info.url,
+        )
+    } else {
+        (
+            format!("Meeting on {}", chrono::Local::now().format("%b %-d, %Y")),
+            "Direct Audio".to_string(),
+            "Taurscribe".to_string(),
+            String::new(),
+        )
+    };
+
+    let saved = match &continued {
+        Some(p) => crate::commands::meetings::replace_meeting_content(
+            &conn,
+            p.meeting_id,
+            duration_ms,
+            Some(&dest_path.to_string_lossy()),
+            final_text,
+            &turns,
+        )
+        .map(|()| p.meeting_id),
+        None => crate::commands::meetings::insert_completed_meeting(
+            &conn,
+            &title,
+            &platform,
+            &app_name,
+            &url,
+            duration_ms,
+            Some(&dest_path.to_string_lossy()),
+            final_text,
+            &turns,
+        ),
+    };
+    match saved {
+        Ok(id) => {
+            // Keep the full stereo recording for a while so recording this call
+            // again continues this meeting (before the WAV is swapped for playback).
+            if let Some(key) = call_key.as_deref() {
+                crate::meeting_continuation::remember(id, key, &dest_path, duration_ms.max(0) as u64);
+            }
+            // The meeting points at the WAV until the compressed copy is fully
+            // written and the path update succeeds.
+            if let Err(e) = crate::commands::meetings::convert_meeting_audio(&conn, id, &dest_path) {
+                eprintln!("[WARN] Keeping raw meeting WAV for playback: {}", e);
+            }
+            println!("[MEETING] Successfully persisted meeting #{}: '{}' (duration: {}ms, {} turns)", id, title, duration_ms, turns.len());
+            Ok(Some(id))
+        }
+        Err(e) => {
+            Err(format!("Could not save meeting; recording retained at {}: {}", dest_path.display(), e))
+        }
+    }
+}
+
 /// macOS fix: Extracted the heavy blocking core of stop_recording into a
 /// separate function so it can be dispatched via spawn_blocking. This keeps
 /// the macOS AppKit main thread free during thread joins, VAD processing,
@@ -1892,9 +1760,11 @@ fn stop_recording_blocking(
     session_transcript: Arc<std::sync::Mutex<String>>,
     last_recording_path: Option<String>,
     whisper_arc: Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
-    parakeet_arc: Arc<std::sync::Mutex<crate::parakeet::ParakeetManager>>,
+    gguf: Option<Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,
     vad_arc: Arc<std::sync::Mutex<crate::vad::VADManager>>,
-) -> Result<String, String> {
+    is_meeting: bool,
+    meeting_info: Option<crate::meeting_detector::MeetingInfo>,
+) -> Result<(String, Option<i64>), String> {
     // Brief tail capture for OS audio scheduling; silence padding in the
     // transcriber thread handles the actual word-boundary safety margin.
     teardown_recording(recording, 80);
@@ -1902,58 +1772,41 @@ fn stop_recording_blocking(
     // Ensure final inference pass runs on P-cores with elevated priority on Windows
     crate::platform_tuning::apply_thread_performance_affinity();
 
-    if active_engine == ASREngine::Parakeet {
-        let final_pass_model_type = {
-            let status = parakeet_arc
-                .lock()
-                .map_err(|_| "Parakeet lock poisoned".to_string())?
-                .get_status();
-            if needs_parakeet_final_pass(status.model_type.as_deref()) {
-                status.model_type
-            } else {
-                None
-            }
-        };
-        if let Some(model_type) = final_pass_model_type {
-            if let Some(path) = last_recording_path.as_ref() {
-                match load_recording_for_parakeet_final(path)
-                    .and_then(|audio| transcribe_parakeet_final(&parakeet_arc, audio))
-                {
+    // Granite re-transcribes the whole saved recording: one pass over the full
+    // audio beats the stitched live chunks and costs well under a second.
+    if active_engine == ASREngine::Granite {
+        match (gguf.as_ref(), last_recording_path.as_ref()) {
+            (Some(granite), Some(path)) => {
+                match load_recording_for_final_pass(path).and_then(|audio| transcribe_final_pass(granite, audio)) {
                     Ok(raw_text) => {
                         let cleaned = clean_transcript(&raw_text);
-                        let (custom_vocab, _) =
-                            crate::context::load_custom_vocabulary_from_settings();
-                        let final_text =
-                            crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
-                        println!(
-                            "[FINAL_TRANSCRIPT] (Parakeet {} final)\n{}",
-                            model_type, final_text
-                        );
+                        let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
+                        let final_text = crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
+                        println!("[FINAL_TRANSCRIPT] (Granite final)\n{}", final_text);
+                        let meeting_id = process_and_save_meeting_if_applicable(
+                            is_meeting,
+                            Some(path),
+                            &final_text,
+                            meeting_info,
+                            active_engine,
+                            &whisper_arc,
+                            gguf.as_ref(),
+                        )?;
                         let _ = std::fs::remove_file(path);
-                        return Ok(final_text);
+                        return Ok((final_text, meeting_id));
                     }
-                    Err(e) => {
-                        eprintln!(
-                            "[ERROR] Parakeet {} final pass failed; falling back to live transcript: {}",
-                            model_type, e
-                        );
-                    }
+                    Err(e) => eprintln!("[ERROR] Granite final pass failed; using the live transcript: {}", e),
                 }
-            } else {
-                eprintln!(
-                    "[ERROR] Parakeet {} final pass requested but no recording path was available",
-                    model_type
-                );
             }
+            _ => eprintln!("[ERROR] Granite final pass skipped: no saved recording"),
         }
     }
 
-    if active_engine == ASREngine::Parakeet || active_engine == ASREngine::Granite {
-        let engine_name = if active_engine == ASREngine::Parakeet {
-            "Parakeet"
-        } else {
-            "Granite"
-        };
+    // Engines that transcribe while recording (their tail is flushed into the
+    // session transcript at teardown) need no final pass. The final pass below is
+    // Whisper's: running it for Qwen3 failed with "Whisper context not initialized".
+    if matches!(active_engine, ASREngine::Granite | ASREngine::Qwen3) {
+        let engine_name = engine_label(active_engine);
         println!(
             "[PROCESSING] Skipping final pass ({} streaming is sufficient)",
             engine_name
@@ -1967,10 +1820,19 @@ fn stop_recording_blocking(
             crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab)
         };
         println!("[FINAL_TRANSCRIPT] (Raw)\n{}", final_text);
+        let meeting_id = process_and_save_meeting_if_applicable(
+            is_meeting,
+            last_recording_path.as_deref(),
+            &final_text,
+            meeting_info,
+            active_engine,
+            &whisper_arc,
+            gguf.as_ref(),
+        )?;
         if let Some(path) = last_recording_path.as_ref() {
             let _ = std::fs::remove_file(path);
         }
-        return Ok(final_text);
+        return Ok((final_text, meeting_id));
     }
 
     if let Some(path) = last_recording_path {
@@ -2043,23 +1905,50 @@ fn stop_recording_blocking(
             whisper.transcribe_audio_data(&clean, prompt.as_deref())
         };
 
-        let _ = std::fs::remove_file(&path);
-
         match result {
             Ok(raw_text) => {
                 println!("[FINAL_TRANSCRIPT] (Raw)\n{}", raw_text);
                 let cleaned = clean_transcript(&raw_text);
                 let final_text =
                     crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
-                Ok(final_text)
+                let meeting_id = process_and_save_meeting_if_applicable(
+                    is_meeting,
+                    Some(&path),
+                    &final_text,
+                    meeting_info,
+                    active_engine,
+                    &whisper_arc,
+                    gguf.as_ref(),
+                )?;
+                let _ = std::fs::remove_file(&path);
+                Ok((final_text, meeting_id))
             }
             Err(e) => {
                 eprintln!("[ERROR] Final transcription failed: {}", e);
-                Err(format!("Final transcription failed: {}", e))
+                let live = session_transcript.lock().unwrap().clone();
+                if live.trim().is_empty() {
+                    return Err(format!("Final transcription failed: {e}; recording retained at {path}"));
+                }
+                let fallback = clean_transcript(&live);
+                let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
+                let fallback = crate::context::apply_custom_vocabulary_casing(&fallback, &custom_vocab);
+                let meeting_id = process_and_save_meeting_if_applicable(
+                    is_meeting,
+                    Some(&path),
+                    &fallback,
+                    meeting_info,
+                    active_engine,
+                    &whisper_arc,
+                    gguf.as_ref(),
+                )?;
+                if is_meeting && meeting_id.is_some() {
+                    let _ = std::fs::remove_file(&path);
+                }
+                Ok((fallback, meeting_id))
             }
         }
     } else {
-        Ok("Recording saved.".to_string())
+        Ok(("Recording saved.".to_string(), None))
     }
 }
 
@@ -2077,6 +1966,7 @@ pub async fn stop_recording(
     state: State<'_, AudioState>,
     app: AppHandle,
 ) -> Result<CommandResult<String>, String> {
+    let model_operation = state.begin_model_operation()?;
     // --- Quick state access (non-blocking, just mutex snapshots) ---
     *state.denoiser.lock().unwrap() = None;
     state.recording_paused.store(false, Ordering::Relaxed);
@@ -2084,31 +1974,52 @@ pub async fn stop_recording(
     let Some(recording) = state.recording_handle.lock().unwrap().take() else {
         return Ok(CommandResult::err("not_recording", "Not recording"));
     };
+    emit_recording_state(&app, &state);
 
     let active_engine = *state.active_engine.lock().unwrap();
     let session_transcript = state.session_transcript.clone();
     let last_recording_path = state.last_recording_path.lock().unwrap().clone();
     let whisper_arc = state.whisper.clone();
-    let parakeet_arc = state.parakeet.clone();
+    let gguf = state.gguf_manager(active_engine);
     let vad_arc = state.vad.clone();
+
+    let is_dual_channel = state.last_recording_is_dual_channel.load(Ordering::SeqCst);
+    let active_meeting = state.meeting_detector.get_status().active_meetings.into_iter().next();
+    // A dual-channel recording is a meeting recording even when no meeting app was
+    // detected: it is saved to the meetings area (as "Direct Audio") instead of
+    // being treated as dictation.
+    let is_meeting = active_meeting.is_some() || is_dual_channel;
+
+    // Transcription + diarization can take a while; let the meetings view show it.
+    if is_meeting {
+        let payload = match active_meeting.as_ref() {
+            Some(m) => serde_json::json!({ "title": m.title, "platform": m.platform, "app_name": m.app_name }),
+            None => serde_json::json!({ "title": "Direct Audio recording", "platform": "Direct Audio", "app_name": "Taurscribe" }),
+        };
+        let _ = app.emit("meeting-processing-started", payload);
+    }
 
     // --- Heavy work: dispatched off the main thread via spawn_blocking so the
     //     macOS AppKit event loop stays responsive (thread joins, VAD, Whisper). ---
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
+    let task = tauri::async_runtime::spawn_blocking(move || {
         stop_recording_blocking(
             recording,
             active_engine,
             session_transcript,
             last_recording_path,
             whisper_arc,
-            parakeet_arc,
+            gguf,
             vad_arc,
+            is_meeting,
+            active_meeting,
         )
     })
-    .await
-    .map_err(|e| format!("stop_recording task failed: {}", e))?;
+    .await;
+    crate::meeting_continuation::release_recording_claim();
+    let outcome = task.unwrap_or_else(|e| Err(format!("stop_recording task failed: {}", e)));
 
     state.touch_activity();
+    drop(model_operation);
 
     // If configured to unload immediately after each transcription, free VRAM now.
     if state.auto_unload_seconds.load(Ordering::Relaxed) == 1 {
@@ -2129,8 +2040,29 @@ pub async fn stop_recording(
         }
     }
 
+    if is_meeting {
+        // Always paired with meeting-processing-started, including when nothing was
+        // saved (empty transcript) or processing failed, so the indicator clears.
+        let payload = match &outcome {
+            Ok((_, id)) => serde_json::json!({ "meeting_id": id, "error": null }),
+            Err(message) => serde_json::json!({ "meeting_id": null, "error": message }),
+        };
+        let _ = app.emit("meeting-processing-finished", payload);
+    }
+
     match outcome {
-        Ok(transcript) => Ok(CommandResult::ok(transcript)),
+        Ok((transcript, maybe_meeting_id)) => {
+            if let Some(meeting_id) = maybe_meeting_id {
+                let _ = app.emit(
+                    "meeting-processing-complete",
+                    serde_json::json!({
+                        "meeting_id": meeting_id,
+                        "transcript": transcript
+                    }),
+                );
+            }
+            Ok(CommandResult::ok(transcript))
+        }
         Err(message) => Ok(CommandResult::err("recording_stop_failed", message)),
     }
 }
@@ -2138,6 +2070,46 @@ pub async fn stop_recording(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dual_channel_tail_is_drained_before_writer_exits() {
+        let (file_tx, file_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+        let (whisper_tx, whisper_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+        let written = Arc::new(std::sync::Mutex::new(Vec::<f32>::new()));
+        let writer_output = written.clone();
+        let writer_thread = std::thread::spawn(move || {
+            while let Ok(frames) = file_rx.recv() {
+                writer_output.lock().unwrap().extend(frames);
+            }
+        });
+        let transcriber_thread = std::thread::spawn(move || {
+            while whisper_rx.recv().is_ok() {}
+        });
+        let stop = Arc::new(AtomicBool::new(false));
+        let capture_stop = stop.clone();
+        let capture_tx = file_tx.clone();
+        let capture_thread = std::thread::spawn(move || {
+            while !capture_stop.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            capture_tx.send(vec![0.25, -0.25]).unwrap();
+        });
+        let level_stop = Arc::new(AtomicBool::new(false));
+        let level_thread = std::thread::spawn(|| {});
+        teardown_recording(RecordingHandle {
+            stream: None,
+            file_tx,
+            whisper_tx,
+            writer_thread,
+            transcriber_thread,
+            level_stop,
+            level_thread,
+            is_dual_channel: true,
+            dual_channel_stop: Some(stop),
+            dual_channel_thread: Some(capture_thread),
+        }, 0);
+        assert_eq!(*written.lock().unwrap(), vec![0.25, -0.25]);
+    }
 
     #[test]
     fn append_transcript_with_word_overlap_removes_duplicate_boundary_words() {
@@ -2164,11 +2136,9 @@ mod tests {
     }
 
     #[test]
-    fn parakeet_final_pass_is_used_for_offline_variants_only() {
-        assert!(needs_parakeet_final_pass(Some("CTC")));
-        assert!(needs_parakeet_final_pass(Some("TDT")));
-        assert!(!needs_parakeet_final_pass(Some("Nemotron Streaming")));
-        assert!(!needs_parakeet_final_pass(Some("EOU")));
-        assert!(!needs_parakeet_final_pass(None));
+    fn live_chunks_are_longer_for_qwen3() {
+        assert_eq!(live_chunk_samples(ASREngine::Qwen3, 16_000), 16_000 * 15);
+        assert_eq!(live_chunk_samples(ASREngine::Granite, 16_000), 16_000 * 6);
+        assert_eq!(live_chunk_samples(ASREngine::Whisper, 48_000), 48_000 * 6);
     }
 }

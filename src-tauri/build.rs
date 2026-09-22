@@ -7,13 +7,13 @@ fn main() {
 
     // CUSTOM: Set minimum macOS deployment target for ONNX Runtime
     if target_os == "macos" {
-        // ONNX Runtime requires macOS 13.4+ on Apple Silicon
-        // (also satisfies whisper.cpp C++17 std::filesystem requirement which needs 10.15+)
-        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
-        std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "13.4");
+        // MLX 0.32 (mlx-rs) requires macOS 14+; this also covers ONNX Runtime
+        // (13.4+) and whisper.cpp's C++17 std::filesystem (10.15+).
+        println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=14.0");
+        std::env::set_var("MACOSX_DEPLOYMENT_TARGET", "14.0");
 
         // Also set CMAKE_OSX_DEPLOYMENT_TARGET for CMake-based dependencies (whisper-rs-sys)
-        std::env::set_var("CMAKE_OSX_DEPLOYMENT_TARGET", "13.4");
+        std::env::set_var("CMAKE_OSX_DEPLOYMENT_TARGET", "14.0");
 
         // Link AVFoundation so the ObjC runtime can resolve AVCaptureDevice
         // (used by check_microphone_permission to query mic authorization status).
@@ -72,6 +72,20 @@ fn main() {
             println!(
                 "cargo:warning=GPU builds will fail with LNK1181 if the linker cannot find cublas.lib"
             );
+        }
+    }
+
+    // CUSTOM: transcribe.cpp's Vulkan backend links vulkan-1.lib (Windows x64 build),
+    // which only the Vulkan SDK provides.
+    println!("cargo:rerun-if-env-changed=VULKAN_SDK");
+    if target_os == "windows" && target_arch == "x86_64" {
+        match std::env::var("VULKAN_SDK") {
+            Ok(sdk) if std::path::Path::new(&sdk).join("Lib").exists() => {
+                println!("cargo:rustc-link-search=native={}", std::path::Path::new(&sdk).join("Lib").display());
+            }
+            _ => println!(
+                "cargo:warning=VULKAN_SDK not set: linking will fail with LNK1181 on vulkan-1.lib (install the Vulkan SDK)"
+            ),
         }
     }
 

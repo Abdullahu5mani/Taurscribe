@@ -72,12 +72,6 @@ pub fn log_process_memory_with_sizes(label: &str, sizes: &[(&str, usize)]) {
     print_process_memory_line(label, &stats, sizes);
 }
 
-pub fn maybe_log_process_memory(label: &str) {
-    if memory_logging_enabled() {
-        log_process_memory(label);
-    }
-}
-
 pub fn maybe_log_process_memory_with_sizes(label: &str, sizes: &[(&str, usize)]) {
     if memory_logging_enabled() {
         log_process_memory_with_sizes(label, sizes);
@@ -120,14 +114,6 @@ pub fn trim_process_memory() {
 
     #[cfg(target_os = "macos")]
     {
-        #[cfg(target_arch = "aarch64")]
-        unsafe {
-            extern "C" {
-                #[link_name = "_ZN3mlx4core11clear_cacheEv"]
-                fn mlx_core_clear_cache();
-            }
-            mlx_core_clear_cache();
-        }
         unsafe {
             #[link(name = "c")]
             extern "C" {
