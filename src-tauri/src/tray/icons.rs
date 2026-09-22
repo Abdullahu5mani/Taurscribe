@@ -4,108 +4,53 @@ use std::sync::atomic::Ordering;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
-// ---------------------------------------------------------------------------
-// Platform-aware tray-icon macros
-// ---------------------------------------------------------------------------
-// macOS menu-bar icons should be monochrome "template" images so the OS can
-// automatically tint them for light / dark mode.  We use small 22×22 PNGs
-// with black-on-transparent artwork.
-//
-// Windows / Linux tray icons can be full-colour.  We use 32×32 coloured
-// circle PNGs (green = ready, red = recording, yellow = processing).
-// ---------------------------------------------------------------------------
-
-// ── Ready (green / hollow circle) ──────────────────────────────────────────
-macro_rules! tray_icon_ready {
-    () => {{
-        #[cfg(target_os = "macos")]
-        {
-            tauri::include_image!("icons/tray-readyTemplate@2x.png")
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            tauri::include_image!("icons/tray-green.png")
-        }
-    }};
-}
-
-// ── Recording (red / filled circle) ────────────────────────────────────────
-macro_rules! tray_icon_recording {
-    () => {{
-        #[cfg(target_os = "macos")]
-        {
-            tauri::include_image!("icons/tray-recordingTemplate@2x.png")
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            tauri::include_image!("icons/tray-red.png")
-        }
-    }};
-}
-
-// ── Processing (yellow / circle-with-dot) ──────────────────────────────────
-macro_rules! tray_icon_processing {
-    () => {{
-        #[cfg(target_os = "macos")]
-        {
-            tauri::include_image!("icons/tray-processingTemplate@2x.png")
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            tauri::include_image!("icons/tray-yellow.png")
-        }
-    }};
-}
-
-/// Helper function to physically change the tray icon
+/// Sets the tray to `state`, keeping the current call (if any).
 pub fn update_tray_icon(app: &AppHandle, state: AppState) -> Result<(), String> {
-    // Pick the right image macro based on state
-    let icon = match state {
-        AppState::Ready => tray_icon_ready!(),
-        AppState::Recording => tray_icon_recording!(),
-        AppState::Processing => tray_icon_processing!(),
-    };
+    let meeting = super::status::current_meeting_full();
+    super::status::set(
+        app,
+        state,
+        meeting.as_ref().map(|m| m.0.as_str()),
+        meeting.as_ref().and_then(|m| m.1.as_deref()),
+        meeting.as_ref().and_then(|m| m.2),
+        None,
+    )
+}
 
-    // Pick the right hover text.
-    // When ready but no model is loaded, surface that in the tooltip so the
-    // user can tell at a glance without opening the app.
-    let tooltip = match state {
-        AppState::Ready => app
-            .try_state::<AudioState>()
-            .map(|s| {
-                let loaded = s.model_loaded.load(Ordering::Relaxed);
-                if loaded {
-                    "Taurscribe - Ready"
-                } else if s.active_engine_has_downloaded_model() {
-                    "Taurscribe — No model loaded"
-                } else {
-                    "Taurscribe — No model found"
-                }
-            })
-            .unwrap_or("Taurscribe - Ready"),
-        AppState::Recording => "Taurscribe - Recording...",
-        AppState::Processing => "Taurscribe - Processing...",
-    };
-
-    // Find the tray item by ID and apply changes
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        tray.set_icon(Some(icon))
-            .map_err(|e| format!("Failed to set tray icon: {}", e))?;
-        #[cfg(target_os = "macos")]
-        tray.set_icon_as_template(true)
-            .map_err(|e| format!("Failed to set icon as template: {}", e))?;
-        tray.set_tooltip(Some(tooltip))
-            .map_err(|e| format!("Failed to set tooltip: {}", e))?;
-
-        println!("[TRAY] State changed to: {:?}", state);
-    }
-
-    Ok(())
+/// Sets the tray to `state` for the given call (None = no call).
+pub fn update_tray_icon_with_meeting(
+    app: &AppHandle,
+    state: AppState,
+    meeting_platform: Option<&str>,
+    meeting_process: Option<&str>,
+    meeting_pid: Option<u32>,
+) -> Result<(), String> {
+    super::status::set(app, state, meeting_platform, meeting_process, meeting_pid, None)
 }
 
 /// Replaces the tray context menu: "Unload Model" when loaded, "Load Model" when a model
 /// exists on disk for the active engine but is not loaded, or a disabled "No model found".
+/// Keeps any detected call and recording state in the menu, and refreshes the idle
+/// tooltip (set at startup, before a model has loaded).
 pub fn update_tray_model_item(app: &AppHandle, loaded: bool) {
+    let Some(state) = app.try_state::<AudioState>() else {
+        return update_tray_menu(app, loaded, None, false);
+    };
+    let is_recording = state.recording_handle.lock().map(|h| h.is_some()).unwrap_or(false);
+    let meeting = state.meeting_detector.get_status().active_meetings.into_iter().next();
+    update_tray_menu(app, loaded, meeting.as_ref().map(|m| (m.platform.as_str(), m.pid)), is_recording);
+    if !is_recording && meeting.is_none() {
+        let _ = super::status::render(app);
+    }
+}
+
+/// Replaces the tray context menu with meeting and recording metadata.
+pub fn update_tray_menu(
+    app: &AppHandle,
+    loaded: bool,
+    meeting_info: Option<(&str, u32)>,
+    is_recording: bool,
+) {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     let Some(tray) = app.tray_by_id("main-tray") else {
         return;
@@ -119,36 +64,62 @@ pub fn update_tray_model_item(app: &AppHandle, loaded: bool) {
     } else {
         ("No model found", false)
     };
-    let Ok(show_item) = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>)
-    else {
+
+    let Ok(menu) = Menu::new(app) else {
         return;
     };
-    let Ok(unload_item) = MenuItem::with_id(
+
+    // What went wrong, while an error-like state is showing.
+    if let Some(line) = super::status::menu_status_line() {
+        if let Ok(item) = MenuItem::with_id(app, "status_line", line, false, None::<&str>) {
+            let _ = menu.append(&item);
+        }
+        if let Ok(sep) = PredefinedMenuItem::separator(app) {
+            let _ = menu.append(&sep);
+        }
+    }
+
+    if let Some((plat, pid)) = meeting_info {
+        let plat = super::status::platform_display_name(plat);
+        let status_label = if is_recording {
+            format!("🔴 Recording: {} (PID {})", plat, pid)
+        } else {
+            format!("🟢 Active Call: {} (PID {})", plat, pid)
+        };
+        if let Ok(item) = MenuItem::with_id(app, "meeting_status", status_label, false, None::<&str>) {
+            let _ = menu.append(&item);
+        }
+        if !is_recording {
+            if let Ok(item) = MenuItem::with_id(app, "meeting_record", format!("Record {} Call", plat), true, None::<&str>) {
+                let _ = menu.append(&item);
+            }
+        }
+        if let Ok(sep) = PredefinedMenuItem::separator(app) {
+            let _ = menu.append(&sep);
+        }
+    }
+
+    if let Ok(show_item) = MenuItem::with_id(app, "show", "Show Taurscribe", true, None::<&str>) {
+        let _ = menu.append(&show_item);
+    }
+    if let Ok(unload_item) = MenuItem::with_id(
         app,
         "unload",
         model_action_label,
         model_action_enabled,
         None::<&str>,
-    ) else {
-        return;
-    };
-    let Ok(quit_item) = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>) else {
-        return;
-    };
-    let Ok(separator) = PredefinedMenuItem::separator(app) else {
-        return;
-    };
-    if let Ok(menu) = Menu::with_items(app, &[&show_item, &unload_item, &separator, &quit_item]) {
-        let _ = tray.set_menu(Some(menu));
+    ) {
+        let _ = menu.append(&unload_item);
     }
-    let tooltip = if loaded {
-        "Taurscribe - Ready"
-    } else if has_downloaded {
-        "Taurscribe — No model loaded"
-    } else {
-        "Taurscribe — No model found"
-    };
-    let _ = tray.set_tooltip(Some(tooltip));
+    // Separator above Exit, as in the startup menu (it used to trail after Exit).
+    if let Ok(separator) = PredefinedMenuItem::separator(app) {
+        let _ = menu.append(&separator);
+    }
+    if let Ok(quit_item) = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>) {
+        let _ = menu.append(&quit_item);
+    }
+
+    let _ = tray.set_menu(Some(menu));
 }
 
 /// After a failed load or switch, align `model_loaded` and tray with whichever engine
@@ -161,17 +132,17 @@ pub fn reconcile_model_loaded_tray(app: &AppHandle, state: &AudioState) {
             .lock()
             .map(|g| g.get_current_model().is_some())
             .unwrap_or(false);
-        let p_ok = state
-            .parakeet
+        let g_ok = state
+            .granite
             .lock()
             .map(|g| g.get_status().loaded)
             .unwrap_or(false);
-        let c_ok = state
-            .cohere
+        let q_ok = state
+            .qwen3
             .lock()
             .map(|g| g.get_status().loaded)
             .unwrap_or(false);
-        w_ok || p_ok || c_ok
+        w_ok || g_ok || q_ok
     };
     state.model_loaded.store(loaded, Ordering::Relaxed);
     update_tray_model_item(app, loaded);
@@ -207,16 +178,12 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show_item, &unload_item, &separator, &quit_item])?;
 
-    let icon = tray_icon_ready!();
-
     let builder = TrayIconBuilder::with_id("main-tray")
-        .icon(icon)
-        .tooltip("Taurscribe - Ready")
+        .icon(tauri::include_image!("icons/tray/mac-ready.png"))
+        .tooltip("Taurscribe")
         .menu(&menu)
         .show_menu_on_left_click(false);
 
-    #[cfg(target_os = "macos")]
-    let builder = builder.icon_as_template(true);
 
     let _tray = builder
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -237,8 +204,20 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 if loaded {
                     do_unload(app);
                 } else if let Some(window) = app.get_webview_window("main") {
+                    // "Load Model" loads (the window runs the same load as its
+                    // Load button); it used to only open the window.
+                    use tauri::Emitter;
                     let _ = window.show();
                     let _ = window.set_focus();
+                    let _ = window.emit("tray-load-model", ());
+                }
+            }
+            "meeting_record" => {
+                use tauri::Emitter;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = window.emit("start-meeting-recording", ());
                 }
             }
             "quit" => app.exit(0),
