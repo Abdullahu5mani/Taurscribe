@@ -1,0 +1,55 @@
+{
+  "wav_path": "/Volumes/ExternalSSD/Projects/Code Projects/Taurscribe/scripts/harness/audio/meeting_1_dual_channel.wav",
+  "duration_ms": 41629,
+  "transcript": "Welcome to the Taurscribe architecture review. Today we are verifying dual channel recording and vocal isolation. Thank you. I am speaker one, and I am speaking clearly from the remote conference room. Let me interrupt for a moment to discuss the architecture. I am continuing to speak while the host speaks at the exact same time. Here is another clean statement from speaker one, perfect for candidate snippet cycling. And I am speaker two, joining from the mobile client to test multiple remote speaker separation. Thank you everyone. The meeting is adjourned and we will process the diarization now.",
+  "turns": [
+    {
+      "speaker": "Host",
+      "channel": 0,
+      "start_ms": 0,
+      "end_ms": 7907,
+      "text": "Welcome to the Taurscribe architecture review. Today we are verifying dual channel recording and vocal isolation.",
+      "is_crosstalk": false
+    },
+    {
+      "speaker": "Speaker 1",
+      "channel": 1,
+      "start_ms": 9407,
+      "end_ms": 14775,
+      "text": "Thank you. I am speaker one, and I am speaking clearly from the remote conference room.",
+      "is_crosstalk": false
+    },
+    {
+      "speaker": "Crosstalk",
+      "channel": 1,
+      "start_ms": 16275,
+      "end_ms": 20425,
+      "text": "Let me interrupt for a moment to discuss the architecture. I am continuing to speak while the host speaks at the exact same time.",
+      "is_crosstalk": true
+    },
+    {
+      "speaker": "Speaker 1",
+      "channel": 1,
+      "start_ms": 21925,
+      "end_ms": 27207,
+      "text": "Here is another clean statement from speaker one, perfect for candidate snippet cycling.",
+      "is_crosstalk": false
+    },
+    {
+      "speaker": "Speaker 2",
+      "channel": 1,
+      "start_ms": 28707,
+      "end_ms": 34712,
+      "text": "And I am speaker two, joining from the mobile client to test multiple remote speaker separation.",
+      "is_crosstalk": false
+    },
+    {
+      "speaker": "Host",
+      "channel": 0,
+      "start_ms": 36212,
+      "end_ms": 41629,
+      "text": "Thank you everyone. The meeting is adjourned and we will process the diarization now.",
+      "is_crosstalk": false
+    }
+  ]
+}
