@@ -110,8 +110,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const hydratedTierRef = useRef(false);
     const [pulseModelIds, setPulseModelIds] = useState<Set<string>>(new Set());
     const whisperGroupRef = useRef<HTMLDivElement>(null);
-    const parakeetGroupRef = useRef<HTMLDivElement>(null);
-    const cohereGroupRef = useRef<HTMLDivElement>(null);
+    const graniteGroupRef = useRef<HTMLDivElement>(null);
     const qwen3GroupRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -143,7 +142,6 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     };
 
     const isMac = platform === 'macos';
-    const isWindows = platform === 'windows';
     const rowProps = { downloadProgress, onDownload, onDelete, onCancelDownload };
     /** ANE badge: Apple Silicon + full-precision Whisper model with bundled encoder. */
     const aneBadgeFor = (m: DownloadableModel) => isAppleSilicon && m.aneCapable === true;
@@ -152,14 +150,10 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
         [sysInfo, isAppleSilicon, useCase],
     );
 
-    const parakeetModels = models.filter(m => m.type === 'Parakeet');
-    const cohereModels = models.filter(
-        m => m.type === 'Granite'
-            && (!m.macosOnly || isMac)
-            && (!m.windowsOnly || isWindows),
-    );
+    const graniteModels = models.filter(m => m.type === 'Granite');
     const qwen3Models = models.filter(m => m.type === 'Qwen3');
     const llmModels = models.filter(m => m.type === 'LLM');
+    const speakerModels = models.filter(m => m.type === 'Speaker');
     const coremlModels = models.filter(m => m.type === 'CoreML');
 
     useEffect(() => {
@@ -199,11 +193,8 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             const recId = isAppleSilicon ? TIER_RECOMMENDED_ANS[preferredTier] : TIER_RECOMMENDED[preferredTier];
             targetModelId = models.find(m => m.id === recId && !m.downloaded)?.id
                 ?? TIER_MODEL_IDS[preferredTier].map(id => models.find(m => m.id === id && !m.downloaded)).find(Boolean)?.id;
-        } else if (scrollTarget === 'parakeet') {
-            groupRef = parakeetGroupRef;
-            targetModelId = models.find(m => m.type === 'Parakeet' && !m.downloaded)?.id;
         } else if (scrollTarget === 'granite') {
-            groupRef = cohereGroupRef;
+            groupRef = graniteGroupRef;
             targetModelId = models.find(m => m.type === 'Granite' && !m.downloaded)?.id;
         } else if (scrollTarget === 'qwen3') {
             groupRef = qwen3GroupRef;
@@ -284,26 +275,25 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             {/* ── Model Memory & Auto-Unload ──────────────────────────── */}
             <div className="setting-card model-memory-card" id="models-memory-retention">
                 <div className="setting-card-header">
-                    <span className="setting-card-label">Model Memory & Inactivity Unload</span>
-                    <span className="setting-card-badge">VRAM Retention</span>
+                    <span className="setting-card-label">Keep model loaded</span>
                 </div>
                 <p className="setting-card-desc">
-                    Keep speech models loaded in VRAM/RAM between dictations for zero cold-start latency.
-                    Automatically unloads the model to free memory after a period of inactivity.
+                    A loaded model starts transcribing instantly. After this much idle time it is unloaded to free memory.
                 </p>
-                <div id="model-memory-retention-options" data-testid="model-memory-retention-options" className="auto-unload-options-grid" role="radiogroup" aria-label="Model memory retention timeout">
+                <div id="model-memory-retention-options" data-testid="model-memory-retention-options" className="recording-mode-seg" role="radiogroup" aria-label="Model memory retention timeout">
                     {AUTO_UNLOAD_OPTIONS.map((opt) => (
                         <button
                             key={opt.value}
                             type="button"
+                            role="radio"
+                            aria-checked={autoUnloadTimeout === opt.value}
                             id={`model-memory-retention-${opt.value}`}
                             data-testid={`model-memory-retention-${opt.value}`}
-                            className={`auto-unload-option-pill${autoUnloadTimeout === opt.value ? ' auto-unload-option-pill--active' : ''}`}
+                            className={autoUnloadTimeout === opt.value ? 'active' : ''}
                             onClick={() => handleUpdateAutoUnload(opt.value)}
                             title={opt.description}
                         >
-                            <span className="auto-unload-option-name">{opt.label}</span>
-                            <span className="auto-unload-option-hint">{opt.shortLabel}</span>
+                            {opt.value === 1 ? 'After each use' : opt.value === 0 ? 'Never' : opt.shortLabel}
                         </button>
                     ))}
                 </div>
@@ -421,14 +411,14 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                 </div>
             </div>
 
-            {/* ── Parakeet ─────────────────────────────────────────── */}
-            <div className="model-group" id="models-group-parakeet" data-testid="models-group-parakeet" ref={parakeetGroupRef}>
+            {/* ── Granite ─────────────────────────────────────────── */}
+            <div className="model-group" id="models-group-granite" data-testid="models-group-granite" ref={graniteGroupRef}>
                 <div className="model-group-header">
-                    <h3 className="settings-section-title">Parakeet</h3>
-                    <span className="model-group-sub model-group-sub--parakeet">by NVIDIA · streaming &amp; high-accuracy variants</span>
+                    <h3 className="settings-section-title">Granite Speech 5</h3>
+                    <span className="model-group-sub model-group-sub--granite">by IBM · English · unquantized F16</span>
                 </div>
                 <div className="model-list">
-                    {parakeetModels.map(m => (
+                    {graniteModels.map(m => (
                         <div key={m.id} className={`model-item-wrapper${pulseModelIds.has(m.id) ? ' model-item-wrapper--pulse' : ''}`}>
                             <ModelRow model={m} {...rowProps} />
                         </div>
@@ -436,31 +426,13 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                 </div>
             </div>
 
-            {/* ── Granite ─────────────────────────────────────────── */}
-            <div className="model-group" id="models-group-granite" data-testid="models-group-granite" ref={cohereGroupRef}>
-                <div className="model-group-header">
-                    <h3 className="settings-section-title">Granite</h3>
-                    <span className="model-group-badge model-group-badge--warn">Experimental</span>
-                    <span className="model-group-sub model-group-sub--cohere">by IBM Granite · Multilingual · ONNX</span>
-                </div>
-                <div className="model-list">
-                    {cohereModels.map(m => (
-                        <div
-                            key={m.id}
-                            className={`model-item-wrapper${pulseModelIds.has(m.id) ? ' model-item-wrapper--pulse' : ''}`}
-                        >
-                            <ModelRow model={m} {...rowProps} />
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            {/* ── Qwen3-ASR ───────────────────────────────────────── */}
+            {/* ── Qwen3-ASR ───── */}
+            {qwen3Models.length > 0 && (
             <div className="model-group" id="models-group-qwen3" data-testid="models-group-qwen3" ref={qwen3GroupRef}>
                 <div className="model-group-header">
                     <h3 className="settings-section-title">Qwen3-ASR</h3>
                     <span className="model-group-badge model-group-badge--warn">Experimental</span>
-                    <span className="model-group-sub">by Qwen · multilingual · Transformers</span>
+                    <span className="model-group-sub">by Qwen · multilingual · unquantized F16</span>
                 </div>
                 <div className="model-list">
                     {qwen3Models.map(m => (
@@ -470,6 +442,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     ))}
                 </div>
             </div>
+            )}
 
             {/* ── Post-Processing Models ────────────────────────────── */}
             <div className="model-group" id="models-group-postprocessing" data-testid="models-group-postprocessing">
@@ -479,6 +452,40 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                 </div>
                 <div className="model-list">
                     {llmModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
+                </div>
+            </div>
+
+            {/* ── Speaker Recognition (Speaker Vault) ───────────────── */}
+            <div className="model-group" id="models-group-speaker" data-testid="models-group-speaker">
+                <div className="model-group-header">
+                    <h3 className="settings-section-title">Speaker recognition</h3>
+                    <span className="model-group-sub">required for the Speaker Vault · recognises people by voice</span>
+                </div>
+                <div className="model-list">
+                    {speakerModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
+                </div>
+            </div>
+
+            {/* ── Built-in models (ship with the app, nothing to download) ── */}
+            <div className="model-group" id="models-group-builtin" data-testid="models-group-builtin">
+                <div className="model-group-header">
+                    <h3 className="settings-section-title">Built into the app</h3>
+                    <span className="model-group-sub">always installed · no download</span>
+                </div>
+                <div className="model-list">
+                    <div className="model-item" aria-label="RNNoise noise reduction, built in">
+                        <div className="model-info">
+                            <div className="model-title-row">
+                                <h3>RNNoise (noise reduction)</h3>
+                            </div>
+                            <p className="model-desc">
+                                Small neural network compiled into Taurscribe. Used when Background noise reduction is on.
+                            </p>
+                        </div>
+                        <div className="model-row-actions">
+                            <span className="model-group-sub">Built in</span>
+                        </div>
+                    </div>
                 </div>
             </div>
 

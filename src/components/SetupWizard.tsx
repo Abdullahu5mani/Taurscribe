@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { TitleBar } from './TitleBar';
+import { Logo } from './Logo';
 import {
   computeModelRecommendation,
   type OnboardingUseCase,
@@ -30,7 +31,7 @@ interface StepEntry {
   key: number;
 }
 
-type SetupEngineId = 'whisper' | 'parakeet' | 'granite';
+type SetupEngineId = 'whisper' | 'granite' | 'qwen3';
 
 const ENGINE_CAROUSEL_SLIDES: Array<{
   id: SetupEngineId;
@@ -42,92 +43,50 @@ const ENGINE_CAROUSEL_SLIDES: Array<{
   {
     id: 'whisper',
     title: 'Whisper',
-    subtitle: 'Most accurate all-rounder. Best default for mixed audio.',
+    subtitle: 'The all-rounder: 99 languages, runs on any computer.',
     goodAt: [
-      'Meetings, interviews, and long-form dictation.',
-      'Multilingual transcription and mixed accents.',
-      'When you want fewer corrections over raw speed.',
+      'Mixed or non-English audio, accents and code-switching.',
+      'Older or low-memory machines (small quantized versions).',
+      'Macs: the encoder runs on the Neural Engine for speed.',
     ],
     usage: [
-      'Start with Small or Medium for daily use.',
-      'Use multilingual variants when language may vary.',
-      'Pick quantized models on lower-memory machines.',
-    ],
-  },
-  {
-    id: 'parakeet',
-    title: 'Parakeet',
-    subtitle: 'Fastest live captions. Tuned for English streaming.',
-    goodAt: [
-      'Real-time dictation where latency matters most.',
-      'Short commands and rapid back-to-back notes.',
-      'Power users who prioritize immediate feedback.',
-    ],
-    usage: [
-      'Use for active typing sessions and coding flow.',
-      'Best with a stable microphone and clear speech.',
-      'Switch to Whisper for harder audio or multilingual content.',
+      'Base or Small for daily dictation; Large V3 Turbo for hard audio.',
+      'Pick the English-only version if you only speak English.',
+      'Quantized versions download faster and use less memory.',
     ],
   },
   {
     id: 'granite',
-    title: 'Granite Speech',
-    subtitle: 'IBM Granite NAR through the ONNX runtime path.',
+    title: 'Granite Speech 5',
+    subtitle: 'The fastest English model: a 30-second note in a blink.',
     goodAt: [
-      'High-accuracy non-autoregressive transcription.',
-      'Users validating CUDA, DirectML, and CPU ONNX backends.',
-      'Controlled comparisons against Whisper/Parakeet.',
+      'English dictation where speed matters most.',
+      'Quick notes, messages and coding flow.',
+      'Laptops without a strong GPU (fast even on the CPU).',
     ],
     usage: [
-      'Treat as a specialized option, not first choice.',
-      'Use when you specifically want Granite Speech output.',
-      'For general daily use, Whisper or Parakeet is usually better.',
+      'Writes plain lowercase text; turn on FlowScribe for punctuation and capitals.',
+      'English only; use Whisper or Qwen3 for other languages.',
+      'IBM weights for non-commercial use.',
+    ],
+  },
+  {
+    id: 'qwen3',
+    title: 'Qwen3-ASR',
+    subtitle: 'The most accurate: punctuation and casing built in.',
+    goodAt: [
+      'Meetings, interviews and files where every word counts.',
+      'Multilingual audio and difficult recordings.',
+      'Finished text straight away, no clean-up pass needed.',
+    ],
+    usage: [
+      '1.7B needs about 5 GB of memory; choose 0.6B on smaller machines.',
+      'Best with a GPU (Metal, CUDA or Vulkan); slower on CPU only.',
+      'For quick English notes, Granite is lighter.',
     ],
   },
 ];
 
-const SETUP_WELCOME_LOGOS = [
-  '/logos/animated_logo_assemble.svg',
-  '/logos/animated_logo_blueprint.svg',
-  '/logos/animated_logo_bottom_spin.svg',
-  '/logos/animated_logo_bounce.svg',
-  '/logos/animated_logo_breathe.svg',
-  '/logos/animated_logo_coaster.svg',
-  '/logos/animated_logo_crt.svg',
-  '/logos/animated_logo_debris.svg',
-  '/logos/animated_logo_flare.svg',
-  '/logos/animated_logo_flip.svg',
-  '/logos/animated_logo_focus.svg',
-  '/logos/animated_logo_glitch.svg',
-  '/logos/animated_logo_grow.svg',
-  '/logos/animated_logo_handwrite.svg',
-  '/logos/animated_logo_heartbeat.svg',
-  '/logos/animated_logo_hologram.svg',
-  '/logos/animated_logo_laser_trace.svg',
-  '/logos/animated_logo_liquid.svg',
-  '/logos/animated_logo_orbit.svg',
-  '/logos/animated_logo_pulse_reveal.svg',
-  '/logos/animated_logo_quantum_flip.svg',
-  '/logos/animated_logo_ripple.svg',
-  '/logos/animated_logo_rubberband.svg',
-  '/logos/animated_logo_scan_reveal.svg',
-  '/logos/animated_logo_shockwave.svg',
-  '/logos/animated_logo_slice.svg',
-  '/logos/animated_logo_spiral.svg',
-  '/logos/animated_logo_split_door.svg',
-  '/logos/animated_logo_stomp.svg',
-  '/logos/animated_logo_swing.svg',
-  '/logos/animated_logo_thin_air.svg',
-  '/logos/animated_logo_wiper.svg',
-  '/logos/animated_logo_write.svg',
-  '/logos/animated_logo_zigzag.svg',
-];
-
-function pickRandomSetupLogo(): string | null {
-  if (SETUP_WELCOME_LOGOS.length === 0) return null;
-  const index = Math.floor(Math.random() * SETUP_WELCOME_LOGOS.length);
-  return SETUP_WELCOME_LOGOS[index];
-}
 
 export function SetupWizard({
   onComplete,
@@ -146,12 +105,11 @@ export function SetupWizard({
   const [platform, setPlatform] = useState<string>('');
   const [isAppleSilicon, setIsAppleSilicon] = useState(false);
   const useCase: OnboardingUseCase = 'quick_notes';
-  const [welcomeLogoSrc] = useState<string | null>(() => pickRandomSetupLogo());
   const [current, setCurrent] = useState<StepEntry>({ idx: 0, enterDir: 'right', key: 0 });
   const [exiting, setExiting] = useState<{ idx: number; exitDir: 'left' | 'right'; key: number } | null>(null);
   const transitioning = useRef(false);
   const recommendation = computeModelRecommendation({ sysInfo, isAppleSilicon, useCase });
-  const totalSteps = platform === 'macos' ? 8 : 7;
+  const totalSteps = platform === 'macos' ? 9 : 8;
 
   useEffect(() => {
     invoke<SystemInfo>('get_system_info')
@@ -188,7 +146,7 @@ export function SetupWizard({
 
   const renderStep = (idx: number) => {
     switch (idx) {
-      case 0: return <StepWelcome onNext={next} logoSrc={welcomeLogoSrc} />;
+      case 0: return <StepWelcome onNext={next} />;
       case 1: return <StepHardware sysInfo={sysInfo} platform={platform} onNext={next} onBack={back} totalSteps={totalSteps} />;
       case 2: return (
         <StepEngines
@@ -197,9 +155,10 @@ export function SetupWizard({
           totalSteps={totalSteps}
         />
       );
-      case 3: return <StepFlowScribe onNext={next} onBack={back} totalSteps={totalSteps} />;
-      case 4: return <StepHotkey onNext={next} onBack={back} platform={platform} totalSteps={totalSteps} />;
-      case 5: return (
+      case 3: return <StepFeatures onNext={next} onBack={back} totalSteps={totalSteps} platform={platform} />;
+      case 4: return <StepFlowScribe onNext={next} onBack={back} totalSteps={totalSteps} />;
+      case 5: return <StepHotkey onNext={next} onBack={back} platform={platform} totalSteps={totalSteps} />;
+      case 6: return (
         <StepRecordingSettings
           onNext={next}
           onBack={back}
@@ -212,13 +171,13 @@ export function SetupWizard({
           setMuteBackgroundAudio={setMuteBackgroundAudio}
         />
       );
-      case 6:
+      case 7:
         // Skip permissions step on non-macOS platforms
         if (platform !== 'macos') {
           return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
         }
         return <StepPermissions onNext={next} onBack={back} platform={platform} totalSteps={totalSteps} />;
-      case 7: return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
+      case 8: return <StepReady onComplete={onComplete} platform={platform} recommendation={recommendation} useCase={useCase} handleDownload={handleDownload} handleCancelDownload={handleCancelDownload} downloadProgress={downloadProgress} settingsModels={settingsModels} />;
       default: return null;
     }
   };
@@ -258,35 +217,29 @@ export function SetupWizard({
 // ─────────────────────────────────────────────────────────────────
 // STEP 0 — WELCOME
 // ─────────────────────────────────────────────────────────────────
-function StepWelcome({ onNext, logoSrc }: { onNext: () => void; logoSrc: string | null }) {
+function StepWelcome({ onNext }: { onNext: () => void }) {
   return (
     <>
-      {logoSrc && (
-        <img
-          className="setup-welcome-logo-image"
-          src={logoSrc}
-          alt=""
-          aria-hidden="true"
-          draggable={false}
-        />
-      )}
+      <div className="welcome-mark">
+        <span className="welcome-mark-glow" aria-hidden="true" />
+        <Logo size={88} animate />
+      </div>
       <h1 className="welcome-logo">Taurscribe</h1>
-      <hr className="welcome-rule" />
-      <p className="welcome-tagline">Local AI speech recognition</p>
+      <p className="welcome-tagline">Private speech-to-text that runs on your computer</p>
 
       <ul className="welcome-features">
-        <li className="welcome-feature">
-          <span className="welcome-feature-dot" />
-          100% offline — nothing leaves your machine
-        </li>
-        <li className="welcome-feature">
-          <span className="welcome-feature-dot" />
-          Three local engines: Whisper, Parakeet, and Granite Speech
-        </li>
-        <li className="welcome-feature">
-          <span className="welcome-feature-dot" />
-          Types directly into any app via global hotkey
-        </li>
+        {[
+          'Works offline: your audio never leaves this machine',
+          'Dictate into any app with one hotkey',
+          'Records meetings and tells the speakers apart',
+        ].map((text) => (
+          <li className="welcome-feature" key={text}>
+            <svg className="welcome-feature-check" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M2.5 7.5l3 3 6-7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {text}
+          </li>
+        ))}
       </ul>
 
       <div className="setup-nav">
@@ -298,7 +251,7 @@ function StepWelcome({ onNext, logoSrc }: { onNext: () => void; logoSrc: string 
           onClick={onNext}
           aria-label="Begin setup"
         >
-          Begin Setup →
+          Get started →
         </button>
       </div>
     </>
@@ -331,7 +284,10 @@ function StepHardware({
   const verdict = () => {
     if (!sysInfo) return null;
     if (sysInfo.cuda_available) {
-      return <p className="hw-verdict"><strong>GPU acceleration ready.</strong> Whisper and Parakeet both run at full speed.</p>;
+      return <p className="hw-verdict"><strong>GPU acceleration ready.</strong> Whisper and Granite both run at full speed.</p>;
+    }
+    if (isMac && sysInfo.backend_hint === 'Metal') {
+      return <p className="hw-verdict"><strong>GPU acceleration ready.</strong> Models run on the GPU through Metal.</p>;
     }
     if (hasGpu) {
       return <p className="hw-verdict"><strong className="amber">GPU detected (no CUDA).</strong> Whisper via CPU — consider downloading a smaller model.</p>;
@@ -342,7 +298,7 @@ function StepHardware({
   return (
     <>
       <p className="setup-eyebrow">Step 2 of {totalSteps}</p>
-      <h2 className="setup-heading">System Analysis</h2>
+      <h2 className="setup-heading">Your hardware</h2>
       <p className="setup-sub">Checking your hardware for AI readiness.</p>
 
       <div className="hw-scan-bar" style={{ display: loading ? undefined : 'none' }} />
@@ -464,14 +420,14 @@ function StepEngines({
   return (
     <>
       <p className="setup-eyebrow">Step 3 of {totalSteps}</p>
-      <h2 className="setup-heading">Meet The Engines</h2>
+      <h2 className="setup-heading">Meet the engines</h2>
       <p className="setup-sub">Swipe through each engine to learn where it shines and when to use it. Continue unlocks after all cards are viewed.</p>
 
       <div className="setup-engine-carousel" aria-live="polite">
         <div className={`setup-engine-carousel-card setup-engine-carousel-card--${slide.id}`}>
           <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--whisper${slide.id === 'whisper' ? ' is-active' : ''}`} />
-          <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--parakeet${slide.id === 'parakeet' ? ' is-active' : ''}`} />
-          <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--cohere${slide.id === 'granite' ? ' is-active' : ''}`} />
+          <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--granite${slide.id === 'granite' ? ' is-active' : ''}`} />
+          <div className={`setup-engine-carousel-bg setup-engine-carousel-bg--qwen3${slide.id === 'qwen3' ? ' is-active' : ''}`} />
 
           <div key={`${slide.id}-${activeSlide}`} className={`setup-engine-carousel-content setup-engine-carousel-content--${navDirection}`}>
             <div className="setup-engine-carousel-topline">
@@ -482,7 +438,7 @@ function StepEngines({
 
             <div className="setup-engine-carousel-grid">
               <div className="setup-engine-carousel-column">
-                <p className="setup-engine-column-title">Good At</p>
+                <p className="setup-engine-column-title">Good at</p>
                 <ul className="setup-engine-list">
                   {slide.goodAt.map((item) => (
                     <li key={item}>{item}</li>
@@ -490,7 +446,7 @@ function StepEngines({
                 </ul>
               </div>
               <div className="setup-engine-carousel-column">
-                <p className="setup-engine-column-title">How To Use</p>
+                <p className="setup-engine-column-title">How to use</p>
                 <ul className="setup-engine-list">
                   {slide.usage.map((item) => (
                     <li key={item}>{item}</li>
@@ -569,6 +525,92 @@ function StepEngines({
           className="setup-btn setup-btn--primary"
           onClick={onNext}
           disabled={!hasViewedAllSlides}
+          aria-label="Continue to features step"
+        >Continue →</button>
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// STEP 3 — WHAT IT DOES
+// ─────────────────────────────────────────────────────────────────
+const FEATURE_CARDS: Array<{ id: string; title: string; body: string; icon: React.ReactNode }> = [
+  {
+    id: 'meetings',
+    title: 'Meetings, no bot',
+    body: 'Spots Zoom, Meet, Teams, Slack and Discord calls and records you and the call on separate channels. Nothing joins the call.',
+    icon: <path d="M3 7h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H3zM16 11l5-3v8l-5-3" />,
+  },
+  {
+    id: 'speakers',
+    title: 'Who said what',
+    body: 'Separates up to 8 people on a call and remembers the ones you name, so they are recognised in later meetings.',
+    icon: <><circle cx="8" cy="8" r="3" /><circle cx="17" cy="9" r="2.5" /><path d="M2.5 19c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5M14 18.5c.5-2 1.8-3 3.5-3s3 1 3.5 3" /></>,
+  },
+  {
+    id: 'files',
+    title: 'Audio files',
+    body: 'Drop recordings in the Files tab and pick the model for each one. Transcripts are saved alongside your dictations.',
+    icon: <path d="M6 3h8l4 4v14H6zM14 3v4h4M9 13h6M9 17h6" />,
+  },
+  {
+    id: 'tray',
+    title: 'Always at a glance',
+    body: 'The menu-bar icon shows what Taurscribe is doing: recording, processing, a detected call, with details on hover.',
+    icon: <><rect x="3" y="4" width="18" height="4" rx="1.5" /><circle cx="17" cy="6" r="0.9" fill="currentColor" /><path d="M7 12h10M7 16h6" /></>,
+  },
+  {
+    id: 'llm',
+    title: 'Ask your AI',
+    body: 'Optionally let Claude, ChatGPT or Cursor search your transcripts (read-only). Off until you turn it on.',
+    icon: <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z" />,
+  },
+  {
+    id: 'private',
+    title: 'Stays on this computer',
+    body: 'Every model runs locally. Audio and transcripts never leave your machine unless you choose to share them.',
+    icon: <path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6zM9 12l2 2 4-4" />,
+  },
+];
+
+function StepFeatures({ onNext, onBack, totalSteps, platform }: { onNext: () => void; onBack: () => void; totalSteps: number; platform: string }) {
+  const trayWord = platform === 'macos' ? 'menu-bar' : 'tray';
+  return (
+    <>
+      <p className="setup-eyebrow">Step 4 of {totalSteps}</p>
+      <h2 className="setup-heading">More than dictation</h2>
+      <p className="setup-sub">Everything below works out of the box and runs entirely on your computer.</p>
+
+      <div className="setup-feature-grid">
+        {FEATURE_CARDS.map((f, i) => (
+          <div className={`setup-feature-card setup-feature-card--${f.id}`} key={f.id} style={{ animationDelay: `${80 + i * 55}ms` }}>
+            <svg className="setup-feature-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              {f.icon}
+            </svg>
+            <div>
+              <div className="setup-feature-title">{f.title}</div>
+              <p className="setup-feature-body">{f.id === 'tray' ? f.body.replace('menu-bar', trayWord) : f.body}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="setup-nav setup-nav--spread">
+        <button
+          type="button"
+          id="wizard-features-back-btn"
+          data-testid="wizard-features-back-btn"
+          className="setup-btn setup-btn--ghost"
+          onClick={onBack}
+          aria-label="Back to engines step"
+        >← Back</button>
+        <button
+          type="button"
+          id="wizard-features-next-btn"
+          data-testid="wizard-features-next-btn"
+          className="setup-btn setup-btn--primary"
+          onClick={onNext}
           aria-label="Continue to FlowScribe step"
         >Continue →</button>
       </div>
@@ -577,7 +619,7 @@ function StepEngines({
 }
 
 // ─────────────────────────────────────────────────────────────────
-// STEP 3 — FLOWSCRIBE LLM
+// STEP 4 — FLOWSCRIBE LLM
 // ─────────────────────────────────────────────────────────────────
 function StepFlowScribe({
   onNext,
@@ -590,13 +632,13 @@ function StepFlowScribe({
 }) {
   return (
     <>
-      <p className="setup-eyebrow">Step 4 of {totalSteps}</p>
-      <h2 className="setup-heading">FlowScribe LLM v2</h2>
-      <p className="setup-sub">FlowScribe v2 is a tiny, specialized on-device model that refines your raw transcripts with structural precision.</p>
+      <p className="setup-eyebrow">Step 5 of {totalSteps}</p>
+      <h2 className="setup-heading">FlowScribe V3 <span className="setup-beta">Beta</span></h2>
+      <p className="setup-sub">FlowScribe is a small on-device model that turns your raw transcript into what you meant: fillers and corrections removed, numbers and emails written properly.</p>
 
-      <div className="fs-processor-rack" aria-label="Hardware processor visualization of FlowScribe v2">
+      <div className="fs-processor-rack" aria-label="Example of FlowScribe cleaning a transcript">
         <div className="fs-rack-headers">
-          <div className="fs-rack-brand">TAURSCRIBE DSP // FLOWSCRIBE V2 0.5B</div>
+          <div className="fs-rack-brand">TAURSCRIBE DSP // FLOWSCRIBE V3 0.8B</div>
           <div className="fs-rack-status">
             <span className="fs-rack-led fs-rack-led--active"></span> ONLINE
           </div>
@@ -606,14 +648,14 @@ function StepFlowScribe({
           <div className="fs-rack-panel fs-rack-input">
             <div className="fs-panel-label">CH 01 / RAW ASR</div>
             <div className="fs-panel-screen">
-              &gt; hey team can we ship this friday i think we should test payment edge cases first
+              &gt; um hey team can we ship this on thursday no wait friday i think we should test the the payment edge cases first
             </div>
           </div>
 
           <div className="fs-rack-center">
             <div className="fs-process-steps">
-              <div className="fs-p-step">GRAMMAR</div>
-              <div className="fs-p-step">CASING</div>
+              <div className="fs-p-step">FILLERS</div>
+              <div className="fs-p-step">CORRECTIONS</div>
               <div className="fs-p-step">PUNCTUATION</div>
             </div>
             <div className="fs-process-arrows" aria-hidden="true">
@@ -663,7 +705,7 @@ function StepFlowScribe({
           data-testid="wizard-flowscribe-back-btn"
           className="setup-btn setup-btn--ghost"
           onClick={onBack}
-          aria-label="Back to engines step"
+          aria-label="Back to features step"
         >← Back</button>
         <button
           type="button"
@@ -690,8 +732,8 @@ function StepHotkey({ onNext, onBack, platform, totalSteps }: { onNext: () => vo
 
   return (
     <>
-      <p className="setup-eyebrow">Step 5 of {totalSteps}</p>
-      <h2 className="setup-heading">One Hotkey</h2>
+      <p className="setup-eyebrow">Step 6 of {totalSteps}</p>
+      <h2 className="setup-heading">One hotkey</h2>
       <p className="setup-sub">Use Taurscribe from anywhere, without switching windows.</p>
 
       <div className="hotkey-keys">
@@ -765,8 +807,8 @@ function StepRecordingSettings({
 }) {
   return (
     <>
-      <p className="setup-eyebrow">Step 6 of {totalSteps}</p>
-      <h2 className="setup-heading">Recording Settings</h2>
+      <p className="setup-eyebrow">Step 7 of {totalSteps}</p>
+      <h2 className="setup-heading">Recording settings</h2>
       <p className="setup-sub">Set your default behavior now. You can change these anytime in Settings.</p>
 
       <div className="setup-recording-settings-grid">
@@ -791,8 +833,8 @@ function StepRecordingSettings({
 
         <div className="setup-recording-setting-row">
           <div className="setup-recording-setting-copy">
-            <p className="setup-recording-setting-title">Live Overlay</p>
-            <p className="setup-recording-setting-desc">Shows a floating live transcript while you speak.</p>
+            <p className="setup-recording-setting-title">Recording overlay</p>
+            <p className="setup-recording-setting-desc">Shows a small capsule with a live waveform and timer while you dictate.</p>
           </div>
           <button
             type="button"
@@ -810,7 +852,7 @@ function StepRecordingSettings({
 
         <div className="setup-recording-setting-row">
           <div className="setup-recording-setting-copy">
-            <p className="setup-recording-setting-title">Mute Background Audio</p>
+            <p className="setup-recording-setting-title">Mute background audio</p>
             <p className="setup-recording-setting-desc">Mutes system playback while recording to reduce bleed-in.</p>
           </div>
           <button
@@ -963,7 +1005,7 @@ function StepPermissions({
 
   return (
     <>
-      <p className="setup-eyebrow">Step 7 of {totalSteps}</p>
+      <p className="setup-eyebrow">Step 8 of {totalSteps}</p>
       <h2 className="setup-heading">Permissions</h2>
       <p className="setup-sub">Three permissions needed for recording, hotkeys, and typing text system-wide.</p>
 
@@ -1173,7 +1215,7 @@ function StepReady({
   return (
     <>
       <p className="setup-eyebrow">All done</p>
-      <h2 className="setup-heading">Ready.</h2>
+      <h2 className="setup-heading">You're all set</h2>
 
       <ul className="ready-checks">
         {[
@@ -1182,6 +1224,7 @@ function StepReady({
           `Recommended engine: ${recommendation.primaryEngineLabel}`,
           `Global hotkey active: ${comboLabel}`,
           'Pastes directly into any app',
+          'Meetings detected automatically, speakers separated',
         ].map((text, i) => (
           <li className="ready-check" key={i}>
             <span className="ready-check-icon">

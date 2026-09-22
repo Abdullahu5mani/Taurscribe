@@ -5,6 +5,7 @@ import { MODELS } from "../components/settings/types";
 import type { DownloadableModel, DownloadProgress } from "../components/settings/types";
 
 interface UseModelsWatcherParams {
+    isSettingsOpen: boolean;
     refreshModels: (showToast?: boolean) => Promise<void>;
     downloadProgressRef: React.RefObject<Record<string, DownloadProgress>>;
     setSettingsModels: React.Dispatch<React.SetStateAction<DownloadableModel[]>>;
@@ -23,6 +24,7 @@ interface DownloadStatus {
  * skipped to avoid clobbering in-flight state with partial on-disk reads.
  */
 export function useModelsWatcher({
+    isSettingsOpen,
     refreshModels,
     downloadProgressRef,
     setSettingsModels,
@@ -31,6 +33,7 @@ export function useModelsWatcher({
         let active = true;
         let unlisten: (() => void) | undefined;
         let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+        let statusInterval: ReturnType<typeof setInterval> | null = null;
         let refreshInFlight = false;
         let refreshQueued = false;
 
@@ -42,7 +45,7 @@ export function useModelsWatcher({
 
             refreshInFlight = true;
             try {
-                // Refresh backend model lists (Whisper + Parakeet + Granite)
+                // Refresh backend model lists (Whisper + Granite + Qwen3)
                 await refreshModels(false);
 
                 // Refresh AppMall status (downloaded / verified flags) so the UI
@@ -105,12 +108,19 @@ export function useModelsWatcher({
         };
 
         setup();
+        // External-volume watchers can miss a filesystem event. Recheck while
+        // Settings is visible so a removed/restored model never stays stale.
+        if (isSettingsOpen) {
+            void runRefresh();
+            statusInterval = setInterval(() => { void runRefresh(); }, 5000);
+        }
         return () => {
             active = false;
             if (debounceTimer !== null) {
                 clearTimeout(debounceTimer);
             }
+            if (statusInterval !== null) clearInterval(statusInterval);
             if (unlisten) unlisten();
         };
-    }, [refreshModels, downloadProgressRef, setSettingsModels]);
+    }, [isSettingsOpen, refreshModels, downloadProgressRef, setSettingsModels]);
 }

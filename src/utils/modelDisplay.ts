@@ -27,7 +27,7 @@ export function beautifyModelName(rawName: string): string {
     .replace("-q8_0", " (Fast)")
     .replace("-q5_1", " (Balanced)")
     .replace("nemotron", "Nemotron Streaming")
-    .replace("parakeet", "")
+    .replace("granite", "")
     .replace("ctc-", "CTC ")
     .replace("tdt-", "TDT ")
     .replace("streaming", "Streaming")
@@ -48,7 +48,7 @@ export function beautifyModelName(rawName: string): string {
  *   whisper-large-v3-turbo-q5_0 → "Large V3 Turbo"
  *   whisper-large-v3            → "Large V3"
  *   whisper-base-q5_1           → "Base"
- *   parakeet-tdt-0.6b-v2        → "TDT 0.6b V2"
+ *   granite-tdt-0.6b-v2        → "TDT 0.6b V2"
  *   cohere-speech-3b-a800m     → "3b A800m"
  */
 export function formatModelDisplay(modelId: string | null | undefined): string | null {
@@ -56,7 +56,7 @@ export function formatModelDisplay(modelId: string | null | undefined): string |
 
     const m = modelId
         .replace(/^whisper-/, '')
-        .replace(/^parakeet-/, '')
+        .replace(/^granite-/, '')
         .replace(/^cohere-speech-/, '')
         .replace(/-q\d[\w]*$/i, '')  // strip quantization: -q5_1, -q5_0, -q4_k_m
         .replace(/-coreml$/, '');    // strip CoreML encoder suffix

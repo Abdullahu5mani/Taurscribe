@@ -3,7 +3,7 @@
 export interface DownloadableModel {
     id: string;
     name: string;
-    type: 'Whisper' | 'Parakeet' | 'LLM' | 'CoreML' | 'Granite' | 'Qwen3';
+    type: 'Whisper' | 'Granite' | 'LLM' | 'CoreML' | 'Qwen3' | 'Speaker';
     size: string;
     description: string;
     downloaded: boolean;
@@ -17,6 +17,8 @@ export interface DownloadableModel {
      * an "⚡ ANE Accelerated" badge for these when running on Apple Silicon.
      */
     aneCapable?: boolean;
+    /** Shown with a "Beta" badge: works, but still being evaluated. */
+    beta?: boolean;
 }
 
 export interface DownloadProgress {
@@ -28,7 +30,18 @@ export interface DownloadProgress {
     error?: string;
 }
 
+/** Speaker recognition model (voiceprints / Speaker Vault). Must match model_registry.rs. */
+export const SPEAKER_MODEL_ID = 'speaker-campplus-en';
+
+/** Speaker diarization model (who spoke when on the call). Must match model_registry.rs. */
+export const DIARIZATION_MODEL_ID = 'diarization-nemotron3';
+
 export const MODELS: DownloadableModel[] = [
+    // --- Speaker recognition (required for the Speaker Vault) ---
+    { id: SPEAKER_MODEL_ID, name: 'Speaker Recognition (CAM++)', type: 'Speaker', size: '28 MB', description: 'Recognises meeting participants by voice across meetings. Required for the Speaker Vault.', downloaded: false },
+
+    { id: DIARIZATION_MODEL_ID, name: 'Speaker Separation (Nemotron 3)', type: 'Speaker', size: '199 MB', description: 'Tells the people on a call apart (up to 8). Much more accurate than the built-in voice grouping. OpenMDW licence.', downloaded: false },
+
     // --- Tiny ---
     // aneCapable = full-precision models whose download auto-bundles the ANE encoder on Apple Silicon.
     { id: 'whisper-tiny', name: 'Tiny (Multilingual)', type: 'Whisper', size: '75 MB', description: 'Fastest, lowest accuracy. 99+ languages.', downloaded: false, aneCapable: true },
@@ -60,22 +73,13 @@ export const MODELS: DownloadableModel[] = [
     { id: 'whisper-large-v3-turbo', name: 'Large V3 Turbo', type: 'Whisper', size: '1.5 GB', description: 'Optimized Large V3. 99+ languages.', downloaded: false, aneCapable: true },
     { id: 'whisper-large-v3-turbo-q5_0', name: 'Large V3 Turbo (Q5_0)', type: 'Whisper', size: '547 MB', description: 'Quantized Turbo. 99+ languages.', downloaded: false },
 
-    // --- Parakeet ---
-    { id: 'parakeet-nemotron', name: 'Nemotron Streaming (INT4)', type: 'Parakeet', size: '663 MB', description: 'Ultra-low latency streaming. English only. Runs on CUDA, DirectML, or CPU through ONNX Runtime. Best for live dictation.', downloaded: true },
-    { id: 'parakeet-nemotron-mlx', name: 'Nemotron Streaming (Apple Silicon MLX)', type: 'Parakeet', size: '1.25 GB', description: 'Runs Parakeet Nemotron on Apple Silicon Metal GPU through MLX. 3x faster with 121ms latency and identical accuracy. macOS Apple Silicon only.', downloaded: true, macosOnly: true },
-    { id: 'parakeet-tdt', name: 'TDT v3 (Multilingual)', type: 'Parakeet', size: '~2.4 GB', description: 'High-accuracy multilingual TDT model. Runs on CUDA, DirectML, or CPU through ONNX Runtime. Best for file transcription, not streaming.', downloaded: false },
-
-    // --- Granite engine slots ---
-    { id: 'granite-speech-4.1-2b-nar-cuda', name: 'NVIDIA CUDA', type: 'Granite', size: '~2.2 GB', description: 'Fastest Granite INT4 ONNX bundle for NVIDIA CUDA GPUs. All four model graphs run on CUDA.', downloaded: false, windowsOnly: true },
-    { id: 'granite-speech-4.1-2b-nar-mlx', name: 'Apple Silicon (MLX)', type: 'Granite', size: '~4.3 GB', description: 'Runs Granite on the Apple GPU through MLX instead of ONNX. Roughly 16x faster than the CPU bundle on Apple silicon, and the same transcripts. macOS only.', downloaded: false, macosOnly: true },
-    { id: 'granite-speech-4.1-2b-nar-portable', name: 'AMD / Intel / CPU', type: 'Granite', size: '~2.2 GB', description: 'Portable Granite INT4 ONNX bundle. Uses DirectML first on Windows AMD or Intel GPUs, then falls back to multi-threaded CPU.', downloaded: false },
-
-    // --- Qwen3-ASR ---
-    { id: 'qwen3-asr-1.7b-mlx', name: 'Apple Silicon (MLX)', type: 'Qwen3', size: '~3.6 GB', description: 'Runs Qwen3-ASR natively on Metal GPU through pure-Rust MLX. macOS Apple Silicon only.', downloaded: false, macosOnly: true },
-    { id: 'qwen3-asr-1.7b-onnx', name: 'Universal (ONNX)', type: 'Qwen3', size: '~4.2 GB', description: 'Universal pure-Rust Qwen3-ASR INT8 ONNX bundle. Runs on NVIDIA CUDA, DirectML, or multi-threaded CPU.', downloaded: false },
+    // --- Unquantized GGUF models (same choices on every supported OS) ---
+    { id: 'granite-speech-5-nc', name: 'Granite Speech 5 (470M, F16)', type: 'Granite', size: '948 MB', description: 'Fast English dictation. Non-commercial CC-BY-NC-SA-4.0 weights; runs through transcribe.cpp.', downloaded: false },
+    { id: 'qwen3-asr-1.7b', name: 'Qwen3-ASR 1.7B (F16)', type: 'Qwen3', size: '4.1 GB', description: 'Full-size multilingual Qwen3-ASR. Unquantized F16 GGUF; runs through transcribe.cpp.', downloaded: false },
+    { id: 'qwen3-asr-0.6b', name: 'Qwen3-ASR 0.6B (F16)', type: 'Qwen3', size: '1.6 GB', description: 'Smaller multilingual Qwen3-ASR architecture for lower-memory machines. Unquantized F16 GGUF.', downloaded: false },
 
     // --- LLM ---
-    { id: 'flowscribe-qwen2.5-0.5b-v2', name: 'FlowScribe Qwen 2.5 0.5B V2', type: 'LLM', size: '398 MB', description: 'Fine-tuned Q4_K_M GGUF for speech-to-text grammar correction.', downloaded: false },
+    { id: 'flowscribe-qwen3.5-0.8b-v3', name: 'FlowScribe V3 (Qwen3.5 0.8B)', type: 'LLM', size: '1.52 GB', description: 'Cleans dictation into what you meant: fillers and corrections removed, numbers and emails written properly, your dictionary and the app you type into respected. Full precision (F16).', downloaded: false, beta: true },
 
 
     // --- CoreML Encoders (macOS Apple Silicon only) ---
@@ -90,3 +94,18 @@ export const MODELS: DownloadableModel[] = [
     { id: 'whisper-large-v3-coreml', name: 'Large V3 CoreML Encoder', type: 'CoreML', size: '1.18 GB', description: 'Apple Neural Engine encoder for Large V3. Pair with ggml-large-v3.bin.', downloaded: false, macosOnly: true },
     { id: 'whisper-large-v3-turbo-coreml', name: 'Large V3 Turbo CoreML Encoder', type: 'CoreML', size: '1.17 GB', description: 'Apple Neural Engine encoder for Large V3 Turbo. Pair with ggml-large-v3-turbo.bin.', downloaded: false, macosOnly: true },
 ];
+
+/** settings.json keys shared with useInitialLoad and MeetingBanner. */
+export const MEETING_KEYS = {
+    sourceMode: 'audio_source_mode',
+    detection: 'meeting_detection_enabled',
+    autoRecord: 'auto_record_meetings',
+    autoRecordDelay: 'meeting_autorecord_delay',
+    showBanner: 'meeting_show_banner',
+    matchThreshold: 'speaker_match_threshold',
+    continueMinutes: 'meeting_continue_minutes',
+} as const;
+
+export const DEFAULT_AUTORECORD_DELAY = 3;
+export const DEFAULT_MATCH_THRESHOLD = 0.6;
+export const DEFAULT_CONTINUE_MINUTES = 10;

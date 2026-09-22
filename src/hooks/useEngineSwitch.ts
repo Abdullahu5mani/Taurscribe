@@ -1,34 +1,29 @@
+import type { TrayState } from "../App";
 import { useState, useRef, startTransition } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
-import type { ModelInfo, ParakeetModelInfo, CohereModelInfo, Qwen3ModelInfo } from "./useModels";
+import type { ModelInfo, GraniteModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { DownloadProgress } from "../components/settings/types";
 import type { CommandResult, SessionNotice } from "../types/session";
-import { GRANITE_MODEL_ID } from "../utils/engineUtils";
 
-export type ASREngine = "whisper" | "parakeet" | "granite" | "qwen3";
+export type ASREngine = "whisper" | "granite" | "qwen3";
 
 interface UseEngineSwitchParams {
     models: ModelInfo[];
-    parakeetModels: ParakeetModelInfo[];
-    cohereModels: CohereModelInfo[];
+    graniteModels: GraniteModelInfo[];
     qwen3Models: Qwen3ModelInfo[];
     currentModel: string | null;
-    currentParakeetModel: string | null;
-    currentCohereModel: string | null;
+    currentGraniteModel: string | null;
     currentQwen3Model: string | null;
     setCurrentModel: (id: string) => void;
-    setCurrentParakeetModel: (id: string) => void;
-    setCurrentCohereModel: (id: string) => void;
+    setCurrentGraniteModel: (id: string) => void;
     setCurrentQwen3Model: (id: string) => void;
     setBackendInfo: (info: string) => void;
     storeRef: React.RefObject<Store | null>;
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
-    setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
+    setTrayState: (state: TrayState) => Promise<void>;
     asrBackend: "gpu" | "cpu";
     setAsrBackend: (backend: "gpu" | "cpu") => void;
-    /** True when Granite is loaded on a GPU backend — ASR CPU/GPU toggle must stay on GPU. */
-    cohereGpuOnlyLocked: boolean;
     isRecordingRef: React.RefObject<boolean>;
     downloadProgressRef: React.RefObject<Record<string, DownloadProgress>>;
     setSessionPhase?: (phase: "idle" | "loading_model" | "recording" | "paused" | "processing" | "success" | "warning" | "error") => void;
@@ -36,21 +31,18 @@ interface UseEngineSwitchParams {
 }
 
 /**
- * Manages the active ASR engine (Whisper / Parakeet / Granite Speech),
+ * Manages the active ASR engine (Whisper / Granite / Qwen3-ASR),
  * loading state, and engine-switch handlers.
  */
 export function useEngineSwitch({
     models,
-    parakeetModels,
-    cohereModels,
+    graniteModels,
     qwen3Models,
     currentModel,
-    currentParakeetModel,
-    currentCohereModel,
+    currentGraniteModel,
     currentQwen3Model,
     setCurrentModel,
-    setCurrentParakeetModel,
-    setCurrentCohereModel,
+    setCurrentGraniteModel,
     setCurrentQwen3Model,
     setBackendInfo,
     storeRef,
@@ -58,7 +50,6 @@ export function useEngineSwitch({
     setTrayState,
     asrBackend,
     setAsrBackend,
-    cohereGpuOnlyLocked,
     isRecordingRef,
     downloadProgressRef,
     setSessionPhase,
@@ -97,7 +88,7 @@ export function useEngineSwitch({
         setHeaderStatus(message, 60_000);
 
         try {
-            await setTrayState("processing");
+            await setTrayState("loading_model");
             await fn();
         } finally {
             isLoadingRef.current = false;
@@ -172,7 +163,7 @@ export function useEngineSwitch({
             console.log("[LOADING] Skipping handleSwitchToWhisper — already loading");
             return;
         }
-        // After unload, active tab is still Whisper — must reload, not return (Parakeet/Granite already check `loaded`).
+        // After unload, active tab is still Whisper — must reload, not return (Granite/Qwen3 already check `loaded`).
         if (activeEngine === "whisper") {
             try {
                 const loadedId = (await invoke("get_current_model")) as string | null;
@@ -192,50 +183,50 @@ export function useEngineSwitch({
         }
     };
 
-    // ── Parakeet ──────────────────────────────────────────────────────────
-    const handleSwitchToParakeet = async (targetModelOverride?: string) => {
+    // ── Granite ──────────────────────────────────────────────────────────
+    const handleSwitchToGranite = async (targetModelOverride?: string) => {
         const progress = downloadProgressRef.current ?? {};
-        const parakeetDownloading = parakeetModels.some(m => progress[m.id]) ||
-            Object.keys(progress).some(k => k.startsWith("parakeet"));
-        if (parakeetDownloading) {
-            setHeaderStatus("Parakeet is still downloading — please wait", 3000);
+        const graniteDownloading = graniteModels.some(m => progress[m.id]) ||
+            Object.keys(progress).some(k => k.startsWith("granite"));
+        if (graniteDownloading) {
+            setHeaderStatus("Granite is still downloading — please wait", 3000);
             return;
         }
-        if (parakeetModels.length === 0) {
-            setActiveEngine("parakeet");
-            activeEngineRef.current = "parakeet";
+        if (graniteModels.length === 0) {
+            setActiveEngine("granite");
+            activeEngineRef.current = "granite";
             return;
         }
         if (isLoading || isLoadingRef.current) {
-            console.log("[LOADING] Skipping handleSwitchToParakeet — already loading");
+            console.log("[LOADING] Skipping handleSwitchToGranite — already loading");
             return;
         }
 
-        const targetModel = targetModelOverride || currentParakeetModel || parakeetModels[0].id;
-        const displayName = parakeetModels.find(m => m.id === targetModel)?.display_name || targetModel;
+        const targetModel = targetModelOverride || currentGraniteModel || graniteModels[0].id;
+        const displayName = graniteModels.find(m => m.id === targetModel)?.display_name || targetModel;
 
-        if (activeEngine === "parakeet") {
+        if (activeEngine === "granite") {
             try {
-                const pStatus = await invoke("get_parakeet_status") as { loaded: boolean; model_id?: string | null };
+                const pStatus = await invoke("get_granite_status") as { loaded: boolean; model_id?: string | null };
                 if (pStatus.loaded && pStatus.model_id === targetModel) return;
             } catch {
                 // proceed with loading attempt
             }
         }
 
-        await withEngineLoad("parakeet", `Loading ${displayName}...`, async () => {
-            const result = await invoke<CommandResult<string>>("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
-            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Parakeet");
+        await withEngineLoad("granite", `Loading ${displayName}...`, async () => {
+            const result = await invoke<CommandResult<string>>("init_granite", { modelId: targetModel, useGpu: asrBackend === "gpu" });
+            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Granite");
 
-            setCurrentParakeetModel(targetModel);
-            setActiveEngine("parakeet");
-            activeEngineRef.current = "parakeet";
-            setLoadedEngine("parakeet");
+            setCurrentGraniteModel(targetModel);
+            setActiveEngine("granite");
+            activeEngineRef.current = "granite";
+            setLoadedEngine("granite");
             setSessionNotice?.(null);
 
             if (storeRef.current) {
-                await storeRef.current.set("parakeet_model", targetModel);
-                await storeRef.current.set("active_engine", "parakeet");
+                await storeRef.current.set("granite_model", targetModel);
+                await storeRef.current.set("active_engine", "granite");
                 await storeRef.current.save();
             }
 
@@ -243,85 +234,12 @@ export function useEngineSwitch({
             const backend = await invoke("get_backend_info");
             setBackendInfo(backend as string);
         }).catch(e => {
-            setHeaderStatus(`Error switching to Parakeet: ${e}`, 5000);
+            setHeaderStatus(`Error switching to Granite: ${e}`, 5000);
             setSessionPhase?.("error");
             setSessionNotice?.({
                 level: "error",
                 code: "model_load_failed",
-                title: "Parakeet failed to load",
-                message: String(e),
-                sticky: true,
-            });
-        });
-    };
-
-    // ── Granite Speech ───────────────────────────────────────────────────
-    const handleSwitchToCohere = async (targetModelOverride?: string) => {
-        const progress = downloadProgressRef.current ?? {};
-        const cohereDownloading = cohereModels.some(m => progress[m.id]) ||
-            Object.keys(progress).some(k => k.startsWith("granite") || k.startsWith("cohere"));
-        if (cohereDownloading) {
-            setHeaderStatus("Granite Speech is still downloading — please wait", 3000);
-            return;
-        }
-        if (cohereModels.length === 0) {
-            setActiveEngine("granite");
-            activeEngineRef.current = "granite";
-            return;
-        }
-        if (isLoading || isLoadingRef.current) {
-            console.log("[LOADING] Skipping handleSwitchToCohere — already loading");
-            return;
-        }
-
-        if (activeEngine === "granite") {
-            try {
-                const gStatus = await invoke("get_granite_status") as { loaded: boolean };
-                if (gStatus.loaded) return;
-            } catch {
-                // proceed with loading attempt
-            }
-        }
-
-        const targetModel = targetModelOverride || currentCohereModel || cohereModels[0].id;
-
-        await withEngineLoad("granite", "Loading Granite Speech...", async () => {
-            const fp16 = targetModel === GRANITE_MODEL_ID;
-            const result = await invoke<CommandResult<string>>("init_granite", {
-                modelId: targetModel,
-                forceCpu: asrBackend === "cpu" && !fp16,
-            });
-            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Granite Speech");
-
-            setCurrentCohereModel(targetModel);
-            setActiveEngine("granite");
-            activeEngineRef.current = "granite";
-            setLoadedEngine("granite");
-            setSessionNotice?.(null);
-
-            if (fp16) {
-                setAsrBackend("gpu");
-            }
-
-            if (storeRef.current) {
-                await storeRef.current.set("granite_model", targetModel);
-                await storeRef.current.set("active_engine", "granite");
-                if (fp16) {
-                    await storeRef.current.set("asr_backend", "gpu");
-                }
-                await storeRef.current.save();
-            }
-
-            setHeaderStatus("Switched to Granite Speech");
-            const backend = await invoke("get_backend_info");
-            setBackendInfo(backend as string);
-        }).catch(e => {
-            setHeaderStatus(`Error switching to Granite Speech: ${e}`, 5000);
-            setSessionPhase?.("error");
-            setSessionNotice?.({
-                level: "error",
-                code: "model_load_failed",
-                title: "Granite Speech failed to load",
+                title: "Granite failed to load",
                 message: String(e),
                 sticky: true,
             });
@@ -372,7 +290,6 @@ export function useEngineSwitch({
     // ── CPU / GPU hot-swap ────────────────────────────────────────────────
     const handleToggleAsrBackend = async (newBackend: "gpu" | "cpu") => {
         if (newBackend === asrBackend) return;
-        if (cohereGpuOnlyLocked) return;
         if (isLoading || isLoadingRef.current) return;
         if (isRecordingRef.current) return;
 
@@ -385,8 +302,7 @@ export function useEngineSwitch({
         // Fast-path: no model loaded — just update preference
         const hasModel =
             (engine === "whisper" && !!currentModel) ||
-            (engine === "parakeet" && !!(currentParakeetModel || parakeetModels.length > 0)) ||
-            (engine === "granite" && cohereModels.length > 0) ||
+            (engine === "granite" && !!(currentGraniteModel || graniteModels.length > 0)) ||
             (engine === "qwen3" && qwen3Models.length > 0);
 
         if (!hasModel) {
@@ -406,26 +322,14 @@ export function useEngineSwitch({
                 setBackendInfo(info as string);
                 setHeaderStatus(`Whisper running on ${label}`);
                 setSessionNotice?.(null);
-            } else if (engine === "parakeet") {
-                const targetModel = currentParakeetModel || parakeetModels[0]?.id;
-                const result = await invoke<CommandResult<string>>("init_parakeet", { modelId: targetModel, useGpu });
-                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Parakeet to ${label}`);
-                setLoadedEngine("parakeet");
-                const info = await invoke("get_backend_info");
-                setBackendInfo(info as string);
-                setHeaderStatus(`Parakeet running on ${label}`);
-                setSessionNotice?.(null);
             } else if (engine === "granite") {
-                const gid = currentCohereModel || cohereModels[0]?.id;
-                const result = await invoke<CommandResult<string>>("init_granite", {
-                    modelId: gid,
-                    forceCpu: !useGpu,
-                });
-                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Granite Speech to ${label}`);
+                const targetModel = currentGraniteModel || graniteModels[0]?.id;
+                const result = await invoke<CommandResult<string>>("init_granite", { modelId: targetModel, useGpu });
+                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Granite to ${label}`);
                 setLoadedEngine("granite");
                 const info = await invoke("get_backend_info");
                 setBackendInfo(info as string);
-                setHeaderStatus(`Granite Speech running on ${label}`);
+                setHeaderStatus(`Granite running on ${label}`);
                 setSessionNotice?.(null);
             } else if (engine === "qwen3") {
                 const qid = currentQwen3Model || qwen3Models[0]?.id;
@@ -463,8 +367,7 @@ export function useEngineSwitch({
         setTransferLineFadingOut,
         handleModelChange,
         handleSwitchToWhisper,
-        handleSwitchToParakeet,
-        handleSwitchToCohere,
+        handleSwitchToGranite,
         handleSwitchToQwen3,
         handleToggleAsrBackend,
     };

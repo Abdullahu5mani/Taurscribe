@@ -9,7 +9,7 @@ export interface SystemInfo {
 }
 
 export type WhisperTier = "Tiny" | "Base" | "Small" | "Medium" | "Large";
-export type RecommendationEngine = "whisper" | "parakeet" | "granite";
+export type RecommendationEngine = "whisper" | "granite";
 export type OnboardingUseCase = "quick_notes" | "coding" | "meetings" | "multilingual";
 
 export interface UseCaseOption {
@@ -71,8 +71,7 @@ export const ONBOARDING_USE_CASES: UseCaseOption[] = [
 
 const ENGINE_LABELS: Record<RecommendationEngine, string> = {
   whisper: "Whisper",
-  parakeet: "Parakeet",
-  granite: "Granite Speech",
+  granite: "Granite",
 };
 
 function hasDiscreteGpu(sysInfo: SystemInfo | null): boolean {
@@ -202,11 +201,11 @@ export function computeModelRecommendation({
       useCase,
       useCaseLabel,
       title: "Fast live dictation first",
-      summary: "Parakeet gives you the fastest English-only live text, with Whisper as the safer fallback when you want a second opinion.",
-      primaryEngine: "parakeet",
-      primaryEngineLabel: ENGINE_LABELS.parakeet,
-      primaryModelId: isAppleSilicon ? "parakeet-nemotron-mlx" : "parakeet-nemotron",
-      primaryLabel: isAppleSilicon ? "Parakeet Nemotron Streaming (Apple Silicon MLX)" : "Parakeet Nemotron Streaming",
+      summary: "Granite gives you the fastest English-only live text, with Whisper as the safer fallback when you want a second opinion.",
+      primaryEngine: "granite",
+      primaryEngineLabel: ENGINE_LABELS.granite,
+      primaryModelId: "granite-speech-5-nc",
+      primaryLabel: "Granite Speech 5 (470M, F16)",
       primaryReasoning: [
         "Best fit for short English dictation where sub-second feedback matters.",
         "Your hardware profile can support the larger streaming model comfortably.",
@@ -236,12 +235,12 @@ export function computeModelRecommendation({
         profile.highHeadroom
           ? "This machine can afford a heavier model for fewer corrections."
           : "This tier keeps correction load low without making the app feel heavy.",
-        "Parakeet is still available later if you decide raw speed matters more than precision.",
+        "Granite is still available later if you decide raw speed matters more than precision.",
       ],
-      backupEngine: profile.accelerated ? "parakeet" : null,
-      backupEngineLabel: profile.accelerated ? ENGINE_LABELS.parakeet : null,
-      backupModelId: profile.accelerated ? (isAppleSilicon ? "parakeet-nemotron-mlx" : "parakeet-nemotron") : null,
-      backupLabel: profile.accelerated ? (isAppleSilicon ? "Parakeet Nemotron Streaming (Apple Silicon MLX)" : "Parakeet Nemotron Streaming") : null,
+      backupEngine: profile.accelerated ? "granite" : null,
+      backupEngineLabel: profile.accelerated ? ENGINE_LABELS.granite : null,
+      backupModelId: profile.accelerated ? "granite-speech-5-nc" : null,
+      backupLabel: profile.accelerated ? "Granite Speech 5 (470M, F16)" : null,
       hardwareLine: baseHardwareLine,
       whisperTier: tier,
     };
@@ -263,7 +262,7 @@ export function computeModelRecommendation({
         profile.highHeadroom
           ? "A larger tier makes sense here because longer sessions benefit from stronger recall."
           : "This tier avoids overloading the machine during extended sessions.",
-        "If you only need live English captions, Parakeet remains a fast optional switch later.",
+        "If you only need live English captions, Granite remains a fast optional switch later.",
       ],
       backupEngine: "whisper",
       backupEngineLabel: ENGINE_LABELS.whisper,
@@ -290,7 +289,7 @@ export function computeModelRecommendation({
       profile.mediumHeadroom
         ? "This tier keeps a good balance between language coverage and responsiveness."
         : "This smaller tier keeps the first-run download and CPU cost under control.",
-      "Parakeet is intentionally not the primary pick here because it is English-only.",
+      "Granite is intentionally not the primary pick here because it is English-only.",
     ],
     backupEngine: "whisper",
     backupEngineLabel: ENGINE_LABELS.whisper,

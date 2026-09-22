@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
-import { MODELS } from "../components/settings/types";
+import { MODELS, MEETING_KEYS } from "../components/settings/types";
 import type { DownloadableModel } from "../components/settings/types";
-import type { ModelInfo, ParakeetModelInfo, CohereModelInfo, Qwen3ModelInfo } from "./useModels";
+import type { ModelInfo, GraniteModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import type { CommandResult, EngineSelectionState } from "../types/session";
 
@@ -11,10 +11,8 @@ interface UseInitialLoadParams {
     // Model state setters
     setModels: (models: ModelInfo[]) => void;
     setCurrentModel: (id: string | null) => void;
-    setParakeetModels: (models: ParakeetModelInfo[]) => void;
-    setCurrentParakeetModel: (id: string | null) => void;
-    setCohereModels: (models: CohereModelInfo[]) => void;
-    setCurrentCohereModel: (id: string | null) => void;
+    setGraniteModels: (models: GraniteModelInfo[]) => void;
+    setCurrentGraniteModel: (id: string | null) => void;
     setQwen3Models: (models: Qwen3ModelInfo[]) => void;
     setCurrentQwen3Model: (id: string | null) => void;
     setSettingsModels: React.Dispatch<React.SetStateAction<DownloadableModel[]>>;
@@ -48,10 +46,8 @@ interface UseInitialLoadParams {
 export function useInitialLoad({
     setModels,
     setCurrentModel,
-    setParakeetModels,
-    setCurrentParakeetModel,
-    setCohereModels,
-    setCurrentCohereModel,
+    setGraniteModels,
+    setCurrentGraniteModel,
     setQwen3Models,
     setCurrentQwen3Model,
     setSettingsModels,
@@ -72,6 +68,8 @@ export function useInitialLoad({
         let cancelled = false;
 
         async function loadInitialData() {
+            let startHidden = false;
+
             try {
                 const backend = await invoke("get_backend_info");
                 if (cancelled) return;
@@ -98,13 +96,9 @@ export function useInitialLoad({
                 if (cancelled) return;
                 setModels(modelList);
 
-                const pModels = (await invoke("list_parakeet_models")) as ParakeetModelInfo[];
+                const pModels = (await invoke("list_granite_models")) as GraniteModelInfo[];
                 if (cancelled) return;
-                setParakeetModels(pModels);
-
-                const gModels = (await invoke("list_granite_models")) as CohereModelInfo[];
-                if (cancelled) return;
-                setCohereModels(gModels);
+                setGraniteModels(pModels);
 
                 const qModels = (await invoke("list_qwen3_models")) as Qwen3ModelInfo[];
                 if (cancelled) return;
@@ -116,26 +110,21 @@ export function useInitialLoad({
                 const validWhisperModel = engineState.active_engine === "whisper" && engineState.selected_model_id && modelList.some((m) => m.id === engineState.selected_model_id)
                     ? engineState.selected_model_id
                     : modelList[0]?.id ?? null;
-                const validParakeetModel = engineState.active_engine === "parakeet" && engineState.selected_model_id && pModels.some((m) => m.id === engineState.selected_model_id)
+                const validGraniteModel = engineState.active_engine === "granite" && engineState.selected_model_id && pModels.some((m) => m.id === engineState.selected_model_id)
                     ? engineState.selected_model_id
                     : pModels[0]?.id ?? null;
-                const validCohereModel = engineState.active_engine === "granite" && engineState.selected_model_id && gModels.some((m) => m.id === engineState.selected_model_id)
-                    ? engineState.selected_model_id
-                    : gModels[0]?.id ?? null;
                 const validQwen3Model = engineState.active_engine === "qwen3" && engineState.selected_model_id && qModels.some((m) => m.id === engineState.selected_model_id)
                     ? engineState.selected_model_id
                     : qModels[0]?.id ?? null;
 
                 setCurrentModel(validWhisperModel);
-                setCurrentParakeetModel(validParakeetModel);
-                setCurrentCohereModel(validCohereModel);
+                setCurrentGraniteModel(validGraniteModel);
                 setCurrentQwen3Model(validQwen3Model);
                 if (engineState.loaded_engine) {
                     setLoadedEngine(engineState.loaded_engine);
                 }
 
                 let savedEngine: ASREngine | null = null;
-                let savedCohereModel: string | null = null;
                 try {
                     const loadedStore = await Store.load("settings.json");
                     if (cancelled) return;
@@ -144,6 +133,9 @@ export function useInitialLoad({
 
                     const setupComplete = await loadedStore.get<boolean>("setup_complete");
                     if (!cancelled) setShowSetupWizard(setupComplete !== true);
+                    // "Start hidden": stay in the background (tray / Dock) until the
+                    // user opens the window. Never before setup is done.
+                    startHidden = setupComplete === true && (await loadedStore.get<boolean>("start_hidden")) === true;
 
                     // Restore saved hotkey binding
                     const savedHotkey = await loadedStore.get<{ keys: string[] }>("hotkey_binding");
@@ -161,29 +153,39 @@ export function useInitialLoad({
                     const savedCloseBehavior = await loadedStore.get<"tray" | "quit">("close_behavior");
                     if (savedCloseBehavior && !cancelled) {
                         setCloseBehavior(savedCloseBehavior);
-                        invoke("set_close_behavior", { behaviour: savedCloseBehavior }).catch(() => {});
+                        invoke("set_close_behavior", { behavior: savedCloseBehavior }).catch(() => {});
                     }
 
+                    // Restore meeting preferences (Settings → Meetings). The detector
+                    // starts in Rust at launch; stop it if the user turned it off.
+                    const savedSourceMode = await loadedStore.get<string>(MEETING_KEYS.sourceMode);
+                    if (savedSourceMode) invoke("set_audio_source_mode", { mode: savedSourceMode }).catch(() => {});
+                    if ((await loadedStore.get<boolean>(MEETING_KEYS.detection)) === false) {
+                        invoke("stop_meeting_detection").catch(() => {});
+                    }
+                    const savedAutoRecord = await loadedStore.get<boolean>(MEETING_KEYS.autoRecord);
+                    if (typeof savedAutoRecord === "boolean") invoke("set_auto_record_meetings", { enabled: savedAutoRecord }).catch(() => {});
+                    const savedThreshold = await loadedStore.get<number>(MEETING_KEYS.matchThreshold);
+                    if (typeof savedThreshold === "number") invoke("set_speaker_match_threshold", { value: savedThreshold }).catch(() => {});
+                    const savedContinue = await loadedStore.get<number>(MEETING_KEYS.continueMinutes);
+                    if (typeof savedContinue === "number") invoke("set_meeting_continue_minutes", { minutes: savedContinue }).catch(() => {});
+
                     const rawSavedEngine = (await loadedStore.get<string>("active_engine")) || null;
-                    savedEngine = rawSavedEngine === "cohere" ? "granite" : (rawSavedEngine as ASREngine | null);
+                    // Migrate retired engine names without discarding a current Granite selection.
+                    if (rawSavedEngine === "cohere" || rawSavedEngine === "parakeet") {
+                        await loadedStore.set("active_engine", rawSavedEngine === "parakeet" ? "granite" : "whisper");
+                        await loadedStore.delete("cohere_model");
+                        await loadedStore.save();
+                    }
+                    savedEngine = rawSavedEngine === "cohere" ? "whisper"
+                        : rawSavedEngine === "parakeet" ? "granite"
+                        : (rawSavedEngine as ASREngine | null);
                     if (savedEngine) {
                         setActiveEngine(savedEngine);
                         activeEngineRef.current = savedEngine;
                     }
 
-                    const savedParakeet = await loadedStore.get<string>("parakeet_model");
-                    savedCohereModel =
-                        (await loadedStore.get<string>("granite_model")) ??
-                        (await loadedStore.get<string>("cohere_model")) ??
-                        null;
-
-                    const coherePick =
-                        gModels.length > 0
-                            ? savedCohereModel && gModels.some((m) => m.id === savedCohereModel)
-                                ? savedCohereModel
-                                : gModels[0].id
-                            : "";
-                    if (coherePick) setCurrentCohereModel(coherePick);
+                    const savedGranite = await loadedStore.get<string>("granite_model");
 
                     const savedAsrBackend = await loadedStore.get<"gpu" | "cpu">("asr_backend");
                     const useGpuPref = savedAsrBackend !== "cpu";
@@ -201,57 +203,31 @@ export function useInitialLoad({
                         if (alreadyOk) {
                             setLoadedEngine("whisper");
                         }
-                    } else if (savedEngine === "parakeet" && pModels.length > 0) {
+                    } else if (savedEngine === "granite" && pModels.length > 0) {
                         const targetModel =
-                            savedParakeet && pModels.find((m) => m.id === savedParakeet)
-                                ? savedParakeet
+                            savedGranite && pModels.find((m) => m.id === savedGranite)
+                                ? savedGranite
                                 : pModels[0].id;
 
                         isLoadingRef.current = true;
                         setIsLoading(true);
-                        setLoadingMessage(`Loading Parakeet (${targetModel})...`);
+                        setLoadingMessage(`Loading Granite (${targetModel})...`);
                         try {
                             if (cancelled) return;
-                            const result = await invoke<CommandResult<string>>("init_parakeet", {
+                            const result = await invoke<CommandResult<string>>("init_granite", {
                                 modelId: targetModel,
                                 useGpu: useGpuPref,
                             });
                             if (!result.ok) {
-                                throw new Error(result.error?.message ?? "Failed to load Parakeet");
+                                throw new Error(result.error?.message ?? "Failed to load Granite");
                             }
                             if (cancelled) return;
-                            setCurrentParakeetModel(targetModel);
-                            setLoadedEngine("parakeet");
-                            setHeaderStatus("Parakeet model loaded");
-                        } catch (e) {
-                            if (cancelled) return;
-                            setHeaderStatus(`Failed to auto-load Parakeet: ${e}`, 5000);
-                        } finally {
-                            if (!cancelled) {
-                                isLoadingRef.current = false;
-                                setIsLoading(false);
-                                setLoadingMessage("");
-                            }
-                        }
-                    } else if (savedEngine === "granite" && coherePick) {
-                        isLoadingRef.current = true;
-                        setIsLoading(true);
-                        setLoadingMessage("Loading Granite Speech...");
-                        try {
-                            if (cancelled) return;
-                            const result = await invoke<CommandResult<string>>("init_granite", {
-                                modelId: coherePick,
-                                forceCpu: savedAsrBackend === "cpu",
-                            });
-                            if (!result.ok) {
-                                throw new Error(result.error?.message ?? "Failed to load Granite Speech");
-                            }
-                            if (cancelled) return;
+                            setCurrentGraniteModel(targetModel);
                             setLoadedEngine("granite");
-                            setHeaderStatus("Granite Speech model loaded");
+                            setHeaderStatus("Granite model loaded");
                         } catch (e) {
                             if (cancelled) return;
-                            setHeaderStatus(`Failed to auto-load Granite Speech: ${e}`, 5000);
+                            setHeaderStatus(`Failed to auto-load Granite: ${e}`, 5000);
                         } finally {
                             if (!cancelled) {
                                 isLoadingRef.current = false;
@@ -305,7 +281,7 @@ export function useInitialLoad({
             } finally {
                 if (!cancelled) {
                     setIsInitialLoading(false);
-                    invoke("show_main_window").catch(() => {});
+                    if (!startHidden) invoke("show_main_window").catch(() => {});
                 }
             }
         }

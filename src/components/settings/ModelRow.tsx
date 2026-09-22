@@ -17,9 +17,6 @@ type DeletePhase = 'idle' | 'confirm' | 'deleting' | 'deleted';
 
 export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCancelDownload, showAneBadge }: ModelRowProps) {
     const progress = downloadProgress[model.id];
-    const graniteBadge = model.type === 'Granite'
-        ? model.id.includes('cuda') ? 'CUDA' : 'PORTABLE'
-        : null;
     const [deletePhase, setDeletePhase] = useState<DeletePhase>('idle');
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -61,9 +58,8 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
     };
 
     const tagClass = model.type === 'LLM' ? 'model-tag--llm'
-        : model.type === 'Parakeet' ? 'model-tag--parakeet'
+        : model.type === 'Granite' ? 'model-tag--granite'
         : model.type === 'Whisper' || model.type === 'CoreML' ? 'model-tag--whisper'
-        : model.type === 'Granite' ? 'model-tag--cohere'
         : 'model-tag--default';
 
     return (
@@ -72,14 +68,19 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
             id={`model-row-${model.id}`}
             data-testid={`model-row-${model.id}`}
             role="region"
-            aria-label={`Model ${model.name}`}
+            // Engine in the label, so every card has a unique accessible name.
+            aria-label={`Model ${model.name.includes(model.type) ? model.name : `${model.type} ${model.name}`}`}
         >
             <div className="model-info">
                 <div className="model-title-row">
                     <h3>{model.name}</h3>
-                    {graniteBadge && (
-                        <span className={`model-hardware-badge${graniteBadge === 'CUDA' ? ' model-hardware-badge--cuda' : ' model-hardware-badge--portable'}`}>
-                            {graniteBadge}
+                    {model.beta && (
+                        <span
+                            className="model-group-badge model-group-badge--warn"
+                            data-testid={`model-beta-badge-${model.id}`}
+                            title="Beta: works well in testing, but may still make occasional mistakes"
+                        >
+                            Beta
                         </span>
                     )}
                     {showAneBadge && (
@@ -118,7 +119,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                             </span>
                             <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
                         </div>
-                        <div className="progress-track progress-track--verify">
+                        <div id={`model-progress-track-${model.id}`} data-testid={`model-progress-track-${model.id}`} className="progress-track progress-track--verify" role="progressbar" aria-label={`Verifying ${model.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}>
                             <div className="progress-fill progress-fill--verify" style={{ width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%` }} />
                         </div>
                     </div>
@@ -129,7 +130,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                             <span>Extracting...</span>
                             <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
                         </div>
-                        <div className="progress-track progress-track--extract">
+                        <div id={`model-progress-track-${model.id}`} data-testid={`model-progress-track-${model.id}`} className="progress-track progress-track--extract" role="progressbar" aria-label={`Extracting ${model.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}>
                             <div className="progress-fill progress-fill--extract" style={{ width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%` }} />
                         </div>
                     </div>
@@ -139,6 +140,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                         <div className="model-progress-header model-progress-header--download">
                             <span>
                                 {progress.status === 'starting' ? 'Starting download...' :
+                                    progress.status === 'cancelling' ? 'Cancelling download...' :
                                     progress.status === 'finalizing' ? 'Finalizing...' :
                                 (progress.total_files || 0) > 1 ?
                                     `Downloading (${progress.current_file || 1}/${progress.total_files || 1})...` :
@@ -146,7 +148,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                             </span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <span>{progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}%</span>
-                                {progress.status !== 'finalizing' && (
+                                {progress.status !== 'finalizing' && progress.status !== 'cancelling' && (
                                     <button
                                         type="button"
                                         id={`model-cancel-download-btn-${model.id}`}
@@ -161,7 +163,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                 )}
                             </div>
                         </div>
-                        <div className="progress-track progress-track--download">
+                        <div id={`model-progress-track-${model.id}`} data-testid={`model-progress-track-${model.id}`} className="progress-track progress-track--download" role="progressbar" aria-label={`Downloading ${model.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.total > 0 ? Math.round((progress.bytes / progress.total) * 100) : 0}>
                             <div className="progress-fill progress-fill--download" style={{ width: `${progress.total > 0 ? (progress.bytes / progress.total) * 100 : 0}%` }} />
                         </div>
                     </div>
@@ -179,7 +181,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                                     </span>
                                     <span>{pct}%</span>
                                 </div>
-                                <div className="progress-track progress-track--delete">
+                                <div id={`model-progress-track-${model.id}`} data-testid={`model-progress-track-${model.id}`} className="progress-track progress-track--delete" role="progressbar" aria-label={`Deleting ${model.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
                                     <div className="progress-fill progress-fill--delete" style={{ width: `${pct}%` }} />
                                 </div>
                             </div>

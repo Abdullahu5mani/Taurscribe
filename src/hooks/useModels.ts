@@ -9,19 +9,11 @@ export interface ModelInfo {
     has_coreml: boolean;
 }
 
-export interface ParakeetModelInfo {
+export interface GraniteModelInfo {
     id: string;
     display_name: string;
     model_type: string;
     size_mb: number;
-}
-
-export interface CohereModelInfo {
-    id: string;
-    display_name: string;
-    size_mb: number;
-    /** True for the FP16 package — requires GPU; download INT4 for CPU-only machines. */
-    requires_gpu?: boolean;
 }
 
 export interface Qwen3ModelInfo {
@@ -31,7 +23,7 @@ export interface Qwen3ModelInfo {
     requires_gpu?: boolean;
 }
 
-export interface ParakeetStatus {
+export interface GraniteStatus {
     loaded: boolean;
     model_id: string | null;
     model_type: string | null;
@@ -39,31 +31,27 @@ export interface ParakeetStatus {
 }
 
 /**
- * Manages Whisper and Parakeet model lists and provides a refresh function.
+ * Manages the Whisper, Granite and Qwen3 model lists and provides a refresh function.
  */
 export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) {
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [currentModel, setCurrentModel] = useState<string | null>(null);
-    const [parakeetModels, setParakeetModels] = useState<ParakeetModelInfo[]>([]);
-    const [currentParakeetModel, setCurrentParakeetModel] = useState<string | null>(null);
-    const [cohereModels, setCohereModels] = useState<CohereModelInfo[]>([]);
-    const [currentCohereModel, setCurrentCohereModel] = useState<string | null>(null);
+    const [graniteModels, setGraniteModels] = useState<GraniteModelInfo[]>([]);
+    const [currentGraniteModel, setCurrentGraniteModel] = useState<string | null>(null);
     const [qwen3Models, setQwen3Models] = useState<Qwen3ModelInfo[]>([]);
     const [currentQwen3Model, setCurrentQwen3Model] = useState<string | null>(null);
 
     const refreshModels = useCallback(async (showToast = true) => {
         try {
             console.log("[INFO] Refreshing model lists...");
-            const [modelList, pModels, gModels, qModels] = await Promise.all([
+            const [modelList, pModels, qModels] = await Promise.all([
                 invoke<ModelInfo[]>("list_models"),
-                invoke<ParakeetModelInfo[]>("list_parakeet_models"),
-                invoke<CohereModelInfo[]>("list_granite_models"),
+                invoke<GraniteModelInfo[]>("list_granite_models"),
                 invoke<Qwen3ModelInfo[]>("list_qwen3_models"),
             ]);
 
             setModels(modelList);
-            setParakeetModels(pModels);
-            setCohereModels(gModels);
+            setGraniteModels(pModels);
             setQwen3Models(qModels);
 
             setCurrentModel(prev => {
@@ -71,15 +59,10 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
                 if (prev && modelList.some(model => model.id === prev)) return prev;
                 return modelList[0].id;
             });
-            setCurrentParakeetModel(prev => {
+            setCurrentGraniteModel(prev => {
                 if (pModels.length === 0) return null;
                 if (prev && pModels.some(model => model.id === prev)) return prev;
                 return pModels[0].id;
-            });
-            setCurrentCohereModel(prev => {
-                if (gModels.length === 0) return null;
-                if (prev && gModels.some(model => model.id === prev)) return prev;
-                return gModels[0].id;
             });
             setCurrentQwen3Model(prev => {
                 if (qModels.length === 0) return null;
@@ -100,14 +83,10 @@ export function useModels(setHeaderStatus: (msg: string, dur?: number) => void) 
         setModels,
         currentModel,
         setCurrentModel,
-        parakeetModels,
-        setParakeetModels,
-        currentParakeetModel,
-        setCurrentParakeetModel,
-        cohereModels,
-        setCohereModels,
-        currentCohereModel,
-        setCurrentCohereModel,
+        graniteModels,
+        setGraniteModels,
+        currentGraniteModel,
+        setCurrentGraniteModel,
         qwen3Models,
         setQwen3Models,
         currentQwen3Model,
