@@ -4,12 +4,12 @@
 //! Each audio file is decoded at its native sample rate and fed through the exact same
 //! chunk-accumulation and preprocessing loop the app uses during a live recording:
 //!
-//! Whisper / Cohere (6s chunks + VAD gate):
+//! Whisper (6s chunks + VAD gate):
 //!   native-rate mono → 6s chunks → preprocess_live_transcribe_chunk
 //!     → vad.is_speech() > 0.35 gate → transcribe_chunk
 //!
-//! Parakeet:
-//!   Nemotron/EOU streaming variants use the model's native live chunk size
+//! Granite:
+//!   Granite Speech 5/EOU streaming variants use the model's native live chunk size
 //!     (560 ms / 160 ms respectively); CTC/TDT stay on buffered 4 s windows.
 //!   All paths use preprocess_live_transcribe_chunk and pad short buffers enough
 //!   to give the selected model at least one decode step.
@@ -29,9 +29,8 @@ use std::sync::{Arc, Mutex};
 
 use taurscribe_lib::audio_decode;
 use taurscribe_lib::audio_preprocess;
-use taurscribe_lib::cohere::CohereManager;
 use taurscribe_lib::librispeech_wer;
-use taurscribe_lib::parakeet::ParakeetManager;
+use taurscribe_lib::gguf_asr::GgufAsrManager;
 use taurscribe_lib::vad::VADManager;
 use taurscribe_lib::whisper::WhisperManager;
 
@@ -64,9 +63,9 @@ fn load_native_mono(path: &Path) -> Result<(Vec<f32>, u32), String> {
 
 // ── Mic simulation helpers ────────────────────────────────────────────────────
 
-/// Whisper / Cohere live path: 6s chunks, VAD-gated, no clean_transcript.
+/// Whisper live path: 6s chunks, VAD-gated, no clean_transcript.
 /// Mirrors `vad_gated_transcribe` inside `start_recording_blocking`.
-fn mic_sim_whisper_cohere<F>(
+fn mic_sim_whisper<F>(
     samples: &[f32],
     sample_rate: u32,
     vad: &Arc<Mutex<VADManager>>,
@@ -120,35 +119,35 @@ where
 }
 
 #[derive(Clone, Copy)]
-struct ParakeetMicConfig {
+struct GraniteMicConfig {
     feed_secs: f32,
     min_samples_16k: usize,
 }
 
-fn parakeet_mic_config(model_type: Option<&str>) -> ParakeetMicConfig {
+fn granite_mic_config(model_type: Option<&str>) -> GraniteMicConfig {
     match model_type {
-        Some("Nemotron") | Some("Nemotron Streaming") => ParakeetMicConfig {
+        Some("Granite Speech 5") | Some("Granite Speech 5 Streaming") => GraniteMicConfig {
             feed_secs: 8_960.0 / 16_000.0,
             min_samples_16k: 8_960,
         },
-        Some("EOU") => ParakeetMicConfig {
+        Some("EOU") => GraniteMicConfig {
             feed_secs: 2_560.0 / 16_000.0,
             min_samples_16k: 2_560,
         },
-        _ => ParakeetMicConfig {
+        _ => GraniteMicConfig {
             feed_secs: 4.0,
             min_samples_16k: 16_000 * 4,
         },
     }
 }
 
-/// Parakeet live path: feed the selected model at its native streaming cadence.
-/// Mirrors `parakeet_preprocess_for_transcribe` + accumulation loop.
-fn mic_sim_parakeet(
+/// Granite live path: feed the selected model at its native streaming cadence.
+/// Mirrors `granite_preprocess_for_transcribe` + accumulation loop.
+fn mic_sim_granite(
     samples: &[f32],
     sample_rate: u32,
-    p: &mut ParakeetManager,
-    config: ParakeetMicConfig,
+    p: &mut GgufAsrManager,
+    config: GraniteMicConfig,
 ) -> String {
     let chunk_size = ((sample_rate as f32) * config.feed_secs).round() as usize;
     let mut parts: Vec<String> = Vec::new();
@@ -162,7 +161,7 @@ fn mic_sim_parakeet(
         if pcm16.len() < config.min_samples_16k {
             pcm16.resize(config.min_samples_16k, 0.0);
         }
-        if let Ok(t) = p.transcribe_chunk(&pcm16, 16000) {
+        if let Ok(t) = p.transcribe_chunk(&pcm16, 16000, None) {
             if !t.trim().is_empty() {
                 parts.push(t.trim().to_string());
             }
@@ -245,7 +244,7 @@ fn mic_accuracy() {
                         }
 
                         let vad_ref = Arc::clone(&vad);
-                        let hyp = mic_sim_whisper_cohere(&samples, rate, &vad_ref, |pcm| {
+                        let hyp = mic_sim_whisper(&samples, rate, &vad_ref, |pcm| {
                             w.transcribe_chunk(pcm, 16000)
                         });
                         let w_val = wer(&row.ref_text, &hyp);
@@ -265,14 +264,14 @@ fn mic_accuracy() {
         Err(e) => eprintln!("[SKIP] Whisper list_models: {e}"),
     }
 
-    // ── Parakeet ──────────────────────────────────────────────────────────────
-    match ParakeetManager::list_available_models() {
+    // ── Granite ──────────────────────────────────────────────────────────────
+    match GgufAsrManager::granite().list_available_models() {
         Ok(models) if !models.is_empty() => {
-            let mut p = ParakeetManager::new();
+            let mut p = GgufAsrManager::granite();
             match p.initialize(None, true) {
                 Ok(_) => {
-                    let config = parakeet_mic_config(p.get_status().model_type.as_deref());
-                    let wers = results.entry("parakeet").or_default();
+                    let config = granite_mic_config(None);
+                    let wers = results.entry("granite").or_default();
                     for row in &rows {
                         let flac = librispeech_wer::resolve_librispeech_flac(
                             &row.flac_path,
@@ -282,66 +281,27 @@ fn mic_accuracy() {
                         let (samples, rate) = match load_native_mono(&flac) {
                             Ok(v) => v,
                             Err(e) => {
-                                eprintln!("[parakeet] {} audio error: {e}", row.utt_id);
+                                eprintln!("[granite] {} audio error: {e}", row.utt_id);
                                 continue;
                             }
                         };
-                        let hyp = mic_sim_parakeet(&samples, rate, &mut p, config);
+                        let hyp = mic_sim_granite(&samples, rate, &mut p, config);
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
                         eprintln!(
-                            "[parakeet] {} | wer={:.3} | ref: {} | hyp: {}",
+                            "[granite] {} | wer={:.3} | ref: {} | hyp: {}",
                             row.utt_id, w_val, &row.ref_text, snippet
                         );
                         wers.push(w_val);
                     }
                 }
-                Err(e) => eprintln!("[SKIP] Parakeet init: {e}"),
+                Err(e) => eprintln!("[SKIP] Granite init: {e}"),
             }
             p.unload();
         }
-        Ok(_) => eprintln!("[SKIP] Parakeet: no models installed"),
-        Err(e) => eprintln!("[SKIP] Parakeet list_models: {e}"),
+        Ok(_) => eprintln!("[SKIP] Granite: no models installed"),
+        Err(e) => eprintln!("[SKIP] Granite list_models: {e}"),
     }
-
-    // ── Cohere ───────────────────────────────────────────────────────────────
-    let mut g = CohereManager::new();
-    match g.initialize(None, true) {
-        Ok(_) => {
-            let wers = results.entry("cohere").or_default();
-            for row in &rows {
-                let flac = librispeech_wer::resolve_librispeech_flac(
-                    &row.flac_path,
-                    &row.utt_id,
-                    audio_root.as_deref(),
-                );
-                let (samples, rate) = match load_native_mono(&flac) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("[cohere] {} audio error: {e}", row.utt_id);
-                        continue;
-                    }
-                };
-                if let Ok(mut v) = vad.lock() {
-                    v.reset_state();
-                }
-
-                let vad_ref = Arc::clone(&vad);
-                let hyp = mic_sim_whisper_cohere(&samples, rate, &vad_ref, |pcm| {
-                    g.transcribe_chunk(pcm, 16000)
-                });
-                let w_val = wer(&row.ref_text, &hyp);
-                let snippet: String = hyp.chars().take(80).collect();
-                eprintln!(
-                    "[granite] {} | wer={:.3} | ref: {} | hyp: {}",
-                    row.utt_id, w_val, &row.ref_text, snippet
-                );
-                wers.push(w_val);
-            }
-        }
-        Err(e) => eprintln!("[SKIP] Cohere init: {e} (need q4f16 bundle in cohere-speech-1b)"),
-    }
-    g.unload();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     eprintln!("\n=== mic_accuracy summary ===");

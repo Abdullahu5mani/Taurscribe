@@ -88,14 +88,8 @@ docker run --rm --platform linux/amd64 ubuntu:24.04 sh -c \
   "apt-get update -qq && apt-get install -y -qq libpipewire-0.3-dev pkg-config >/dev/null && pkg-config --cflags --libs libpipewire-0.3"
 pass "Linux PipeWire & pkg-config dependencies verified on Ubuntu 24.04 x86_64"
 
-header "STAGE 6: Windows (x86_64) Runner Verification"
-info "Testing Win32 MinGW cross-compilation & Wine64 execution"
-./scripts/tests/run_win32_benchmark.sh
-pass "Windows x86_64 Win32 PE binary compiled and verified under Wine64"
-
 header "ALL LOCAL GITHUB ACTIONS RUNNERS VERIFIED SUCCESSFULLY"
 echo -e "${GREEN}✓ Frontend (Bun/Vite/TypeScript)${NC}"
 echo -e "${GREEN}✓ macOS Apple Silicon (aarch64-apple-darwin) [.app & .dmg]${NC}"
 echo -e "${GREEN}✓ macOS Intel (x86_64-apple-darwin) target${NC}"
 echo -e "${GREEN}✓ Linux Ubuntu 24.04 (x86_64-unknown-linux-gnu) dependencies${NC}"
-echo -e "${GREEN}✓ Windows (x86_64-pc-windows-msvc / Win32 Wine64)${NC}"

@@ -28,7 +28,7 @@ cargo test --lib context::context_tests
 # Run corpus empirical benchmark
 echo ""
 echo ">>> Step 2: Running empirical corpus benchmark with Whisper..."
-cargo run --release --bin custom_vocab_eval
+cargo run --release --features dev-tools --bin custom_vocab_eval
 
 echo ""
 echo ">>> Evaluation complete! All tests passed."

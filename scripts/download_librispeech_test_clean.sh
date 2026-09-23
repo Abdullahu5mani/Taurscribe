@@ -49,4 +49,4 @@ if [[ ! -d "$MARKER" ]]; then
   exit 1
 fi
 echo "Done. test-clean at: $MARKER"
-echo "Build manifest: cargo run --manifest-path src-tauri/Cargo.toml --bin librispeech_manifest -- --root \"$MARKER\" --out \"$DEST_ROOT/eval_manifest.jsonl\""
+echo "Build manifest: cargo run --manifest-path src-tauri/Cargo.toml --features dev-tools --bin librispeech_manifest -- --root \"$MARKER\" --out \"$DEST_ROOT/eval_manifest.jsonl\""

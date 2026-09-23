@@ -50,4 +50,4 @@ if (-not (Test-Path $ExtractMarker)) {
     throw "Extraction failed: expected $ExtractMarker"
 }
 Write-Host "Done. test-clean at: $ExtractMarker"
-Write-Host "Build manifest: cargo run --manifest-path src-tauri/Cargo.toml --bin librispeech_manifest -- --root `"$ExtractMarker`" --out `"$DestRoot\eval_manifest.jsonl`""
+Write-Host "Build manifest: cargo run --manifest-path src-tauri/Cargo.toml --features dev-tools --bin librispeech_manifest -- --root `"$ExtractMarker`" --out `"$DestRoot\eval_manifest.jsonl`""

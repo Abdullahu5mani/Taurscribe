@@ -1,19 +1,17 @@
-//! Integration smoke test: runs preprocessed `jfk.wav` through Whisper, Parakeet, and Cohere.
+//! Integration smoke test: runs preprocessed `jfk.wav` through Whisper and Granite.
 //!
 //! Requires:
 //! - `jfk.wav` at `tests/fixtures/jfk.wav`, repo root, or `JFK_WAV` env var
 //! - **Whisper**: at least one `ggml-*.bin` in `%LOCALAPPDATA%\Taurscribe\models`
-//! - **Parakeet**: a detected ONNX bundle under the same models dir
-//! - **Cohere**: Cohere Transcribe ONNX universal q4f16 bundle (`cohere-speech-1b` directory)
+//! - **Granite**: a detected ONNX bundle under the same models dir
 //!
 //! The smoke test is `#[ignore]` by default. Run with:
-//!   cargo test jfk_audio_through_whisper_parakeet_and_cohere -- --ignored --nocapture
+//!   cargo test jfk_audio_through_whisper_and_granite -- --ignored --nocapture
 //!
 //! Set `TAURSCRIBE_ASR_SMOKE_SKIP=1` to no-op pass when models are absent.
 
 use std::path::{Path, PathBuf};
-use taurscribe_lib::cohere::CohereManager;
-use taurscribe_lib::parakeet::ParakeetManager;
+use taurscribe_lib::gguf_asr::GgufAsrManager;
 use taurscribe_lib::whisper::WhisperManager;
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -106,8 +104,8 @@ fn jfk_pcm16_preprocessed_for_asr() -> Result<Vec<f32>, String> {
 // ── Smoke test ────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "Needs jfk.wav + Whisper, Parakeet, Cohere in %LOCALAPPDATA%/Taurscribe/models. Run with --ignored."]
-fn jfk_audio_through_whisper_parakeet_and_cohere() {
+#[ignore = "Needs jfk.wav + Whisper, Granite in %LOCALAPPDATA%/Taurscribe/models. Run with --ignored."]
+fn jfk_audio_through_whisper_and_granite() {
     if std::env::var("TAURSCRIBE_ASR_SMOKE_SKIP").as_deref() == Ok("1") {
         eprintln!("SKIP jfk ASR smoke (TAURSCRIBE_ASR_SMOKE_SKIP=1)");
         return;
@@ -145,44 +143,30 @@ fn jfk_audio_through_whisper_parakeet_and_cohere() {
         Err(e) => failures.push(format!("Whisper list_models: {e}")),
     }
 
-    // ── Parakeet ──────────────────────────────────────────────────────────────
-    match ParakeetManager::list_available_models() {
+    // ── Granite ──────────────────────────────────────────────────────────────
+    match GgufAsrManager::granite().list_available_models() {
         Ok(models) if !models.is_empty() => {
-            let mut p = ParakeetManager::new();
+            let mut p = GgufAsrManager::granite();
             match p.initialize(None, true) {
-                Ok(_) => match p.transcribe_chunk(&pcm, 16000) {
+                Ok(_) => match p.transcribe_chunk(&pcm, 16000, None) {
                     Ok(text) if text.trim().is_empty() => {
-                        failures.push("Parakeet: empty transcript".into())
+                        failures.push("Granite: empty transcript".into())
                     }
                     Ok(_) => {}
-                    Err(e) => failures.push(format!("Parakeet transcribe: {e}")),
+                    Err(e) => failures.push(format!("Granite transcribe: {e}")),
                 },
-                Err(e) => failures.push(format!("Parakeet init: {e}")),
+                Err(e) => failures.push(format!("Granite init: {e}")),
             }
             p.unload();
         }
         Ok(_) => failures
-            .push("Parakeet: no ONNX bundle in models dir (download Parakeet/Nemotron)".into()),
-        Err(e) => failures.push(format!("Parakeet list_models: {e}")),
+            .push("Granite: no ONNX bundle in models dir (download Granite/Granite Speech 5)".into()),
+        Err(e) => failures.push(format!("Granite list_models: {e}")),
     }
-
-    // ── Cohere ───────────────────────────────────────────────────────────────
-    let mut g = CohereManager::new();
-    match g.initialize(None, true) {
-        Ok(_) => match g.transcribe_chunk(&pcm, 16000) {
-            Ok(text) if text.trim().is_empty() => failures.push("Cohere: empty transcript".into()),
-            Ok(_) => {}
-            Err(e) => failures.push(format!("Cohere transcribe: {e}")),
-        },
-        Err(e) => failures.push(format!(
-            "Cohere init: {e} (need Cohere q4f16 bundle in the cohere-speech-1b directory)"
-        )),
-    }
-    g.unload();
 
     assert!(
         failures.is_empty(),
-        "jfk three-engine smoke failed:\n{}",
+        "jfk two-engine smoke failed:\n{}",
         failures.join("\n")
     );
 }

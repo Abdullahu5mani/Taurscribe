@@ -259,7 +259,6 @@ async function runE2ETest() {
       'appium:automationName': automationName,
       'appium:bundleId': bundleId,
       'appium:app': appPath,
-      'appium:showServerLogs': true,
       'appium:wdaLaunchTimeout': 120000,
     }
   });

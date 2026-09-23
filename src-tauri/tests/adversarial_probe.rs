@@ -183,7 +183,9 @@ fn test_m5_x11_selection_ignores_wayland_tools() {
     assert_eq!(res_none, TextInjectionBackend::Enigo);
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+// Retired with the Parakeet MLX runtime. The GGUF engine's real-hardware
+// warmup/inference path is covered by the file and meeting harness instead.
+#[cfg(any())]
 #[test]
 fn test_m1_real_parakeet_mlx_metal_warmup_and_reset() {
     use std::path::PathBuf;
@@ -402,6 +404,7 @@ fn test_adversarial_audio_device_sorting_high_volume() {
 }
 
 #[test]
+#[ignore = "pastes into the frontmost app; run with --ignored only with a disposable text field focused"]
 fn test_adversarial_clipboard_multithreaded_concurrency() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -431,4 +434,3 @@ fn test_adversarial_clipboard_multithreaded_concurrency() {
     println!("[TEST] All 5 concurrent clipboard worker threads completed cleanly. Success count: {}",
         success_count.load(Ordering::SeqCst));
 }
-

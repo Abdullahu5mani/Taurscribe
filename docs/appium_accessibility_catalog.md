@@ -211,7 +211,7 @@ Taurscribe's cross-platform accessibility architecture uses standardized attribu
 | `pp-style-grid` | `<div>` | `radiogroup` | "Transcription style" grid container |
 | `pp-style-btn-verbatim` | `<button>` | `radio` | "Verbatim: Exact word-for-word dictation" (`aria-checked`) |
 | `pp-style-btn-natural` | `<button>` | `radio` | "Natural: Fixed punctuation and flow" (`aria-checked`) |
-| `pp-style-btn-casual` | `<button>` | `radio` | "Casual: Conversational tone" (`aria-checked`) |
+| `pp-style-btn-clean` | `<button>` | `radio` | "Clean" clean-up level (`aria-checked`); also `pp-style-btn-verbatim`, `pp-style-btn-formatted` |
 | `pp-style-btn-concise` | `<button>` | `radio` | "Concise: Tight, direct phrasing" (`aria-checked`) |
 | `pp-style-btn-formal` | `<button>` | `radio` | "Formal: Professional and structured" (`aria-checked`) |
 

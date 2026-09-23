@@ -22,9 +22,8 @@ use std::sync::Arc;
 
 use taurscribe_lib::audio_decode;
 use taurscribe_lib::audio_preprocess;
-use taurscribe_lib::cohere::CohereManager;
 use taurscribe_lib::librispeech_wer;
-use taurscribe_lib::parakeet::ParakeetManager;
+use taurscribe_lib::gguf_asr::GgufAsrManager;
 use taurscribe_lib::utils::clean_transcript;
 use taurscribe_lib::vad::assemble_speech_audio;
 use taurscribe_lib::whisper::WhisperManager;
@@ -99,24 +98,11 @@ fn transcribe_whisper(w: &mut WhisperManager, pcm: &[f32]) -> Result<String, Str
     Ok(clean_transcript(&parts.join(" ")))
 }
 
-fn transcribe_parakeet(p: &mut ParakeetManager, pcm: &[f32]) -> Result<String, String> {
+fn transcribe_granite(p: &mut GgufAsrManager, pcm: &[f32]) -> Result<String, String> {
     let parts: Vec<String> = pcm
         .chunks(STREAM_CHUNK_SAMPLES)
         .filter_map(|chunk| {
-            p.transcribe_chunk(chunk, 16000)
-                .ok()
-                .filter(|t| !t.trim().is_empty())
-                .map(|t| t.trim().to_string())
-        })
-        .collect();
-    Ok(clean_transcript(&parts.join(" ")))
-}
-
-fn transcribe_cohere(g: &mut CohereManager, pcm: &[f32]) -> Result<String, String> {
-    let parts: Vec<String> = pcm
-        .chunks(STREAM_CHUNK_SAMPLES)
-        .filter_map(|chunk| {
-            g.transcribe_chunk(chunk, 16000)
+            p.transcribe_chunk(chunk, 16000, None)
                 .ok()
                 .filter(|t| !t.trim().is_empty())
                 .map(|t| t.trim().to_string())
@@ -211,13 +197,13 @@ fn file_drop_accuracy() {
         Err(e) => eprintln!("[SKIP] Whisper list_models: {e}"),
     }
 
-    // ── Parakeet ──────────────────────────────────────────────────────────────
-    match ParakeetManager::list_available_models() {
+    // ── Granite ──────────────────────────────────────────────────────────────
+    match GgufAsrManager::granite().list_available_models() {
         Ok(models) if !models.is_empty() => {
-            let mut p = ParakeetManager::new();
+            let mut p = GgufAsrManager::granite();
             match p.initialize(None, true) {
                 Ok(_) => {
-                    let wers = results.entry("parakeet").or_default();
+                    let wers = results.entry("granite").or_default();
                     for row in &rows {
                         let flac = librispeech_wer::resolve_librispeech_flac(
                             &row.flac_path,
@@ -227,71 +213,33 @@ fn file_drop_accuracy() {
                         let pcm = match prepare_file_audio(&flac) {
                             Ok(p) => p,
                             Err(e) => {
-                                eprintln!("[parakeet] {} audio error: {e}", row.utt_id);
+                                eprintln!("[granite] {} audio error: {e}", row.utt_id);
                                 continue;
                             }
                         };
-                        let hyp = match transcribe_parakeet(&mut p, &pcm) {
+                        let hyp = match transcribe_granite(&mut p, &pcm) {
                             Ok(t) => t,
                             Err(e) => {
-                                eprintln!("[parakeet] {} transcribe error: {e}", row.utt_id);
+                                eprintln!("[granite] {} transcribe error: {e}", row.utt_id);
                                 continue;
                             }
                         };
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
                         eprintln!(
-                            "[parakeet] {} | wer={:.3} | ref: {} | hyp: {}",
+                            "[granite] {} | wer={:.3} | ref: {} | hyp: {}",
                             row.utt_id, w_val, &row.ref_text, snippet
                         );
                         wers.push(w_val);
                     }
                 }
-                Err(e) => eprintln!("[SKIP] Parakeet init: {e}"),
+                Err(e) => eprintln!("[SKIP] Granite init: {e}"),
             }
             p.unload();
         }
-        Ok(_) => eprintln!("[SKIP] Parakeet: no models installed"),
-        Err(e) => eprintln!("[SKIP] Parakeet list_models: {e}"),
+        Ok(_) => eprintln!("[SKIP] Granite: no models installed"),
+        Err(e) => eprintln!("[SKIP] Granite list_models: {e}"),
     }
-
-    // ── Cohere ───────────────────────────────────────────────────────────────
-    let mut g = CohereManager::new();
-    match g.initialize(None, true) {
-        Ok(_) => {
-            let wers = results.entry("cohere").or_default();
-            for row in &rows {
-                let flac = librispeech_wer::resolve_librispeech_flac(
-                    &row.flac_path,
-                    &row.utt_id,
-                    audio_root.as_deref(),
-                );
-                let pcm = match prepare_file_audio(&flac) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("[cohere] {} audio error: {e}", row.utt_id);
-                        continue;
-                    }
-                };
-                let hyp = match transcribe_cohere(&mut g, &pcm) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        eprintln!("[cohere] {} transcribe error: {e}", row.utt_id);
-                        continue;
-                    }
-                };
-                let w_val = wer(&row.ref_text, &hyp);
-                let snippet: String = hyp.chars().take(80).collect();
-                eprintln!(
-                    "[cohere] {} | wer={:.3} | ref: {} | hyp: {}",
-                    row.utt_id, w_val, &row.ref_text, snippet
-                );
-                wers.push(w_val);
-            }
-        }
-        Err(e) => eprintln!("[SKIP] Cohere init: {e} (need q4f16 bundle in cohere-speech-1b)"),
-    }
-    g.unload();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     eprintln!("\n=== file_drop_accuracy summary ===");

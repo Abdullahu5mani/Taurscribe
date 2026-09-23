@@ -29,6 +29,12 @@ Model-dependent integration tests are marked `#[ignore]` so normal `cargo test` 
 
 ## Cross-Platform E2E Gates
 
+The in-app HTTP control server is disabled during normal launches. For the
+meeting harness, set `TAURSCRIBE_TEST_MODE=1` and a nonempty
+`TAURSCRIBE_CONTROL_TOKEN` in the environment that starts Taurscribe. Set the
+same token for the harness process. Every control API request, including status
+and health checks, requires `Authorization: Bearer <token>`.
+
 These commands validate the shared UI automation contract on every build-matrix target. They do not claim native GPU, microphone, or desktop-session execution.
 
 ```bash
@@ -56,9 +62,9 @@ replace those tests.
 
 | File | Type | Purpose |
 | --- | --- | --- |
-| `src-tauri/src/bin/librispeech_eval.rs` | CLI | Batch WER for Whisper / Parakeet / Cohere from a JSONL manifest |
-| `src-tauri/src/bin/librispeech_manifest.rs` | CLI | Builds JSONL manifest (`utt_id`, `flac_path`, `ref_text`) from LibriSpeech `test-clean` |
-| `src-tauri/src/bin/audio_pipeline_bench.rs` | CLI | Synthetic no-model benchmark for file decode/downmix/resample memory and speed |
+| `src-tauri/tools/librispeech_eval.rs` | CLI | Batch WER for Whisper / Parakeet / Cohere from a JSONL manifest |
+| `src-tauri/tools/librispeech_manifest.rs` | CLI | Builds JSONL manifest (`utt_id`, `flac_path`, `ref_text`) from LibriSpeech `test-clean` |
+| `src-tauri/tools/audio_pipeline_bench.rs` | CLI | Synthetic no-model benchmark for file decode/downmix/resample memory and speed |
 | `src-tauri/src/librispeech_wer.rs` | Library | Text normalization, token-level Levenshtein WER, LibriSpeech FLAC path resolution helpers |
 | `src-tauri/src/audio_decode.rs` | Library | Format-agnostic decode (FLAC, WAV, MP3, M4A, …) via Symphonia |
 | `src-tauri/src/audio_preprocess.rs` | Library | Resample, denoise, DC remove, HP filter, level assist, clamp |
@@ -436,7 +442,7 @@ Follow [Downloading the LibriSpeech test-clean dataset](#downloading-the-librisp
 ### 2. Build the JSONL manifest
 
 ```bash
-cargo run --manifest-path src-tauri/Cargo.toml --bin librispeech_manifest -- \
+cargo run --manifest-path src-tauri/Cargo.toml --features dev-tools --bin librispeech_manifest -- \
   --root taurscribe-runtime/librispeech/LibriSpeech/test-clean \
   --out taurscribe-runtime/librispeech/eval_manifest.jsonl
 ```
@@ -448,7 +454,7 @@ Useful: `--limit N` and `--shuffle-seed U64` for a smaller, reproducible subset.
 From repo root:
 
 ```bash
-cargo run --release --manifest-path src-tauri/Cargo.toml --bin librispeech_eval -- \
+cargo run --release --manifest-path src-tauri/Cargo.toml --features dev-tools --bin librispeech_eval -- \
   --manifest taurscribe-runtime/librispeech/eval_manifest.jsonl \
   --audio-root taurscribe-runtime/librispeech/LibriSpeech/test-clean \
   --out librispeech_results.csv
@@ -486,7 +492,7 @@ for bin in "$MODELS"/ggml-*.bin; do
   echo "=== Whisper: $id ==="
   TAURSCRIBE_WHISPER_MODEL_ID="$id" \
   TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT="$ROOT" \
-  cargo run --release --manifest-path src-tauri/Cargo.toml --bin librispeech_eval -- \
+  cargo run --release --manifest-path src-tauri/Cargo.toml --features dev-tools --bin librispeech_eval -- \
     --manifest "$MANIFEST" --audio-root "$ROOT" --engines whisper --limit "$LIMIT" \
     --out "wer_whisper_${id//./_}.csv"
 done
@@ -508,7 +514,7 @@ Use a small reproducible LibriSpeech subset while iterating. This validates TDT 
 $env:TAURSCRIBE_PARAKEET_MODEL_ID = 'tdt:parakeet-tdt'
 $env:TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT = 'taurscribe-runtime/librispeech/LibriSpeech/test-clean'
 Measure-Command {
-  cargo run --release --manifest-path src-tauri/Cargo.toml --bin librispeech_eval -- `
+  cargo run --release --manifest-path src-tauri/Cargo.toml --features dev-tools --bin librispeech_eval -- `
     --manifest taurscribe-runtime/librispeech/eval_manifest_5.jsonl `
     --audio-root taurscribe-runtime/librispeech/LibriSpeech/test-clean `
     --engines parakeet `
@@ -525,7 +531,7 @@ To specifically validate DirectML, force the DirectML backend and strict GPU loa
 $env:TAURSCRIBE_PARAKEET_MODEL_ID = 'tdt:parakeet-tdt'
 $env:TAURSCRIBE_PARAKEET_BACKEND = 'directml'
 $env:TAURSCRIBE_PARAKEET_STRICT_GPU = '1'
-cargo run --release --manifest-path src-tauri/Cargo.toml --bin librispeech_eval -- `
+cargo run --release --manifest-path src-tauri/Cargo.toml --features dev-tools --bin librispeech_eval -- `
   --manifest taurscribe-runtime/librispeech/eval_manifest_all.jsonl `
   --engines parakeet `
   --limit 30 `
@@ -546,7 +552,7 @@ Granite ships as two app-visible artifacts:
 | `granite-speech-4.1-2b-nar-cuda` | NVIDIA CUDA | INT4 argmax ONNX on CUDA |
 | `granite-speech-4.1-2b-nar-portable` | AMD / Intel / CPU | INT4 argmax ONNX with a DirectML-safe encoder; tries full DirectML first on Windows, then multi-threaded CPU |
 
-The portable bundle is built by `scripts/make_granite_portable_dml.py`. Its encoder graph differs from the CUDA bundle in three DirectML-compatibility rewrites: rank-5 attention MatMuls are flattened to rank 3, shape chains are baked for the fixed 800-frame bucket, and GLU Split nodes are replaced with Slice pairs. Output parity vs. the CUDA encoder is float noise (max rel diff ~4e-5). Its manifest sets `"encoder_dml_safe": true`, which lets the app run the full encoder on DirectML.
+The portable bundle was built by `scripts/make_granite_portable_dml.py` (retired with Granite 4; kept in the local `archive/` folder). Its encoder graph differs from the CUDA bundle in three DirectML-compatibility rewrites: rank-5 attention MatMuls are flattened to rank 3, shape chains are baked for the fixed 800-frame bucket, and GLU Split nodes are replaced with Slice pairs. Output parity vs. the CUDA encoder is float noise (max rel diff ~4e-5). Its manifest sets `"encoder_dml_safe": true`, which lets the app run the full encoder on DirectML.
 
 On Windows, the portable bundle now attempts full DirectML first and falls back to multi-threaded CPU if session creation or inference fails. The explicit backend override remains useful for validation:
 
@@ -627,7 +633,7 @@ receipt only when every pinned hash matches.
 If a local Windows build hits GGML duplicate-symbol linker errors (`LNK2005: ggml_* already defined` — whisper-rs embeds a static ggml while llama-cpp-2's `dynamic-link` feature links `ggml-base.dll`, and both export into every executable), first try `cargo clean -p llama-cpp-sys-2 -p whisper-rs-sys` and rebuild. If the collision persists it affects debug builds and `cargo test` link steps too; previously-built binaries in `target/release` keep working, and `cargo check` still validates code changes. Historically a debug build sometimes still linked — treat debug timing as relative only:
 
 ```powershell
-cargo build --manifest-path src-tauri/Cargo.toml --bin librispeech_eval
+cargo build --manifest-path src-tauri/Cargo.toml --features dev-tools --bin librispeech_eval
 $env:TAURSCRIBE_PARAKEET_MODEL_ID = 'tdt:parakeet-tdt'
 Measure-Command {
   .\src-tauri\target\debug\librispeech_eval.exe `
@@ -645,7 +651,7 @@ Use this when you are tuning file-drop RAM or decode speed and do not want to lo
 
 ```powershell
 cd src-tauri
-cargo run --release --bin audio_pipeline_bench -- 120
+cargo run --release --features dev-tools --bin audio_pipeline_bench -- 120
 ```
 
 Use a larger duration, for example `600`, to stress long-file behavior. The benchmark is synthetic, so treat it as a pipeline regression check, not an ASR accuracy result.

@@ -8,7 +8,7 @@
 //!
 //! Requires:
 //! - `jfk.wav` at `tests/fixtures/jfk.wav`, repo root, or `JFK_WAV`
-//! - Whisper / Parakeet / Cohere models installed under `%LOCALAPPDATA%\Taurscribe\models`
+//! - Whisper / Granite models installed under `%LOCALAPPDATA%\Taurscribe\models`
 //!
 //! Run with:
 //!   cargo test memory_engine_regression -- --ignored --nocapture
@@ -23,11 +23,22 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use serde::Serialize;
-use taurscribe_lib::cohere::CohereManager;
 use taurscribe_lib::memory::{process_memory_stats, ProcessMemoryStats};
-use taurscribe_lib::parakeet::ParakeetManager;
-use taurscribe_lib::parakeet_loaders::ParakeetLoadPath;
+use taurscribe_lib::gguf_asr::GraniteManager;
 use taurscribe_lib::whisper::WhisperManager;
+
+#[derive(Clone, Copy, PartialEq)]
+enum GraniteLoadPath { Cpu, FallbackGpu, StrictGpu }
+
+impl std::fmt::Display for GraniteLoadPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cpu => "CPU",
+            Self::FallbackGpu => "automatic backend",
+            Self::StrictGpu => "strict GPU (unsupported by transcribe.cpp wrapper)",
+        })
+    }
+}
 
 #[derive(Debug, Serialize)]
 struct MemorySnapshot {
@@ -425,89 +436,59 @@ fn run_whisper_cycle(
     })
 }
 
-fn run_parakeet_cycle(
+fn run_granite_cycle(
     pcm: &[f32],
-    parakeet_model_id: &str,
+    granite_model_id: &str,
     force_cpu: bool,
 ) -> Result<ScenarioReport, String> {
-    run_parakeet_load_path_cycle(
-        "parakeet_cycle",
+    run_granite_load_path_cycle(
+        "granite_cycle",
         pcm,
-        parakeet_model_id,
+        granite_model_id,
         if force_cpu {
-            ParakeetLoadPath::Cpu
+            GraniteLoadPath::Cpu
         } else {
-            ParakeetLoadPath::FallbackGpu
+            GraniteLoadPath::FallbackGpu
         },
     )
 }
 
-fn run_parakeet_load_path_cycle(
+fn run_granite_load_path_cycle(
     name: &str,
     pcm: &[f32],
-    parakeet_model_id: &str,
-    load_path: ParakeetLoadPath,
+    granite_model_id: &str,
+    load_path: GraniteLoadPath,
 ) -> Result<ScenarioReport, String> {
     let started = Instant::now();
     let mut snapshots = vec![snapshot("baseline")];
     let mut notes = Vec::new();
 
-    let mut p = ParakeetManager::new();
+    let mut p = GraniteManager::granite();
     notes.push(format!("load_path={load_path}"));
-    p.initialize_with_load_path(
-        Some(parakeet_model_id),
-        load_path == ParakeetLoadPath::Cpu,
-        load_path,
-    )?;
-    snapshots.push(snapshot(format!("parakeet after initialize ({load_path})")));
+    if load_path == GraniteLoadPath::StrictGpu {
+        return Err("strict GPU selection is not exposed by the GGUF manager".into());
+    }
+    p.initialize(Some(granite_model_id), load_path == GraniteLoadPath::Cpu)?;
+    snapshots.push(snapshot(format!("granite after initialize ({load_path})")));
 
-    let text1 = p.transcribe_chunk(pcm, 16000)?;
+    let text1 = p.transcribe_chunk(pcm, 16000, None)?;
     notes.push(format!("first transcript chars={}", text1.len()));
     snapshots.push(snapshot(format!(
-        "parakeet after first transcription ({load_path})"
+        "granite after first transcription ({load_path})"
     )));
 
-    let text2 = p.transcribe_chunk(pcm, 16000)?;
+    let text2 = p.transcribe_chunk(pcm, 16000, None)?;
     notes.push(format!("second transcript chars={}", text2.len()));
     snapshots.push(snapshot(format!(
-        "parakeet after second transcription ({load_path})"
+        "granite after second transcription ({load_path})"
     )));
 
     p.unload();
-    snapshots.push(snapshot(format!("parakeet after unload ({load_path})")));
-    assert!(!p.get_status().loaded, "parakeet should be unloaded");
+    snapshots.push(snapshot(format!("granite after unload ({load_path})")));
+    assert!(!p.get_status().loaded, "granite should be unloaded");
 
     Ok(ScenarioReport {
         name: name.to_string(),
-        duration_ms: started.elapsed().as_millis(),
-        snapshots,
-        notes,
-    })
-}
-
-fn run_cohere_cycle(pcm: &[f32], force_cpu: bool) -> Result<ScenarioReport, String> {
-    let started = Instant::now();
-    let mut snapshots = vec![snapshot("baseline")];
-    let mut notes = Vec::new();
-
-    let mut g = CohereManager::new();
-    g.initialize(None, force_cpu)?;
-    snapshots.push(snapshot("cohere after initialize"));
-
-    let text1 = g.transcribe_chunk(pcm, 16000)?;
-    notes.push(format!("first transcript chars={}", text1.len()));
-    snapshots.push(snapshot("cohere after first transcription"));
-
-    let text2 = g.transcribe_chunk(pcm, 16000)?;
-    notes.push(format!("second transcript chars={}", text2.len()));
-    snapshots.push(snapshot("cohere after second transcription"));
-
-    g.unload();
-    snapshots.push(snapshot("cohere after unload"));
-    assert!(!g.get_status().loaded, "cohere should be unloaded");
-
-    Ok(ScenarioReport {
-        name: "cohere_cycle".to_string(),
         duration_ms: started.elapsed().as_millis(),
         snapshots,
         notes,
@@ -518,7 +499,7 @@ fn run_switch_sequence(
     name: &str,
     pcm: &[f32],
     whisper_model_id: &str,
-    parakeet_model_id: &str,
+    granite_model_id: &str,
     force_cpu: bool,
     steps: &[&str],
 ) -> Result<ScenarioReport, String> {
@@ -527,14 +508,12 @@ fn run_switch_sequence(
     let mut notes = Vec::new();
 
     let mut w = WhisperManager::new();
-    let mut p = ParakeetManager::new();
-    let mut g = CohereManager::new();
+    let mut p = GraniteManager::granite();
 
     for step in steps {
         match *step {
             "whisper" => {
                 p.unload();
-                g.unload();
                 snapshots.push(snapshot("after outgoing unloads before whisper init"));
                 w.initialize(Some(whisper_model_id), force_cpu)?;
                 snapshots.push(snapshot("after whisper init"));
@@ -542,25 +521,14 @@ fn run_switch_sequence(
                 notes.push(format!("whisper transcript chars={}", text.len()));
                 snapshots.push(snapshot("after whisper transcription"));
             }
-            "parakeet" => {
+            "granite" => {
                 w.unload();
-                g.unload();
-                snapshots.push(snapshot("after outgoing unloads before parakeet init"));
-                p.initialize(Some(parakeet_model_id), force_cpu)?;
-                snapshots.push(snapshot("after parakeet init"));
-                let text = p.transcribe_chunk(pcm, 16000)?;
-                notes.push(format!("parakeet transcript chars={}", text.len()));
-                snapshots.push(snapshot("after parakeet transcription"));
-            }
-            "cohere" => {
-                w.unload();
-                p.unload();
-                snapshots.push(snapshot("after outgoing unloads before cohere init"));
-                g.initialize(None, force_cpu)?;
-                snapshots.push(snapshot("after cohere init"));
-                let text = g.transcribe_chunk(pcm, 16000)?;
-                notes.push(format!("cohere transcript chars={}", text.len()));
-                snapshots.push(snapshot("after cohere transcription"));
+                snapshots.push(snapshot("after outgoing unloads before granite init"));
+                p.initialize(Some(granite_model_id), force_cpu)?;
+                snapshots.push(snapshot("after granite init"));
+                let text = p.transcribe_chunk(pcm, 16000, None)?;
+                notes.push(format!("granite transcript chars={}", text.len()));
+                snapshots.push(snapshot("after granite transcription"));
             }
             other => return Err(format!("unknown switch step: {other}")),
         }
@@ -568,14 +536,12 @@ fn run_switch_sequence(
 
     w.unload();
     p.unload();
-    g.unload();
     snapshots.push(snapshot("after final unloads"));
     assert!(
         w.get_current_model().is_none(),
         "whisper should be unloaded at end"
     );
-    assert!(!p.get_status().loaded, "parakeet should be unloaded at end");
-    assert!(!g.get_status().loaded, "cohere should be unloaded at end");
+    assert!(!p.get_status().loaded, "granite should be unloaded at end");
 
     Ok(ScenarioReport {
         name: name.to_string(),
@@ -586,7 +552,7 @@ fn run_switch_sequence(
 }
 
 #[test]
-#[ignore = "Needs JFK fixture + installed Whisper, Parakeet, and Cohere models. Run with --ignored --nocapture."]
+#[ignore = "Needs JFK fixture + installed Whisper and Granite models. Run with --ignored --nocapture."]
 fn memory_engine_regression() {
     if std::env::var("TAURSCRIBE_ASR_SMOKE_SKIP").as_deref() == Ok("1") {
         eprintln!("SKIP memory_engine_regression (TAURSCRIBE_ASR_SMOKE_SKIP=1)");
@@ -610,13 +576,13 @@ fn memory_engine_regression() {
     );
     let whisper_model_id = whisper_models[0].id.clone();
 
-    let parakeet_models = ParakeetManager::list_available_models()
-        .unwrap_or_else(|e| panic!("Parakeet list models failed: {e}"));
+    let granite_models = GraniteManager::granite().list_available_models()
+        .unwrap_or_else(|e| panic!("Granite list models failed: {e}"));
     assert!(
-        !parakeet_models.is_empty(),
-        "Parakeet model required for memory regression test"
+        !granite_models.is_empty(),
+        "Granite model required for memory regression test"
     );
-    let parakeet_model_id = parakeet_models[0].id.clone();
+    let granite_model_id = granite_models[0].id.clone();
 
     let mut scenarios = Vec::new();
     scenarios.push(
@@ -626,93 +592,63 @@ fn memory_engine_regression() {
         },
     );
     scenarios.push(
-        match run_parakeet_cycle(&pcm, &parakeet_model_id, force_cpu) {
+        match run_granite_cycle(&pcm, &granite_model_id, force_cpu) {
             Ok(report) => report,
-            Err(e) => panic!("parakeet cycle failed: {e}"),
+            Err(e) => panic!("granite cycle failed: {e}"),
         },
     );
     if !force_cpu {
         scenarios.push(
-            match run_parakeet_load_path_cycle(
-                "parakeet_strict_gpu_cycle",
+            match run_granite_load_path_cycle(
+                "granite_strict_gpu_cycle",
                 &pcm,
-                &parakeet_model_id,
-                ParakeetLoadPath::StrictGpu,
+                &granite_model_id,
+                GraniteLoadPath::StrictGpu,
             ) {
                 Ok(report) => report,
                 Err(e) => skipped_scenario(
-                    "parakeet_strict_gpu_cycle",
+                    "granite_strict_gpu_cycle",
                     format!("strict GPU unavailable: {e}"),
                 ),
             },
         );
         scenarios.push(
-            match run_parakeet_load_path_cycle(
-                "parakeet_fallback_gpu_cycle",
+            match run_granite_load_path_cycle(
+                "granite_fallback_gpu_cycle",
                 &pcm,
-                &parakeet_model_id,
-                ParakeetLoadPath::FallbackGpu,
+                &granite_model_id,
+                GraniteLoadPath::FallbackGpu,
             ) {
                 Ok(report) => report,
                 Err(e) => skipped_scenario(
-                    "parakeet_fallback_gpu_cycle",
+                    "granite_fallback_gpu_cycle",
                     format!("fallback GPU unavailable: {e}"),
                 ),
             },
         );
     }
     scenarios.push(
-        match run_parakeet_load_path_cycle(
-            "parakeet_cpu_cycle",
+        match run_granite_load_path_cycle(
+            "granite_cpu_cycle",
             &pcm,
-            &parakeet_model_id,
-            ParakeetLoadPath::Cpu,
+            &granite_model_id,
+            GraniteLoadPath::Cpu,
         ) {
             Ok(report) => report,
-            Err(e) => skipped_scenario("parakeet_cpu_cycle", format!("cpu-only run failed: {e}")),
-        },
-    );
-    scenarios.push(match run_cohere_cycle(&pcm, force_cpu) {
-        Ok(report) => report,
-        Err(e) => skipped_scenario("cohere_cycle", format!("skip: {e}")),
-    });
-    scenarios.push(
-        match run_switch_sequence(
-            "switch_whisper_parakeet_whisper",
-            &pcm,
-            &whisper_model_id,
-            &parakeet_model_id,
-            force_cpu,
-            &["whisper", "parakeet", "whisper"],
-        ) {
-            Ok(report) => report,
-            Err(e) => panic!("whisper→parakeet→whisper failed: {e}"),
+            Err(e) => skipped_scenario("granite_cpu_cycle", format!("cpu-only run failed: {e}")),
         },
     );
     scenarios.push(
         match run_switch_sequence(
-            "switch_whisper_cohere_whisper",
+            "switch_whisper_granite_whisper",
             &pcm,
             &whisper_model_id,
-            &parakeet_model_id,
+            &granite_model_id,
             force_cpu,
-            &["whisper", "cohere", "whisper"],
+            &["whisper", "granite", "whisper"],
         ) {
             Ok(report) => report,
-            Err(e) => skipped_scenario("switch_whisper_cohere_whisper", format!("skip: {e}")),
-        },
-    );
-    scenarios.push(
-        match run_switch_sequence(
-            "switch_parakeet_cohere_parakeet",
-            &pcm,
-            &whisper_model_id,
-            &parakeet_model_id,
-            force_cpu,
-            &["parakeet", "cohere", "parakeet"],
-        ) {
-            Ok(report) => report,
-            Err(e) => skipped_scenario("switch_parakeet_cohere_parakeet", format!("skip: {e}")),
+            Err(e) => panic!("whisper→granite→whisper failed: {e}"),
         },
     );
 
