@@ -2,6 +2,31 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+/// Truncate to a byte budget without splitting a UTF-8 code point.
+pub fn truncate_utf8_with_ellipsis(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    let suffix = if max_bytes >= 3 { "..." } else { "" };
+    let mut end = max_bytes.saturating_sub(suffix.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{}", &text[..end], suffix)
+}
+
+#[cfg(test)]
+mod utf8_truncation_tests {
+    use super::truncate_utf8_with_ellipsis;
+
+    #[test]
+    fn truncates_on_character_boundaries() {
+        assert_eq!(truncate_utf8_with_ellipsis("é🙂abcd", 8), "é...");
+        assert_eq!(truncate_utf8_with_ellipsis("é🙂abcd", 9), "é🙂...");
+        assert_eq!(truncate_utf8_with_ellipsis("é🙂abcd", 10), "é🙂abcd");
+    }
+}
+
 /// Post-process raw ASR output: fix punctuation artifacts and remove Whisper hallucinations.
 pub fn clean_transcript(text: &str) -> String {
     let mut cleaned = text.trim().to_string();
@@ -9,7 +34,7 @@ pub fn clean_transcript(text: &str) -> String {
     // Remove Whisper hallucination repetitions before anything else
     cleaned = remove_repetitions(&cleaned);
 
-    // Strip known subtitle-style sound/caption tags ([music], (laughter), …) from Whisper / Granite
+    // Strip known subtitle-style sound/caption tags ([music], (laughter), …) from Whisper / Qwen3
     cleaned = strip_whitelisted_sound_captions(&cleaned);
 
     // Fix floating punctuation
@@ -41,7 +66,7 @@ pub fn clean_transcript(text: &str) -> String {
 }
 
 /// Remove `[…]` / `(…)` segments only when the inner text matches a known ASR sound/caption label.
-/// Used for live streaming chunks so the UI matches `clean_transcript` output. Whisper / Granite only.
+/// Used for live streaming chunks so the UI matches `clean_transcript` output. Whisper / Qwen3 only.
 pub(crate) fn strip_whitelisted_sound_captions(text: &str) -> String {
     static RE_BRACKETS: OnceLock<Regex> = OnceLock::new();
     static RE_PARENS: OnceLock<Regex> = OnceLock::new();
@@ -319,17 +344,8 @@ pub fn get_recordings_dir() -> Result<std::path::PathBuf, String> {
     Ok(recordings_dir)
 }
 
-/// Helper: Find or create the directory to save models
+/// Helper: Find or create the directory to save models (default
+/// AppData/Local/Taurscribe/models, or the folder chosen in Settings → Storage).
 pub fn get_models_dir() -> Result<std::path::PathBuf, String> {
-    // Get the standard AppData folder (C:\Users\Name\AppData\Local)
-    let app_data = dirs::data_local_dir().ok_or("Could not find AppData directory")?;
-
-    // Append our specific folder: ...\Taurscribe\models
-    let models_dir = app_data.join("Taurscribe").join("models");
-
-    // Create folder if it doesn't exist
-    std::fs::create_dir_all(&models_dir)
-        .map_err(|e| format!("Failed to create models directory: {}", e))?;
-
-    Ok(models_dir)
+    crate::storage::resolve_dir(crate::storage::Area::Models)
 }

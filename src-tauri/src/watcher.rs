@@ -1,12 +1,17 @@
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Bumped on every (re)start so a watcher on an old models folder stops itself.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 use std::sync::mpsc;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Starts watching the models directory for changes
-/// Emits "models-changed" event to frontend when files are added/removed
+/// Emits "models-changed" after writes, renames, or removals settle.
+/// Calling it again (after the models folder moves) replaces the old watcher.
 pub fn start_models_watcher(app_handle: AppHandle) -> Result<(), String> {
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     // Get the models directory path
     let models_dir = crate::utils::get_models_dir()?;
 
@@ -19,12 +24,11 @@ pub fn start_models_watcher(app_handle: AppHandle) -> Result<(), String> {
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<Event, notify::Error>| {
             if let Ok(event) = res {
-                // Only send for create/remove events
-                match event.kind {
-                    notify::EventKind::Create(_) | notify::EventKind::Remove(_) => {
-                        let _ = tx.send(event);
-                    }
-                    _ => {}
+                // macOS can report a rename on an external volume as a generic
+                // modify event. Refresh for any filesystem change, but ignore
+                // reads so status checks do not trigger another refresh.
+                if !matches!(event.kind, notify::EventKind::Access(_)) {
+                    let _ = tx.send(event);
                 }
             }
         },
@@ -32,9 +36,12 @@ pub fn start_models_watcher(app_handle: AppHandle) -> Result<(), String> {
     )
     .map_err(|e| format!("Failed to create watcher: {}", e))?;
 
-    // Start watching the models directory (recursive to catch Parakeet subdirs)
+    // Start watching the models directory (recursive to catch per-model subfolders)
+    // Watch the real folder: a symlinked models dir (e.g. moved to another
+    // disk) otherwise reports no events at all.
+    let watch_dir = std::fs::canonicalize(&models_dir).unwrap_or_else(|_| models_dir.clone());
     watcher
-        .watch(Path::new(&models_dir), RecursiveMode::Recursive)
+        .watch(Path::new(&watch_dir), RecursiveMode::Recursive)
         .map_err(|e| format!("Failed to watch directory: {}", e))?;
 
     // Spawn a thread to handle events and emit to frontend
@@ -42,37 +49,38 @@ pub fn start_models_watcher(app_handle: AppHandle) -> Result<(), String> {
         // Keep the watcher alive
         let _watcher = watcher;
 
-        // Debounce timer to avoid spamming events
-        let mut last_emit = std::time::Instant::now();
+        // Emit after a burst settles. A leading-edge throttle drops the second
+        // half of a quick remove/restore and leaves Settings showing stale state.
+        let mut pending = false;
+        let mut last_change = std::time::Instant::now();
         let debounce_duration = std::time::Duration::from_millis(500);
 
         loop {
-            match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            if GENERATION.load(Ordering::SeqCst) != generation {
+                break;
+            }
+            match rx.recv_timeout(std::time::Duration::from_millis(100)) {
                 Ok(event) => {
-                    // Check if enough time has passed since last emit
-                    if last_emit.elapsed() >= debounce_duration {
-                        println!("[WATCHER] Model files changed: {:?}", event.paths);
-
-                        // Emit event to frontend
-                        if let Err(e) = app_handle.emit("models-changed", ()) {
-                            eprintln!("[WATCHER] Failed to emit event: {}", e);
-                        }
-
-                        if let Some(st) = app_handle.try_state::<crate::state::AudioState>() {
-                            let loaded = st.model_loaded.load(Ordering::Relaxed);
-                            crate::tray::update_tray_model_item(&app_handle, loaded);
-                        }
-
-                        last_emit = std::time::Instant::now();
-                    }
+                    println!("[WATCHER] Model files changed: {:?}", event.paths);
+                    pending = true;
+                    last_change = std::time::Instant::now();
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // No events, continue watching
-                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     println!("[WATCHER] Channel disconnected, stopping watcher");
                     break;
                 }
+            }
+
+            if pending && last_change.elapsed() >= debounce_duration {
+                if let Err(e) = app_handle.emit("models-changed", ()) {
+                    eprintln!("[WATCHER] Failed to emit event: {}", e);
+                }
+                if let Some(st) = app_handle.try_state::<crate::state::AudioState>() {
+                    let loaded = st.model_loaded.load(Ordering::Relaxed);
+                    crate::tray::update_tray_model_item(&app_handle, loaded);
+                }
+                pending = false;
             }
         }
     });
