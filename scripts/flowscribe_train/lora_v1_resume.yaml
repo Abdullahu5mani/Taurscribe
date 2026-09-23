@@ -1,0 +1,29 @@
+# FlowScribe v3 pilot: LoRA on Qwen3.5-0.8B (bf16 base; fused result stays full precision).
+model: "/Volumes/ExternalSSD/TaurscribeData/hf/hub/models--Qwen--Qwen3.5-0.8B/snapshots/2fc06364715b967f1860aea9cf38778875588b17"
+train: true
+fine_tune_type: lora
+data: data/v1
+mask_prompt: true          # learn only the assistant answer
+seed: 1                    # new order for the resumed part
+num_layers: -1             # adapt every layer
+batch_size: 4
+grad_accumulation_steps: 4  # effective batch 16 within 16 GB unified memory
+iters: 4132                # remaining micro-steps after resuming at 1200 of 5332
+learning_rate: 1.0e-4
+lr_schedule:
+  name: cosine_decay
+  arguments: [9.1e-5, 1033, 5.0e-6]  # continue the cosine from optimizer step 300 of 1333
+lora_parameters:
+  rank: 32
+  scale: 10.0
+  dropout: 0.05
+max_seq_length: 512
+grad_checkpoint: true
+clear_cache_threshold: 1000000000   # keep MLX buffer cache under 1 GB (OOM at 12 GB peak)
+resume_adapter_file: adapters/v1/resume_from_1200.safetensors
+optimizer: adamw
+steps_per_report: 40
+steps_per_eval: 800
+val_batches: 40
+save_every: 400
+adapter_path: adapters/v1b

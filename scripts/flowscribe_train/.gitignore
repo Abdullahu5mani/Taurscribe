@@ -1,0 +1,5 @@
+.venv/
+data/
+adapters/
+fused/
+*.log
