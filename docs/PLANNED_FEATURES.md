@@ -18,37 +18,17 @@ Rather than building in arbitrary order, this roadmap is strictly engineered so 
 │   • Foundation 4: 5-Tier Cross-Platform Hardware Emulation Suite (Metal/CPU)│
 │   • Foundation 5: Appium macOS E2E UI Automation Suite (19 live screenshots)│
 │   • Foundation 6: Dual-Channel Loopback & Bot-Free Meeting Detector (Live)  │
+│   • Step 1: Searchable Meeting Catalog Hub (SQLite, Scrubber, Export) (Done)│
+│   • Step 2: Speaker Diarization, Voiceprint Vault & Audio Snippets (Done)   │
+│   • [Step 3: Automated Meeting Summaries & Action Items - REMOVED BY DESIGN]│
+│   • Step 4 (Windows): Live Floating Capsule & 17-Bar Real-Time Waveform (Done)
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 1: Searchable Meeting Catalog Hub & Local Store (NEXT FOCUS)           │
-│ Builds the SQLite/JSON schema & dedicated "Meetings" UI view to hold calls, │
-│ transcripts, search, and markdown exports. You need a home for meetings     │
-│ before categorizing or diarizing them.                                      │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 2: Speaker Diarization, Voiceprint Vault & Audio Snippets              │
-│ Ingests dual-channel audio, runs pyannote + CAM++ clustering to separate    │
-│ speakers into conversational turns, extracts 3s isolated audio clips for    │
-│ labeling, and persists voiceprints.                                         │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 3: Automated Meeting Summarization, Categorization & Action Items      │
-│ Feeds the diarized, speaker-attributed transcript turns into our local LLM  │
-│ to generate titles, categories, summaries, and action items with a slide-up │
-│ confirmation modal.                                                         │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │
-                                       ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 4: Live Floating Capsule with Real-Time Audio Waveform                 │
-│ Circles back to polish daily voice typing: dynamic Island-style floating    │
-│ pill tracking the active text caret with a 60 FPS visualizer.               │
+│ STEP 4 (macOS & Caret Polish): Unified Floating Capsule & Caret Tracking    │
+│ (NEXT FOCUS)                                                                │
+│ Port the Windows Dynamic Island pill to macOS and track active caret coords.│
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
                                        ▼
@@ -77,9 +57,13 @@ These core technical layers are completely implemented, tested, and verified on 
 | **[Foundation 1: 1-Click Whisper CoreML ANE Auto-Downloader](#foundation-1-1-click-whisper-coreml-ane-auto-downloader)** | ✅ **COMPLETE** | **Apple Neural Engine Offload**: Bundles `.bin` + `.mlmodelc.zip` for **85.0x real-time** inference on Apple Silicon M-Series. | Done |
 | **[Foundation 2: Custom Vocabulary & Context Jargon Injection](#foundation-2-custom-vocabulary--context-jargon-injection)** | ✅ **COMPLETE** | **Prompt Biasing & Casing Normalization**: Empirically verified on LibriSpeech (+50% proper noun accuracy gain, 59% WER error reduction). | Done |
 | **[Foundation 3: Qwen3-ASR SOTA Engine (Zero-Python, 0 Quant)](#foundation-3-qwen3-asr-engine-zero-python-0-quantization)** | ✅ **COMPLETE** | **Conversational SOTA Accuracy**: 100% native Rust MLX (Metal) & ONNX engine, full-precision `model.safetensors` (0 quantization), stateful KV-caching, **3.4× speedup** (12.05s vs 40.44s), and exact bit-by-bit parity. | Done |
-| **[Foundation 4: Cross-Platform Hardware Emulation Suite](#foundation-4-cross-platform-hardware-emulation-suite)** | ✅ **COMPLETE** | **5/5 Tiers Validated**: Automated test suite simulating Apple Silicon Metal, CPU multi-threading, Windows DirectML WARP, NVIDIA CUDA mock, and AMD ROCm HIP-CPU. | Done |
+| **[Foundation 4: Cross-Platform Hardware Emulation Suite](#foundation-4-cross-platform-hardware-emulation-suite)** | ✅ **COMPLETE** | **2/2 Tiers Validated**: Qwen3-ASR transcribes the JFK clip on Apple Silicon Metal and on the multi-threaded CPU path. (Mock DirectML/CUDA/ROCm tiers removed: they never ran Taurscribe code.) | Done |
 | **[Foundation 5: Appium macOS E2E UI Automation & Benchmarks](#foundation-5-appium-macos-e2e-ui-automation--benchmarks)** | ✅ **COMPLETE** | **100% E2E UI & Multi-Model Verification**: Automated native file picker (`Cmd+Shift+G`), CoreML file transcription (50.2x RT), engine picker popover, dictation mode, 6-tab settings tour, and 19 live screenshot artifacts. | Done |
 | **[Foundation 6: Dual-Channel Loopback & Bot-Free Meeting Detector](#foundation-6-dual-channel-system-loopback--bot-free-meeting-detector)** | ✅ **COMPLETE** | **Bot-Free Dual Capture & Call Detection**: CoreAudio HAL process tap / WASAPI loopback, real-time meeting detection (Zoom, Teams, Meet, Slack, Discord, Webex), 48 kHz stereo WAV (CH1 Mic / CH2 Call), 1-click recording banner, auto-record, and dual-level visualizer. | Done |
+| **[Step 1: Searchable Meeting Catalog Hub](#step-1-searchable-meeting-catalog-hub)** | ✅ **COMPLETE** | **Data & UI Foundation**: Persistent SQLite catalog (`meetings.db`), dedicated "Meetings" view, search, platform filtering pills, recent/platform grouping, 1x/1.25x/1.5x audio scrubber, export to Markdown/Text/JSON. Responsive single-column drill-down (<768px) and 2-column desktop (≥768px). | Done |
+| **[Step 2: Speaker Diarization, Voiceprint Vault & Audio Snippets](#step-2-speaker-diarization-voiceprint-vault--audio-snippets)** | ✅ **COMPLETE** | **Speaker Intelligence**: Deterministic dual-channel separation (CH0 = You), unsupervised acoustic feature clustering (CH1 Callers), duration-weighted transcript word alignment, 3s isolated WAV snippets (`[ ▶ 3s ]`), and Speaker Vault modal with cascading SQLite renaming. | Done |
+| **[Step 3: Automated Summaries & Action Items](#step-3-automated-meeting-summarization-categorization--action-items---removed)** | 🚫 **REMOVED** | **Discarded by Design**: User decision to remove forced LLM summaries, heuristic categorizations, and confirmation modals in favor of a 100% clean, high-clarity, transcript-first architecture. | Removed |
+| **[Step 4: Live Floating Capsule with Waveform Visualizer](#step-4-live-floating-capsule-with-real-time-audio-waveform)** | 🟡 **IN PROGRESS** | **Daily Voice-Typing Polish**: **Windows is COMPLETE** (228×42 Dynamic Island pill with 17-bar real-time audio waveform, latency/duration clock, and non-stealing focus in `OverlayApp.tsx`). **macOS & Caret Tracking** is next focus. | In Progress |
 
 ---
 
@@ -89,10 +73,10 @@ Strictly ordered by true architectural dependencies and cumulative user value:
 
 | Step | Milestone | Status | Strategic Rationale & Architectural Dependency | Effort |
 |:---:|:---|:---:|:---|:---:|
-| **1** | [Searchable Meeting Catalog Hub](#step-1-searchable-meeting-catalog-hub) | 🟡 **NEXT FOCUS** | **Data & UI Foundation**: Ingests the dual-channel recordings, providing a persistent SQLite/JSON store and a dedicated "Meetings" view in the UI to organize, filter, and review calls. | ~1–2 days |
-| **2** | [Speaker Diarization, Voiceprint Vault & Audio Snippets](#step-2-speaker-diarization-voiceprint-vault--audio-snippets) | ⚪ Planned | **Speaker Intelligence**: Takes dual-channel meeting audio, separates speakers into conversation turns, extracts 3s isolated audio clips for naming, and stores voiceprints. | ~2–3 days |
-| **3** | [Automated Meeting Summarization, Categorization & Action Items](#step-3-automated-meeting-summarization-categorization--action-items) | ⚪ Planned | **Post-Meeting Intelligence**: Runs local LLM on the diarized conversation turns to generate structured titles, categories, summaries, and action items with confirmation modal. | ~1 day |
-| **4** | [Live Floating Capsule with Real-Time Audio Waveform](#step-4-live-floating-capsule-with-real-time-audio-waveform) | ⚪ Planned | **Daily Voice-Typing Polish**: Upgrades the dictation overlay to a Dynamic Island pill tracking the active caret with a 60 FPS audio visualizer without stealing keyboard focus. | ~2–3 days |
+| **1** | [Searchable Meeting Catalog Hub](#step-1-searchable-meeting-catalog-hub) | ✅ **COMPLETE** | **Data & UI Foundation**: Ingests dual-channel recordings into SQLite, providing a dedicated "Meetings" view organized by platform with filters, search, audio scrubbing, and export. | Done |
+| **2** | [Speaker Diarization, Voiceprint Vault & Audio Snippets](#step-2-speaker-diarization-voiceprint-vault--audio-snippets) | ✅ **COMPLETE** | **Speaker Intelligence**: Deterministic dual-channel separation, acoustic feature clustering, duration-weighted text alignment, 3s voice snippets, and voiceprint vault. | Done |
+| **3** | [Automated Summaries & Action Items](#step-3-automated-meeting-summarization-categorization--action-items---removed) | 🚫 **REMOVED** | **Discarded by Design**: Explicitly removed LLM summaries and heuristic tags to prevent UI clutter and hallucinations. | Scrapped |
+| **4** | [Live Floating Capsule with Waveform Visualizer](#step-4-live-floating-capsule-with-real-time-audio-waveform) | 🟡 **NEXT FOCUS** | **Daily Voice-Typing Polish**: Windows capsule is already delivered. Next: bring transparent Dynamic Island pill to macOS and track active text caret position across apps. | ~1–2 days |
 | **5** | [Adaptive In-Situ Correction Learning](#step-5-adaptive-in-situ-correction-learning) | ⚪ Planned | **Self-Improving Flywheel**: Monitors post-paste user edits in the active text field, computes word-level diffs, and auto-ingests technical terms into custom vocabulary for next time. | ~1 day |
 | **6** | [Voice Transformation Commands (Model Fine-Tuning)](#step-6-voice-transformation-commands-model-fine-tuning---deferred) | ⏸️ **DEFERRED** | **Advanced Post-Processing**: Supervised LoRA fine-tuning of a specialized local instruction model for voice-directed editing ("bullet this", "make executive email format"). | Deferred |
 
@@ -164,7 +148,7 @@ Strictly ordered by true architectural dependencies and cumulative user value:
 ---
 
 ### Foundation 4: Cross-Platform Hardware Emulation Suite
-* **Status:** ✅ **COMPLETED & VERIFIED (5/5 Tiers Passing)**
+* **Status:** ✅ **COMPLETED & VERIFIED (2/2 Tiers Passing)**
 * **Harness Script**: `scripts/tests/test_qwen3_cross_platform_emulation.sh`
 
 #### Validated Hardware Tiers
@@ -173,9 +157,6 @@ Strictly ordered by true architectural dependencies and cumulative user value:
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Tier 1** | Apple Silicon Metal GPU | macOS (`aarch64`) | FP16/BFloat16 | Native unified memory Metal compute pipeline | **PASS ✓** |
 | **Tier 2** | Multi-Threaded CPU Engine | Linux / macOS / Windows | FP32 | SIMD NEON/AVX multi-core parallel execution | **PASS ✓** |
-| **Tier 3** | Windows DirectML Software WARP | Windows 10/11 (x64/ARM64) | FP16/FP32 | Direct3D 12 WARP rasterizer/compute emulation | **PASS ✓** |
-| **Tier 4** | NVIDIA CUDA Driver Mock | Linux / Windows NVIDIA | FP16/BFloat16 | `libcuda.so` mock dispatch with async CUDA streams | **PASS ✓** |
-| **Tier 5** | AMD ROCm HIP-CPU Parallel | Linux AMD RDNA2/3 | FP16/FP32 | ROCm HIP-CPU parallel vector execution | **PASS ✓** |
 
 ---
 
@@ -241,83 +222,135 @@ Strictly ordered by true architectural dependencies and cumulative user value:
 
 ---
 
-## 3. Upcoming Strategic Implementation Sequence
+## 3. Implementation Details: Meeting Intelligence & Catalog Suite
 
-### STEP 1: Searchable Meeting Catalog Hub
-* **Status:** 🟡 **NEXT FOCUS**
-* **Strategic Role:** Storage & UI Backbone for Meetings
-* **Estimated Effort:** ~1–2 days
+### STEP 1: Clean Transcript-First Meeting Catalog Hub
+* **Status:** ✅ **COMPLETED & VERIFIED**
+* **Strategic Role:** Storage Backbone & Transcript-First Catalog
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
-#### Why Build This Next?
-With dual-channel audio capture and automated meeting detection now fully live, we need a permanent visual home and queryable database to index, catalog, and playback the recorded meetings:
-- **Local Meeting Store** (`meetings.json` or SQLite table in AppData):
-  - Fields: `id`, `title`, `category`, `tags`, `timestamp`, `duration_secs`, `audio_path`, `speakers`, `transcript_segments`, `summary`, `action_items`.
-- **Dedicated Meetings Tab (`MeetingsTab.tsx`)**:
-  - Category filter pills (`Engineering`, `1-on-1`, `Client Call`, etc.).
-  - Speaker filter pills (`All`, `Sarah`, `Abdullah`).
-  - Full-text search bar searching both speech text and action items.
-  - Export button (Markdown `.md` with timestamps and checklist action items).
+#### Architecture & User Experience
+In accordance with user requirements, the meeting catalog avoids keyword classification tags, summaries, or cluttered AI checklists. Instead, it delivers a razor-sharp, distraction-free meeting explorer focused on accurate identification and instant transcript access:
+1. **Meeting Card Metadata**:
+   - **Platform Badge**: Visual color-coded pill (`Google Meet`, `Zoom`, `Microsoft Teams`, `Slack`, `Discord`, `Webex`, `Direct Audio`).
+   - **Date & Time**: Exact call start time (`Sep 20 • 7:33 PM`).
+   - **Duration**: Formatted elapsed time (`12m 34s`).
+   - **Meeting Name**: Extracted from active window title/URL or editable by the user.
+   - **Speaker Count**: Number of distinct speakers detected in the call.
+2. **Side-by-Side Instant Transcript Panel**:
+   - Clicking any meeting card immediately loads the complete, full-fidelity conversation transcript on the right pane.
+   - Header with quick actions: `Copy Transcript`, `Export` (Markdown, Text, JSON), and `Delete`.
+   - Meeting metadata banner with external link back to the call URL if recorded from a browser.
+   - Built-in audio timeline scrubber with playback speeds (`1x`, `1.25x`, `1.5x`).
+3. **Database & File Storage Architecture (Where & How Transcripts Are Saved)**:
+   - **Application Root Directory**:
+     - macOS: `~/Library/Application Support/Taurscribe/`
+     - Windows: `%APPDATA%\Taurscribe\`
+     - Linux: `~/.local/share/taurscribe/`
+   - **SQLite Database (`transcript_history.db`)**:
+     - `meetings`: Stores primary call record:
+       ```sql
+       CREATE TABLE IF NOT EXISTS meetings (
+           id TEXT PRIMARY KEY,
+           session_id TEXT,
+           title TEXT NOT NULL,
+           platform TEXT NOT NULL,
+           app_name TEXT,
+           url TEXT,
+           created_at INTEGER NOT NULL,
+           duration_ms INTEGER NOT NULL,
+           audio_path TEXT,
+           transcript_raw TEXT NOT NULL,
+           summary TEXT,
+           action_items TEXT,
+           category TEXT,
+           speaker_count INTEGER NOT NULL DEFAULT 1
+       );
+       ```
+     - `meeting_turns`: Foreign-keyed turns linked by `meeting_id`:
+       ```sql
+       CREATE TABLE IF NOT EXISTS meeting_turns (
+           id TEXT PRIMARY KEY,
+           meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+           speaker_id TEXT NOT NULL,
+           speaker_name TEXT NOT NULL,
+           start_ms INTEGER NOT NULL,
+           end_ms INTEGER NOT NULL,
+           text TEXT NOT NULL
+       );
+       ```
+   - **Dedicated Meeting Audio & Snippet Folders**:
+     - `meetings/audio/{meeting_id}.wav`: Raw 48 kHz stereo recording (Channel 0 = Local Mic, Channel 1 = System Loopback).
+     - `meetings/snippets/{speaker_id}.wav`: 3-second isolated mono voice sample per speaker for instant playback.
 
 ---
 
-### STEP 2: Speaker Diarization, Voiceprint Vault & Audio Snippets
-* **Status:** ⚪ Planned
+### STEP 2: Speaker Diarization, Voiceprint Identification & Speaker Vault
+* **Status:** ✅ **COMPLETED & VERIFIED**
 * **Strategic Role:** Conversational Speaker Intelligence (Who Spoke When)
-* **Estimated Effort:** ~2–3 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
-#### Why Build This Second?
-With dual-channel audio captured and cataloged, we turn the audio into distinct, conversational speech turns:
-- **Channel 1** is instantly labeled as "You".
-- **Channel 2** is clustered using offline neural speaker embeddings.
-- Users can listen to isolated 3-second audio snippets of unknown speakers and name them.
-
-#### Implementation Architecture
-1. **Diarization Pipeline**:
-   - `pyannote-segmentation-3.0.onnx` (~6 MB) segments speech turns.
-   - `CAM++.onnx` (~25 MB) extracts a 192-dimensional embedding vector per turn.
-2. **Clean Audio Snippet Extraction**:
-   - Finds an isolated 3–5 second slice with zero cross-talk for each cluster.
-   - Converts to in-memory base64 WAV data URI for the `[ ▶ Play 3s sample ]` player in the confirmation modal.
-3. **Voiceprint Vault (`voiceprints.json`)**:
-   - Stores user-labeled embeddings.
-   - Computes cosine similarity ($\tau \ge 0.75$) to auto-identify enrolled speakers in all future meetings.
+#### How Diarized Speakers Are Identified and Saved
+1. **Deterministic Dual-Channel Hardware Separation**:
+   - **Channel 0 (Local Mic / Left)**: 100% deterministic isolation for the user (`speaker_you` = "You"). Eliminates cross-talk and ensures the local speaker is never misattributed.
+   - **Channel 1 (System Loopback / Right)**: Isolates incoming meeting participants captured directly from the OS audio engine (CoreAudio HAL Process Tap on macOS, WASAPI Loopback on Windows).
+2. **Acoustic Feature Extraction & Clustering (`diarization.rs`)**:
+   - Extracts 32-dimensional acoustic feature vectors across voice-active frames on Channel 1:
+     - **RMS Energy**: Distinguishes vocal prominence.
+     - **Zero-Crossing Rate (ZCR)**: Separates voiced vs. unvoiced consonants and vocal textures.
+     - **Spectral Centroid & Spectral Flatness**: Measures frequency distribution and brightness.
+     - **Autocorrelation Pitch Proxy**: Identifies fundamental pitch frequency across speakers.
+   - Unsupervised centroid clustering assigns unique speaker IDs (`Speaker 1`, `Speaker 2`), merging turns where conversational pauses are under 1000ms.
+3. **Duration-Weighted Transcript Alignment**:
+   - Transcribed sentence chunks from Whisper or Qwen3 are mapped against voice activity time boundaries, proportionally assigning each word segment to the active speaker turn.
+4. **Isolated 3-Second Audio Snippets**:
+   - A clean 3-second slice with highest SNR is exported per speaker to `~/Library/Application Support/Taurscribe/meetings/snippets/`.
+   - Allows instant in-app listening (`[ ▶ 3s ]` button) directly from the transcript turn.
+5. **Speaker Voiceprint Vault (`speaker_vault` in SQLite & `SpeakerVaultModal.tsx`)**:
+   - Enrolls discovered speaker profiles:
+     ```sql
+     CREATE TABLE IF NOT EXISTS speaker_vault (
+         speaker_id TEXT PRIMARY KEY,
+         display_name TEXT NOT NULL,
+         sample_audio_path TEXT,
+         total_turns INTEGER NOT NULL DEFAULT 0,
+         total_duration_ms INTEGER NOT NULL DEFAULT 0,
+         first_seen_at INTEGER NOT NULL,
+         last_seen_at INTEGER NOT NULL
+     );
+     ```
+   - **Global Identity Renaming**: Clicking a speaker's name in any transcript turn or opening the Speaker Vault allows renaming (e.g., changing `Speaker 1` to `Sarah`). The change instantly cascades across the SQLite database to all historical meeting turns.
 
 ---
 
-### STEP 3: Automated Meeting Summarization, Categorization & Action Items
-* **Status:** ⚪ Planned
-* **Strategic Role:** Post-Meeting Local LLM Intelligence Layer
-* **Estimated Effort:** ~1 day
-* **Target Platforms:** All Platforms (macOS, Windows, Linux)
-
-#### Why Build This Third?
-Now that the transcript is fully separated into speaker turns, the local LLM has the rich conversational context needed to attribute action items and generate accurate summaries.
-
-#### Implementation Architecture
-1. **Structured LLM Inference** in [`llm.rs`](file:///Volumes/ExternalSSD/Projects/Code%20Projects/Taurscribe/src-tauri/src/llm.rs):
-   - Takes the diarized transcript turns and returns structured JSON: `title`, `category`, `tags`, `summary`, and `action_items` (attributed to specific speakers).
-2. **Post-Meeting Confirmation Modal**:
-   - Slides up when meeting recording finishes.
-   - Editable Title input.
-   - Category dropdown (pre-selected with the AI's choice).
-   - Speaker name assignment chips with 3s audio preview buttons.
-   - `[Confirm & Save to Catalog]` button writes directly into the Step 1 Meeting Catalog store.
+### STEP 3: Automated Meeting Summarization, Categorization & Action Items — REMOVED
+* **Status:** 🚫 **CANCELLED / REMOVED BY DESIGN**
+* **Strategic Role:** Clean, Zero-Clutter Philosophy
+* **Rationale & Decision:**
+  - **User Decision**: Explicitly discarded post-meeting LLM summaries, automatic action item extractors, and artificial category tags (`Engineering`, `Standup`, `Planning`).
+  - **Why**: Forced AI summaries introduce cognitive overhead, slow down the post-recording experience, and can hallucinate details. Instead, Taurscribe prioritizes 100% reliable, pristine conversational transcripts with deterministic speaker turns, timestamps, and synchronized audio playback.
 
 ---
 
 ### STEP 4: Live Floating Capsule with Real-Time Audio Waveform
-* **Status:** ⚪ Planned
+* **Status:** 🟡 **IN PROGRESS / WINDOWS COMPLETE**
 * **Strategic Role:** Daily Dictation UI/UX Polish
-* **Estimated Effort:** ~2–3 days
 * **Target Platforms:** All Platforms (macOS, Windows, Linux)
 
-#### Why Build This Fourth?
-With the meeting intelligence pipeline complete, this step circles back to polish the **day-to-day push-to-talk dictation experience**:
-- Upgrades the static overlay into an ultra-sleek, frosted-glass Dynamic Island pill.
-- Tracks active text cursor/caret in whatever app you are typing into.
-- Displays a 60 FPS real-time audio waveform visualizer without stealing keyboard focus.
+#### Current Architecture Status:
+1. **Windows (Delivered & Operational)**:
+   - Configured in `src-tauri/tauri.windows.conf.json` as an independent, transparent, frameless, always-on-top window (`label: "overlay"`, `url: "index.html#overlay"`).
+   - Implemented in `src/OverlayApp.tsx` and `src/OverlayApp.css`:
+     - 228×42 Dynamic Island capsule with frosted border and subtle glow.
+     - Pulsating red recording status dot and spinner transitions for `transcribing` / `correcting` / `done`.
+     - Live elapsed timer and latency display (`formatLatency(ms)`).
+     - 17-bar real-time smoothed audio visualizer driven by incoming audio level events.
+     - Non-activating window behavior (`restore_focus`) preventing keyboard focus theft from active editors.
+2. **macOS (Delivered via AppKit NSPanel)**:
+   - Operates via native Cocoa AppKit `NSPanel` (`src-tauri/src/overlay.rs`) at `kCGScreenSaverWindowLevel` with non-activating focus.
+3. **Remaining Polish Scope**:
+   - **Cross-Platform Visual Parity**: Unify macOS to use the identical transparent WebKit Dynamic Island pill with the 17-bar animated audio waveform.
+   - **Active Caret Tracking**: Track the active text insertion caret across external applications (VS Code, Chrome, Word, Slack) using OS Accessibility APIs (`AXUIElement` on macOS, `UIAutomation` on Windows) so the capsule floats directly above the user's cursor rather than fixed at screen bottom.
 
 ---
 
@@ -357,15 +390,15 @@ Unlike standard prompting, zero-latency voice transformation commands (*"bullet 
 │   ✓ Foundation 5: Appium E2E Automation: 100% pass, 19 UI screenshots       │
 │   ✓ Foundation 6: Dual-Channel Loopback & Bot-Free Meeting Detector (Live)  │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 1: Storage Hub & Catalog (Days 1–2)                                   │
-│   🟡 Step 1: Searchable Meeting Catalog Hub & Local Store (NEXT FOCUS)      │
+│ PHASE 1: Storage Hub & Catalog (Delivered & Verified)                       │
+│   ✓ Step 1: Searchable Meeting Catalog Hub (SQLite, Scrubber, Export Done)  │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 2: Meeting Intelligence & Diarization (Days 3–6)                      │
-│   ⚪ Step 2: Speaker Diarization + Voiceprint Vault & Audio Snippets        │
-│   ⚪ Step 3: Automated Meeting Summarization, Categorization & Action Items │
+│ PHASE 2: Meeting Intelligence & Diarization (Delivered & Verified)          │
+│   ✓ Step 2: Speaker Diarization + Voiceprint Vault & Audio Snippets (Done)  │
+│   🚫 [Step 3: Automated Summaries & Action Items - CANCELLED BY DESIGN]     │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ PHASE 3: Dictation Polish & Self-Improvement (Week 2–3)                     │
-│   ⚪ Step 4: Live Floating Capsule with Waveform Visualizer                 │
+│ PHASE 3: Dictation Polish & Self-Improvement                                │
+│   🟡 Step 4: Live Floating Capsule (Windows DONE; macOS/Caret NEXT FOCUS)   │
 │   ⚪ Step 5: Adaptive In-Situ Correction Learning (Post-Paste Auto-Learn)   │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ PHASE 4: Advanced Fine-Tuning (Post-v2.0)                                   │
