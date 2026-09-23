@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "./OverlayApp.css";
 
-type Phase =
+export type Phase =
     | "recording"
     | "paused"
     | "transcribing"
@@ -24,11 +24,11 @@ interface Payload {
     engine?: string | null;
 }
 
-const BAR_COUNT = 17;
+const BAR_COUNT = 21;
 const ATTACK = 0.35;
 const DECAY = 0.12;
-const OVERLAY_WIDTH = 228;
-const OVERLAY_HEIGHT = 42;
+const OVERLAY_WIDTH = 236;
+const OVERLAY_HEIGHT = 44;
 
 function formatElapsed(ms: number) {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -49,21 +49,21 @@ function getStatusLabel(phase: Phase) {
         case "paused":
             return "Paused";
         case "transcribing":
-            return "Transcribing";
+            return "Transcribing…";
         case "correcting":
-            return "Correcting";
+            return "Polishing…";
         case "done":
-            return "Done";
+            return "Pasted";
         case "too_short":
             return "Too short";
         case "paste_failed":
-            return "Paste failed";
+            return "Couldn't paste";
         case "cancelled":
             return "Discarded";
         case "no_model":
-            return "No model";
+            return "No model loaded";
         case "model_loading":
-            return "Loading model";
+            return "Loading model…";
         case "nothing_heard":
             return "Nothing heard";
     }
@@ -204,54 +204,90 @@ export function OverlayApp() {
         };
     }, [phase]);
 
+    return <OverlayPill phase={phase} elapsedMs={elapsedMs} latencyMs={latencyMs} levels={levels} />;
+}
+
+const PROCESSING = new Set<Phase>(["transcribing", "correcting", "model_loading"]);
+const WARNING = new Set<Phase>(["no_model", "too_short", "nothing_heard", "paste_failed"]);
+
+function PhaseGlyph({ phase }: { phase: Phase }) {
+    if (phase === "recording") return <span className="ov-dot" aria-hidden="true" />;
+    if (phase === "paused") {
+        return (
+            <span className="ov-glyph ov-glyph--pause" aria-hidden="true">
+                <svg viewBox="0 0 16 16"><rect x="3.5" y="3" width="3" height="10" rx="1" /><rect x="9.5" y="3" width="3" height="10" rx="1" /></svg>
+            </span>
+        );
+    }
+    if (PROCESSING.has(phase)) return <span className="ov-spinner" aria-hidden="true" />;
+    if (phase === "done") {
+        return (
+            <span className="ov-glyph ov-glyph--done" aria-hidden="true">
+                <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" /><path d="M4.8 8.2l2.1 2.1 4.3-4.5" /></svg>
+            </span>
+        );
+    }
+    if (phase === "cancelled") {
+        return (
+            <span className="ov-glyph ov-glyph--muted" aria-hidden="true">
+                <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" /><path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" /></svg>
+            </span>
+        );
+    }
+    return (
+        <span className="ov-glyph ov-glyph--warn" aria-hidden="true">
+            <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" /><path d="M8 4.6v4.2" /><circle className="ov-glyph-dotfill" cx="8" cy="11.3" r="0.9" /></svg>
+        </span>
+    );
+}
+
+/** Pure view of the overlay capsule; also rendered by the dev preview. */
+export function OverlayPill({ phase, elapsedMs, latencyMs, levels }: {
+    phase: Phase;
+    elapsedMs: number;
+    latencyMs: number | null;
+    levels: number[];
+}) {
     const isLive = phase === "recording" || phase === "paused";
     const isDone = phase === "done";
-    const isProcessing = phase === "transcribing" || phase === "correcting" || phase === "model_loading";
-    const isError =
-        phase === "no_model" ||
-        phase === "too_short" ||
-        phase === "nothing_heard" ||
-        phase === "paste_failed" ||
-        phase === "cancelled";
+    const tone = isLive ? "live" : PROCESSING.has(phase) ? "busy" : isDone ? "ok" : WARNING.has(phase) ? "warn" : "muted";
+    const status = isDone
+        ? `Transcription finished in ${formatLatency(latencyMs)}`
+        : isLive ? `Elapsed time ${formatElapsed(elapsedMs)}` : getStatusLabel(phase);
 
     return (
         <div
             id="overlay-pill"
             data-testid="overlay-pill"
-            className={`overlay-pill overlay-pill--${phase}`}
+            className={`overlay-pill ov ov--${tone} ov--${phase}`}
             role="status"
             aria-live="polite"
             aria-label={`Recording Overlay: ${getStatusLabel(phase)}`}
         >
-            <div className="overlay-pill__left">
-                {isDone ? (
-                    <span className="overlay-pill__icon overlay-pill__icon--done" aria-hidden="true">✓</span>
-                ) : isProcessing ? (
-                    <span className="overlay-pill__spinner" aria-hidden="true" />
-                ) : isError ? (
-                    <span className="overlay-pill__icon overlay-pill__icon--error" aria-hidden="true">!</span>
-                ) : (
-                    <span className={`overlay-pill__dot${phase === "paused" ? " overlay-pill__dot--paused" : ""}`} aria-hidden="true" />
-                )}
-                <span
-                    id="overlay-time-label"
-                    data-testid="overlay-time-label"
-                    className="overlay-pill__time"
-                    aria-label={`Overlay status: ${isDone ? `Transcription finished in ${formatLatency(latencyMs)}` : isLive ? `Elapsed time ${formatElapsed(elapsedMs)}` : getStatusLabel(phase)}`}
-                >
-                    {isDone ? formatLatency(latencyMs) : isLive ? formatElapsed(elapsedMs) : getStatusLabel(phase)}
-                </span>
-            </div>
+            <PhaseGlyph phase={phase} />
 
-            <div className={`overlay-pill__wave${isLive ? "" : " overlay-pill__wave--inactive"}`} aria-hidden="true">
-                {levels.map((level, index) => (
-                    <span
-                        key={index}
-                        className="overlay-pill__bar"
-                        style={{ height: `${Math.max(3, Math.round(level * 24))}px` }}
-                    />
-                ))}
-            </div>
+            {isLive ? (
+                <div className="ov-wave" aria-hidden="true">
+                    {levels.map((level, index) => (
+                        <span
+                            key={index}
+                            className="ov-bar"
+                            style={{ transform: `scaleY(${Math.max(0.12, Math.min(1, level * 1.15))})` }}
+                        />
+                    ))}
+                </div>
+            ) : (
+                <span className="ov-label" key={phase}>{getStatusLabel(phase)}</span>
+            )}
+
+            <span
+                id="overlay-time-label"
+                data-testid="overlay-time-label"
+                className={`ov-meta${isLive || isDone ? "" : " ov-meta--empty"}`}
+                aria-label={`Overlay status: ${status}`}
+            >
+                {isDone ? formatLatency(latencyMs) : isLive ? formatElapsed(elapsedMs) : ""}
+            </span>
         </div>
     );
 }
