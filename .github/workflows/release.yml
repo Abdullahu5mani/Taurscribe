@@ -352,8 +352,8 @@ jobs:
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
           CMAKE_CUDA_ARCHITECTURES: "75;86;89"
-          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
-          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
           CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}
@@ -393,8 +393,8 @@ jobs:
           WHISPER_NO_AVX2: "0"
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
-          MACOSX_DEPLOYMENT_TARGET: "13.4"
-          CMAKE_OSX_DEPLOYMENT_TARGET: "13.4"
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+          CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
 
       - name: Copy binary to expected location
         run: |
@@ -454,8 +454,8 @@ jobs:
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
           CMAKE_CUDA_ARCHITECTURES: "75;86;89"
-          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
-          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
           CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
           VULKAN_SDK: ${{ env.VULKAN_SDK }}
           VK_ICD_FILENAMES: ${{ env.VK_ICD_FILENAMES }}

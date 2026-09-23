@@ -163,7 +163,7 @@ jobs:
           xcodebuild -version
           cmake --version
           # Set deployment target to ensure compatibility with recent macOS versions
-          echo "MACOSX_DEPLOYMENT_TARGET will be set to: 13.4"
+          echo "MACOSX_DEPLOYMENT_TARGET will be set to: 14.0"
       
       # Linux Dependencies
       # Install system libraries needed for Tauri (WebKit, GTK, AppIndicator)
@@ -489,8 +489,8 @@ jobs:
           CMAKE_CUDA_ARCHITECTURES: "75;86;89"
 
           # macOS: Set minimum deployment target for ONNX Runtime/CoreML support.
-          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
-          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
 
           # Pass environment variables set in previous steps to the build process
           CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
@@ -593,8 +593,8 @@ jobs:
           CMAKE_CUDA_ARCHITECTURES: "75;86;89"
           
           # macOS: Set minimum deployment target for ONNX Runtime/CoreML support.
-          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
-          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '13.4' || '' }}
+          MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
+          CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
           
           # Pass environment variables set in previous steps to the build process
           CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
