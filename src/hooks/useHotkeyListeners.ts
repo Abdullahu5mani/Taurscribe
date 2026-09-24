@@ -10,9 +10,10 @@ interface UseHotkeyListenersParams {
     activeEngineRef: React.RefObject<ASREngine>;
     /** True while FileTranscriptionPanel is transcribing — mirrors Record button BUSY. */
     isFileTranscribingRef: React.RefObject<boolean>;
+    /** Settings > Recording > Recording overlay. */
+    enableOverlayRef: React.RefObject<boolean>;
     asrModelCountsRef: MutableRefObject<{
         whisper: number;
-        parakeet: number;
         granite: number;
         qwen3: number;
     }>;
@@ -24,7 +25,6 @@ interface UseHotkeyListenersParams {
     handleResumeRecordingRef: React.RefObject<() => Promise<void>>;
     handleCancelRecordingRef: React.RefObject<() => Promise<void>>;
     handleTranscriptionChunkRef: React.RefObject<(text: string) => void>;
-    handlePartialChunkRef: React.RefObject<(word: string) => void>;
     playErrorRef: React.RefObject<() => void>;
     setHeaderStatusRef: React.RefObject<(msg: string, dur?: number) => void>;
     triggerNoModelAttentionRef: React.RefObject<() => void>;
@@ -49,6 +49,7 @@ export function useHotkeyListeners({
     isLoadingRef,
     activeEngineRef,
     isFileTranscribingRef,
+    enableOverlayRef,
     asrModelCountsRef,
     handleStartRecordingRef,
     handleStopRecordingRef,
@@ -56,7 +57,6 @@ export function useHotkeyListeners({
     handleResumeRecordingRef,
     handleCancelRecordingRef,
     handleTranscriptionChunkRef,
-    handlePartialChunkRef,
     playErrorRef,
     setHeaderStatusRef,
     triggerNoModelAttentionRef,
@@ -77,13 +77,13 @@ export function useHotkeyListeners({
         let active = true;
         let unlistenStart: (() => void) | undefined;
         let unlistenStop: (() => void) | undefined;
+        let unlistenToggle: (() => void) | undefined;
         let unlistenChunk: (() => void) | undefined;
         let unlistenAccessibility: (() => void) | undefined;
         let unlistenAudioFallback: (() => void) | undefined;
         let unlistenAudioDisconnect: (() => void) | undefined;
         let unlistenOverlayAction: (() => void) | undefined;
         let unlistenModelUnloaded: (() => void) | undefined;
-        let unlistenPartial: (() => void) | undefined;
         let unlistenAudioLevel: (() => void) | undefined;
 
         const SILENCE_THRESHOLD = 0.02;
@@ -97,6 +97,7 @@ export function useHotkeyListeners({
         };
 
         const showTimedOverlayFeedback = (phase: "model_loading" | "no_model") => {
+            if (!enableOverlayRef.current) return;
             clearOverlayFeedbackHide();
             invoke("show_overlay").catch(() => {});
             invoke("set_overlay_state", {
@@ -114,7 +115,7 @@ export function useHotkeyListeners({
         };
 
         const setup = async () => {
-            const unsub1 = await listen("hotkey-start-recording", async () => {
+            const handleStartHotkey = async () => {
                 const now = Date.now();
                 if (now - lastStartTime.current < HOTKEY_DEBOUNCE_MS) return;
                 lastStartTime.current = now;
@@ -148,7 +149,6 @@ export function useHotkeyListeners({
                 const counts = asrModelCountsRef.current;
                 const noModelsForEngine =
                     (eng === "whisper" && counts.whisper === 0) ||
-                    (eng === "parakeet" && counts.parakeet === 0) ||
                     (eng === "granite" && counts.granite === 0) ||
                     (eng === "qwen3" && counts.qwen3 === 0);
                 if (noModelsForEngine) {
@@ -165,12 +165,13 @@ export function useHotkeyListeners({
                 if (pendingStopRef.current) {
                     pendingStopRef.current = false;
                     setTimeout(async () => {
-                        await handleStopRecordingRef.current?.();
+                        if (isRecordingRef.current) await handleStopRecordingRef.current?.();
                     }, 250);
                 }
-            });
+            };
+            const unsub1 = await listen("hotkey-start-recording", handleStartHotkey);
 
-            const unsub2 = await listen("hotkey-stop-recording", async () => {
+            const handleStopHotkey = async () => {
                 if (startingRecordingRef.current) {
                     pendingStopRef.current = true;
                     return;
@@ -191,16 +192,20 @@ export function useHotkeyListeners({
                 } finally {
                     stopInProgressRef.current = false;
                 }
+            };
+            const unsub2 = await listen("hotkey-stop-recording", handleStopHotkey);
+            const unsubToggle = await listen("hotkey-toggle-recording", async () => {
+                if (startingRecordingRef.current) {
+                    pendingStopRef.current = true;
+                } else if (isRecordingRef.current) {
+                    await handleStopHotkey();
+                } else {
+                    await handleStartHotkey();
+                }
             });
 
             const unsub3 = await listen<{ text: string }>("transcription-chunk", (event) => {
                 handleTranscriptionChunkRef.current?.(event.payload.text);
-            });
-
-            // Cohere word-streaming: provisional partial words emitted during decode.
-            // The authoritative transcription-chunk that follows will replace them.
-            const unsub_partial = await listen<{ text: string }>("transcription-partial", (event) => {
-                handlePartialChunkRef.current?.(event.payload.text);
             });
 
             // Re-check macOS permissions if the backend notices the hotkey listener
@@ -284,6 +289,7 @@ export function useHotkeyListeners({
             if (active) {
                 unlistenStart = unsub1;
                 unlistenStop = unsub2;
+                unlistenToggle = unsubToggle;
                 unlistenChunk = unsub3;
                 unlistenAccessibility = unsub4;
                 unlistenAudioFallback = unsub5;
@@ -291,11 +297,9 @@ export function useHotkeyListeners({
                 unlistenOverlayAction = unsub7;
                 unlistenModelUnloaded = unsub8;
                 unlistenAudioLevel = unsub9;
-                unlistenPartial = unsub_partial;
             } else {
-                unsub1(); unsub2(); unsub3(); unsub4();
+                unsub1(); unsub2(); unsubToggle(); unsub3(); unsub4();
                 unsub5(); unsub6(); unsub7(); unsub8(); unsub9();
-                unsub_partial();
             }
         };
 
@@ -305,6 +309,7 @@ export function useHotkeyListeners({
             clearOverlayFeedbackHide();
             unlistenStart?.();
             unlistenStop?.();
+            unlistenToggle?.();
             unlistenChunk?.();
             unlistenAccessibility?.();
             unlistenAudioFallback?.();
@@ -312,7 +317,6 @@ export function useHotkeyListeners({
             unlistenOverlayAction?.();
             unlistenModelUnloaded?.();
             unlistenAudioLevel?.();
-            unlistenPartial?.();
         };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 }

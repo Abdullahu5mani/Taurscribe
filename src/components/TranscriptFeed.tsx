@@ -12,10 +12,11 @@ type TranscriptRecord = {
     grammar_llm_used: boolean;
     processing_time_ms: number | null;
     audio_source: string | null;
+    kind?: "dictation" | "file";
 };
 
 const TRANSCRIPT_PREVIEW_CHARS = 1_200;
-const TRANSCRIPT_FONT_FAMILY = '"Space Grotesk", sans-serif';
+const TRANSCRIPT_FONT_FAMILY = '"IBM Plex Sans", sans-serif';
 const TRANSCRIPT_LINE_HEIGHT_RATIO = 1.55;
 
 interface TranscriptFeedProps {
@@ -111,8 +112,17 @@ function AutoSizedTranscriptText({ text, isLatest }: { text: string; isLatest: b
         const el = ref.current;
         if (!el) return;
 
+        // Fitting runs several text layouts per row, so while the window is
+        // being dragged each row keeps its size (text still re-wraps) and refits
+        // once the drag pauses; the font-size change then eases in via CSS.
+        let settleTimer: ReturnType<typeof setTimeout> | undefined;
         const updateWidth = () => {
             if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+            clearTimeout(settleTimer);
+            if (document.documentElement.dataset.resizing !== undefined) {
+                settleTimer = setTimeout(updateWidth, 180);
+                return;
+            }
             rafRef.current = requestAnimationFrame(() => {
                 rafRef.current = null;
                 setWidth(Math.floor(el.clientWidth));
@@ -133,6 +143,7 @@ function AutoSizedTranscriptText({ text, isLatest }: { text: string; isLatest: b
         observer.observe(el);
         return () => {
             observer.disconnect();
+            clearTimeout(settleTimer);
             if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
         };
@@ -179,7 +190,7 @@ function TranscriptFeedComponent({
                 offset: 0,
             });
             // Only show mic recordings here; file transcriptions have their own panel.
-            const rows = all.filter(r => !r.audio_source || r.audio_source === "microphone");
+            const rows = all.filter(r => (r.kind ?? (!r.audio_source || r.audio_source === "microphone" ? "dictation" : "file")) === "dictation");
             // Detect a newly added top item and trigger its enter animation.
             const isNewItem = rows.length > 0 && rows[0].id !== prevTopIdRef.current;
             if (isNewItem) {
@@ -311,7 +322,7 @@ function TranscriptFeedComponent({
                                         </span>
                                     ) : null}
                                     <span className={`feed-badge feed-badge-engine--${item.engine}`}>
-                                        {item.engine === "parakeet" ? "Parakeet" : item.engine === "granite" ? "Granite" : "Whisper"}
+                                        {item.engine === "granite" ? "Granite" : item.engine === "granite" ? "Granite" : "Whisper"}
                                     </span>
                                     {item.grammar_llm_used && (
                                         <span className="feed-badge feed-badge-llm">LLM</span>

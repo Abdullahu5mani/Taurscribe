@@ -1,7 +1,8 @@
+import type { TrayState } from "../App";
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ModelInfo, ParakeetModelInfo, CohereModelInfo, Qwen3ModelInfo } from "./useModels";
+import type { ModelInfo, GraniteModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
@@ -10,12 +11,10 @@ import type { CommandResult, SessionNotice } from "../types/session";
 interface UseRecordingParams {
     activeEngineRef: React.RefObject<ASREngine>;
     models: ModelInfo[];
-    parakeetModels: ParakeetModelInfo[];
-    cohereModels: CohereModelInfo[];
+    graniteModels: GraniteModelInfo[];
     qwen3Models: Qwen3ModelInfo[];
     currentModel: string | null;
-    currentParakeetModel: string | null;
-    currentCohereModel: string | null;
+    currentGraniteModel: string | null;
     currentQwen3Model: string | null;
     asrBackend: "gpu" | "cpu";
     setCurrentModel: (id: string) => void;
@@ -26,7 +25,7 @@ interface UseRecordingParams {
     muteBackgroundAudioRef: React.RefObject<boolean>;
     transcriptionStyleRef: React.MutableRefObject<string>;
     setHeaderStatus: (msg: string, dur?: number, isProcessing?: boolean) => void;
-    setTrayState: (state: "ready" | "recording" | "processing") => Promise<void>;
+    setTrayState: (state: TrayState, meeting?: undefined, detail?: string) => Promise<void>;
     setIsSettingsOpen: (open: boolean) => void;
     playStart?: () => void;
     playPaste?: () => void;
@@ -71,12 +70,10 @@ const TERMINAL_OVERLAY_PHASES = new Set<OverlayPhase>([
 export function useRecording({
     activeEngineRef,
     models,
-    parakeetModels,
-    cohereModels,
+    graniteModels,
     qwen3Models,
     currentModel,
-    currentParakeetModel,
-    currentCohereModel,
+    currentGraniteModel,
     currentQwen3Model,
     asrBackend,
     setCurrentModel,
@@ -106,6 +103,8 @@ export function useRecording({
     const [latestLatency, setLatestLatency] = useState<number | null>(null);
 
     const isRecordingRef = useRef(false);
+    /** True while the running session is a dual-channel meeting recording. */
+    const meetingSessionRef = useRef(false);
     const isProcessingTranscriptRef = useRef(false);
     const isPausedRef = useRef(false);
     const recordingStartTimeRef = useRef(0);
@@ -115,10 +114,6 @@ export function useRecording({
     const overlayTerminalRef = useRef(false);
     const overlayCommandChainRef = useRef<Promise<void>>(Promise.resolve());
     const liveTranscriptRef = useRef("");
-    /** Base transcript snapshot taken when the first Cohere partial arrives for a chunk. */
-    const coherePartialBaseRef = useRef("");
-    /** True while streaming partials for the current Cohere VAD chunk. */
-    const coherePartialActiveRef = useRef(false);
     const pausedAtRef = useRef<number | null>(null);
     const totalPausedMsRef = useRef(0);
 
@@ -208,16 +203,41 @@ export function useRecording({
     const [isDualChannelRecording, setIsDualChannelRecording] = useState(false);
     const [dualLevels, setDualLevels] = useState<{ mic: number; system: number }>({ mic: 0, system: 0 });
 
+    // Recordings can start or stop outside the UI (control server, tray). Follow
+    // the backend so the UI never keeps showing RECORDING for a stopped session.
     useEffect(() => {
-        const unlistenPromise = listen<{ mic: number; system: number }>("dual-audio-levels", (event) => {
-            setDualLevels(event.payload);
+        const unlistenPromise = listen<{ is_recording: boolean; is_dual_channel: boolean }>("recording-state", (event) => {
+            const { is_recording, is_dual_channel } = event.payload;
+            if (is_recording && !isRecordingRef.current) {
+                setIsRecording(true);
+                isRecordingRef.current = true;
+                setIsDualChannelRecording(is_dual_channel);
+                meetingSessionRef.current = is_dual_channel;
+                setSessionPhase?.("recording");
+            } else if (!is_recording && isRecordingRef.current) {
+                setIsRecording(false);
+                isRecordingRef.current = false;
+                resetRecordingSession();
+                setSessionPhase?.("idle");
+                void setTrayState("ready");
+            }
         });
         return () => {
             unlistenPromise.then((unlisten) => unlisten());
         };
     }, []);
 
-    const handleStartRecording = async (fromHotkey = false, audioSource?: string) => {
+    useEffect(() => {
+        const unlistenPromise = listen<{ mic: number; system: number }>("dual-audio-levels", (event) => {
+            setDualLevels(event.payload);
+            setIsDualChannelRecording(true);
+        });
+        return () => {
+            unlistenPromise.then((unlisten) => unlisten());
+        };
+    }, []);
+
+    const startRecordingOnce = async (fromHotkey = false, audioSource?: string) => {
         hotkeySessionRef.current = fromHotkey; // tracks hotkey session independent of overlay toggle
         let effectiveAudioSource = audioSource;
         if (!effectiveAudioSource) {
@@ -229,6 +249,7 @@ export function useRecording({
         }
         const isDual = effectiveAudioSource === "dual_channel";
         setIsDualChannelRecording(isDual);
+        meetingSessionRef.current = isDual;
         if (fromHotkey) {
             overlaySessionIdRef.current += 1;
             overlayTerminalRef.current = false;
@@ -291,73 +312,36 @@ export function useRecording({
             }
         }
 
-        if (currentEngine === "parakeet") {
-            if (parakeetModels.length === 0) {
-                setHeaderStatus("No Parakeet models installed!", 5000);
-                showNotice({
-                    level: "warning",
-                    code: "model_missing",
-                    title: "Parakeet is not installed",
-                    message: "Download Parakeet from Settings or switch to Whisper/Granite before recording.",
-                    sticky: true,
-                });
-                setIsSettingsOpen(true);
-                return;
-            }
-            try {
-                const targetModel = currentParakeetModel || parakeetModels[0].id;
-                const pStatus = await invoke("get_parakeet_status") as { loaded: boolean; model_id?: string | null };
-                if (!pStatus.loaded || pStatus.model_id !== targetModel) {
-                    setHeaderStatus("Loading Parakeet...", 60_000);
-                    setSessionPhase?.("loading_model");
-                    const result = await invoke<CommandResult<string>>("init_parakeet", { modelId: targetModel, useGpu: asrBackend === "gpu" });
-                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Parakeet");
-                    setLoadedEngine("parakeet");
-                    setHeaderStatus("Parakeet model loaded");
-                    showNotice(null);
-                }
-            } catch (e) {
-                const error = e as { code?: string; message?: string };
-                setHeaderStatus("Failed to initialize Parakeet: " + error.message, 5000);
-                setSessionPhase?.("error");
-                showNotice(commandErrorToNotice(error, "Parakeet failed to load"));
-                return;
-            }
-        }
-
         if (currentEngine === "granite") {
-            if (cohereModels.length === 0) {
-                setHeaderStatus("No Granite Speech model installed! Download it from Settings.", 5000);
+            if (graniteModels.length === 0) {
+                setHeaderStatus("No Granite models installed!", 5000);
                 showNotice({
                     level: "warning",
                     code: "model_missing",
-                    title: "Granite Speech is not installed",
-                    message: "Download the Granite Speech bundle from Settings or switch to another engine.",
+                    title: "Granite is not installed",
+                    message: "Download Granite from Settings or switch to Whisper or Qwen3 before recording.",
                     sticky: true,
                 });
                 setIsSettingsOpen(true);
                 return;
             }
             try {
-                const gStatus = await invoke("get_granite_status") as { loaded: boolean };
-                if (!gStatus.loaded) {
-                    setHeaderStatus("Loading Granite Speech...", 60_000);
+                const targetModel = currentGraniteModel || graniteModels[0].id;
+                const pStatus = await invoke("get_granite_status") as { loaded: boolean; model_id?: string | null };
+                if (!pStatus.loaded || pStatus.model_id !== targetModel) {
+                    setHeaderStatus("Loading Granite...", 60_000);
                     setSessionPhase?.("loading_model");
-                    const gid = currentCohereModel || cohereModels[0]?.id;
-                    const result = await invoke<CommandResult<string>>("init_granite", {
-                        modelId: gid,
-                        forceCpu: asrBackend === "cpu",
-                    });
-                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Granite Speech");
+                    const result = await invoke<CommandResult<string>>("init_granite", { modelId: targetModel, useGpu: asrBackend === "gpu" });
+                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Granite");
                     setLoadedEngine("granite");
-                    setHeaderStatus("Granite Speech loaded");
+                    setHeaderStatus("Granite model loaded");
                     showNotice(null);
                 }
             } catch (e) {
                 const error = e as { code?: string; message?: string };
-                setHeaderStatus("Failed to initialize Granite Speech: " + error.message, 5000);
+                setHeaderStatus("Failed to initialize Granite: " + error.message, 5000);
                 setSessionPhase?.("error");
-                showNotice(commandErrorToNotice(error, "Granite Speech failed to load"));
+                showNotice(commandErrorToNotice(error, "Granite failed to load"));
                 return;
             }
         }
@@ -401,7 +385,8 @@ export function useRecording({
                 audioSource: isDual ? "dual_channel" : "mic",
             });
             if (!result.ok) throw result.error ?? new Error("Failed to start recording");
-            setHeaderStatus(result.data ?? "Recording started");
+            // The command reports the temp file path; users only need to know it started.
+            setHeaderStatus("Recording started");
             recordingStartTimeRef.current = Date.now();
             setIsRecording(true);
             isRecordingRef.current = true;
@@ -446,6 +431,20 @@ export function useRecording({
         }
     };
 
+    // One start at a time: a second start request (a duplicate tray/hotkey event
+    // arriving while the first is still loading a model or opening devices) used
+    // to start overlapping recordings.
+    const startingRef = useRef(false);
+    const handleStartRecording = async (fromHotkey = false, audioSource?: string) => {
+        if (startingRef.current || isRecordingRef.current || isProcessingTranscriptRef.current) return;
+        startingRef.current = true;
+        try {
+            await startRecordingOnce(fromHotkey, audioSource);
+        } finally {
+            startingRef.current = false;
+        }
+    };
+
     const handlePauseRecording = async () => {
         if (!isRecordingRef.current || isPausedRef.current || isProcessingTranscriptRef.current) return;
         try {
@@ -454,6 +453,7 @@ export function useRecording({
             isPausedRef.current = true;
             pausedAtRef.current = Date.now();
             setHeaderStatus("Recording paused", 1500);
+            await setTrayState("paused");
             setSessionPhase?.("paused");
             await emitOverlayState("paused", liveTranscriptRef.current);
         } catch (e) {
@@ -469,6 +469,7 @@ export function useRecording({
             setIsPaused(false);
             isPausedRef.current = false;
             setHeaderStatus("Recording resumed", 1500);
+            await setTrayState("recording");
             setSessionPhase?.("recording");
             await emitOverlayState("recording", liveTranscriptRef.current);
         } catch (e) {
@@ -494,7 +495,7 @@ export function useRecording({
         }
 
         try {
-            await setTrayState("processing");
+            await setTrayState(meetingSessionRef.current ? "processing_meeting" : "processing_speech");
             if (currentEngine === "whisper") setHeaderStatus("Processing transcription...", 15_000, true);
 
             const stopResult = await invoke<CommandResult<string>>("stop_recording");
@@ -502,6 +503,25 @@ export function useRecording({
                 throw stopResult.error ?? new Error("Failed to stop recording");
             }
             let finalTrans = stopResult.data ?? "";
+
+            // Meeting (dual-channel) recordings belong to the meetings area only:
+            // the backend saves and processes them there. Never paste a meeting
+            // transcript into the frontmost app or add it to dictation history.
+            if (meetingSessionRef.current) {
+                meetingSessionRef.current = false;
+                if (muteBackgroundAudioRef.current) {
+                    await invoke("unmute_system_audio").catch(() => {});
+                }
+                resetRecordingSession();
+                setProcessingTranscript(false);
+                await setTrayState("done", undefined, "Meeting saved to Meetings");
+                setSessionPhase?.("idle");
+                setHeaderStatus("Meeting recording saved to Meetings", 4000);
+                if (isOverlay) {
+                    hideOverlay();
+                }
+                return;
+            }
 
             // Apply custom dictionary substitutions (before grammar LLM)
             finalTrans = applyDictionary(finalTrans, dictionaryRef.current ?? []);
@@ -515,7 +535,7 @@ export function useRecording({
                 playError?.();
                 resetRecordingSession();
                 setProcessingTranscript(false);
-                await setTrayState("ready");
+                await setTrayState("nothing_heard", undefined, "Recording too short");
                 setSessionPhase?.("warning");
                 showNotice({
                     level: "warning",
@@ -543,7 +563,7 @@ export function useRecording({
                 playError?.();
                 resetRecordingSession();
                 setProcessingTranscript(false);
-                await setTrayState("ready");
+                await setTrayState("nothing_heard", undefined, "Nothing heard — check your microphone");
                 setSessionPhase?.("warning");
                 showNotice({
                     level: "warning",
@@ -568,6 +588,7 @@ export function useRecording({
                     emitOverlayState("correcting", liveTranscriptRef.current).catch(() => { });
                 }
                 setHeaderStatus("Correcting grammar...", 60_000, true);
+                void setTrayState("grammar");
                 try {
                     const activeStyle = transcriptionStyleRef.current;
                     finalTrans = await invoke("correct_text", { text: finalTrans, style: activeStyle });
@@ -616,8 +637,7 @@ export function useRecording({
             try {
                 const activeModelId =
                     currentEngine === "whisper" ? currentModel :
-                    currentEngine === "parakeet" ? currentParakeetModel :
-                    currentEngine === "granite" ? currentCohereModel :
+                    currentEngine === "granite" ? currentGraniteModel :
                     currentEngine === "qwen3" ? currentQwen3Model : null;
                 await invoke("save_transcript_history", {
                     transcript: finalTrans,
@@ -644,6 +664,7 @@ export function useRecording({
                 }
                 setHeaderStatus(headerMsg, 5000);
                 playError?.();
+                await setTrayState("paste_failed", undefined, headerMsg);
                 setSessionPhase?.("warning");
                 showNotice({
                     level: "warning",
@@ -670,6 +691,7 @@ export function useRecording({
                     setHeaderStatus("Done!", 900);
                 }
                 playPaste?.();
+                await setTrayState("done", undefined, finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : ""));
                 setSessionPhase?.("success");
                 showNotice(null);
                 if (showOverlay) {
@@ -730,7 +752,7 @@ export function useRecording({
             setIsRecording(false);
             isRecordingRef.current = false;
             setProcessingTranscript(false);
-            await setTrayState("ready");
+            await setTrayState("cancelled");
             resetRecordingSession();
             setHeaderStatus("Recording discarded", 1800);
             playError?.();
@@ -758,26 +780,6 @@ export function useRecording({
         }
     };
 
-    const handlePartialChunk = (word: string) => {
-        // Reject partials when not actively recording or when paused.
-        if ((!isRecordingRef.current && !isProcessingTranscriptRef.current) || isPausedRef.current) return;
-        const trimmed = word.trim();
-        if (!trimmed) return;
-
-        if (!coherePartialActiveRef.current) {
-            // First partial for this VAD chunk — snapshot the committed transcript.
-            coherePartialBaseRef.current = liveTranscriptRef.current;
-            coherePartialActiveRef.current = true;
-        }
-        const base = coherePartialBaseRef.current;
-        const next = base ? `${base} ${trimmed}` : trimmed;
-        liveTranscriptRef.current = next;
-        if (hotkeySessionRef.current && enableOverlayRef.current && !overlayTerminalRef.current) {
-            const phase = isRecordingRef.current ? "recording" : "transcribing";
-            emitOverlayState(phase, next)?.catch(() => {});
-        }
-    };
-
     const handleTranscriptionChunk = (chunkText: string) => {
         // Accept chunks when actively recording OR during the processing window
         // (tail flush events arrive while stop_recording is awaited). Reject when
@@ -785,15 +787,6 @@ export function useRecording({
         if ((!isRecordingRef.current && !isProcessingTranscriptRef.current) || isPausedRef.current) return;
         const cleanChunk = chunkText.trim();
         if (!cleanChunk) return;
-
-        // If provisional partials were streaming, reset live transcript to the snapshot
-        // taken before partials started so the authoritative decoded text can replace
-        // them without duplication.
-        if (coherePartialActiveRef.current) {
-            liveTranscriptRef.current = coherePartialBaseRef.current;
-            coherePartialActiveRef.current = false;
-            coherePartialBaseRef.current = "";
-        }
 
         // Leading space in chunkText = SentencePiece word boundary marker.
         // Only join with a space when the chunk starts a new word; a chunk that
@@ -825,6 +818,5 @@ export function useRecording({
         handleStopRecording,
         handleCancelRecording,
         handleTranscriptionChunk,
-        handlePartialChunk,
     };
 }

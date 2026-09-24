@@ -34,7 +34,6 @@
   initial-value: 1.7rem;
 }
 
-
 :root {
   /* =========================================================================
    * 60-30-10 COLOUR DISTRIBUTION
@@ -54,6 +53,9 @@
 
   /* 10% — Accent (use sparingly: CTAs, active indicators, focus rings) */
   --accent-primary:      rgba(255, 255, 255, 0.7);
+  /* Brand orange from the logo: switches that are on, active selections. */
+  --brand:               #f2a65a;
+  --brand-ink:           #1a1411;
   --accent-primary-rgb:  255, 255, 255;
   --accent-primary-dark: rgba(255, 255, 255, 0.5);
   --accent-glow:         rgba(255, 255, 255, 0.16);
@@ -61,8 +63,8 @@
   /* 10% — Engine status colours (brand-accurate) */
   --whisper-color: #6895d2;           /* OpenAI blue-steel */
   --whisper-glow:  rgba(104, 149, 210, 0.25);
-  --parakeet-color: #3ecfa5;          /* NVIDIA teal */
-  --parakeet-glow:  rgba(62, 207, 165, 0.25);
+  --granite-color: #3ecfa5;          /* NVIDIA teal */
+  --granite-glow:  rgba(62, 207, 165, 0.25);
   --cohere-color:  #0f62fe;          /* Cohere blue */
   --cohere-glow:   rgba(15, 98, 254, 0.25);
 
@@ -151,15 +153,17 @@
   --space-6:    3rem;      /* 48px */
 
   /* Titlebar heights as rem — scale with root font-size */
-  --titlebar-mac: 2.375rem;  /* 38px at 16px */
+  --titlebar-mac: 2.25rem;   /* 36px: matches .titlebar */
   --titlebar-win: 2rem;      /* 32px at 16px */
 
-  /* Font system — Pure: Space Grotesk for transcript/headers, Space Mono for everything else */
-  --font-display: 'Space Grotesk', sans-serif;  /* transcript body text, headers */
-  --font-ui:      'Space Mono', monospace;       /* labels, buttons, badges, chips */
-  --font-mono:    'Space Mono', monospace;       /* explicit monospace contexts */
+  /* Font system: IBM Plex Sans for everything people read or press; IBM Plex
+     Mono only for figures (times, sizes, latencies) where columns should align. */
+  --font-sans:    'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: var(--font-sans);  /* transcript body text, headings */
+  --font-ui:      var(--font-sans);  /* labels, buttons, badges, chips */
+  --font-mono:    'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
-  font-family: 'Space Mono', -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+  font-family: var(--font-sans);
   /* Stepped root sizing keeps rem-based layout stable during drag-resize.
    * This avoids per-pixel global reflow from continuously fluid typography. */
   font-size: 13px;
@@ -174,27 +178,25 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-@media (max-width: 900px) {
+:root {
+  font-size: 14px;
+}
+
+@media (min-width: 1200px) {
   :root {
-    font-size: 12px;
+    font-size: 15px;
   }
 }
 
-@media (max-width: 760px) {
+@media (min-width: 1600px) {
   :root {
-    font-size: 11px;
+    font-size: 16px;
   }
 }
 
 @media (max-width: 640px) {
   :root {
-    font-size: 10px;
-  }
-}
-
-@media (max-width: 520px) {
-  :root {
-    font-size: 9px;
+    font-size: 13px;
   }
 }
 
@@ -255,7 +257,7 @@ body {
   -webkit-user-select: none;
   min-width: 280px;
   background: var(--bg-primary);
-  font-family: 'Space Mono', -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -271,38 +273,25 @@ body {
 /* During live window resize, pause decorative loops but keep intentional layout
    transitions alive. This avoids the old snap-cut feeling while still removing
    the expensive glow/breath animations that make drag-resize janky. */
-body.is-resizing *::before,
-body.is-resizing *::after {
+:root[data-resizing] *::before,
+:root[data-resizing] *::after {
   animation-play-state: paused !important;
 }
 
-body.is-resizing {
+:root[data-resizing] body {
   text-rendering: auto;
 }
 
-body.is-resizing .app-body {
+:root[data-resizing] .app-body {
   background: var(--bg-primary) !important;
 }
 
-body.is-resizing .header-ticker {
-  mask-image: none !important;
-  -webkit-mask-image: none !important;
-}
-
-body.is-resizing .record-btn,
-body.is-resizing .loading-overlay-backdrop,
-body.is-resizing .loading-overlay,
-body.is-resizing .info-tooltip-popup,
-body.is-resizing .quick-settings,
-body.is-resizing .file-card,
-body.is-resizing .settings-overlay--open,
-body.is-resizing .settings-modal,
-body.is-resizing .model-item {
+/* Backdrop blur is re-rendered for every frame of a resize; drop it on the
+   full-window overlays only. Shadows stay so nothing visibly flickers. */
+:root[data-resizing] .loading-overlay-backdrop,
+:root[data-resizing] .settings-overlay--open {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  filter: none !important;
-  box-shadow: none !important;
-  text-shadow: none !important;
 }
 
 /* Flex row: main content + optional sidebar */
@@ -327,47 +316,18 @@ body.is-resizing .model-item {
   width: 100%;
   margin: 0 auto;
   /* rem-based so it scales with root font-size (fluid) */
-  padding: 1.5rem;
-  padding-top: 1.5rem;
+  padding: 0.75rem 1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.72rem;
+  gap: 0.45rem;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  transition: gap 0.35s ease, padding 0.35s ease;
+  transition: gap 0.25s ease, padding 0.25s ease;
 }
 
 /* ---- Toasts: compact, fits between title and settings icon ---- */
-.toaster-header {
-  position: fixed !important;
-  top: 1.25rem !important;
-  left: 50% !important;
-  transform: translateX(-50%) !important;
-  right: auto !important;
-  width: auto !important;
-  max-width: 240px !important;
-  z-index: 9999;
-}
-
-.toaster-header [data-sonner-toast] {
-  font-size: var(--font-xs) !important;
-  padding: 4px 10px !important;
-  border-radius: 6px !important;
-  min-height: auto !important;
-  line-height: 1.3 !important;
-  gap: 8px !important;
-}
-
-.toaster-header [data-sonner-toast] [data-content] {
-  font-size: inherit !important;
-}
-
-.toaster-header [data-sonner-toast] [data-icon] {
-  width: 14px !important;
-  height: 14px !important;
-}
 
 /* ---- In-frame status rail ---- */
 .app-status-rail {
@@ -437,44 +397,6 @@ body.is-resizing .model-item {
   to   { opacity: 1; }
 }
 
-.settings-btn {
-  width: 2.5rem;
-  height: 2.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  opacity: 1;
-  /* M2 fix: was transition: all — enumerate specific properties */
-  transition: border-color 0.25s cubic-bezier(0.25, 1, 0.5, 1),
-              color 0.25s cubic-bezier(0.25, 1, 0.5, 1),
-              background 0.25s cubic-bezier(0.25, 1, 0.5, 1),
-              opacity 1.2s cubic-bezier(0.25, 1, 0.5, 1);
-}
-
-.settings-btn svg {
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.settings-btn:hover svg {
-  transform: rotate(22deg);
-}
-
-.settings-btn:active svg {
-  transform: rotate(90deg);
-  transition-duration: 0.15s;
-}
-
-.settings-btn:hover {
-  border-color: var(--border-hover);
-  color: var(--text-primary);
-  background: var(--bg-tertiary);
-}
-
 /* Settings gear is always accessible, even when a status message is showing. */
 
 /* Base mic-selector-bar rule — the active styling lives in the
@@ -495,7 +417,7 @@ body.is-resizing .model-item {
 .mic-selector-dropdown {
   flex: 1;
   min-width: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--font-xs);
   font-weight: 500;
   letter-spacing: 0.03em;
@@ -677,59 +599,9 @@ body.is-resizing .model-item {
   opacity: 1;
 }
 
-.backend-toggle-inline-btn.active {
-  color: var(--accent-primary);
-  background: rgba(var(--accent-primary-rgb), 0.08);
-}
-
 /* ── Tooltips ── */
 
 /* 1. Simple CSS-only tooltips for Engine Cards (info-icon) */
-.info-icon {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  cursor: help;
-  transition: color 0.2s ease;
-}
-
-.info-icon:hover {
-  color: var(--text-primary);
-}
-
-.info-icon::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  top: calc(100% + 8px);
-  right: -8px;
-  width: 150px;
-  white-space: normal;
-  background: #000000 !important;
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(var(--accent-primary-rgb), 0.4) !important;
-  font-family: var(--font-display) !important;
-  font-size: 8px !important;
-  font-weight: 600 !important;
-  line-height: 1.5 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--accent-primary) !important;
-  padding: 5px 8px !important;
-  border-radius: 2px !important;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
-  pointer-events: none;
-  opacity: 0;
-  transform: translateY(-4px);
-  transition: opacity 0.15s ease, transform 0.15s ease;
-  z-index: 100;
-}
-
-.info-icon:hover::after {
-  opacity: 1;
-  transform: translateY(0);
-}
 
 /* 2. React-based Tooltips (Portal to Body) — used in QuickSettings and LLM labels */
 .info-tooltip-popup {
@@ -773,7 +645,6 @@ body.is-resizing .model-item {
 .info-tooltip-anchor:hover {
   color: var(--accent-primary);
 }
-
 
 /* Copy Static Discharge Pulse */
 @keyframes copy-discharge {
@@ -846,16 +717,16 @@ body.is-resizing .model-item {
 
 .record-btn {
   position: relative;
-  width: 5.5rem;
-  height: 5.5rem;
+  width: 4.5rem;
+  height: 4.5rem;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(12px);
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1), 0 8px 32px rgba(0,0,0,0.5);
   cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: var(--font-sm);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.15em;
   text-transform: uppercase;
@@ -1016,8 +887,8 @@ body.is-resizing .model-item {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  gap: 0.75rem;
-  margin-top: 0.75rem;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
   contain: layout;
   transition:
     gap 0.24s var(--ease-smooth),
@@ -1089,7 +960,7 @@ body.is-resizing .model-item {
 .bottom-left .mic-selector-dropdown {
   flex: 1;
   min-width: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--font-xs);
   letter-spacing: 0.02em;
   color: var(--ink-45);
@@ -1118,7 +989,7 @@ body.is-resizing .model-item {
   background: rgba(16, 185, 129, 0.12);
   border: 1px solid rgba(16, 185, 129, 0.35);
   border-radius: 6px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.05em;
@@ -1180,7 +1051,7 @@ body.is-resizing .model-item {
   border: 1px solid var(--border-color);
   background: var(--bg-card);
   color: var(--ink-45);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--font-xs);
   letter-spacing: 0.05em;
   cursor: pointer;
@@ -1500,325 +1371,6 @@ button.auto-unload-timer-btn--active {
   color: #38bdf8;
 }
 
-/* EnginePicker auto-unload row */
-.ep-unload-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.ep-auto-unload-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.ep-auto-unload-label {
-  font-size: 11px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.ep-auto-unload-chips {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.ep-auto-unload-chip {
-  appearance: none;
-  -webkit-appearance: none;
-  padding: 3px 7px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.04);
-  color: #cbd5e1;
-  font-size: 10.5px;
-  font-weight: 500;
-  font-family: inherit;
-  cursor: pointer;
-  outline: none;
-  transition: all 0.12s ease;
-}
-
-.ep-auto-unload-chip:hover {
-  background: rgba(255, 255, 255, 0.09);
-  color: #fff;
-}
-
-.ep-auto-unload-chip--selected {
-  background: #38bdf8;
-  border-color: #38bdf8;
-  color: #000;
-  font-weight: 600;
-}
-
-.bottom-bar .settings-btn {
-  grid-column: 3;
-  justify-self: end;
-}
-
-/* ---- Engine picker: click-to-drill popover anchored above the chip ---- */
-.engine-picker-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 299;
-}
-
-.engine-picker {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  width: 230px;
-  background: #111111;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.85);
-  z-index: 300;
-  overflow: hidden;
-  animation: epPopUp 0.18s cubic-bezier(0.34, 1.4, 0.64, 1);
-}
-
-@keyframes epPopUp {
-  from { opacity: 0; transform: translateY(6px) scale(0.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-.ep-hd,
-.ep-sub-hd {
-  padding: 8px 12px;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--ink-20);
-  border-bottom: 1px solid var(--border-color);
-}
-
-.ep-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border: none;
-  border-bottom: 1px solid var(--border-color);
-  background: none;
-  cursor: pointer;
-  transition: background 0.15s ease;
-  font-family: var(--font-ui);
-}
-
-.ep-row:last-child {
-  border-bottom: none;
-}
-
-.ep-row:hover {
-  background: rgba(255, 255, 255, 0.045);
-}
-
-.ep-row--active {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.ep-row-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  border: 1.5px solid;
-  flex-shrink: 0;
-}
-
-.ep-row-name {
-  font-size: 13px;
-  font-family: var(--font-display);
-  color: var(--ink-70);
-}
-
-.ep-row-badge {
-  margin-left: auto;
-  font-size: 8px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ink-20);
-}
-
-.ep-row-caret {
-  opacity: 0.2;
-  flex-shrink: 0;
-}
-
-.ep-pill {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 2px 8px;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  line-height: 1;
-  border: 1px solid rgba(234, 179, 8, 0.42);
-  background: rgba(234, 179, 8, 0.14);
-  color: #facc15;
-}
-
-.ep-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.ep-back {
-  background: none;
-  border: none;
-  color: var(--ink-45);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 2px;
-}
-
-.ep-back:hover {
-  color: var(--ink-70);
-}
-
-.ep-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.ep-title {
-  font-family: var(--font-display);
-  font-size: 13px;
-  flex: 1;
-}
-
-.ep-models {
-  max-height: 260px;
-  overflow-y: auto;
-}
-
-.ep-model-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: none;
-  border-bottom: 1px solid var(--border-color);
-  background: none;
-  cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--ink-45);
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.ep-model-row:last-child {
-  border-bottom: none;
-}
-
-.ep-model-row:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--ink-70);
-}
-
-.ep-model-row:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.ep-model-row--selected {
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--ink-70);
-}
-
-.ep-model-row--empty {
-  color: var(--error);
-  justify-content: center;
-}
-
-.ep-model-name {
-  flex: 1;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ep-model-hardware-badge {
-  flex-shrink: 0;
-  padding: 3px 7px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  line-height: 1;
-}
-
-.ep-model-hardware-badge--cuda {
-  color: #a3e635;
-  border-color: rgba(163, 230, 53, 0.5);
-  background: rgba(132, 204, 22, 0.12);
-}
-
-.ep-model-hardware-badge--portable {
-  color: var(--ink-35);
-  border-color: rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.ep-model-size {
-  color: var(--ink-20);
-  font-size: 9px;
-  flex-shrink: 0;
-}
-
-.ep-model-spinner {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  border: 1.5px solid var(--ink-15);
-  border-top-color: var(--ink-60);
-  animation: spin 0.8s linear infinite;
-}
-
-.ep-model-check {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.ep-unload {
-  width: 100%;
-  padding: 9px 12px;
-  border: none;
-  background: rgba(220, 38, 38, 0.06);
-  color: var(--error);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.05em;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.ep-unload:hover {
-  background: rgba(220, 38, 38, 0.12);
-}
-
 /* ---- Loading overlay: full-window backdrop + centered card ---- */
 .loading-overlay-backdrop {
   position: fixed;
@@ -1912,11 +1464,6 @@ button.auto-unload-timer-btn--active {
   --os-handle-interactive-area-offset: 6px;
 }
 
-.output-area-empty {
-  min-height: 14rem;
-  display: block;
-}
-
 .output-area pre {
   margin: 0;
   font-family: var(--font-mono);
@@ -1928,40 +1475,6 @@ button.auto-unload-timer-btn--active {
 }
 
 /* Live transcript */
-.live-transcript {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.live-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-}
-
-.live-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--font-mono);
-  font-size: var(--font-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--recording);
-}
-
-.live-indicator::before {
-  content: '';
-  width: 8px;
-  height: 8px;
-  background: var(--recording);
-  border-radius: 50%;
-  animation: ledBlink 1.2s ease-in-out infinite;
-  box-shadow: 0 0 10px var(--recording-glow);
-}
 
 @keyframes ledBlink {
 
@@ -1989,106 +1502,16 @@ button.auto-unload-timer-btn--active {
   font-variant-numeric: tabular-nums;
 }
 
-.latency-badge--muted {
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-.live-transcript p {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--font-base);
-  color: var(--text-primary);
-  line-height: 1.65;
-}
-
-.listening-placeholder {
-  margin: 0;
-  font-size: var(--font-base);
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-.final-transcript-header {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  margin-bottom: 8px;
-  min-height: 28px;
-}
-
 /* Correction buttons */
-.copy-container {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  justify-content: flex-end;
-}
-
-.btn-copy {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-width: 40px;
-  height: 40px;
-  padding: 0 12px;
-  background: transparent;
-  border: 1px solid var(--border-color);
-  color: var(--text-muted);
-  border-radius: 10px;
-  cursor: pointer;
-  transition: color 0.35s ease-out, border-color 0.35s ease-out, background 0.35s ease-out, transform 0.35s ease-out;
-  font-family: var(--font-ui);
-  font-size: var(--font-sm);
-  font-weight: 500;
-}
-
-.btn-copy:hover {
-  color: var(--accent-primary);
-  border-color: var(--accent-primary);
-  background: rgba(var(--accent-primary-rgb), 0.08);
-}
-
-.btn-copy--confirmed {
-  color: var(--parakeet-color);
-  border-color: var(--parakeet-color);
-  background: rgba(62, 207, 165, 0.1);
-  animation: copyBtnToGreen 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.btn-copy--confirmed:hover {
-  color: var(--parakeet-color);
-  border-color: var(--parakeet-color);
-  background: rgba(62, 207, 165, 0.15);
-}
 
 /* Reverse animation when going back from "Copied" to copy icon */
-.btn-copy--resetting {
-  animation: copyBtnBackToNormal 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
-}
-
-.btn-copy-inner {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.btn-copy-inner--confirmed {
-  animation: copyContentIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.08s both;
-}
 
 /* When reverting from "Copied" back to copy icon (plays after button animates back) */
-.btn-copy-inner--animate-in {
-  animation: copyContentIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 0.12s both;
-}
 
 @keyframes copyBtnBackToNormal {
   0% {
-    color: var(--parakeet-color);
-    border-color: var(--parakeet-color);
+    color: var(--granite-color);
+    border-color: var(--granite-color);
     background: rgba(62, 207, 165, 0.1);
     transform: scale(1);
   }
@@ -2118,8 +1541,8 @@ button.auto-unload-timer-btn--active {
   }
 
   100% {
-    color: var(--parakeet-color);
-    border-color: var(--parakeet-color);
+    color: var(--granite-color);
+    border-color: var(--granite-color);
     background: rgba(62, 207, 165, 0.1);
     transform: scale(1);
   }
@@ -2135,10 +1558,6 @@ button.auto-unload-timer-btn--active {
     opacity: 1;
     transform: scale(1);
   }
-}
-
-.btn-copy-label {
-  white-space: nowrap;
 }
 
 /* ---- Page load animation ----
@@ -2251,7 +1670,7 @@ button.auto-unload-timer-btn--active {
 }
 
 .feed-live-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--font-sm);
   font-weight: 600;
   text-transform: uppercase;
@@ -2265,7 +1684,6 @@ button.auto-unload-timer-btn--active {
 .feed-live-row--processing .feed-live-label {
   color: var(--processing);
 }
-
 
 /* ── Wrapper: drives height 0 → auto via grid-row trick (no layout jump) ── */
 .feed-item-wrapper {
@@ -2399,7 +1817,6 @@ button.auto-unload-timer-btn--active {
   animation: feedFadeIn 0.3s ease 0.1s both;
 }
 
-
 .feed-item-header {
   display: flex;
   align-items: center;
@@ -2437,8 +1854,8 @@ button.auto-unload-timer-btn--active {
   border-color: rgba(104, 149, 210, 0.4);
 }
 
-.feed-badge-engine--parakeet {
-  color: var(--parakeet-color);
+.feed-badge-engine--granite {
+  color: var(--granite-color);
   border-color: rgba(62, 207, 165, 0.4);
 }
 
@@ -2478,7 +1895,7 @@ button.auto-unload-timer-btn--active {
 }
 
 .feed-copy-btn--done {
-  color: var(--parakeet-color) !important;
+  color: var(--granite-color) !important;
   border-color: rgba(62, 207, 165, 0.45) !important;
 }
 
@@ -2504,7 +1921,6 @@ button.auto-unload-timer-btn--active {
     opacity 0.16s ease;
   will-change: font-size, line-height;
 }
-
 
 .feed-empty {
   display: flex;
@@ -2541,7 +1957,7 @@ button.auto-unload-timer-btn--active {
 }
 
 .feed-empty-text {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 0.6rem;
   letter-spacing: 0.35em;
   color: var(--accent-primary);
@@ -2710,11 +2126,6 @@ button.auto-unload-timer-btn--active {
   border-radius: 50%;
 }
 
-.settings-btn:focus-visible,
-.btn-copy:focus-visible {
-  border-radius: 10px;
-}
-
 /* ---- Reduced motion: pause all continuous animation loops ---- */
 @media (prefers-reduced-motion: reduce) {
 
@@ -2762,12 +2173,70 @@ button.auto-unload-timer-btn--active {
   }
 }
 
-/* ---- Responsive ---- */
+/* ---- Responsive Breakpoints & Multi-Scale UI Modes ---- */
 
-/* ── Narrow window ── */
+/* ── Compact / Mini Mode (≤ 640px) ── */
 @media (max-width: 640px) {
   .container {
-    padding: 1.5rem 1rem;
+    padding: 0.5rem 0.6rem;
+    gap: 0.35rem;
+  }
+
+  .record-btn {
+    width: 3.5rem;
+    height: 3.5rem;
+    font-size: 0.65rem;
+  }
+
+  .bottom-bar {
+    gap: 0.4rem;
+    margin-top: 0.3rem;
+  }
+
+  .mode-toggle {
+    gap: 2px;
+    margin-bottom: 0;
+  }
+
+  .mode-toggle-btn {
+    padding: 4px 6px 6px;
+    margin: 0 4px 0 0;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    gap: 4px;
+  }
+
+  .accessibility-banner,
+  .mic-banner,
+  .silence-banner {
+    padding: 6px 10px;
+    font-size: 0.75rem;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .accessibility-banner-actions {
+    width: 100%;
+    margin-top: 4px;
+    display: flex;
+    gap: 6px;
+  }
+
+  .app-status-rail {
+    padding: 2px 4px;
+    font-size: 0.72rem;
+  }
+
+  .file-drop-zone {
+    padding: 18px 12px;
+  }
+
+  .file-drop-title {
+    font-size: 13px;
+  }
+
+  .file-drop-hint {
+    font-size: 10px;
   }
 }
 
@@ -2823,7 +2292,7 @@ button.auto-unload-timer-btn--active {
 }
 
 .qs-title {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--font-xs);
   font-weight: 400;
   letter-spacing: 0.25em;
@@ -2863,7 +2332,7 @@ button.auto-unload-timer-btn--active {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 9px;
   font-weight: 400;
   letter-spacing: 0.25em;
@@ -2898,7 +2367,7 @@ button.auto-unload-timer-btn--active {
 .qs-row-hint {
   font-size: var(--font-xs);
   color: var(--text-muted);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .qs-row-right {
@@ -3023,19 +2492,6 @@ button.auto-unload-timer-btn--active {
   background: rgba(var(--accent-primary-rgb), 0.08);
 }
 
-.qs-backend-row--locked {
-  opacity: 0.6;
-  pointer-events: none;
-}
-
-.qs-backend-hint {
-  margin: 0;
-  padding: 4px 18px 8px;
-  font-size: var(--font-xs);
-  color: var(--processing);
-  line-height: 1.4;
-}
-
 /* ── Volume ── */
 .qs-volume-row {
   display: flex;
@@ -3085,7 +2541,7 @@ button.auto-unload-timer-btn--active {
 }
 
 .qs-volume-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--font-xs);
   color: var(--text-muted);
   width: 28px;
@@ -3115,7 +2571,7 @@ button.auto-unload-timer-btn--active {
 }
 
 .qs-personal-count {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--font-xs);
   color: var(--text-muted);
 }
@@ -3128,6 +2584,15 @@ button.auto-unload-timer-btn--active {
 @media (min-width: 1100px) {
   .container {
     gap: 1.15rem;
+    max-width: 1400px;
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+
+  .output-area--feed {
+    max-width: 1100px;
+    margin: 0 auto;
+    width: 100%;
   }
 
   /* Record button: slightly larger in fullscreen */
@@ -3142,8 +2607,9 @@ button.auto-unload-timer-btn--active {
 @media (min-width: 1400px) {
   .container {
     gap: 1.35rem;
-    padding-left: 2rem;
-    padding-right: 2rem;
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+    max-width: 1600px;
   }
 
   .record-btn {
@@ -3153,9 +2619,25 @@ button.auto-unload-timer-btn--active {
   }
 }
 /* ─────────────────────────────────────────────────────────────────────────────
-   Mic / File mode toggle
+   Mic / Meetings / Files mode toggle & Top Navigation Row
 ───────────────────────────────────────────────────────────────────────────── */
+.mode-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 6px;
+  padding-right: 2px;
+  flex-shrink: 0;
+}
+
+.mode-toggle-row .mode-toggle {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
 .mode-toggle {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 4px;
@@ -3167,6 +2649,27 @@ button.auto-unload-timer-btn--active {
   margin-bottom: 4px;
 }
 
+.top-settings-btn,
+button.top-settings-btn,
+button#top-settings-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: #9ca3af;
+  transition: all 0.15s ease;
+}
+
+.top-settings-btn:hover,
+button.top-settings-btn:hover,
+button#top-settings-btn:hover {
+  color: #f3f4f6;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .mode-toggle-btn {
   display: flex;
   align-items: center;
@@ -3174,7 +2677,7 @@ button.auto-unload-timer-btn--active {
   padding: 6px 4px 8px;
   margin: 0 10px 0 0;
   border-radius: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 10px;
   font-weight: 400;
   letter-spacing: 0.15em;
@@ -3194,8 +2697,27 @@ button.auto-unload-timer-btn--active {
 .mode-toggle-btn--active {
   background: none;
   color: var(--ink-70);
-  border-bottom-color: var(--accent-primary);
   box-shadow: none;
+}
+
+/* One underline that glides to the selected mode (see useSlidingIndicator). */
+.mode-toggle-indicator {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent-primary);
+  pointer-events: none;
+  transition:
+    transform 0.34s cubic-bezier(0.3, 1.25, 0.5, 1),
+    width 0.34s cubic-bezier(0.3, 1.25, 0.5, 1),
+    opacity 0.2s ease;
+  will-change: transform, width;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mode-toggle-indicator { transition: opacity 0.2s ease; }
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -3349,7 +2871,7 @@ button.auto-unload-timer-btn--active {
 }
 
 .file-queue-summary {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 0.62rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3357,7 +2879,7 @@ button.auto-unload-timer-btn--active {
 }
 
 .file-queue-cancel-all {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 0.62rem;
   letter-spacing: 0.06em;
   color: #f87171;
@@ -3423,7 +2945,6 @@ button.auto-unload-timer-btn--active {
   0%, 100% { opacity: 0.18; }
   50% { opacity: 0.42; }
 }
-
 
 .file-card--error {
   border-bottom-color: rgba(239, 68, 68, 0.35);
@@ -3629,7 +3150,7 @@ button.auto-unload-timer-btn--active {
 .file-meta-badge:nth-child(6) { animation-delay: 0.46s; }
 
 .file-meta-toggle {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 0.62rem;
   letter-spacing: 0.06em;
   padding: 2px 8px;
@@ -3753,14 +3274,8 @@ button.auto-unload-timer-btn--active {
   }
 
   /* Ticker tape */
-  .header-ticker-track {
-    animation: none;
-  }
 
   /* Title boot scramble */
-  .titlebar-title--boot {
-    animation: none;
-  }
 
   /* Ambient recording hum overlay */
   .app-body--recording::before {
@@ -3779,4 +3294,67 @@ button.auto-unload-timer-btn--active {
   .feed-item--fading-in {
     animation: none;
   }
+}
+
+/* ── Window resizing & view motion (see hooks/useWindowLayout.ts) ─────── */
+
+/* While the window is being resized, sizes follow the edge immediately:
+   eased width/gap/padding transitions would trail behind and read as lag. */
+:root[data-resizing] *,
+:root[data-resizing] *::before,
+:root[data-resizing] *::after {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+
+/* Crossing a layout breakpoint: the areas that re-flow settle in instead of
+   jumping to their new arrangement. */
+:root[data-layout-changed] .meeting-catalog-layout,
+:root[data-layout-changed] .output-area,
+:root[data-layout-changed] .bottom-bar,
+:root[data-layout-changed] .mode-toggle,
+:root[data-layout-changed] .settings-body {
+  animation: layoutSettle 240ms ease-out both;
+}
+
+@keyframes layoutSettle {
+  from { opacity: 0.7; }
+  to { opacity: 1; }
+}
+
+/* Switching Mic / Meetings / Files: the view that appears fades up. Panes kept
+   mounted (Files) restart the animation when they become visible again. */
+.nav-view-enter {
+  animation: navViewIn 240ms var(--ease-pop) both;
+}
+
+@keyframes navViewIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Press feedback on plain buttons (ones without their own transform effects). */
+.about-open-btn:not(:disabled):active,
+.ghost-btn:not(:disabled):active,
+.detail-tool-btn:not(:disabled):active,
+.category-tab-btn:not(:disabled):active,
+.load-eject-btn:not(:disabled):active,
+.engine-chip:not(:disabled):active,
+.meeting-vault-btn:not(:disabled):active,
+.view-mode-btn:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-layout-changed] .meeting-catalog-layout,
+  :root[data-layout-changed] .output-area,
+  :root[data-layout-changed] .bottom-bar,
+  :root[data-layout-changed] .mode-toggle,
+  :root[data-layout-changed] .settings-body,
+  .nav-view-enter { animation: none !important; }
+}
+
+button.top-settings-btn:focus-visible {
+  outline: 2px solid var(--brand, #f2a65a);
+  outline-offset: 1px;
 }

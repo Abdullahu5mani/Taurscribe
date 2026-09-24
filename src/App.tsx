@@ -20,6 +20,9 @@ import { FileTranscriptionPanel } from "./components/FileTranscriptionPanel";
 import { QuickSettings } from "./components/QuickSettings";
 import { EnginePicker } from "./components/EnginePicker";
 import { MeetingBanner } from "./components/MeetingBanner";
+import { MeetingsPanel } from "./components/MeetingsPanel";
+import { useWindowLayout } from "./hooks/useWindowLayout";
+import { levelToPercent } from "./utils/audioLevel";
 import { SessionNoticeCard } from "./components/SessionNoticeCard";
 import { useDownloads } from "./hooks/useDownloads";
 import { useInitialLoad } from "./hooks/useInitialLoad";
@@ -32,20 +35,14 @@ import { beautifyModelName } from "./utils/modelDisplay";
 import type { OnboardingUseCase } from "./modelRecommendations";
 import "./components/TitleBar.css";
 import "./App.css";
-import { IconFileText, IconBolt, IconEject, IconDownload, IconMic, IconLightbulb, IconSettings } from "./components/Icons";
+import { IconFileText, IconBolt, IconEject, IconDownload, IconMic, IconVideo, IconLightbulb, IconSettings } from "./components/Icons";
 import { getEngineForModelId } from "./utils/engineUtils";
 import { useAutoUnload, AUTO_UNLOAD_OPTIONS, formatTimeoutLabel, formatRemaining } from "./hooks/useAutoUnload";
+import { useSlidingIndicator } from "./hooks/useSlidingIndicator";
+import { useDismissOnOutside } from "./hooks/useDismissOnOutside";
 import { OverlayScrollbarsComponent } from "overlayscrollbars-react";
 import type { CommandResult } from "./types/session";
 
-const ANIMATED_LOGOS = [
-  "animated_logo_breathe.svg",
-  "animated_logo_scan_reveal.svg",
-  "animated_logo_focus.svg",
-  "animated_logo_crt.svg",
-  "animated_logo_pulse_reveal.svg",
-  "animated_logo_stomp.svg",
-];
 
 type EngineSelectionState = {
   active_engine: string;
@@ -59,9 +56,32 @@ type EngineSelectionState = {
 
 
 
-const setTrayState = async (newState: "ready" | "recording" | "processing") => {
+import type { MeetingInfo } from "./components/MeetingHeaderPill";
+
+let currentActiveMeeting: MeetingInfo | null = null;
+
+/** Tray states; the processing ones say what is being processed. */
+export type TrayState =
+  | "ready" | "recording" | "paused" | "loading_model" | "downloading"
+  | "processing_speech" | "processing_meeting" | "processing_file" | "grammar"
+  | "done" | "nothing_heard" | "paste_failed" | "error" | "mic_blocked" | "cancelled";
+
+/** Sets the tray icon. `detail` shows in its tooltip (and, for errors, the tray menu).
+ *  Short-lived states (done, nothing heard, errors…) return to idle on their own. */
+const setTrayState = async (
+  newState: TrayState,
+  meetingOverride?: MeetingInfo | null,
+  detail?: string,
+) => {
   try {
-    await invoke("set_tray_state", { newState });
+    const meeting = meetingOverride !== undefined ? meetingOverride : currentActiveMeeting;
+    await invoke("set_tray_state", {
+      newState,
+      meetingPlatform: meeting?.platform || null,
+      meetingProcess: meeting?.app_name || null,
+      meetingPid: meeting?.pid || null,
+      detail: detail ?? null,
+    });
   } catch (e) {
     console.error("Failed to set tray state:", e);
   }
@@ -69,13 +89,7 @@ const setTrayState = async (newState: "ready" | "recording" | "processing") => {
 
 
 function App() {
-  const pickRandomLogo = useCallback(() => {
-    return ANIMATED_LOGOS[Math.floor(Math.random() * ANIMATED_LOGOS.length)];
-  }, []);
-
-  const [randomLogo, setRandomLogo] = useState(pickRandomLogo);
-  const [isLogoShuttering, setIsLogoShuttering] = useState(false);
-
+  useWindowLayout();
   // M6 fix: containerBooting controls the CSS stagger class; cleared after
   // the boot animation completes so re-mounts don't re-trigger the stagger.
   const [containerBooting, setContainerBooting] = useState(true);
@@ -89,56 +103,7 @@ function App() {
     };
   }, []);
 
-  const handleLogoClick = useCallback(() => {
-    if (isLogoShuttering) return;
-    setIsLogoShuttering(true);
-    // Sharp mechanical shutter timing: 150ms to close, swap, 150ms to open
-    setTimeout(() => {
-      setRandomLogo(pickRandomLogo());
-      setTimeout(() => setIsLogoShuttering(false), 150);
-    }, 150);
-  }, [isLogoShuttering, pickRandomLogo]);
 
-  useEffect(() => {
-    let resizeRaf: number | null = null;
-    let resizeDoneTimer: number | null = null;
-
-    const markResizing = () => {
-      if (!document.body.classList.contains("is-resizing")) {
-        document.body.classList.add("is-resizing");
-      }
-      if (resizeDoneTimer !== null) {
-        window.clearTimeout(resizeDoneTimer);
-      }
-      resizeDoneTimer = window.setTimeout(() => {
-        document.body.classList.remove("is-resizing");
-        resizeDoneTimer = null;
-      }, 140);
-    };
-
-    const onResize = () => {
-      if (resizeRaf !== null) {
-        return;
-      }
-      resizeRaf = window.requestAnimationFrame(() => {
-        resizeRaf = null;
-        markResizing();
-      });
-    };
-
-    window.addEventListener("resize", onResize, { passive: true });
-
-    return () => {
-      window.removeEventListener("resize", onResize);
-      if (resizeRaf !== null) {
-        window.cancelAnimationFrame(resizeRaf);
-      }
-      if (resizeDoneTimer !== null) {
-        window.clearTimeout(resizeDoneTimer);
-      }
-      document.body.classList.remove("is-resizing");
-    };
-  }, []);
 
   // Close the settings modal when the window is hidden to tray so the hotkey
   // works immediately when the user restores the window.
@@ -160,14 +125,19 @@ function App() {
   const [loadingMessage, setLoadingMessage] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEnginePickerOpen, setIsEnginePickerOpen] = useState(false);
+  const autoUnloadMenuRef = useRef<HTMLDivElement>(null);
+  const modeToggleRef = useRef<HTMLDivElement>(null);
   const [settingsInitialTab, setSettingsInitialTab] = useState<string | undefined>(undefined);
   const [settingsScrollTarget, setSettingsScrollTarget] = useState<ASREngine | null>(null);
   /** null = not yet loaded from store; true = show wizard (first run); false = show main app */
   const [showSetupWizard, setShowSetupWizard] = useState<boolean | null>(null);
   /** Incremented after each successful save_transcript_history; tells TranscriptFeed to reload. */
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
-  /** Whether the output area is in file-transcription mode vs mic-recording mode */
-  const [fileMode, setFileMode] = useState(false);
+  type NavMode = "mic" | "meetings" | "files";
+  /** Whether the output area is in mic, meetings, or file-transcription mode */
+  const [navMode, setNavMode] = useState<NavMode>("mic");
+  const modeIndicator = useSlidingIndicator(modeToggleRef, ".mode-toggle-btn--active", navMode);
+  const setFileMode = (files: boolean) => setNavMode(files ? "files" : "mic");
   /** True while FileTranscriptionPanel has a file actively transcribing */
   const [isFileTranscribing, setIsFileTranscribing] = useState(false);
   const [noModelCtaAttention, setNoModelCtaAttention] = useState(false);
@@ -291,8 +261,7 @@ function App() {
   }, [micPermission, isMac, setSessionNotice]);
   const {
     models, setModels, currentModel, setCurrentModel,
-    parakeetModels, setParakeetModels, currentParakeetModel, setCurrentParakeetModel,
-    cohereModels, setCohereModels, currentCohereModel, setCurrentCohereModel,
+    graniteModels, setGraniteModels, currentGraniteModel, setCurrentGraniteModel,
     qwen3Models, setQwen3Models, currentQwen3Model, setCurrentQwen3Model,
     refreshModels,
   } = useModels(setHeaderStatus);
@@ -361,8 +330,6 @@ function App() {
     asrBackend, setAsrBackend,
   } = usePostProcessing(setHeaderStatus, () => setIsSettingsOpen(true), storeRef);
 
-  /** Granite loaded on a GPU backend — lock header ASR toggle while active. */
-  const [cohereGpuOnlyLoaded, setCohereGpuOnlyLoaded] = useState(false);
 
   const { volume, muted, setVolume, setMuted, playStart, playPaste, playError } = useSounds();
 
@@ -385,10 +352,10 @@ function App() {
     isRecording, isRecordingRef, isPaused, isProcessingTranscript,
     latestLatency,
     isDualChannelRecording, dualLevels,
-    handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk, handlePartialChunk,
+    handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk,
   } = useRecording({
     activeEngineRef: activeEngineForwarded,
-    models, parakeetModels, cohereModels, qwen3Models, currentModel, currentParakeetModel, currentCohereModel, currentQwen3Model,
+    models, graniteModels, qwen3Models, currentModel, currentGraniteModel, currentQwen3Model,
     asrBackend,
     setCurrentModel, setLoadedEngine: (e) => setLoadedEngineForwarded.current(e), enableGrammarLMRef,
     enableDenoiseRef, enableOverlayRef, muteBackgroundAudioRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
@@ -406,39 +373,157 @@ function App() {
     loadedEngine, setLoadedEngine,
     isLoading, setIsLoading, isLoadingRef,
     loadingTargetEngine,
-    handleModelChange, handleSwitchToWhisper, handleSwitchToParakeet, handleSwitchToCohere, handleSwitchToQwen3,
+    handleModelChange, handleSwitchToWhisper, handleSwitchToGranite, handleSwitchToQwen3,
     handleToggleAsrBackend,
   } = useEngineSwitch({
-    models, parakeetModels, cohereModels, qwen3Models,
-    currentModel, currentParakeetModel, currentCohereModel, currentQwen3Model,
-    setCurrentModel, setCurrentParakeetModel, setCurrentCohereModel, setCurrentQwen3Model,
+    models, graniteModels, qwen3Models,
+    currentModel, currentGraniteModel, currentQwen3Model,
+    setCurrentModel, setCurrentGraniteModel, setCurrentQwen3Model,
     setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
     setAsrBackend,
-    cohereGpuOnlyLocked: cohereGpuOnlyLoaded,
     isRecordingRef,
     downloadProgressRef,
     setSessionPhase,
     setSessionNotice,
   });
 
+  const [activeMeeting, setActiveMeeting] = useState<MeetingInfo | null>(null);
+
+  // Sync active meeting state with system tray & menu bar
+  // While a stopped recording is processing, useRecording owns the tray (it shows
+  // what is being processed); this sync resumes when processing ends.
   useEffect(() => {
-    let cancelled = false;
-    if (loadedEngine !== "granite") {
-      setCohereGpuOnlyLoaded(false);
-      return () => { cancelled = true; };
+    currentActiveMeeting = activeMeeting;
+    if (isProcessingTranscript) return;
+    if (!isRecording) {
+      void setTrayState("ready", activeMeeting);
+    } else {
+      void setTrayState(isPaused ? "paused" : "recording", activeMeeting);
     }
-    invoke<{ loaded?: boolean; gpu_only?: boolean; backend?: string }>("get_granite_status")
-      .then((s) => {
-        if (!cancelled) {
-          const locked = (!!s.loaded && !!s.gpu_only) || s.backend === "Hybrid";
-          setCohereGpuOnlyLoaded(locked);
-        }
+  }, [activeMeeting, isRecording, isPaused, isProcessingTranscript]);
+
+  // Errors reach the tray from the notice the app shows for them.
+  const lastTrayNoticeRef = useRef<unknown>(null);
+  useEffect(() => {
+    const notice = sessionState.notice;
+    if (!notice || notice === lastTrayNoticeRef.current || notice.level !== "error") return;
+    lastTrayNoticeRef.current = notice;
+    if (notice.code === "mic_permission_denied") {
+      void setTrayState("mic_blocked");
+    } else {
+      void setTrayState("error", undefined, notice.title || notice.message);
+    }
+  }, [sessionState.notice]);
+
+  // Model downloads: show progress in the tray (updated per whole percent).
+  const trayDownloadRef = useRef<string | null>(null);
+  useEffect(() => {
+    const active = Object.entries(downloadProgress).filter(([, p]) => p.total > 0 && p.bytes < p.total && !p.error);
+    if (active.length === 0) {
+      if (trayDownloadRef.current !== null) {
+        trayDownloadRef.current = null;
+        if (!isRecording && !isProcessingTranscript) void setTrayState("ready", activeMeeting);
+      }
+      return;
+    }
+    const [id, p] = active[0];
+    const name = settingsModels.find((m) => m.id === id)?.name ?? id;
+    const label = `${name} · ${Math.floor((p.bytes / p.total) * 100)}%` + (active.length > 1 ? ` (+${active.length - 1} more)` : "");
+    if (label === trayDownloadRef.current) return;
+    trayDownloadRef.current = label;
+    if (!isRecording && !isProcessingTranscript) void setTrayState("downloading", activeMeeting, label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downloadProgress]);
+
+  // File transcription shows in the tray too (recording is blocked meanwhile).
+  const fileTrayActiveRef = useRef(false);
+  useEffect(() => {
+    if (isFileTranscribing) {
+      fileTrayActiveRef.current = true;
+      void setTrayState("processing_file");
+    } else if (fileTrayActiveRef.current) {
+      fileTrayActiveRef.current = false;
+      void setTrayState(isRecording ? "recording" : "ready", activeMeeting);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFileTranscribing]);
+
+  // Direct meeting detector event subscriptions and periodic reconciliation
+  useEffect(() => {
+    let isSubscribed = true;
+
+    // 1. Initial scan on mount
+    invoke<MeetingInfo[]>("scan_active_meetings")
+      .then((meetings) => {
+        if (!isSubscribed) return;
+        const live = meetings.find((m) => m.should_record || m.confidence >= 70);
+        setActiveMeeting(live || null);
       })
-      .catch(() => {
-        if (!cancelled) setCohereGpuOnlyLoaded(false);
+      .catch(() => {});
+
+    // 2. Real-time events from Rust meeting detector
+    const unlistenDetectedPromise = listen<MeetingInfo>("meeting-detected", (event) => {
+      const m = event.payload;
+      if (m.should_record || m.confidence >= 70) {
+        setActiveMeeting(m);
+      }
+    });
+
+    const unlistenChangedPromise = listen<MeetingInfo>("meeting-changed", (event) => {
+      const m = event.payload;
+      setActiveMeeting((curr) => (curr?.pid === m.pid ? m : curr));
+    });
+
+    const unlistenEndedPromise = listen<MeetingInfo>("meeting-ended", (event) => {
+      const m = event.payload;
+      setActiveMeeting((curr) => {
+        if (!curr || curr.pid === m.pid || m.pid === 99999) {
+          return null;
+        }
+        return curr;
       });
-    return () => { cancelled = true; };
-  }, [loadedEngine]);
+    });
+
+    // 3. Periodic reconciliation every 3 seconds to guarantee no stuck meeting state
+    const pollInterval = setInterval(() => {
+      if (!isSubscribed) return;
+      invoke<{ active_meetings: MeetingInfo[] }>("get_meeting_detection_status")
+        .then((status) => {
+          if (!isSubscribed) return;
+          const live = status.active_meetings?.find((m) => m.should_record || m.confidence >= 70);
+          setActiveMeeting((curr) => {
+            if (!live && curr !== null) {
+              return null;
+            } else if (live && (!curr || curr.pid !== live.pid || curr.title !== live.title)) {
+              return live;
+            }
+            return curr;
+          });
+        })
+        .catch(() => {});
+    }, 3000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(pollInterval);
+      unlistenDetectedPromise.then((u) => u());
+      unlistenChangedPromise.then((u) => u());
+      unlistenEndedPromise.then((u) => u());
+    };
+  }, []);
+
+  // Handle tray menu click "Record [Platform] Call"
+  // Subscribed once: re-subscribing on every render (the handler changes each
+  // render and unlisten is async) left several listeners live, and one click
+  // started several recordings.
+  useEffect(() => {
+    const unlistenPromise = listen("start-meeting-recording", () => {
+      void handleStartRecordingRef.current(false, "dual_channel");
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   // Wire the forwarded refs so useRecording's handlers use the real values
   activeEngineForwarded.current = activeEngineRef.current;
@@ -464,7 +549,7 @@ function App() {
 
   // handleDeleteModel moved here so setLoadedEngine is in scope
   const handleDeleteModel = async (id: string, _name: string) => {
-    const isActiveModel = id === currentModel || id === currentParakeetModel || id === currentCohereModel || id === currentQwen3Model;
+    const isActiveModel = id === currentModel || id === currentGraniteModel || id === currentQwen3Model;
     if (isFileTranscribing && isActiveModel) {
       throw new Error("Cannot delete the active model while a file is being transcribed.");
     }
@@ -474,7 +559,7 @@ function App() {
         throw new Error(result.error?.message ?? "Failed to delete model");
       }
       setSettingsModels(prev => prev.map(m => m.id === id ? { ...m, downloaded: false, verified: false } : m));
-      if (currentModel === id || currentParakeetModel === id || currentCohereModel === id || currentQwen3Model === id) {
+      if (currentModel === id || currentGraniteModel === id || currentQwen3Model === id) {
         setLoadedEngine(null);
         setSessionNotice({
           level: "warning",
@@ -485,8 +570,7 @@ function App() {
         });
       }
       if (currentModel === id) setCurrentModel(null);
-      if (currentParakeetModel === id) setCurrentParakeetModel(null);
-      if (currentCohereModel === id) setCurrentCohereModel(null);
+      if (currentGraniteModel === id) setCurrentGraniteModel(null);
       if (currentQwen3Model === id) setCurrentQwen3Model(null);
       await refreshModels(false);
     } catch (e) {
@@ -502,17 +586,14 @@ function App() {
   const handleResumeRecordingRef = useSyncedRef(handleResumeRecording);
   const handleCancelRecordingRef = useSyncedRef(handleCancelRecording);
   const handleTranscriptionChunkRef = useSyncedRef(handleTranscriptionChunk);
-  const handlePartialChunkRef = useSyncedRef(handlePartialChunk);
   const asrModelCountsRef = useRef({
     whisper: 0,
-    parakeet: 0,
     granite: 0,
     qwen3: 0,
   });
   asrModelCountsRef.current = {
     whisper: models.length,
-    parakeet: parakeetModels.length,
-    granite: cohereModels.length,
+    granite: graniteModels.length,
     qwen3: qwen3Models.length,
   };
   const isFileTranscribingRef = useSyncedRef(isFileTranscribing);
@@ -549,10 +630,16 @@ function App() {
     };
   }, []);
 
-  // Re-randomize the logo animation when the window is restored from the tray
+  // Tray "Load Model" runs the same load as the Load button.
+  const loadActiveEngineRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const unlisten = listen("tray-load-model", () => loadActiveEngineRef.current());
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
+  // Window restored from the tray
   useEffect(() => {
     const unlisten = listen("window-restored", () => {
-      setRandomLogo(pickRandomLogo());
       appHiddenRef.current = false;
       if (pendingNoModelCtaPulseRef.current) {
         pendingNoModelCtaPulseRef.current = false;
@@ -561,13 +648,12 @@ function App() {
       }
     });
     return () => { unlisten.then(fn => fn()); };
-  }, [pickRandomLogo, startNoModelCtaAttention]);
+  }, [startNoModelCtaAttention]);
 
   // ── Hooks extracted from App.tsx ──
   useInitialLoad({
     setModels, setCurrentModel,
-    setParakeetModels, setCurrentParakeetModel,
-    setCohereModels, setCurrentCohereModel,
+    setGraniteModels, setCurrentGraniteModel,
     setQwen3Models, setCurrentQwen3Model,
     setSettingsModels,
     setLoadedEngine, setActiveEngine, activeEngineRef,
@@ -583,6 +669,7 @@ function App() {
     isLoadingRef,
     activeEngineRef,
     isFileTranscribingRef,
+    enableOverlayRef,
     asrModelCountsRef,
     handleStartRecordingRef,
     handleStopRecordingRef,
@@ -590,7 +677,6 @@ function App() {
     handleResumeRecordingRef,
     handleCancelRecordingRef,
     handleTranscriptionChunkRef,
-    handlePartialChunkRef,
     playErrorRef,
     setHeaderStatusRef,
     triggerNoModelAttentionRef,
@@ -600,7 +686,7 @@ function App() {
     refreshMacPermissions,
   });
 
-  useModelsWatcher({ refreshModels, downloadProgressRef, setSettingsModels });
+  useModelsWatcher({ isSettingsOpen, refreshModels, downloadProgressRef, setSettingsModels });
 
   const {
     timeoutSeconds: autoUnloadTimeout,
@@ -612,6 +698,11 @@ function App() {
     loadedEngine,
     setLoadedEngine,
     setHeaderStatus,
+  });
+  const closeAutoUnloadMenu = useCallback(() => setIsAutoUnloadMenuOpen(false), [setIsAutoUnloadMenuOpen]);
+  useDismissOnOutside(autoUnloadMenuRef, closeAutoUnloadMenu, {
+    enabled: isAutoUnloadMenuOpen,
+    ignoreSelector: "#auto-unload-timer-btn",
   });
 
   // ── Small helpers (local, use hook outputs) ──
@@ -646,10 +737,10 @@ function App() {
 
   const handleLoadActiveEngine = () => {
     if (activeEngine === "whisper") void handleSwitchToWhisper();
-    else if (activeEngine === "parakeet") void handleSwitchToParakeet();
-    else if (activeEngine === "granite") void handleSwitchToCohere();
+    else if (activeEngine === "granite") void handleSwitchToGranite();
     else void handleSwitchToQwen3();
   };
+  loadActiveEngineRef.current = handleLoadActiveEngine;
 
   const refreshEngineSelectionState = useCallback(() => {
     invoke<EngineSelectionState>("get_engine_selection_state")
@@ -670,8 +761,7 @@ function App() {
     activeEngine,
     loadedEngine,
     currentModel,
-    currentParakeetModel,
-    currentCohereModel,
+    currentGraniteModel,
     currentQwen3Model,
     backendInfo,
     isLoading,
@@ -693,19 +783,17 @@ function App() {
       if (engineForModel && engineForModel === activeEngineRef.current && !isLoadingRef.current) {
         if (isExplicitSelection) {
           if (engineForModel === 'whisper') await handleModelChange(id);
-          else if (engineForModel === 'parakeet') await handleSwitchToParakeet(id);
-          else if (engineForModel === 'granite') await handleSwitchToCohere(id);
+          else if (engineForModel === 'granite') await handleSwitchToGranite(id);
           else await handleSwitchToQwen3(id);
           return;
         }
         if (loadedEngine) return;
         if (engineForModel === 'whisper') handleModelChange(id);
-        else if (engineForModel === 'parakeet') handleSwitchToParakeet(id);
-        else if (engineForModel === 'granite') handleSwitchToCohere(id);
+        else if (engineForModel === 'granite') handleSwitchToGranite(id);
         else handleSwitchToQwen3(id);
       }
     };
-  }, [handleModelChange, handleSwitchToCohere, handleSwitchToParakeet, handleSwitchToQwen3, loadedEngine, refreshModels]);
+  }, [handleModelChange, handleSwitchToGranite, handleSwitchToQwen3, loadedEngine, refreshModels]);
 
 
 
@@ -725,14 +813,12 @@ function App() {
 
   // --- Derived UI state ---
   const noWhisperModel = models.length === 0;
-  const noParakeetModel = parakeetModels.length === 0;
-  const noCohereModel = cohereModels.length === 0;
+  const noGraniteModel = graniteModels.length === 0;
   const noQwen3Model = qwen3Models.length === 0;
-  const noAnyAsrModel = noWhisperModel && noParakeetModel && noCohereModel && noQwen3Model;
+  const noAnyAsrModel = noWhisperModel && noGraniteModel && noQwen3Model;
   const activeEngineHasNoModel =
     (activeEngine === "whisper" && noWhisperModel) ||
-    (activeEngine === "parakeet" && noParakeetModel) ||
-    (activeEngine === "granite" && noCohereModel) ||
+    (activeEngine === "granite" && noGraniteModel) ||
     (activeEngine === "qwen3" && noQwen3Model);
   const noModel = activeEngineHasNoModel;
   const noLlm = llmStatus === "Not Downloaded";
@@ -741,12 +827,8 @@ function App() {
     () => downloadProgressKeys.some((key) => key.startsWith("whisper-")),
     [downloadProgressKeys],
   );
-  const isParakeetDownloading = useMemo(
-    () => downloadProgressKeys.some((key) => key.startsWith("parakeet")),
-    [downloadProgressKeys],
-  );
-  const isCohereDownloading = useMemo(
-    () => downloadProgressKeys.some((key) => key.startsWith("granite") || key.startsWith("cohere")),
+  const isGraniteDownloading = useMemo(
+    () => downloadProgressKeys.some((key) => key.startsWith("granite")),
     [downloadProgressKeys],
   );
   const isQwen3Downloading = useMemo(
@@ -776,6 +858,7 @@ function App() {
   const onRecordClick = () => {
     if (noModel) { setIsSettingsOpen(true); return; }
     if (isRecording) handleStopRecording();
+    else if (activeMeeting) handleStartRecording(false, "dual_channel");
     else handleStartRecording();
   };
 
@@ -789,23 +872,14 @@ function App() {
       const m = models.find(x => x.id === currentModel);
       return { label, color, model: m ? beautifyModelName(m.display_name) : "None" };
     }
-    if (activeEngine === "parakeet") {
-      const label = "Parakeet";
-      const color = "var(--parakeet-color)";
-      if (isLoading && loadingTargetEngine === "parakeet") return { label, color, model: "Loading…" };
-      if (isParakeetDownloading) return { label, color, model: "Downloading…" };
-      if (parakeetModels.length === 0) return { label, color, model: "No model" };
-      const m = parakeetModels.find(x => x.id === currentParakeetModel) ?? parakeetModels[0];
-      return { label, color, model: beautifyModelName(m.display_name) };
-    }
     if (activeEngine === "granite") {
       const label = "Granite";
-      const color = "var(--cohere-color)";
+      const color = "var(--granite-color)";
       if (isLoading && loadingTargetEngine === "granite") return { label, color, model: "Loading…" };
-      if (isCohereDownloading) return { label, color, model: "Downloading…" };
-      if (cohereModels.length === 0) return { label, color, model: "No model" };
-      const m = cohereModels.find(x => x.id === currentCohereModel) ?? cohereModels[0];
-      return { label, color, model: m.display_name };
+      if (isGraniteDownloading) return { label, color, model: "Downloading…" };
+      if (graniteModels.length === 0) return { label, color, model: "No model" };
+      const m = graniteModels.find(x => x.id === currentGraniteModel) ?? graniteModels[0];
+      return { label, color, model: beautifyModelName(m.display_name) };
     }
     const label = "Qwen3-ASR";
     const color = "#a78bfa";
@@ -814,8 +888,8 @@ function App() {
     if (qwen3Models.length === 0) return { label, color, model: "No model" };
     const m = qwen3Models.find(x => x.id === currentQwen3Model) ?? qwen3Models[0];
     return { label, color, model: m.display_name };
-  }, [activeEngine, isLoading, loadingTargetEngine, isWhisperDownloading, isParakeetDownloading, isCohereDownloading, isQwen3Downloading,
-      models, currentModel, parakeetModels, currentParakeetModel, cohereModels, currentCohereModel, qwen3Models, currentQwen3Model]);
+  }, [activeEngine, isLoading, loadingTargetEngine, isWhisperDownloading, isGraniteDownloading, isQwen3Downloading,
+      models, currentModel, graniteModels, currentGraniteModel, qwen3Models, currentQwen3Model]);
 
   const recordReadinessMeta = useMemo(() => {
     const loadedEngineName = engineSelectionState?.loaded_engine as ASREngine | null | undefined;
@@ -829,15 +903,11 @@ function App() {
         const m = models.find(x => x.id === selectedOrLoadedModelId) ?? models.find(x => x.id === currentModel);
         return m ? beautifyModelName(m.display_name) : engineChipMeta.model;
       }
-      if (activeEngine === "parakeet") {
-        const m = parakeetModels.find(x => x.id === selectedOrLoadedModelId) ?? parakeetModels.find(x => x.id === currentParakeetModel) ?? parakeetModels[0];
+      if (activeEngine === "granite") {
+        const m = graniteModels.find(x => x.id === selectedOrLoadedModelId) ?? graniteModels.find(x => x.id === currentGraniteModel) ?? graniteModels[0];
         return m ? beautifyModelName(m.display_name) : engineChipMeta.model;
       }
-      if (activeEngine === "qwen3") {
-        const m = qwen3Models.find(x => x.id === selectedOrLoadedModelId) ?? qwen3Models.find(x => x.id === currentQwen3Model) ?? qwen3Models[0];
-        return m ? beautifyModelName(m.display_name) : engineChipMeta.model;
-      }
-      const m = cohereModels.find(x => x.id === selectedOrLoadedModelId) ?? cohereModels.find(x => x.id === currentCohereModel) ?? cohereModels[0];
+      const m = qwen3Models.find(x => x.id === selectedOrLoadedModelId) ?? qwen3Models.find(x => x.id === currentQwen3Model) ?? qwen3Models[0];
       return m ? beautifyModelName(m.display_name) : engineChipMeta.model;
     };
 
@@ -871,10 +941,8 @@ function App() {
     activeEngine,
     models,
     currentModel,
-    parakeetModels,
-    currentParakeetModel,
-    cohereModels,
-    currentCohereModel,
+    graniteModels,
+    currentGraniteModel,
     qwen3Models,
     currentQwen3Model,
     engineChipMeta.model,
@@ -912,11 +980,11 @@ function App() {
 
   const colorizedStatus = useMemo(() => {
     const msg = headerStatusMessage ?? "";
-    const parts = msg.split(/(Granite Speech|Granite|Whisper|Parakeet|OpenAI|NVIDIA)/g);
+    const parts = msg.split(/(Qwen3-ASR|Whisper|Granite|OpenAI|NVIDIA)/g);
     return parts.map((part, i) => {
       if (part === "Whisper" || part === "OpenAI") return <span key={i} style={{ color: 'var(--whisper-color)' }}>{part}</span>;
-      if (part === "Parakeet" || part === "NVIDIA") return <span key={i} style={{ color: 'var(--parakeet-color)' }}>{part}</span>;
-      if (part === "Granite Speech" || part === "Granite") return <span key={i} style={{ color: 'var(--cohere-color)' }}>{part}</span>;
+      if (part === "Granite" || part === "NVIDIA") return <span key={i} style={{ color: 'var(--granite-color)' }}>{part}</span>;
+      if (part === "Qwen3-ASR") return <span key={i} style={{ color: '#a78bfa' }}>{part}</span>;
       return part;
     });
   }, [headerStatusMessage]);
@@ -931,6 +999,19 @@ function App() {
       setIsSettingsOpen(true);
     }
   }, []);
+
+  useEffect(() => {
+    (window as any).__TAURSCRIBE_TEST__ = {
+      getActiveMeeting: () => activeMeeting,
+      isRecording: () => isRecording,
+      isDualChannel: () => isDualChannelRecording,
+      getNavMode: () => navMode,
+      setNavMode: (mode: NavMode) => setNavMode(mode),
+      startDualRecording: () => handleStartRecording(false, "dual_channel"),
+      stopRecording: () => handleStopRecording(),
+      openSettings: () => setIsSettingsOpen(true),
+    };
+  }, [activeMeeting, isRecording, isDualChannelRecording, navMode, handleStartRecording, handleStopRecording]);
 
   if (showSetupWizard === null) {
     return (
@@ -961,9 +1042,10 @@ function App() {
   return (
     <>
       <TitleBar
-        logoSrc={`/logos/${randomLogo}`}
-        isLogoShuttering={isLogoShuttering}
-        onLogoClick={handleLogoClick}
+        meeting={activeMeeting}
+        isRecording={isRecording}
+        isDualChannelRecording={isDualChannelRecording}
+        onStartDualRecording={() => handleStartRecording(false, "dual_channel")}
       />
       <div className={`app-body ${isRecording ? "app-body--recording" : ""} theme-${activeEngine}`}>
         <main className={`container${containerBooting ? " container--booting" : ""}`}>
@@ -1136,45 +1218,89 @@ function App() {
               </div>
             )}
 
+            {/* Meeting Banner V8 */}
             <MeetingBanner
+              key={activeMeeting ? `${activeMeeting.pid}:${activeMeeting.url}:${activeMeeting.title}` : "none"}
+              meeting={activeMeeting}
               isRecording={isRecording}
               onStartDualRecording={() => handleStartRecording(false, "dual_channel")}
+              suppressBanner={navMode === "meetings"}
             />
           </div>
 
-          {/* Mic / File mode toggle — top-left, directly under the header */}
-          <div
-            id="mode-toggle-group"
-            data-testid="mode-toggle-group"
-            className="mode-toggle"
-            role="radiogroup"
-            aria-label="Input mode"
-          >
+          {/* Mode toggle (Mic / Meetings / Files) — top bar with Settings shortcut */}
+          <div className="mode-toggle-row">
+            <div
+              id="mode-toggle-group"
+              data-testid="mode-toggle-group"
+              ref={modeToggleRef}
+              className="mode-toggle"
+              role="radiogroup"
+              aria-label="Input mode"
+            >
+              <span
+                className="mode-toggle-indicator"
+                aria-hidden="true"
+                style={{
+                  transform: `translateX(${modeIndicator.left}px)`,
+                  width: modeIndicator.width,
+                  opacity: modeIndicator.ready ? 1 : 0,
+                }}
+              />
+              <button
+                type="button"
+                id="mode-toggle-mic"
+                data-testid="mode-toggle-mic"
+                role="radio"
+                aria-checked={navMode === "mic"}
+                aria-label="Microphone dictation mode"
+                className={`mode-toggle-btn${navMode === "mic" ? " mode-toggle-btn--active" : ""}`}
+                onClick={() => setNavMode("mic")}
+                disabled={navMode === "files" && isFileTranscribing}
+                title={navMode === "files" && isFileTranscribing ? "Wait for file transcription to finish" : undefined}
+              >
+                <IconMic size={13} /> Mic
+              </button>
+              <button
+                type="button"
+                id="mode-toggle-meetings"
+                data-testid="mode-toggle-meetings"
+                role="radio"
+                aria-checked={navMode === "meetings"}
+                aria-label="Meeting detection and dual-channel recording mode"
+                className={`mode-toggle-btn${navMode === "meetings" ? " mode-toggle-btn--active" : ""}`}
+                onClick={() => setNavMode("meetings")}
+                disabled={navMode === "files" && isFileTranscribing}
+              >
+                <IconVideo size={13} /> Meetings
+                {activeMeeting && (
+                  <span className="mode-toggle-meeting-dot" title="Active Meeting Detected" />
+                )}
+              </button>
+              <button
+                type="button"
+                id="mode-toggle-files"
+                data-testid="mode-toggle-files"
+                role="radio"
+                aria-checked={navMode === "files"}
+                aria-label="File transcription mode"
+                className={`mode-toggle-btn${navMode === "files" ? " mode-toggle-btn--active" : ""}`}
+                onClick={() => setNavMode("files")}
+              >
+                <IconFileText size={13} /> Files
+              </button>
+            </div>
+
             <button
               type="button"
-              id="mode-toggle-mic"
-              data-testid="mode-toggle-mic"
-              role="radio"
-              aria-checked={!fileMode}
-              aria-label="Microphone dictation mode"
-              className={`mode-toggle-btn${!fileMode ? " mode-toggle-btn--active" : ""}`}
-              onClick={() => setFileMode(false)}
-              disabled={fileMode && isFileTranscribing}
-              title={fileMode && isFileTranscribing ? "Wait for file transcription to finish" : undefined}
+              id="settings-open-btn"
+              data-testid="settings-open-btn"
+              className="top-settings-btn"
+              onClick={() => setIsSettingsOpen(true)}
+              title="Settings"
+              aria-label="Settings"
             >
-              <IconMic size={13} /> Mic
-            </button>
-            <button
-              type="button"
-              id="mode-toggle-files"
-              data-testid="mode-toggle-files"
-              role="radio"
-              aria-checked={fileMode}
-              aria-label="File transcription mode"
-              className={`mode-toggle-btn${fileMode ? " mode-toggle-btn--active" : ""}`}
-              onClick={() => setFileMode(true)}
-            >
-              <IconFileText size={13} /> Files
+              <IconSettings size={14} />
             </button>
           </div>
 
@@ -1210,18 +1336,29 @@ function App() {
             }}
             defer
           >
-            <div style={fileMode ? undefined : { display: 'none' }}>
+            <div className="nav-view-enter" style={navMode === "files" ? undefined : { display: 'none' }}>
               <FileTranscriptionPanel
                 activeEngine={activeEngine}
                 currentModel={currentModel}
-                currentParakeetModel={currentParakeetModel}
-                currentCohereModel={currentCohereModel}
+                currentGraniteModel={currentGraniteModel}
                 currentQwen3Model={currentQwen3Model}
                 isModelLoading={isLoading}
                 onFileProcessingChange={setIsFileTranscribing}
               />
             </div>
-            {!fileMode && (activeEngineHasNoModel ? (
+            {navMode === "meetings" && (
+              <MeetingsPanel
+                activeMeeting={activeMeeting}
+                isRecording={isRecording}
+                isDualChannelRecording={isDualChannelRecording}
+                dualLevels={dualLevels}
+                onStartDualRecording={() => handleStartRecording(false, "dual_channel")}
+                onStopRecording={handleStopRecording}
+                onOpenSettings={() => handleOpenSettingsTab("meetings")}
+                onOpenModelSettings={() => handleOpenSettingsTab("models")}
+              />
+            )}
+            {navMode === "mic" && (activeEngineHasNoModel ? (
               <div className="empty-state">
                 <div className="empty-state-icon" aria-hidden="true">
                   {noAnyAsrModel ? <IconDownload size={32} /> : activeEngine === "whisper" ? <IconMic size={32} /> : <IconBolt size={32} style={{ color: '#facc15' }} />}
@@ -1231,32 +1368,28 @@ function App() {
                     ? "No speech model downloaded"
                     : activeEngine === "whisper"
                       ? "No Whisper model downloaded"
-                      : activeEngine === "parakeet"
-                        ? "Parakeet not downloaded"
-                        : activeEngine === "granite" ? "Granite not downloaded" : "Qwen3-ASR not downloaded"}
+                      : activeEngine === "granite"
+                        ? "Granite not downloaded"
+                        : "Qwen3-ASR not downloaded"}
                 </h2>
                 <p className="empty-state-body">
                   {noAnyAsrModel ? (
-                    <>Download a <strong>Whisper</strong>, <strong>Parakeet</strong>, <strong>Granite</strong>, or <strong>Qwen3-ASR</strong> model to start transcribing. Whisper Base is a good starting point.</>
+                    <>Download a <strong>Whisper</strong>, <strong>Granite</strong>, or <strong>Qwen3-ASR</strong> model to start transcribing. Whisper Base is a good starting point.</>
                   ) : activeEngine === "whisper" ? (
-                    <>You're on the <strong>Whisper</strong> engine but haven't downloaded a model yet. Try <strong>Whisper Base</strong> — it's small and accurate. Or switch to Parakeet if you already have it.</>
-                  ) : activeEngine === "parakeet" ? (
-                    <>You're on the <strong>Parakeet</strong> engine but the Nemotron Streaming model isn't downloaded yet. Switch to Whisper if you already have a model, or download Parakeet from Settings.</>
+                    <>You're on the <strong>Whisper</strong> engine but haven't downloaded a model yet. Try <strong>Whisper Base</strong> — it's small and accurate. Or switch to Granite if you already have it.</>
                   ) : activeEngine === "granite" ? (
-                    <>You're on the <strong>Granite</strong> engine but the model isn't downloaded yet. Switch to Whisper or Parakeet if you already have a model, or download Granite from Settings.</>
+                    <>You're on the <strong>Granite</strong> engine but Granite Speech 5 isn't downloaded yet. Switch to Whisper if you already have a model, or download Granite from Settings.</>
                   ) : (
                     <>You're on the <strong>Qwen3-ASR</strong> engine but the model isn't downloaded yet. Download Qwen3-ASR from Settings or switch to another installed engine.</>
                   )}
                 </p>
                 {!noAnyAsrModel && (
                   <p className="empty-state-hint">
-                    {activeEngine === "whisper" && !noParakeetModel
-                      ? <><IconLightbulb size={14} /> You already have a Parakeet model — click the Parakeet card above to switch.</>
-                      : activeEngine === "parakeet" && !noWhisperModel
+                    {activeEngine === "whisper" && !noGraniteModel
+                      ? <><IconLightbulb size={14} /> You already have a Granite model — click the Granite card above to switch.</>
+                      : activeEngine === "granite" && !noWhisperModel
                         ? <><IconLightbulb size={14} /> You already have a Whisper model — click the Whisper card above to switch.</>
-                        : activeEngine === "granite" && !noWhisperModel
-                          ? <><IconLightbulb size={14} /> You already have a Whisper model — click the Whisper card above to switch.</>
-                          : null}
+                        : null}
                   </p>
                 )}
                 <button
@@ -1289,10 +1422,13 @@ function App() {
             ))}
           </OverlayScrollbarsComponent>
 
-          <div className="bottom-bar">
-            <div className="bottom-left">
+          {navMode !== "meetings" && (
+            <div className={`bottom-bar${navMode === "files" ? " bottom-bar--files" : ""}`}>
+              <div className="bottom-left">
               {/* Microphone selector — lists all available input devices;
-                  selecting one persists the choice to settings.json. */}
+                  selecting one persists the choice to settings.json.
+                  Files mode keeps only the engine/model controls. */}
+              {navMode === "mic" && (
               <div className="bottom-left-status-row">
                 <div className="mic-selector-bar">
                   <svg className="mic-selector-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1332,14 +1468,15 @@ function App() {
                     <span className="dual-channel-text">DUAL-CH</span>
                     <span className="dual-channel-levels">
                       <span className="dual-ch-tag">M</span>
-                      <span className="dual-ch-val">{Math.round((dualLevels?.mic ?? 0) * 100)}%</span>
+                      <span className="dual-ch-val">{levelToPercent(dualLevels?.mic ?? 0)}%</span>
                       <span className="dual-ch-sep">·</span>
                       <span className="dual-ch-tag">S</span>
-                      <span className="dual-ch-val">{Math.round((dualLevels?.system ?? 0) * 100)}%</span>
+                      <span className="dual-ch-val">{levelToPercent(dualLevels?.system ?? 0)}%</span>
                     </span>
                   </div>
                 )}
               </div>
+              )}
 
               <button
                 type="button"
@@ -1368,7 +1505,7 @@ function App() {
 
               {/* Load / unload toggle — hidden while busy, or while the active
                   engine has no installed model to load. */}
-              {!isLoading && !isRecording && !isProcessingTranscript && (
+              {!isLoading && !isRecording && !isProcessingTranscript && !isFileTranscribing && (
                 loadedEngine === activeEngine ? (
                   <div className="load-eject-group">
                     <button
@@ -1412,6 +1549,7 @@ function App() {
                           onClick={() => setIsAutoUnloadMenuOpen(false)}
                         />
                         <div
+                          ref={autoUnloadMenuRef}
                           id="auto-unload-menu"
                           data-testid="auto-unload-menu"
                           className="auto-unload-menu"
@@ -1471,8 +1609,7 @@ function App() {
                   </div>
                 ) : (
                   (activeEngine === "whisper" ? !noWhisperModel :
-                   activeEngine === "parakeet" ? !noParakeetModel :
-                   activeEngine === "granite" ? !noCohereModel :
+                   activeEngine === "granite" ? !noGraniteModel :
                    !noQwen3Model) && (
                     <button
                       type="button"
@@ -1496,21 +1633,17 @@ function App() {
                   loadingTargetEngine={loadingTargetEngine}
                   models={models}
                   currentModel={currentModel}
-                  parakeetModels={parakeetModels}
-                  currentParakeetModel={currentParakeetModel}
-                  cohereModels={cohereModels}
-                  currentCohereModel={currentCohereModel}
-                  qwen3Models={qwen3Models}
+                  graniteModels={graniteModels}
+                  currentGraniteModel={currentGraniteModel}
+                    qwen3Models={qwen3Models}
                   currentQwen3Model={currentQwen3Model}
                   downloadProgress={downloadProgress}
                   isWhisperDownloading={isWhisperDownloading}
-                  isParakeetDownloading={isParakeetDownloading}
-                  isCohereDownloading={isCohereDownloading}
+                  isGraniteDownloading={isGraniteDownloading}
                   isQwen3Downloading={isQwen3Downloading}
                   disabled={isRecording || isFileTranscribing}
                   onSelectWhisperModel={(id) => handleModelChange(id)}
-                  onSelectParakeetModel={(id) => { void handleSwitchToParakeet(id); }}
-                  onSelectCohereModel={(id) => { void handleSwitchToCohere(id); }}
+                  onSelectGraniteModel={(id) => { void handleSwitchToGranite(id); }}
                   onSelectQwen3Model={(id) => { void handleSwitchToQwen3(id); }}
                   onUnload={handleEjectModel}
                   onOpenDownloads={openModelSettingsForEngine}
@@ -1521,6 +1654,7 @@ function App() {
               )}
             </div>
 
+            {navMode === "mic" && (
             <div className="record-btn-wrap">
               <button
                 type="button"
@@ -1536,19 +1670,10 @@ function App() {
                 {recordBtnLabel}
               </button>
             </div>
+            )}
 
-            <button
-              type="button"
-              id="settings-open-btn"
-              data-testid="settings-open-btn"
-              className="settings-btn"
-              onClick={() => setIsSettingsOpen(true)}
-              title="Settings"
-              aria-label="Settings"
-            >
-              <IconSettings size={20} />
-            </button>
           </div>
+          )}
 
           <SettingsModal
             isOpen={isSettingsOpen}
@@ -1617,7 +1742,6 @@ function App() {
           asrBackend={asrBackend}
           onToggleAsrBackend={handleToggleAsrBackend}
           asrBackendLoading={isLoading}
-          cohereGpuOnlyLoaded={cohereGpuOnlyLoaded}
           activeEngine={activeEngine}
           soundVolume={volume}
           soundMuted={muted}

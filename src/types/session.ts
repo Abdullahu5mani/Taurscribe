@@ -38,9 +38,9 @@ export interface CommandResult<T> {
 }
 
 export interface EngineSelectionState {
-  active_engine: "whisper" | "parakeet" | "granite" | "qwen3";
+  active_engine: "whisper" | "granite" | "qwen3";
   selected_model_id: string | null;
-  loaded_engine: "whisper" | "parakeet" | "granite" | "qwen3" | null;
+  loaded_engine: "whisper" | "granite" | "qwen3" | null;
   loaded_model_id: string | null;
   backend: string;
   engine_loading: boolean;

@@ -22,7 +22,7 @@ export function useDownloads(
 ) {
     const [downloadProgress, setDownloadProgress] = useState<Record<string, DownloadProgress>>({});
     const activeDownloadsRef = useRef<Set<string>>(new Set());
-    const cancelledRef = useRef<Set<string>>(new Set());
+    const stalledRef = useRef<Set<string>>(new Set());
     const lastActivityRef = useRef<Record<string, { bytes: number; time: number }>>({});
     const onDownloadFailedRef = useRef(onDownloadFailed);
     onDownloadFailedRef.current = onDownloadFailed;
@@ -89,9 +89,17 @@ export function useDownloads(
                 const activity = lastActivityRef.current[modelId];
                 if (!activity) continue;
                 if (now - activity.time > STALL_THRESHOLD_MS) {
+                    if (stalledRef.current.has(modelId)) continue;
+                    stalledRef.current.add(modelId);
                     console.warn(`[STALL] No progress for ${modelId} in ${STALL_THRESHOLD_MS}ms — cancelling`);
-                    invoke("cancel_download", { modelId }).catch(() => {});
-                    markError(modelId, "Download failed — connection stalled. Check your internet and try again.");
+                    invoke<boolean>("cancel_download", { modelId })
+                        .then((accepted) => { if (!accepted) stalledRef.current.delete(modelId); })
+                        .catch(() => {
+                            stalledRef.current.delete(modelId);
+                            if (activeDownloadsRef.current.has(modelId)) {
+                                markError(modelId, "Download failed — connection stalled. Check your internet and try again.");
+                            }
+                        });
                 }
             }
         }, STALL_CHECK_INTERVAL_MS);
@@ -117,6 +125,7 @@ export function useDownloads(
                 }
 
                 if (payload.status === "done") {
+                    stalledRef.current.delete(payload.model_id);
                     updateProgressState(payload, "finalizing");
                     Promise.resolve(onModelDownloaded(payload.model_id))
                         .catch((err) => {
@@ -128,13 +137,21 @@ export function useDownloads(
                             toast.success(`Downloaded: ${payload.model_id}`);
                         });
                 } else if (payload.status === "error") {
+                    const stalled = stalledRef.current.delete(payload.model_id);
                     markError(
                         payload.model_id,
-                        "Download failed — check your internet connection and try again.",
+                        stalled
+                            ? "Download failed — connection stalled. Check your internet and try again."
+                            : "Download failed — check your internet connection and try again.",
                     );
                 } else if (payload.status === "cancelled") {
+                    if (!activeDownloadsRef.current.has(payload.model_id)) return;
+                    const stalled = stalledRef.current.delete(payload.model_id);
+                    if (stalled) {
+                        markError(payload.model_id, "Download failed — connection stalled. Check your internet and try again.");
+                        return;
+                    }
                     activeDownloadsRef.current.delete(payload.model_id);
-                    cancelledRef.current.add(payload.model_id);
                     delete lastActivityRef.current[payload.model_id];
                     toast.info(`Download cancelled: ${payload.model_id}`);
                     clearProgress(payload.model_id);
@@ -168,15 +185,23 @@ export function useDownloads(
         try {
             await invoke("download_model", { modelId: id });
         } catch (e) {
-            activeDownloadsRef.current.delete(id);
-            delete lastActivityRef.current[id];
             const raw = `${e ?? "Unknown error"}`;
-            if (cancelledRef.current.has(id) || raw.toLowerCase().includes("cancel")) {
-                cancelledRef.current.delete(id);
-                clearProgress(id);
-                void Promise.resolve(onDownloadFailedRef.current?.(id)).catch(() => {});
+            if (raw.toLowerCase().includes("cancel")) {
+                if (activeDownloadsRef.current.has(id)) {
+                    if (stalledRef.current.delete(id)) {
+                        markError(id, "Download failed — connection stalled. Check your internet and try again.");
+                    } else {
+                        activeDownloadsRef.current.delete(id);
+                        clearProgress(id);
+                        toast.info(`Download cancelled: ${id}`);
+                        void Promise.resolve(onDownloadFailedRef.current?.(id)).catch(() => {});
+                    }
+                }
                 return;
             }
+            if (!activeDownloadsRef.current.has(id)) return;
+            activeDownloadsRef.current.delete(id);
+            delete lastActivityRef.current[id];
             const message = raw.includes("internet") || raw.includes("onnect") || raw.includes("stall") || raw.includes("lost")
                 ? raw
                 : `Download failed — ${raw}`;
@@ -189,17 +214,16 @@ export function useDownloads(
     };
 
     const handleCancelDownload = async (id: string) => {
-        cancelledRef.current.add(id);
-        activeDownloadsRef.current.delete(id);
-        delete lastActivityRef.current[id];
-        toast.info("Download cancelled");
         try {
-            await invoke("cancel_download", { modelId: id });
+            const accepted = await invoke<boolean>("cancel_download", { modelId: id });
+            if (accepted) {
+                setDownloadProgress(prev => prev[id]
+                    ? { ...prev, [id]: { ...prev[id], status: "cancelling" } }
+                    : prev);
+            }
         } catch (e) {
             console.warn("cancel_download failed:", e);
         }
-        clearProgress(id);
-        void Promise.resolve(onDownloadFailedRef.current?.(id)).catch(() => {});
     };
 
     return {

@@ -91,6 +91,12 @@ export const IconRetry = ({ size = 16, ...props }: IconProps) => (
     </svg>
 );
 
+export const IconRefresh = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+    </svg>
+);
+
 export const IconX = ({ size = 16, ...props }: IconProps) => (
     <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
         <line x1="6" y1="6" x2="18" y2="18" />
@@ -275,6 +281,107 @@ export const IconHeadphones = ({ size = 16, ...props }: IconProps) => (
     <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
         <path d="M3 18v-6a9 9 0 0 1 18 0v6" />
         <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z" />
+    </svg>
+);
+
+export const IconSearch = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <circle cx="11" cy="11" r="8" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+);
+
+export const IconFilter = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+    </svg>
+);
+
+export const IconTag = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+        <line x1="7" y1="7" x2="7.01" y2="7" />
+    </svg>
+);
+
+export const IconSparkles = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M12 2l2.4 5.6L20 10l-5.6 2.4L12 18l-2.4-5.6L4 10l5.6-2.4z" />
+        <path d="M19 17l1 2 2 1-2 1-1 2-1-2-2-1 2-1z" />
+    </svg>
+);
+
+export const IconUser = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
+    </svg>
+);
+
+export const IconUsers = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+);
+
+export const IconCalendar = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+        <line x1="16" y1="2" x2="16" y2="6" />
+        <line x1="8" y1="2" x2="8" y2="6" />
+        <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+);
+
+export const IconClock = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <circle cx="12" cy="12" r="10" />
+        <polyline points="12 6 12 12 16 14" />
+    </svg>
+);
+
+export const IconListCheck = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M9 11l3 3L22 4" />
+        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+    </svg>
+);
+
+export const IconChevronRight = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <polyline points="9 18 15 12 9 6" />
+    </svg>
+);
+
+export const IconChevronDown = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <polyline points="6 9 12 15 18 9" />
+    </svg>
+);
+
+export const IconExternalLink = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+        <polyline points="15 3 21 3 21 9" />
+        <line x1="10" y1="14" x2="21" y2="3" />
+    </svg>
+);
+
+export const IconDownloadFile = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+);
+
+export const IconEdit = ({ size = 16, ...props }: IconProps) => (
+    <svg {...defaultProps(size)} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
     </svg>
 );
 

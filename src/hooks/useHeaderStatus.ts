@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 
 /**
  * Manages the header status message that temporarily shows a message
@@ -9,7 +9,7 @@ export function useHeaderStatus() {
     const [headerStatusIsProcessing, setHeaderStatusIsProcessing] = useState(false);
     const headerStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const setHeaderStatus = (message: string, durationMs = 3200, isProcessing = false) => {
+    const setHeaderStatus = useCallback((message: string, durationMs = 3200, isProcessing = false) => {
         if (headerStatusTimeoutRef.current) clearTimeout(headerStatusTimeoutRef.current);
         setHeaderStatusMessage(message);
         setHeaderStatusIsProcessing(isProcessing);
@@ -18,7 +18,7 @@ export function useHeaderStatus() {
             setHeaderStatusIsProcessing(false);
             headerStatusTimeoutRef.current = null;
         }, durationMs);
-    };
+    }, []);
 
     return { headerStatusMessage, headerStatusIsProcessing, setHeaderStatus };
 }

@@ -25,12 +25,11 @@ interface QuickSettingsProps {
     // Tone / transcription style
     transcriptionStyle: string;
     setTranscriptionStyle: (val: string) => void;
-    // ASR hardware backend (Whisper/Parakeet/Cohere — GPU or CPU)
+    // ASR hardware backend (Whisper/Granite/Qwen3 — GPU or CPU)
     backendInfo: string;
     asrBackend: "gpu" | "cpu";
     onToggleAsrBackend: (backend: "gpu" | "cpu") => void;
     asrBackendLoading: boolean;
-    cohereGpuOnlyLoaded: boolean;
     activeEngine: string;
     // LLM backend
     llmBackend: "gpu" | "cpu";
@@ -104,7 +103,7 @@ function QuickSettingsComponent({
     enableOverlay, setEnableOverlay,
     muteBackgroundAudio, setMuteBackgroundAudio,
     transcriptionStyle, setTranscriptionStyle,
-    backendInfo, asrBackend, onToggleAsrBackend, asrBackendLoading, cohereGpuOnlyLoaded, activeEngine,
+    backendInfo, asrBackend, onToggleAsrBackend, asrBackendLoading,
     llmBackend, setLlmBackend,
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
     dictionaryCount, snippetsCount,
@@ -239,12 +238,12 @@ function QuickSettingsComponent({
                     Apple Silicon uses Metal automatically, no user choice needed. */}
                 {!isMac && (
                   <>
-                    <Section label="Speech Engine Backend" info="Run the active speech-recognition engine (Whisper/Parakeet/Granite) on GPU (faster) or CPU. This transcribes your voice." />
+                    <Section label="Speech Engine Backend" info="Run the active speech-recognition engine (Whisper/Granite/Qwen3) on GPU (faster) or CPU. This transcribes your voice." />
                     <div className="qs-row-hint" style={{ padding: "0 18px 4px" }}>{backendInfo}</div>
                     <div
                         id="qs-asr-backend-group"
                         data-testid="qs-asr-backend-group"
-                        className={`qs-backend-row${cohereGpuOnlyLoaded ? " qs-backend-row--locked" : ""}`}
+                        className="qs-backend-row"
                         role="group"
                         aria-label="Speech Engine Backend"
                     >
@@ -254,7 +253,7 @@ function QuickSettingsComponent({
                                 data-testid="qs-asr-backend-gpu"
                                 className={`qs-backend-btn${asrBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
                                 onClick={() => onToggleAsrBackend("gpu")}
-                                disabled={asrBackendLoading || cohereGpuOnlyLoaded}
+                                disabled={asrBackendLoading}
                                 aria-pressed={asrBackend === "gpu"}
                                 aria-label="Run speech engine on GPU"
                                 title="Run the active speech engine on GPU (faster, requires VRAM)"
@@ -265,22 +264,12 @@ function QuickSettingsComponent({
                                 data-testid="qs-asr-backend-cpu"
                                 className={`qs-backend-btn${asrBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
                                 onClick={() => onToggleAsrBackend("cpu")}
-                                disabled={asrBackendLoading || cohereGpuOnlyLoaded}
+                                disabled={asrBackendLoading}
                                 aria-pressed={asrBackend === "cpu"}
                                 aria-label="Run speech engine on CPU"
                                 title="Run the active speech engine on CPU (universal, slower)"
                             ><IconCpu size={11} /> CPU</button>
                         </div>
-                    {cohereGpuOnlyLoaded && activeEngine === "granite" && (
-                        <p
-                            id="qs-asr-backend-hint"
-                            data-testid="qs-asr-backend-hint"
-                            className="qs-backend-hint"
-                            role="status"
-                        >
-                            Granite is loaded on a GPU backend — unload it before switching to CPU.
-                        </p>
-                    )}
                   </>
                 )}
 
