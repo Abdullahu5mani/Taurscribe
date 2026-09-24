@@ -10,19 +10,14 @@ use tauri::{AppHandle, State};
 pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
     let active = *state.active_engine.lock().unwrap();
     match active {
-        ASREngine::Parakeet => {
-            let parakeet = state.parakeet.lock().unwrap();
-            let status = parakeet.get_status();
+        ASREngine::Granite => {
+            let granite = state.granite.lock().unwrap();
+            let status = granite.get_status();
             Ok(status.backend)
         }
         ASREngine::Whisper => {
             let whisper = state.whisper.lock().unwrap();
             Ok(format!("{}", whisper.get_backend()))
-        }
-        ASREngine::Granite => {
-            let gs = state.cohere.lock().unwrap();
-            let status = gs.get_status();
-            Ok(status.backend)
         }
         ASREngine::Qwen3 => Ok(state.qwen3.lock().unwrap().get_status().backend),
     }
@@ -35,15 +30,13 @@ pub fn get_engine_selection_state(
     let active = *state.active_engine.lock().unwrap();
     let active_engine = match active {
         ASREngine::Whisper => "whisper",
-        ASREngine::Parakeet => "parakeet",
         ASREngine::Granite => "granite",
         ASREngine::Qwen3 => "qwen3",
     }
     .to_string();
 
     let whisper_model = state.whisper.lock().unwrap().get_current_model().cloned();
-    let parakeet_status = state.parakeet.lock().unwrap().get_status();
-    let cohere_status = state.cohere.lock().unwrap().get_status();
+    let granite_status = state.granite.lock().unwrap().get_status();
     let qwen3_status = state.qwen3.lock().unwrap().get_status();
 
     let (selected_model_id, loaded_engine, loaded_model_id, backend) = match active {
@@ -60,30 +53,17 @@ pub fn get_engine_selection_state(
                 backend,
             )
         }
-        ASREngine::Parakeet => {
-            let loaded = if parakeet_status.loaded {
-                parakeet_status.model_id.clone()
-            } else {
-                None
-            };
-            (
-                parakeet_status.model_id.clone(),
-                loaded.as_ref().map(|_| "parakeet".to_string()),
-                loaded,
-                parakeet_status.backend,
-            )
-        }
         ASREngine::Granite => {
-            let loaded = if cohere_status.loaded {
-                cohere_status.model_id.clone()
+            let loaded = if granite_status.loaded {
+                granite_status.model_id.clone()
             } else {
                 None
             };
             (
-                cohere_status.model_id.clone(),
+                granite_status.model_id.clone(),
                 loaded.as_ref().map(|_| "granite".to_string()),
                 loaded,
-                cohere_status.backend,
+                granite_status.backend,
             )
         }
         ASREngine::Qwen3 => {
@@ -119,9 +99,7 @@ pub fn set_active_engine(
 ) -> Result<String, String> {
     let new_engine = match engine.to_lowercase().as_str() {
         "whisper" => ASREngine::Whisper,
-        "parakeet" => ASREngine::Parakeet,
-        "granite" | "granitespeech" | "granite_speech" | "granite-speech" => ASREngine::Granite,
-        "cohere" | "coherespeech" | "cohere_speech" | "cohere-speech" => ASREngine::Granite,
+        "granite" | "granitespeech" | "granite_speech" | "granite-speech" | "parakeet" => ASREngine::Granite,
         "qwen3" | "qwen3-asr" | "qwen3_asr" => ASREngine::Qwen3,
         _ => return Err(format!("Unknown engine: {}", engine)),
     };
@@ -191,21 +169,62 @@ pub fn set_close_behavior(state: State<AudioState>, behavior: String) -> Result<
     }
 }
 
-/// Update the system tray icon manually from the frontend
+/// Shows or hides the menu-bar / system-tray icon. The choice is saved by the
+/// frontend as `show_tray_icon` and re-applied at startup.
+#[tauri::command]
+pub fn set_tray_icon_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    match app.tray_by_id("main-tray") {
+        Some(tray) => tray.set_visible(visible).map_err(|e| e.to_string()),
+        None => Err("Tray icon not found".to_string()),
+    }
+}
+
+/// Update the system tray icon manually from the frontend with optional meeting metadata
 #[tauri::command]
 pub fn set_tray_state(
     app: AppHandle,
-    _state: State<AudioState>,
+    state: State<AudioState>,
     new_state: String,
+    meeting_platform: Option<String>,
+    meeting_process: Option<String>,
+    meeting_pid: Option<u32>,
+    detail: Option<String>,
 ) -> Result<(), String> {
     let app_state = match new_state.as_str() {
         "ready" => AppState::Ready,
         "recording" => AppState::Recording,
         "processing" => AppState::Processing,
+        "processing_speech" => AppState::ProcessingSpeech,
+        "processing_meeting" => AppState::ProcessingMeeting,
+        "processing_file" => AppState::ProcessingFile,
+        "loading_model" => AppState::LoadingModel,
+        "paused" => AppState::Paused,
+        "downloading" => AppState::Downloading,
+        "grammar" => AppState::Grammar,
+        "done" => AppState::Done,
+        "nothing_heard" => AppState::NothingHeard,
+        "paste_failed" => AppState::PasteFailed,
+        "error" => AppState::Error,
+        "mic_blocked" => AppState::MicBlocked,
+        "cancelled" => AppState::Cancelled,
         _ => return Err(format!("Unknown state: {}", new_state)),
     };
 
-    tray::update_tray_icon(&app, app_state)?;
+    tray::set_status(
+        &app,
+        app_state,
+        meeting_platform.as_deref(),
+        meeting_process.as_deref(),
+        meeting_pid,
+        detail,
+    )?;
+
+    let loaded = state.model_loaded.load(std::sync::atomic::Ordering::Relaxed);
+    let meeting_info = meeting_platform
+        .as_deref()
+        .and_then(|plat| meeting_pid.map(|pid| (plat, pid)));
+    let is_recording = matches!(app_state, AppState::Recording | AppState::Paused);
+    tray::update_tray_menu(&app, loaded, meeting_info, is_recording);
 
     Ok(())
 }

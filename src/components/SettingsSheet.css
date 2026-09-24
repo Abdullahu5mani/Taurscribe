@@ -1,0 +1,660 @@
+/* Settings: full-window sheet with sidebar navigation, and the shared design
+   system for every tab (headings, grouped cards, rows, switches, segmented
+   controls, buttons). Loaded after SettingsModal.css; rules are scoped to
+   .settings-sheet so they win over the older tab styles. */
+
+/* ── Tokens ─────────────────────────────────────────────────────────── */
+.settings-sheet {
+  --s-bg: #0c0c0d;
+  --s-side: #101012;
+  --s-card: rgba(255, 255, 255, 0.03);
+  --s-card-hover: rgba(255, 255, 255, 0.045);
+  --s-border: rgba(255, 255, 255, 0.075);
+  --s-divider: rgba(255, 255, 255, 0.06);
+  --s-text: rgba(255, 255, 255, 0.92);
+  --s-text-2: rgba(255, 255, 255, 0.58);
+  --s-text-3: rgba(255, 255, 255, 0.38);
+  --s-accent: var(--brand, #f2a65a);
+  --s-radius: 12px;
+  --s-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ── Overlay & sheet ────────────────────────────────────────────────── */
+/* Sits below the title bar so the window stays movable while it is open. */
+.settings-overlay {
+  top: var(--titlebar-mac, 36px) !important;
+}
+
+.settings-overlay.settings-overlay--open {
+  /* No !important: it would block the fade-in animation. */
+  background-color: rgba(0, 0, 0, 0.45);
+  backdrop-filter: none !important;
+  animation: settingsBackdropIn 200ms ease-out both !important;
+  padding: 10px;
+  align-items: stretch !important;
+  justify-content: stretch !important;
+}
+
+.settings-overlay--closing {
+  visibility: visible !important;
+  opacity: 1 !important;
+  background-color: transparent !important;
+  transition: background-color 180ms ease !important;
+}
+
+.settings-modal.settings-sheet {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  width: 100%;
+  max-width: 1080px;
+  height: 100%;
+  max-height: none;
+  margin: 0 auto;
+  background: var(--s-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 1px solid var(--s-border);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  animation: sheetIn 300ms var(--s-ease) both !important;
+}
+
+.settings-overlay--closing .settings-sheet {
+  animation: sheetOut 180ms cubic-bezier(0.4, 0, 1, 1) both !important;
+}
+
+@keyframes settingsBackdropIn {
+  from { background-color: rgba(0, 0, 0, 0); }
+}
+
+/* The sheet fills the window, so it rises and fades rather than zooming. */
+@keyframes sheetIn {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes sheetOut {
+  to { opacity: 0; transform: translateY(6px) scale(0.99); }
+}
+
+/* ── Sidebar ────────────────────────────────────────────────────────── */
+.settings-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 10px 12px;
+  background: var(--s-side);
+  border-right: 1px solid var(--s-divider);
+  min-height: 0;
+}
+
+.settings-side-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 14px;
+  font: 600 14px/1 var(--font-sans);
+  color: var(--s-text);
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.settings-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--s-text-2);
+  font: 500 13px/1.3 var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.settings-nav-btn svg {
+  flex-shrink: 0;
+  color: var(--s-text-3);
+  transition: color 140ms ease, transform 200ms var(--s-ease);
+}
+
+.settings-nav-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--s-text);
+}
+
+.settings-nav-btn.active {
+  background: rgba(255, 255, 255, 0.085);
+  color: var(--s-text);
+}
+
+.settings-nav-btn.active svg {
+  color: var(--s-accent);
+  transform: scale(1.06);
+}
+
+.settings-nav-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-side-note {
+  margin: auto 0 0;
+  padding: 10px 8px 2px;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font: 400 11px/1.4 var(--font-sans);
+  color: var(--s-text-3);
+}
+
+.settings-side-note-dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: #f5a524;
+  flex-shrink: 0;
+}
+
+/* ── Main column ────────────────────────────────────────────────────── */
+.settings-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.settings-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 28px 14px;
+  border-bottom: 1px solid var(--s-divider);
+}
+
+.settings-sheet--switched .settings-page-heading {
+  animation: settingsPageIn 240ms var(--s-ease) both;
+}
+
+.settings-page-heading h2 {
+  margin: 0;
+  font: 600 20px/1.2 var(--font-sans);
+  letter-spacing: -0.015em;
+  text-transform: none;
+  color: var(--s-text);
+}
+
+.settings-page-heading p {
+  margin: 4px 0 0;
+  font: 400 13px/1.4 var(--font-sans);
+  color: var(--s-text-2);
+}
+
+.settings-close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid var(--s-border);
+  background: transparent;
+  color: var(--s-text-2);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.settings-close:hover { background: rgba(255, 255, 255, 0.07); color: var(--s-text); }
+.settings-close:active { transform: scale(0.94); }
+
+.settings-sheet .settings-content {
+  flex: 1;
+  padding: 14px 28px 40px !important;
+  overflow-y: auto;
+  background: none !important;
+  animation: none !important;
+  scrollbar-gutter: stable;
+}
+
+.settings-content-inner {
+  max-width: 660px;
+}
+
+.settings-sheet--switched .settings-content {
+  animation: settingsPageIn 260ms var(--s-ease) both !important;
+}
+
+@keyframes settingsPageIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── Typography ─────────────────────────────────────────────────────── */
+.settings-sheet .settings-section-title {
+  display: block;
+  margin: 26px 0 10px !important;
+  font: 600 13px/1.3 var(--font-sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--s-text);
+}
+
+.settings-sheet .settings-section-title::after { display: none; }
+
+.settings-sheet .settings-section-title:first-child { margin-top: 18px !important; }
+
+.settings-sheet h4,
+.settings-sheet .setting-card-label,
+.settings-sheet .setting-card-label-plain {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--s-text);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.settings-sheet .setting-card-desc {
+  margin: 4px 0 0;
+  font: 400 12.5px/1.5 var(--font-sans);
+  color: var(--s-text-2);
+}
+
+.settings-sheet .setting-card-desc + *:not(.setting-card-desc) { margin-top: 12px; }
+
+.settings-sheet .setting-card-meta {
+  font: 500 11px/1.4 var(--font-sans);
+  color: var(--s-text-3);
+  background: none;
+  border: 1px solid var(--s-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.settings-sheet .saved-confirm {
+  font: 500 12px/1 var(--font-sans);
+  color: var(--success, #34d399);
+  animation: settingsPageIn 200ms var(--s-ease) both;
+}
+
+/* ── Cards (a group of related controls) ────────────────────────────── */
+.settings-sheet .setting-card {
+  background: var(--s-card);
+  border: 1px solid var(--s-border);
+  border-radius: var(--s-radius);
+  padding: 14px 16px;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.settings-sheet .setting-card:hover { background: var(--s-card-hover); }
+
+.settings-sheet .setting-card + .setting-card { margin-top: 8px !important; }
+
+.settings-sheet .setting-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0;
+}
+
+.settings-sheet .setting-card-header + .setting-card-header { margin-top: 12px; }
+
+.settings-sheet .status-dot {
+  width: 7px;
+  height: 7px;
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+
+/* Key/value rows inside a card */
+.settings-sheet .info-row {
+  padding: 8px 0;
+  border-bottom: none;
+  border-top: 1px solid var(--s-divider);
+  align-items: center;
+}
+
+.settings-sheet .setting-card-desc + .info-row,
+.settings-sheet .info-row:first-child { margin-top: 12px; }
+
+.settings-sheet .info-row-label {
+  font: 400 12.5px/1.4 var(--font-sans);
+  color: var(--s-text-2);
+}
+
+.settings-sheet .info-row-value {
+  font: 500 12.5px/1.4 var(--font-sans);
+  color: var(--s-text);
+}
+
+/* ── Switch ─────────────────────────────────────────────────────────── */
+.settings-sheet .switch {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+}
+
+.settings-sheet .switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.settings-sheet .switch .slider {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  border: none;
+  transition: background 200ms ease;
+}
+
+.settings-sheet .switch .slider::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 240ms cubic-bezier(0.34, 1.4, 0.64, 1), width 160ms ease;
+}
+
+.settings-sheet .switch input:checked + .slider { background: var(--s-accent); }
+.settings-sheet .switch input:checked + .slider::before { transform: translateX(16px); }
+.settings-sheet .switch:active .slider::before { width: 19px; }
+.settings-sheet .switch input:checked:active + .slider::before { transform: translateX(13px); }
+.settings-sheet .switch input:disabled + .slider { opacity: 0.35; cursor: not-allowed; }
+.settings-sheet .switch input:focus-visible + .slider { box-shadow: var(--focus-ring); }
+
+/* ── Segmented control ──────────────────────────────────────────────── */
+.settings-sheet .recording-mode-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--s-divider);
+}
+
+.settings-sheet .recording-mode-seg button {
+  flex: 1;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--s-text-2);
+  font: 500 12.5px/1.3 var(--font-sans);
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  transition: background 180ms var(--s-ease), color 140ms ease, box-shadow 180ms ease;
+}
+
+.settings-sheet .recording-mode-seg button:hover:not(:disabled):not(.active) {
+  color: var(--s-text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.settings-sheet .recording-mode-seg button.active {
+  background: rgba(255, 255, 255, 0.13);
+  color: var(--s-text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.settings-sheet .recording-mode-seg button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Buttons & inputs ───────────────────────────────────────────────── */
+.settings-sheet .about-open-btn,
+.settings-sheet .ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--s-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--s-text);
+  font: 500 12.5px/1.3 var(--font-sans);
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 120ms ease;
+}
+
+.settings-sheet .about-open-btn:hover,
+.settings-sheet .ghost-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.settings-sheet .about-open-btn:active,
+.settings-sheet .ghost-btn:active { transform: scale(0.97); }
+
+.settings-sheet .ghost-btn--danger { color: #f87171; }
+.settings-sheet .ghost-btn--danger:hover { background: rgba(248, 113, 113, 0.12); border-color: rgba(248, 113, 113, 0.3); }
+
+.settings-sheet .select-input,
+.settings-sheet input[type="text"],
+.settings-sheet input[type="search"],
+.settings-sheet textarea {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--s-border);
+  color: var(--s-text);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.settings-sheet .select-input:focus,
+.settings-sheet input[type="text"]:focus,
+.settings-sheet input[type="search"]:focus,
+.settings-sheet textarea:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--s-accent) 60%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--s-accent) 18%, transparent);
+}
+
+.settings-sheet .volume-slider { accent-color: var(--s-accent); }
+
+/* ── Narrow windows: the sidebar becomes a tab strip ────────────────── */
+@media (max-width: 700px) {
+  .settings-overlay--open { padding: 0; }
+
+  .settings-modal.settings-sheet {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    border-radius: 0;
+    border-width: 0;
+  }
+
+  .settings-side {
+    flex-direction: row;
+    align-items: center;
+    padding: 8px 10px;
+    border-right: none;
+    border-bottom: 1px solid var(--s-divider);
+  }
+
+  .settings-side-brand,
+  .settings-side-note { display: none; }
+
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .settings-nav::-webkit-scrollbar { display: none; }
+
+  .settings-nav-btn {
+    width: auto;
+    white-space: nowrap;
+    padding: 6px 10px;
+  }
+
+  .settings-page-header { padding: 16px 18px 12px; }
+  .settings-sheet .settings-content { padding: 4px 18px 32px !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-modal.settings-sheet,
+  .settings-overlay--closing .settings-sheet,
+  .settings-overlay--open,
+  .settings-sheet--switched .settings-page-heading,
+  .settings-sheet--switched .settings-content { animation: none !important; }
+}
+
+/* ── Legacy labels: sentence case, Plex, no tracking ───────────────── */
+.settings-sheet :is(.about-app-name, .about-badge, .about-chip-badge, .about-hw-group-title,
+  .dict-field-label, .settings-section-subtitle, .snippet-label, .vocab-presets-label,
+  .vocab-preview-title, .whisper-picker-field > span) {
+  text-transform: none;
+  letter-spacing: normal;
+  font-family: var(--font-sans);
+}
+.settings-sheet :is(.dict-field-label, .vocab-presets-label, .vocab-preview-title,
+  .snippet-label, .about-hw-group-title, .whisper-picker-field > span) {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--s-text-2);
+}
+.settings-sheet .about-app-name { font-size: 17px; font-weight: 600; }
+.settings-sheet .about-version { font-family: var(--font-mono); }
+.settings-sheet .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-sheet .setting-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.settings-sheet .setting-info .setting-label { font-size: 13px; font-weight: 500; color: var(--s-text); }
+.settings-sheet .setting-info .setting-desc { font-size: 12px; line-height: 1.45; color: var(--s-text-3); }
+
+/* ── Storage tab ─────────────────────────────────────────────────────── */
+.settings-sheet .storage-tab { display: flex; flex-direction: column; gap: 12px; }
+.settings-sheet .storage-card { display: flex; flex-direction: column; gap: 10px; }
+.settings-sheet .storage-card .setting-card-desc { margin: 0; }
+
+.settings-sheet .storage-chip {
+  font: 500 11.5px/1 var(--font-sans);
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--s-text-2);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--s-border);
+  white-space: nowrap;
+}
+.settings-sheet .storage-chip--warn { color: #ffcf8a; background: rgba(255, 184, 77, 0.1); border-color: rgba(255, 184, 77, 0.28); }
+.settings-sheet .storage-chip--error { color: #fca5a5; background: rgba(248, 113, 113, 0.1); border-color: rgba(248, 113, 113, 0.3); }
+
+.settings-sheet .storage-path-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings-sheet .storage-path {
+  flex: 1 1 220px;
+  min-width: 0;
+  font: 400 12px/1.4 var(--font-mono);
+  color: var(--s-text-2);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--s-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;          /* keep the end of long paths visible */
+  text-align: left;
+}
+.settings-sheet .storage-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.settings-sheet .storage-actions .ghost-btn:disabled,
+.settings-sheet .storage-speed-block .ghost-btn:disabled,
+.settings-sheet .storage-confirm .ghost-btn:disabled { opacity: 0.45; cursor: default; transform: none; }
+
+.settings-sheet .storage-meta { display: flex; gap: 14px; font-size: 12px; color: var(--s-text-3); font-variant-numeric: tabular-nums; }
+
+.settings-sheet .storage-warning {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #ffdcaa;
+  background: rgba(255, 184, 77, 0.08);
+  border: 1px solid rgba(255, 184, 77, 0.22);
+}
+.settings-sheet .storage-warning--error { color: #fecaca; background: rgba(248, 113, 113, 0.08); border-color: rgba(248, 113, 113, 0.25); }
+
+.settings-sheet .storage-speed-block { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.settings-sheet .storage-speed-block .ghost-btn { gap: 8px; }
+.settings-sheet .storage-hint { font-size: 12px; color: var(--s-text-3); }
+.settings-sheet .storage-speed { flex: 1 1 100%; display: flex; flex-direction: column; gap: 6px; animation: storageIn 0.25s ease-out both; }
+@keyframes storageIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
+.settings-sheet .storage-bar-row,
+.settings-sheet .storage-progress { display: grid; grid-template-columns: 150px 1fr 76px; align-items: center; gap: 10px; }
+.settings-sheet .storage-progress { grid-template-columns: 1fr 130px; }
+.settings-sheet .storage-bar-label { font-size: 12px; color: var(--s-text-2); }
+.settings-sheet .storage-bar-track { height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+.settings-sheet .storage-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--s-accent);
+  transition: width 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.settings-sheet .storage-bar-fill--muted { background: rgba(255, 255, 255, 0.3); }
+.settings-sheet .storage-bar-value { font: 500 12px/1 var(--font-mono); color: var(--s-text); text-align: right; font-variant-numeric: tabular-nums; }
+
+.settings-sheet .storage-verdict { margin: 4px 0 0; font-size: 12.5px; font-weight: 500; }
+.settings-sheet .storage-verdict--good { color: #6ee7a8; }
+.settings-sheet .storage-verdict--ok { color: #ffcf8a; }
+.settings-sheet .storage-verdict--slow { color: #fca5a5; }
+.settings-sheet .storage-estimate { margin: 0; font-size: 12px; line-height: 1.5; color: var(--s-text-3); }
+.settings-sheet .storage-estimate--busy { display: flex; align-items: center; gap: 8px; }
+.settings-sheet .storage-estimate strong { color: var(--s-text); font-weight: 600; }
+
+.settings-sheet .storage-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--s-border);
+  animation: storageIn 0.22s ease-out both;
+}
+.settings-sheet .storage-confirm-title { margin: 0; font-size: 13px; font-weight: 600; color: var(--s-text); }
+.settings-sheet .storage-confirm-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.settings-sheet .ghost-btn.storage-primary { background: var(--s-accent); border-color: var(--s-accent); color: var(--brand-ink, #1a1411); }
+.settings-sheet .ghost-btn.storage-primary:hover { filter: brightness(1.06); background: var(--s-accent); }
+
+.settings-sheet .storage-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: currentColor;
+  display: inline-block;
+  animation: storageSpin 0.8s linear infinite;
+}
+@keyframes storageSpin { to { transform: rotate(360deg); } }
+
+@media (max-width: 560px) {
+  .settings-sheet .storage-bar-row { grid-template-columns: 90px 1fr 64px; }
+}
+
+/* ── Models tab rhythm: same spacing as the other pages ─────────────── */
+.settings-sheet .models-tab { gap: 22px; }
+.settings-sheet .model-memory-card { margin-bottom: 0; }
+.settings-sheet .model-group-header { margin-bottom: 10px; }

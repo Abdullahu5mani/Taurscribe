@@ -84,7 +84,7 @@ export function TextTab({
             {/* ── Custom Vocabulary & Context Jargon Injection ─────────── */}
             <div className="vocab-header-row">
                 <h3 className="settings-section-title" style={{ margin: 0 }}>
-                    Custom Vocabulary & Decoder Jargon
+                    Custom vocabulary
                 </h3>
                 <span className="vocab-count-badge">
                     {customVocabulary.length} {customVocabulary.length === 1 ? "term" : "terms"}
@@ -100,12 +100,12 @@ export function TextTab({
                 {/* Context Bias Toggle */}
                 <div className="setting-row" style={{ padding: "8px 0 16px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                     <div className="setting-info">
-                        <span className="setting-label">Active App Contextual Biasing</span>
+                        <span className="setting-label">Use the focused app for context</span>
                         <span className="setting-desc">
                             Automatically infer domain keywords from your currently focused window (IDEs, Slack, Zoom, medical software).
                         </span>
                     </div>
-                    <label className="toggle-switch">
+                    <label className="switch" htmlFor="context-bias-toggle">
                         <input
                             type="checkbox"
                             id="context-bias-toggle"
@@ -114,14 +114,14 @@ export function TextTab({
                             checked={contextBiasEnabled}
                             onChange={(e) => setContextBiasEnabled?.(e.target.checked)}
                         />
-                        <span className="toggle-slider"></span>
+                        <span className="slider"></span>
                     </label>
                 </div>
 
                 {/* Add Term Input */}
                 <div className="dict-add-row" style={{ marginTop: "16px" }}>
                     <div className="dict-field" style={{ flex: 1 }}>
-                        <label className="dict-field-label" htmlFor="vocab-input-term">Add Technical Term or Name</label>
+                        <label className="dict-field-label" htmlFor="vocab-input-term">Add a term or name</label>
                         <input
                             type="text"
                             id="vocab-input-term"
@@ -143,13 +143,13 @@ export function TextTab({
                         disabled={!newVocabTerm.trim()}
                         aria-label="Add custom vocabulary term"
                     >
-                        + Add Term
+                        Add
                     </button>
                 </div>
 
                 {/* Preset Packs */}
                 <div className="vocab-presets-section">
-                    <span className="vocab-presets-label">Domain Presets:</span>
+                    <span className="vocab-presets-label">Presets</span>
                     <div className="vocab-presets-row">
                         <button
                             type="button"
@@ -159,7 +159,7 @@ export function TextTab({
                             onClick={() => addVocabPreset?.("developer")}
                             title="Add Developer keywords (TypeScript, Rust, Docker, etc.)"
                         >
-                            + Developer Pack
+                            + Developer
                         </button>
                         <button
                             type="button"
@@ -169,7 +169,7 @@ export function TextTab({
                             onClick={() => addVocabPreset?.("medical")}
                             title="Add Medical keywords (hypertension, tachycardia, etc.)"
                         >
-                            + Medical Pack
+                            + Medical
                         </button>
                         <button
                             type="button"
@@ -179,7 +179,7 @@ export function TextTab({
                             onClick={() => addVocabPreset?.("legal")}
                             title="Add Legal keywords (affidavit, indemnification, etc.)"
                         >
-                            + Legal Pack
+                            + Legal
                         </button>
                         {customVocabulary.length > 0 && (
                             <button
@@ -226,7 +226,7 @@ export function TextTab({
                 {/* Live Context Prompt Preview */}
                 <div className="vocab-preview-container">
                     <div className="vocab-preview-header">
-                        <span className="vocab-preview-title">Live Decoder Prompt Preview</span>
+                        <span className="vocab-preview-title">Decoder prompt preview</span>
                         <button
                             type="button"
                             id="vocab-preview-refresh"
@@ -235,7 +235,7 @@ export function TextTab({
                             onClick={handleRefreshPreview}
                             disabled={loadingPreview}
                         >
-                            {loadingPreview ? "Reading Context..." : "Inspect Active Decoder Prompt"}
+                            {loadingPreview ? "Reading…" : "Show prompt"}
                         </button>
                     </div>
                     {previewData && (
@@ -260,7 +260,7 @@ export function TextTab({
             </p>
 
             {/* ── Custom Dictionary ───────────────────────────────── */}
-            <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Custom Dictionary</h3>
+            <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Replacements</h3>
 
             <div className="setting-card">
                 <p className="setting-card-desc">
@@ -361,7 +361,7 @@ export function TextTab({
             </p>
 
             {/* ── Text Snippets ───────────────────────────────────── */}
-            <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Text Snippets</h3>
+            <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Text snippets</h3>
 
             <div className="setting-card">
                 <p className="setting-card-desc">

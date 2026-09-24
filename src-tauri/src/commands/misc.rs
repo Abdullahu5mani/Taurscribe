@@ -10,8 +10,13 @@ use tauri::{Emitter, Manager};
 
 /// Shows the main window. Called by the frontend once it has finished its own
 /// initialization so the user never sees a loading state when the window opens.
+/// Set once the frontend has asked to show the window (see lib.rs's startup
+/// fallback, which shows it anyway if the frontend never does).
+pub static MAIN_WINDOW_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[tauri::command]
 pub fn show_main_window(app: tauri::AppHandle) {
+    MAIN_WINDOW_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(window) = app.get_webview_window("main") {
         // macOS: appear on all Spaces so the window can be focused from any Space.
         let _ = window.set_visible_on_all_workspaces(true);
@@ -225,15 +230,32 @@ pub fn get_process_memory_stats() -> crate::memory::ProcessMemoryStats {
     crate::memory::process_memory_stats()
 }
 
+/// CPU name for display. ARM Linux reports no brand string (its /proc/cpuinfo
+/// has no "model name"), so fall back to the board's device-tree model, then the
+/// vendor id, then the architecture.
+fn cpu_display_name(sys: &System) -> String {
+    let cpu = sys.cpus().first();
+    if let Some(brand) = cpu.map(|c| c.brand().trim()).filter(|b| !b.is_empty()) {
+        return brand.to_string();
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(model) = std::fs::read_to_string("/proc/device-tree/model") {
+        let model = model.trim_matches(char::from(0)).trim();
+        if !model.is_empty() {
+            return model.to_string();
+        }
+    }
+    if let Some(vendor) = cpu.map(|c| c.vendor_id().trim()).filter(|v| !v.is_empty()) {
+        return format!("{vendor} {} CPU", std::env::consts::ARCH);
+    }
+    format!("{} CPU", std::env::consts::ARCH)
+}
+
 fn get_system_info_blocking() -> SystemInfo {
     let mut sys = System::new_all();
     sys.refresh_all();
 
-    let cpu_name = sys
-        .cpus()
-        .first()
-        .map(|c| c.brand().trim().to_string())
-        .unwrap_or_else(|| "Unknown CPU".to_string());
+    let cpu_name = cpu_display_name(&sys);
 
     let cpu_cores = sys.cpus().len();
 
@@ -300,8 +322,8 @@ pub struct HardwareDiagnostics {
     pub audio_driver: String,
     pub whisper_framework: String,
     pub whisper_coreml_models: Vec<String>,
-    pub parakeet_framework: String,
     pub granite_framework: String,
+    pub grammar_framework: String,
     pub active_engine: String,
     pub active_model_id: Option<String>,
     pub active_backend: String,
@@ -321,11 +343,7 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
     let mut sys = System::new_all();
     sys.refresh_all();
 
-    let cpu_name = sys
-        .cpus()
-        .first()
-        .map(|c| c.brand().trim().to_string())
-        .unwrap_or_else(|| "Unknown CPU".to_string());
+    let cpu_name = cpu_display_name(&sys);
 
     let cpu_cores = sys.cpus().len();
 
@@ -492,34 +510,21 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
         }
     };
 
-    let parakeet_framework = if is_apple_silicon {
-        "parakeet-rs · Apple MLX Metal GPU (Unified Memory Zero-Copy)".to_string()
+    let granite_framework = if is_apple_silicon {
+        "transcribe.cpp · Metal GPU".to_string()
     } else if cuda_available {
-        "parakeet-rs · ONNX Runtime (CUDA 12 Execution Provider)".to_string()
+        "transcribe.cpp · CUDA GPU".to_string()
     } else {
-        #[cfg(target_os = "windows")]
-        {
-            "parakeet-rs · ONNX Runtime (DirectML Execution Provider)".to_string()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            "parakeet-rs · ONNX Runtime (CPU XNNPACK)".to_string()
-        }
+        "transcribe.cpp · Vulkan GPU or CPU".to_string()
     };
 
-    let granite_framework = if is_apple_silicon {
-        "ONNX Runtime · CoreML Hybrid EP (Apple Neural Engine + GPU)".to_string()
+    // The grammar model (FlowScribe GGUF) runs on llama.cpp.
+    let grammar_framework = if is_apple_silicon {
+        "llama.cpp · Metal GPU".to_string()
     } else if cuda_available {
-        "llama-cpp-2 / ONNX · CUDA 12 Hardware Offload".to_string()
+        "llama.cpp · CUDA".to_string()
     } else {
-        #[cfg(target_os = "windows")]
-        {
-            "ONNX Runtime · DirectML Hardware Offload".to_string()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            "CPU Multi-threaded (INT8 / FP16 Quantized)".to_string()
-        }
+        "llama.cpp · CPU".to_string()
     };
 
     let active = *state.active_engine.lock().unwrap();
@@ -530,14 +535,9 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
             let backend = format!("{}", whisper.get_backend());
             ("whisper".to_string(), model, backend)
         }
-        ASREngine::Parakeet => {
-            let parakeet = state.parakeet.lock().unwrap();
-            let status = parakeet.get_status();
-            ("parakeet".to_string(), status.model_id, status.backend)
-        }
         ASREngine::Granite => {
-            let cohere = state.cohere.lock().unwrap();
-            let status = cohere.get_status();
+            let granite = state.granite.lock().unwrap();
+            let status = granite.get_status();
             ("granite".to_string(), status.model_id, status.backend)
         }
         ASREngine::Qwen3 => {
@@ -570,8 +570,8 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
         audio_driver,
         whisper_framework,
         whisper_coreml_models,
-        parakeet_framework,
         granite_framework,
+        grammar_framework,
         active_engine,
         active_model_id,
         active_backend,
@@ -1130,11 +1130,11 @@ pub async fn factory_reset_app_data(
     if let Ok(mut whisper) = state.whisper.lock() {
         whisper.unload();
     }
-    if let Ok(mut parakeet) = state.parakeet.lock() {
-        parakeet.unload();
+    if let Ok(mut granite) = state.granite.lock() {
+        granite.unload();
     }
-    if let Ok(mut cohere) = state.cohere.lock() {
-        cohere.unload();
+    if let Ok(mut qwen3) = state.qwen3.lock() {
+        qwen3.unload();
     }
     if let Ok(mut llm) = state.llm.lock() {
         *llm = None;
@@ -1305,7 +1305,7 @@ fn open_macos_privacy_settings(anchor: &str) {
 
 /// Open one of the app's storage folders in the system file manager.
 ///
-/// `folder` is one of: "models", "recordings", "settings"
+/// `folder` is one of: "models", "recordings", "meetings", "settings"
 /// - "models"     → opens %LOCALAPPDATA%\Taurscribe\models\
 /// - "recordings" → opens %LOCALAPPDATA%\Taurscribe\temp\
 /// - "settings"   → reveals settings.json in its parent folder
@@ -1317,8 +1317,9 @@ pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), Stri
     let base = app_data.join("Taurscribe");
 
     let path = match folder.as_str() {
-        "models" => base.join("models"),
+        "models" => crate::utils::get_models_dir()?,
         "recordings" => base.join("temp"),
+        "meetings" => crate::commands::meetings::get_meetings_dir()?,
         "settings" => base.clone(), // open the parent directory; settings.json lives here
         _ => return Err(format!("Unknown folder: {}", folder)),
     };
@@ -1334,8 +1335,8 @@ pub fn open_app_folder(app: tauri::AppHandle, folder: String) -> Result<(), Stri
         .map_err(|e| format!("Failed to open folder: {}", e))
 }
 
-/// Frees VRAM by unloading every ASR engine that still holds weights (Whisper / Parakeet /
-/// Granite). Does not depend on `active_engine`, which can disagree with actual load state.
+/// Frees VRAM by unloading every ASR engine that still holds weights (Whisper / Granite /
+/// Qwen3). Does not depend on `active_engine`, which can disagree with actual load state.
 /// Returns a comma-separated list of unloaded engines, or `"none"` if nothing was loaded.
 #[tauri::command]
 pub async fn unload_current_model(
@@ -1349,6 +1350,12 @@ pub async fn unload_current_model(
         return Ok(CommandResult::err(
             "engine_loading",
             "A model is currently loading — please wait for it to finish",
+        ));
+    }
+    if state.recording_handle.lock().unwrap().is_some() {
+        return Ok(CommandResult::err(
+            "already_recording",
+            "Stop recording before unloading the model",
         ));
     }
 
@@ -1426,9 +1433,7 @@ pub fn get_auto_unload_status(state: tauri::State<'_, AudioState>) -> AutoUnload
 #[cfg(test)]
 mod hardware_diagnostics_tests {
     use super::*;
-    use crate::cohere::CohereManager;
-    use crate::parakeet::ParakeetManager;
-    use crate::qwen3::Qwen3Manager;
+    use crate::gguf_asr::GgufAsrManager;
     use crate::vad::VADManager;
     use crate::whisper::WhisperManager;
 
@@ -1436,10 +1441,9 @@ mod hardware_diagnostics_tests {
     fn test_get_hardware_diagnostics() {
         let state = AudioState::new(
             WhisperManager::new(),
-            ParakeetManager::new(),
+            GgufAsrManager::granite(),
             VADManager::new().expect("vad init"),
-            CohereManager::new(),
-            Qwen3Manager::new(),
+            GgufAsrManager::qwen3(),
         );
         let diag = get_hardware_diagnostics_blocking(&state);
         println!("\n=== HARDWARE DIAGNOSTICS REPORT ===");
@@ -1459,8 +1463,8 @@ mod hardware_diagnostics_tests {
         println!("Audio Driver:        {}", diag.audio_driver);
         println!("Whisper Framework:   {}", diag.whisper_framework);
         println!("Whisper CoreML:      {:?}", diag.whisper_coreml_models);
-        println!("Parakeet Framework:  {}", diag.parakeet_framework);
         println!("Granite Framework:   {}", diag.granite_framework);
+        println!("Grammar Framework:   {}", diag.grammar_framework);
         println!("Active Engine:       {}", diag.active_engine);
         println!("Active Backend:      {}", diag.active_backend);
         println!("====================================\n");
@@ -1475,9 +1479,7 @@ mod hardware_diagnostics_tests {
 #[cfg(test)]
 mod auto_unload_tests {
     use super::*;
-    use crate::cohere::CohereManager;
-    use crate::parakeet::ParakeetManager;
-    use crate::qwen3::Qwen3Manager;
+    use crate::gguf_asr::GgufAsrManager;
     use crate::vad::VADManager;
     use crate::whisper::WhisperManager;
     use std::sync::atomic::Ordering;
@@ -1485,10 +1487,9 @@ mod auto_unload_tests {
     fn create_test_state() -> AudioState {
         AudioState::new(
             WhisperManager::new(),
-            ParakeetManager::new(),
+            GgufAsrManager::granite(),
             VADManager::new().expect("vad init"),
-            CohereManager::new(),
-            Qwen3Manager::new(),
+            GgufAsrManager::qwen3(),
         )
     }
 
@@ -1600,60 +1601,54 @@ mod auto_unload_tests {
             let avail = WhisperManager::list_available_models().unwrap_or_default();
             if !avail.is_empty() {
                 let id = &avail[0].id;
-                println!("[TEST ENGINE 1/3] Loading Whisper model '{}'...", id);
+                println!("[TEST ENGINE 1/2] Loading Whisper model '{}'...", id);
                 let init_res = w.initialize(Some(id), false);
                 assert!(init_res.is_ok(), "Whisper model failed to initialize: {:?}", init_res.err());
                 assert!(w.get_current_model().is_some(), "Whisper current_model should be Some");
-                println!("[TEST ENGINE 1/3] Whisper loaded successfully. Unloading...");
+                println!("[TEST ENGINE 1/2] Whisper loaded successfully. Unloading...");
                 w.unload();
                 assert!(w.get_current_model().is_none(), "Whisper current_model should be None after unload");
-                println!("[TEST ENGINE 1/3] ✓ Whisper load/unload verified!");
+                println!("[TEST ENGINE 1/2] ✓ Whisper load/unload verified!");
             } else {
-                println!("[TEST ENGINE 1/3] Whisper models not found in local AppData - skipping init");
+                println!("[TEST ENGINE 1/2] Whisper models not found in local AppData - skipping init");
             }
         }
 
-        // 2. Parakeet Engine Verification
+        // 2. Granite Engine Verification
         {
-            let mut p = state.parakeet.lock().unwrap();
-            let avail = ParakeetManager::list_available_models().unwrap_or_default();
+            let mut p = state.granite.lock().unwrap();
+            let avail = p.list_available_models().unwrap_or_default();
             if !avail.is_empty() {
                 let id = &avail[0].id;
-                println!("[TEST ENGINE 2/3] Loading Parakeet model '{}'...", id);
+                println!("[TEST ENGINE 2/2] Loading Granite model '{}'...", id);
                 let init_res = p.initialize(Some(id), false);
-                assert!(init_res.is_ok(), "Parakeet model failed to initialize: {:?}", init_res.err());
-                assert!(p.get_status().loaded, "Parakeet status.loaded should be true");
-                println!("[TEST ENGINE 2/3] Parakeet loaded successfully. Unloading...");
+                assert!(init_res.is_ok(), "Granite model failed to initialize: {:?}", init_res.err());
+                assert!(p.get_status().loaded, "Granite status.loaded should be true");
+                println!("[TEST ENGINE 2/2] Granite loaded successfully. Unloading...");
                 p.unload();
-                assert!(!p.get_status().loaded, "Parakeet status.loaded should be false after unload");
-                println!("[TEST ENGINE 2/3] ✓ Parakeet load/unload verified!");
+                assert!(!p.get_status().loaded, "Granite status.loaded should be false after unload");
+                println!("[TEST ENGINE 2/2] ✓ Granite load/unload verified!");
             } else {
-                println!("[TEST ENGINE 2/3] Parakeet models not found in local AppData - skipping init");
+                println!("[TEST ENGINE 2/2] Granite models not found in local AppData - skipping init");
             }
         }
 
-        // 3. Granite Speech Engine Verification
-        {
-            let mut g = state.cohere.lock().unwrap();
-            println!("[TEST ENGINE 3/3] Checking Granite engine slot...");
-            assert!(!g.get_status().loaded, "Granite status.loaded should be false initially");
-            // Granite initialize returns Err when model files are not downloaded
-            let init_res = g.initialize(None, true);
-            if init_res.is_ok() {
-                assert!(g.get_status().loaded, "Granite status.loaded should be true when initialized");
-                g.unload();
-                assert!(!g.get_status().loaded, "Granite status.loaded should be false after unload");
-                println!("[TEST ENGINE 3/3] ✓ Granite load/unload verified!");
-            } else {
-                println!("[TEST ENGINE 3/3] Granite weights not installed ({:?}) - contract verified!", init_res.err());
-                g.unload();
-                assert!(!g.get_status().loaded);
-            }
-        }
-
-        // 4. Test Global unload_all_loaded_asr()
+        // 3. Test Global unload_all_loaded_asr()
         let res = state.unload_all_loaded_asr();
         assert!(res.is_ok());
     }
 }
 
+/// What an LLM app needs to start Taurscribe's MCP server: this executable plus
+/// the `mcp` argument.
+#[derive(serde::Serialize)]
+pub struct McpSetup {
+    pub command: String,
+    pub args: Vec<String>,
+}
+
+#[tauri::command]
+pub fn get_mcp_setup() -> Result<McpSetup, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("could not find the Taurscribe executable: {e}"))?;
+    Ok(McpSetup { command: exe.to_string_lossy().into_owned(), args: vec!["mcp".into()] })
+}

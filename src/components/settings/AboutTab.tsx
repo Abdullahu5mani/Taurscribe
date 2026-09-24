@@ -26,8 +26,8 @@ export interface HardwareDiagnostics {
     audio_driver: string;
     whisper_framework: string;
     whisper_coreml_models: string[];
-    parakeet_framework: string;
     granite_framework: string;
+    grammar_framework: string;
     active_engine: string;
     active_model_id: string | null;
     active_backend: string;
@@ -67,16 +67,7 @@ export function AboutTab() {
 
     const storageFolders: { label: string; folder: string; pathByPlatform: Record<string, string> }[] = [
         {
-            label: 'Models',
-            folder: 'models',
-            pathByPlatform: {
-                windows: '%LOCALAPPDATA%\\Taurscribe\\models\\',
-                macos: '~/Library/Application Support/Taurscribe/models/',
-                linux: '~/.local/share/Taurscribe/models/',
-            },
-        },
-        {
-            label: 'Recordings',
+            label: 'Dictation audio',
             folder: 'recordings',
             pathByPlatform: {
                 windows: '%LOCALAPPDATA%\\Taurscribe\\temp\\',
@@ -85,7 +76,7 @@ export function AboutTab() {
             },
         },
         {
-            label: 'Settings',
+            label: 'Settings & history',
             folder: 'settings',
             pathByPlatform: {
                 windows: '%LOCALAPPDATA%\\Taurscribe\\',
@@ -137,7 +128,7 @@ export function AboutTab() {
             <div className="setting-card">
                 <div className="about-hero">
                     <span className="about-app-name">Taurscribe</span>
-                    <span className="about-version">v{version}</span>
+                    {version && <span className="about-version">v{version}</span>}
                 </div>
                 <p className="setting-card-desc">
                     Local, offline speech-to-text. Nothing leaves your machine.
@@ -209,7 +200,7 @@ export function AboutTab() {
                             </div>
 
                             <div className="about-row">
-                                <span className="about-row-label">Neural Accelerator</span>
+                                <span className="about-row-label">Neural accelerator</span>
                                 <span className="about-row-value about-row-value--highlight">
                                     {hw.neural_accelerator}
                                 </span>
@@ -221,13 +212,13 @@ export function AboutTab() {
                             </div>
 
                             <div className="about-row">
-                                <span className="about-row-label">Audio Pipeline</span>
+                                <span className="about-row-label">Audio pipeline</span>
                                 <span className="about-row-value">{hw.audio_driver}</span>
                             </div>
                         </div>
 
                         <div className="about-hw-group" style={{ marginTop: '16px' }}>
-                            <div className="about-hw-group-title">Model Acceleration Frameworks</div>
+                            <div className="about-hw-group-title">Acceleration frameworks</div>
 
                             <div className="about-engine-row">
                                 <div className="about-engine-header">
@@ -252,14 +243,14 @@ export function AboutTab() {
 
                             <div className="about-engine-row">
                                 <div className="about-engine-header">
-                                    <span className="about-engine-name">Parakeet Nemotron</span>
+                                    <span className="about-engine-name">Granite Speech 5</span>
                                     <span className={`about-badge ${
                                         hw.is_apple_silicon ? 'about-badge--mlx' : hw.cuda_available ? 'about-badge--cuda' : 'about-badge--gpu'
                                     }`}>
-                                        {hw.active_engine === 'parakeet' ? `Active: ${hw.active_backend}` : (hw.is_apple_silicon ? 'Apple MLX Metal' : 'ONNX GPU')}
+                                        {hw.active_engine === 'granite' ? `Active: ${hw.active_backend}` : 'transcribe.cpp'}
                                     </span>
                                 </div>
-                                <div className="about-engine-desc">{hw.parakeet_framework}</div>
+                                <div className="about-engine-desc">{hw.granite_framework}</div>
                             </div>
 
                             <div className="about-engine-row">
@@ -268,10 +259,10 @@ export function AboutTab() {
                                     <span className={`about-badge ${
                                         hw.is_apple_silicon ? 'about-badge--ane' : hw.cuda_available ? 'about-badge--cuda' : 'about-badge--gpu'
                                     }`}>
-                                        {hw.active_engine === 'granite' ? `Active: ${hw.active_backend}` : (hw.is_apple_silicon ? 'CoreML Hybrid EP' : 'Hardware Offload')}
+                                        {hw.is_apple_silicon ? 'Metal' : hw.cuda_available ? 'CUDA' : 'CPU'}
                                     </span>
                                 </div>
-                                <div className="about-engine-desc">{hw.granite_framework}</div>
+                                <div className="about-engine-desc">{hw.grammar_framework}</div>
                             </div>
                         </div>
                     </>
@@ -281,8 +272,8 @@ export function AboutTab() {
             </div>
 
             <div className="setting-card" style={{ marginTop: '12px' }}>
-                <h4 className="setting-card-label-plain">Storage Locations</h4>
-                <p className="setting-card-desc">All data is stored locally on your machine.</p>
+                <h4 className="setting-card-label-plain">Storage locations</h4>
+                <p className="setting-card-desc">Everything stays on this computer. Models and meeting recordings can be moved to another drive in Storage.</p>
                 {storageFolders.map(({ label, folder, pathByPlatform }) => (
                     <div className="about-row about-row--folder" key={folder}>
                         <span className="about-row-label">{label}</span>
@@ -303,10 +294,10 @@ export function AboutTab() {
             </div>
 
             <div className="setting-card" style={{ marginTop: '12px' }}>
-                <h4 className="setting-card-label-plain">Factory Reset</h4>
+                <h4 className="setting-card-label-plain">Factory reset</h4>
                 <p className="setting-card-desc">
                     Deletes all local app data and restarts Taurscribe into the setup wizard as a brand-new install.
-                    This removes downloaded models, settings, transcript history, and temp files.
+                    This removes downloaded models, settings, transcript history, and temp files. Models or recordings kept in a custom folder (Storage) are left where they are.
                 </p>
                 <div className="about-reset-actions">
                     <button

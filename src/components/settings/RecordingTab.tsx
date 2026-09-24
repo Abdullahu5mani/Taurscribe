@@ -193,98 +193,11 @@ export function RecordingTab({
         }
     };
 
-    // ── Meeting & Dual-Channel state ─────────────────────────────
-    const [audioSourceMode, setAudioSourceMode] = useState<string>('mic');
-    const [meetingDetectionEnabled, setMeetingDetectionEnabled] = useState(true);
-    const [autoRecordMeetings, setAutoRecordMeetings] = useState(false);
-    const [meetingSaved, setMeetingSaved] = useState(false);
-    const [activeMeetingCount, setActiveMeetingCount] = useState(0);
-
-    useEffect(() => {
-        const initMeetings = async () => {
-            try {
-                const store = await Store.load('settings.json');
-                const savedSource = await store.get<string>('audio_source_mode');
-                if (savedSource) {
-                    setAudioSourceMode(savedSource);
-                    invoke('set_audio_source_mode', { mode: savedSource }).catch(() => {});
-                } else {
-                    const rustSource = await invoke<string>('get_audio_source_mode').catch(() => 'mic');
-                    setAudioSourceMode(rustSource);
-                }
-
-                const savedAutoRecord = await store.get<boolean>('auto_record_meetings');
-                if (savedAutoRecord !== null && savedAutoRecord !== undefined) {
-                    setAutoRecordMeetings(savedAutoRecord);
-                    invoke('set_auto_record_meetings', { enabled: savedAutoRecord }).catch(() => {});
-                } else {
-                    const rustAuto = await invoke<boolean>('get_auto_record_meetings').catch(() => false);
-                    setAutoRecordMeetings(rustAuto);
-                }
-
-                const status = await invoke<{ is_watching: boolean; active_meetings_count: number }>('get_meeting_detection_status').catch(() => null);
-                if (status) {
-                    setMeetingDetectionEnabled(status.is_watching);
-                    setActiveMeetingCount(status.active_meetings_count);
-                }
-            } catch (e) {
-                console.error('Failed to load meeting settings:', e);
-            }
-        };
-        initMeetings();
-    }, []);
-
-    const handleAudioSourceChange = async (mode: string) => {
-        setAudioSourceMode(mode);
-        try {
-            await invoke('set_audio_source_mode', { mode });
-            const store = await Store.load('settings.json');
-            await store.set('audio_source_mode', mode);
-            await store.save();
-            setMeetingSaved(true);
-            setTimeout(() => setMeetingSaved(false), 2000);
-        } catch (e) {
-            console.error('Failed to set audio source mode:', e);
-        }
-    };
-
-    const handleToggleMeetingDetection = async (enabled: boolean) => {
-        setMeetingDetectionEnabled(enabled);
-        try {
-            if (enabled) {
-                await invoke('start_meeting_detection');
-            } else {
-                await invoke('stop_meeting_detection');
-            }
-            const store = await Store.load('settings.json');
-            await store.set('meeting_detection_enabled', enabled);
-            await store.save();
-            setMeetingSaved(true);
-            setTimeout(() => setMeetingSaved(false), 2000);
-        } catch (e) {
-            console.error('Failed to toggle meeting detection:', e);
-        }
-    };
-
-    const handleToggleAutoRecord = async (enabled: boolean) => {
-        setAutoRecordMeetings(enabled);
-        try {
-            await invoke('set_auto_record_meetings', { enabled });
-            const store = await Store.load('settings.json');
-            await store.set('auto_record_meetings', enabled);
-            await store.save();
-            setMeetingSaved(true);
-            setTimeout(() => setMeetingSaved(false), 2000);
-        } catch (e) {
-            console.error('Failed to toggle auto record:', e);
-        }
-    };
-
     return (
         <div className="recording-tab">
 
             {/* ── Hotkey ──────────────────────────────────────────── */}
-            <h3 className="settings-section-title">Global Hotkey</h3>
+            <h3 className="settings-section-title">Global hotkey</h3>
 
             <div className="setting-card">
                 <p className="setting-card-desc">
@@ -309,7 +222,7 @@ export function RecordingTab({
                         aria-label="Hold to record mode"
                         className={currentBinding.mode === 'hold' ? 'active' : ''}
                         onClick={() => handleModeChange('hold')}
-                    >Hold to Record</button>
+                    >Hold to record</button>
                     <button
                         type="button"
                         id="hotkey-mode-toggle-btn"
@@ -319,7 +232,7 @@ export function RecordingTab({
                         aria-label="Click to toggle record mode"
                         className={currentBinding.mode === 'toggle' ? 'active' : ''}
                         onClick={() => handleModeChange('toggle')}
-                    >Click to Toggle</button>
+                    >Press to toggle</button>
                 </div>
                 <p className="setting-card-desc" style={{ marginBottom: '16px' }}>{modeDescription}</p>
 
@@ -412,7 +325,7 @@ export function RecordingTab({
                 <div className="setting-card-header">
                     <div className="setting-card-label">
                         <span className="status-dot" style={{ background: enableOverlay ? 'var(--success)' : 'var(--text-muted)' }} />
-                        <span>Recording Overlay</span>
+                        <span>Recording overlay</span>
                     </div>
                     <label className="switch" htmlFor="recording-overlay-toggle">
                         <input
@@ -429,7 +342,7 @@ export function RecordingTab({
                     </label>
                 </div>
                 <p className="setting-card-desc">
-                    Shows the compact floating HUD on screen while recording via the global hotkey.
+                    Shows a small capsule with a live waveform and timer at the bottom of the screen while you dictate with the hotkey.
                 </p>
             </div>
 
@@ -475,7 +388,7 @@ export function RecordingTab({
                         onFocus={() => invoke<string[]>('list_input_devices').then(setDevices).catch(() => {})}
                         onMouseEnter={() => invoke<string[]>('list_input_devices').then(setDevices).catch(() => {})}
                     >
-                        <option value="">System Default</option>
+                        <option value="">System default</option>
                         {devices.map(name => (
                             <option key={name} value={name}>{name}</option>
                         ))}
@@ -517,7 +430,7 @@ export function RecordingTab({
                 <div className="setting-card-header">
                     <div className="setting-card-label">
                         <span className="status-dot" style={{ background: muteBackgroundAudio ? 'var(--success)' : 'var(--text-muted)' }} />
-                        <span>Mute During Recording</span>
+                        <span>Mute while recording</span>
                     </div>
                     <label className="switch" htmlFor="recording-mute-bg-toggle">
                         <input
@@ -539,7 +452,7 @@ export function RecordingTab({
             </div>
 
             <div className="setting-card" style={{ marginTop: '12px' }}>
-                <h4 className="setting-card-label-plain">Voice Activity Detection</h4>
+                <h4 className="setting-card-label-plain">Voice activity detection</h4>
                 <p className="setting-card-desc">
                     VAD filters silence before sending audio to the engine, reducing hallucinations.
                 </p>
@@ -551,129 +464,6 @@ export function RecordingTab({
                     <span className="info-row-label">Min recording</span>
                     <span className="info-row-value">1500 ms</span>
                 </div>
-                <div className="info-row info-row--muted" style={{ marginTop: '12px' }}>
-                    <span className="info-row-label">Threshold control</span>
-                    <span className="info-row-value">Coming in a future update</span>
-                </div>
-            </div>
-
-            {/* ── Meeting & Dual-Channel Audio ───────────────────── */}
-            <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Meeting &amp; Dual-Channel Audio</h3>
-
-            <div className="setting-card">
-                <div className="setting-card-header">
-                    <span className="setting-card-label-plain" style={{ fontWeight: 600 }}>Default Recording Mode</span>
-                    {meetingSaved && <span className="saved-confirm">Saved ✓</span>}
-                </div>
-                <p className="setting-card-desc">
-                    Choose whether dictation uses standard single-mic input or dual-channel loopback.
-                </p>
-
-                <div
-                    id="audio-source-mode-group"
-                    data-testid="audio-source-mode-group"
-                    className="recording-mode-seg"
-                    role="radiogroup"
-                    aria-label="Default audio source mode"
-                    style={{ marginBottom: '16px' }}
-                >
-                    <button
-                        type="button"
-                        id="audio-source-mic-btn"
-                        data-testid="audio-source-mic-btn"
-                        role="radio"
-                        aria-checked={audioSourceMode === 'mic'}
-                        className={audioSourceMode === 'mic' ? 'active' : ''}
-                        onClick={() => handleAudioSourceChange('mic')}
-                    >Standard Microphone</button>
-                    <button
-                        type="button"
-                        id="audio-source-dual-btn"
-                        data-testid="audio-source-dual-btn"
-                        role="radio"
-                        aria-checked={audioSourceMode === 'dual_channel'}
-                        className={audioSourceMode === 'dual_channel' ? 'active' : ''}
-                        onClick={() => handleAudioSourceChange('dual_channel')}
-                    >Dual-Channel (Mic + Call)</button>
-                </div>
-                <p className="setting-card-desc" style={{ marginBottom: '16px' }}>
-                    {audioSourceMode === 'dual_channel'
-                        ? 'Captures your voice on Channel 1 and internal call audio on Channel 2 into a stereo WAV.'
-                        : 'Captures only your voice for fast, isolated voice dictation and command typing.'}
-                </p>
-
-                <div className="info-row">
-                    <span className="info-row-label">Channel 1 (Left)</span>
-                    <span className="info-row-value">Microphone (Your Voice)</span>
-                </div>
-                <div className="info-row">
-                    <span className="info-row-label">Channel 2 (Right)</span>
-                    <span className="info-row-value">System Loopback (Remote Participants)</span>
-                </div>
-                <div className="info-row">
-                    <span className="info-row-label">Sample Rate</span>
-                    <span className="info-row-value">48,000 Hz Stereo (Lossless WAV)</span>
-                </div>
-            </div>
-
-            <div className="setting-card" style={{ marginTop: '12px' }}>
-                <div className="setting-card-header">
-                    <div className="setting-card-label">
-                        <span className="status-dot" style={{ background: meetingDetectionEnabled ? 'var(--success)' : 'var(--text-muted)' }} />
-                        <span>Auto-Detect Meetings</span>
-                        <span className="setting-card-meta">Zoom · Teams · Meet · Slack · Discord</span>
-                    </div>
-                    <label className="switch" htmlFor="meeting-detection-toggle">
-                        <input
-                            id="meeting-detection-toggle"
-                            data-testid="meeting-detection-toggle"
-                            role="switch"
-                            aria-checked={meetingDetectionEnabled}
-                            aria-label="Auto-detect meetings"
-                            type="checkbox"
-                            checked={meetingDetectionEnabled}
-                            onChange={e => handleToggleMeetingDetection(e.target.checked)}
-                        />
-                        <span className="slider round" />
-                    </label>
-                </div>
-                <p className="setting-card-desc">
-                    Scans native apps and web browser calls to display a convenient 1-click recording banner when a meeting starts.
-                </p>
-                <div className="info-row">
-                    <span className="info-row-label">Detector Engine</span>
-                    <span className="info-row-value">Native OS Process Audio Tap (Bot-Free)</span>
-                </div>
-                <div className="info-row">
-                    <span className="info-row-label">Active Calls</span>
-                    <span className="info-row-value">{activeMeetingCount > 0 ? `${activeMeetingCount} active call in progress` : 'None detected'}</span>
-                </div>
-            </div>
-
-            <div className="setting-card" style={{ marginTop: '12px' }}>
-                <div className="setting-card-header">
-                    <div className="setting-card-label">
-                        <span className="status-dot" style={{ background: autoRecordMeetings ? 'var(--success)' : 'var(--text-muted)' }} />
-                        <span>Auto-Record Meetings</span>
-                    </div>
-                    <label className="switch" htmlFor="auto-record-meetings-toggle">
-                        <input
-                            id="auto-record-meetings-toggle"
-                            data-testid="auto-record-meetings-toggle"
-                            role="switch"
-                            aria-checked={autoRecordMeetings}
-                            aria-label="Auto-record detected meetings"
-                            type="checkbox"
-                            checked={autoRecordMeetings}
-                            disabled={!meetingDetectionEnabled}
-                            onChange={e => handleToggleAutoRecord(e.target.checked)}
-                        />
-                        <span className="slider round" />
-                    </label>
-                </div>
-                <p className="setting-card-desc">
-                    Automatically starts dual-channel recording the moment a meeting call is confirmed active.
-                </p>
             </div>
 
         </div>

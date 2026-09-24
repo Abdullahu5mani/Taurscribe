@@ -1,5 +1,8 @@
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
+import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
+import { LlmAccessSection } from './LlmAccessSection';
 
 interface AppTabProps {
     closeBehavior: 'tray' | 'quit';
@@ -23,11 +26,99 @@ export function AppTab({
         await invoke('set_close_behavior', { behavior: val });
     };
 
+    const isMac = (navigator.platform ?? '').toLowerCase().includes('mac');
+    const trayName = isMac ? 'menu bar icon' : 'tray icon';
+    const [launchAtLogin, setLaunchAtLogin] = useState(false);
+    const [startHidden, setStartHidden] = useState(false);
+    const [showTrayIcon, setShowTrayIcon] = useState(true);
+    const [startupError, setStartupError] = useState<string | null>(null);
+
+    useEffect(() => {
+        isAutostartEnabled().then(setLaunchAtLogin).catch(() => {});
+        Store.load('settings.json').then(async (store) => {
+            setStartHidden((await store.get<boolean>('start_hidden')) === true);
+            setShowTrayIcon((await store.get<boolean>('show_tray_icon')) !== false);
+        }).catch(() => {});
+    }, []);
+
+    const saveSetting = async (key: string, val: boolean) => {
+        const store = await Store.load('settings.json');
+        await store.set(key, val);
+        await store.save();
+    };
+
+    const toggleLaunchAtLogin = async (val: boolean) => {
+        setStartupError(null);
+        try {
+            await (val ? enableAutostart() : disableAutostart());
+            setLaunchAtLogin(await isAutostartEnabled());
+        } catch (e) {
+            setStartupError(`Couldn't change launch at login: ${e}`);
+        }
+    };
+
+    const toggleStartHidden = (val: boolean) => {
+        setStartHidden(val);
+        saveSetting('start_hidden', val).catch(() => {});
+    };
+
+    const toggleTrayIcon = async (val: boolean) => {
+        setStartupError(null);
+        try {
+            await invoke('set_tray_icon_visible', { visible: val });
+            setShowTrayIcon(val);
+            await saveSetting('show_tray_icon', val);
+        } catch (e) {
+            setStartupError(`Couldn't change the ${trayName}: ${e}`);
+        }
+    };
+
+    const switchRow = (
+        id: string, label: string, desc: string, checked: boolean, onChange: (val: boolean) => void,
+    ) => (
+        <div className="setting-card">
+            <div className="setting-card-header">
+                <div className="setting-card-label">
+                    <span className="status-dot" style={{ background: checked ? 'var(--success)' : 'var(--text-muted)' }} />
+                    <span>{label}</span>
+                </div>
+                <label className="switch" htmlFor={id}>
+                    <input
+                        id={id}
+                        data-testid={id}
+                        role="switch"
+                        aria-checked={checked}
+                        aria-label={label}
+                        type="checkbox"
+                        checked={checked}
+                        onChange={e => onChange(e.target.checked)}
+                    />
+                    <span className="slider round" />
+                </label>
+            </div>
+            <p className="setting-card-desc">{desc}</p>
+        </div>
+    );
+
     return (
         <div className="app-tab">
 
+            {/* ── Startup ─────────────────────────────────────────── */}
+            <h3 className="settings-section-title">Startup</h3>
+
+            {switchRow('app-launch-at-login-toggle', 'Launch at login',
+                'Open Taurscribe automatically when you log in, so the hotkey is ready right away.',
+                launchAtLogin, toggleLaunchAtLogin)}
+            {switchRow('app-start-hidden-toggle', 'Start hidden',
+                `Open in the background without showing the window. Open it from the ${trayName}${isMac ? ', the Dock' : ''} or by launching Taurscribe again.`,
+                startHidden, toggleStartHidden)}
+            {switchRow('app-show-tray-icon-toggle', `Show ${trayName}`,
+                `Shows recording status and quick actions in the ${isMac ? 'menu bar' : 'system tray'}. When it's off, open the window by launching Taurscribe again${isMac ? ' or from the Dock' : ''}.`,
+                showTrayIcon, toggleTrayIcon)}
+            {startupError && <p id="app-startup-error" data-testid="app-startup-error" className="storage-warning storage-warning--error" role="alert">{startupError}</p>}
+
             {/* ── Window ──────────────────────────────────────────── */}
-            <h3 className="settings-section-title">Window</h3>
+            <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Window</h3>
 
             <div className="setting-card">
                 <div className="setting-card-header">
@@ -83,7 +174,7 @@ export function AppTab({
             </div>
 
             {/* ── Sounds ──────────────────────────────────────────── */}
-            <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Sound Effects</h3>
+            <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Sound effects</h3>
 
             <div className="setting-card">
                 <div className="setting-card-header">
@@ -154,21 +245,7 @@ export function AppTab({
                 </div>
             </div>
 
-            <div className="setting-card" style={{ marginTop: '12px' }}>
-                <h4 className="setting-card-label-plain">Sound events</h4>
-                <div className="sound-events">
-                    {[
-                        { event: 'Recording start', file: 'recStart.wav' },
-                        { event: 'Transcript pasted', file: 'paste.wav' },
-                        { event: 'Error', file: 'error.wav' },
-                    ].map(({ event, file }) => (
-                        <div className="sound-event-row" key={file}>
-                            <span className="sound-event-name">{event}</span>
-                            <span className="sound-event-file">{file}</span>
-                        </div>
-                    ))}
-                </div>
-            </div>
+            <LlmAccessSection />
 
         </div>
     );

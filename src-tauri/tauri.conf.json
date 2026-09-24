@@ -17,15 +17,22 @@
         "title": "Taurscribe",
         "width": 780,
         "height": 730,
-        "minWidth": 700,
-        "minHeight": 620,
+        "minWidth": 380,
+        "minHeight": 440,
         "decorations": false,
-        "visible": true,
+        "backgroundColor": "#000000",
+        "visible": false,
         "devtools": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$LOCALDATA/Taurscribe/meetings/**"
+        ]
+      }
     }
   },
   "bundle": {
@@ -40,7 +47,7 @@
     ],
     "resources": [],
     "macOS": {
-      "minimumSystemVersion": "13.4",
+      "minimumSystemVersion": "14.0",
       "entitlements": "Entitlements.plist",
       "infoPlist": "Info.plist"
     }
