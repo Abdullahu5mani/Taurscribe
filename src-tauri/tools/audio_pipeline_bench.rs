@@ -1,7 +1,7 @@
 //! Synthetic audio decode/preprocess benchmark.
 //!
 //! Usage:
-//!   cargo run --release --bin audio_pipeline_bench -- 120
+//!   cargo run --release --features dev-tools --bin audio_pipeline_bench -- 120
 //!
 //! The optional argument is duration in seconds. This does not run ASR models;
 //! it isolates the file-drop audio pipeline hot path.

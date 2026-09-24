@@ -3,16 +3,15 @@
 //! Does **not** use file-drop VAD assembly (short read utterances = one contiguous clip).
 //!
 //! Models: `%LOCALAPPDATA%\\Taurscribe\\models` (or platform equivalent). Optional env:
-//! `TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_PARAKEET_MODEL_ID`, `TAURSCRIBE_GRANITE_MODEL_ID`.
-//! `TAURSCRIBE_COHERE_MODEL_ID` is still accepted as a legacy Granite alias.
+//! `TAURSCRIBE_WHISPER_MODEL_ID`, `TAURSCRIBE_GRANITE_MODEL_ID`.
 //!
 //! If manifest `flac_path` entries point at another machine (or a moved corpus), set
 //! `--audio-root` or `TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT` to the **`test-clean` directory**
 //! (the folder that contains per-reader subdirs like `908/`). Paths are then rebuilt from `utt_id`.
 //!
 //! Usage:
-//!   cargo run --release --bin librispeech_eval -- --manifest eval_manifest.jsonl --out results.csv
-//!   cargo run --release --bin librispeech_eval -- --manifest m.jsonl --audio-root ../taurscribe-runtime/librispeech/LibriSpeech/test-clean --engines whisper,granite --limit 50 --force-cpu
+//!   cargo run --release --features dev-tools --bin librispeech_eval -- --manifest eval_manifest.jsonl --out results.csv
+//!   cargo run --release --features dev-tools --bin librispeech_eval -- --manifest m.jsonl --audio-root ../taurscribe-runtime/librispeech/LibriSpeech/test-clean --engines whisper,granite --limit 50 --force-cpu
 
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -21,9 +20,8 @@ use std::path::{Path, PathBuf};
 
 use taurscribe_lib::audio_decode;
 use taurscribe_lib::audio_preprocess;
-use taurscribe_lib::cohere::CohereManager;
 use taurscribe_lib::librispeech_wer;
-use taurscribe_lib::parakeet::ParakeetManager;
+use taurscribe_lib::gguf_asr::GgufAsrManager;
 use taurscribe_lib::utils::clean_transcript;
 use taurscribe_lib::whisper::WhisperManager;
 
@@ -37,7 +35,6 @@ struct ManifestRow {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Engine {
     Whisper,
-    Parakeet,
     Granite,
 }
 
@@ -45,7 +42,6 @@ impl Engine {
     fn as_str(self) -> &'static str {
         match self {
             Engine::Whisper => "whisper",
-            Engine::Parakeet => "parakeet",
             Engine::Granite => "granite",
         }
     }
@@ -62,7 +58,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "librispeech_eval --manifest <path.jsonl> [--out results.csv] [--engines whisper,parakeet,granite] [--limit N] [--audio-root <test-clean-dir>] [--force-cpu]"
+        "librispeech_eval --manifest <path.jsonl> [--out results.csv] [--engines whisper,granite] [--limit N] [--audio-root <test-clean-dir>] [--force-cpu]"
     );
     eprintln!("Env: TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT (same as --audio-root if flag omitted)");
     std::process::exit(2);
@@ -104,8 +100,7 @@ fn parse_args() -> Args {
             let p = part.trim().to_lowercase();
             let e = match p.as_str() {
                 "whisper" => Engine::Whisper,
-                "parakeet" => Engine::Parakeet,
-                "granite" | "cohere" => Engine::Granite,
+                "granite" => Engine::Granite,
                 _ => usage(),
             };
             if seen.insert(e) {
@@ -117,7 +112,7 @@ fn parse_args() -> Args {
         }
         v
     } else {
-        vec![Engine::Whisper, Engine::Parakeet, Engine::Granite]
+        vec![Engine::Whisper, Engine::Granite]
     };
     Args {
         manifest: manifest.unwrap_or_else(|| usage()),
@@ -158,7 +153,6 @@ fn pcm_for_eval(flac_path: &Path) -> Result<Vec<f32>, String> {
 
 const WHISPER_CHUNK_SAMPLES: usize = 16000 * 180;
 const STREAM_CHUNK_SAMPLES: usize = 16000 * 15;
-const COHERE_CHUNK_SAMPLES: usize = 16000 * 35;
 
 fn transcribe_whisper(w: &mut WhisperManager, pcm: &[f32]) -> Result<String, String> {
     let mut parts: Vec<String> = Vec::new();
@@ -171,21 +165,10 @@ fn transcribe_whisper(w: &mut WhisperManager, pcm: &[f32]) -> Result<String, Str
     Ok(parts.join(" "))
 }
 
-fn transcribe_parakeet(p: &mut ParakeetManager, pcm: &[f32]) -> Result<String, String> {
+fn transcribe_granite(p: &mut GgufAsrManager, pcm: &[f32]) -> Result<String, String> {
     let mut parts: Vec<String> = Vec::new();
     for chunk in pcm.chunks(STREAM_CHUNK_SAMPLES) {
-        let t = p.transcribe_chunk(chunk, 16000)?;
-        if !t.trim().is_empty() {
-            parts.push(t.trim().to_string());
-        }
-    }
-    Ok(parts.join(" "))
-}
-
-fn transcribe_cohere(g: &mut CohereManager, pcm: &[f32]) -> Result<String, String> {
-    let mut parts: Vec<String> = Vec::new();
-    for chunk in pcm.chunks(COHERE_CHUNK_SAMPLES) {
-        let t = g.transcribe_chunk(chunk, 16000)?;
+        let t = p.transcribe_chunk(chunk, 16000, None)?;
         if !t.trim().is_empty() {
             parts.push(t.trim().to_string());
         }
@@ -292,16 +275,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 w.unload();
             }
-            Engine::Parakeet => {
-                let parakeet_id = std::env::var("TAURSCRIBE_PARAKEET_MODEL_ID").ok();
-                let models = ParakeetManager::list_available_models()?;
+            Engine::Granite => {
+                let granite_id = std::env::var("TAURSCRIBE_GRANITE_MODEL_ID").ok();
+                let models = GgufAsrManager::granite().list_available_models()?;
                 if models.is_empty() {
-                    return Err("Parakeet: no ONNX bundle in models dir".into());
+                    return Err("Granite: no ONNX bundle in models dir".into());
                 }
-                let id = parakeet_id
+                let id = granite_id
                     .as_deref()
                     .filter(|id| models.iter().any(|m| m.id == *id));
-                let mut p = ParakeetManager::new();
+                let mut p = GgufAsrManager::granite();
                 p.initialize(id, force)?;
                 for row in &rows {
                     let flac = librispeech_wer::resolve_librispeech_flac(
@@ -316,54 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
                     };
-                    let hyp_raw = match transcribe_parakeet(&mut p, &pcm) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            eprintln!("[eval] {} parakeet: {}", row.utt_id, e);
-                            continue;
-                        }
-                    };
-                    let hyp = clean_transcript(&hyp_raw);
-                    let ref_t = librispeech_wer::normalize_for_wer(&row.ref_text);
-                    let hyp_t = librispeech_wer::normalize_for_wer(&hyp);
-                    let wer = librispeech_wer::word_error_rate(&ref_t, &hyp_t);
-                    let snippet: String = hyp.chars().take(120).collect();
-                    writeln!(
-                        out,
-                        "{},{},{},{},{}",
-                        csv_cell(&row.utt_id),
-                        eng.as_str(),
-                        wer,
-                        ref_t.len(),
-                        csv_cell(&snippet)
-                    )?;
-                    if let Some((_, v)) = summary.iter_mut().find(|(e, _)| *e == Engine::Parakeet) {
-                        v.push(wer);
-                    }
-                }
-                p.unload();
-            }
-            Engine::Granite => {
-                let cohere_id = std::env::var("TAURSCRIBE_GRANITE_MODEL_ID")
-                    .or_else(|_| std::env::var("TAURSCRIBE_COHERE_MODEL_ID"))
-                    .ok();
-                let id = cohere_id.as_deref();
-                let mut g = CohereManager::new();
-                g.initialize(id, force)?;
-                for row in &rows {
-                    let flac = librispeech_wer::resolve_librispeech_flac(
-                        &row.flac_path,
-                        &row.utt_id,
-                        audio_root.as_deref(),
-                    );
-                    let pcm = match pcm_for_eval(&flac) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("[eval] {} decode/preprocess: {}", row.utt_id, e);
-                            continue;
-                        }
-                    };
-                    let hyp_raw = match transcribe_cohere(&mut g, &pcm) {
+                    let hyp_raw = match transcribe_granite(&mut p, &pcm) {
                         Ok(t) => t,
                         Err(e) => {
                             eprintln!("[eval] {} granite: {}", row.utt_id, e);
@@ -388,7 +324,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         v.push(wer);
                     }
                 }
-                g.unload();
+                p.unload();
             }
         }
         out.flush()?;

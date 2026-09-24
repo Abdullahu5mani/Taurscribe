@@ -1,7 +1,7 @@
 //! Build JSONL manifest for LibriSpeech `test-clean` (utt_id, flac_path, ref_text).
 //!
 //! Usage:
-//!   cargo run --bin librispeech_manifest -- --root "%LOCALAPPDATA%\Taurscribe\...\LibriSpeech\test-clean" --out manifest.jsonl
+//!   cargo run --features dev-tools --bin librispeech_manifest -- --root "%LOCALAPPDATA%\Taurscribe\...\LibriSpeech\test-clean" --out manifest.jsonl
 //! Optional: `--limit N` [--shuffle-seed U64] for a reproducible subset (shuffled then truncated).
 
 use serde::Serialize;

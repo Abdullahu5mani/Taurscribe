@@ -6,8 +6,8 @@
 //!   2. Custom Vocabulary & Jargon injected recognition (dynamic prompt biasing + casing)
 //!
 //! Usage:
-//!   cargo run --release --bin custom_vocab_eval
-//!   cargo run --release --bin custom_vocab_eval -- --manifest <path> --audio-root <path>
+//!   cargo run --release --features dev-tools --bin custom_vocab_eval
+//!   cargo run --release --features dev-tools --bin custom_vocab_eval -- --manifest <path> --audio-root <path>
 
 use std::path::{Path, PathBuf};
 use taurscribe_lib::audio_decode;
