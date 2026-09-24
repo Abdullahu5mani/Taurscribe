@@ -12,12 +12,12 @@ interface PostProcessingTabProps {
     setTranscriptionStyle: (val: string) => void;
 }
 
+// FlowScribe clean-up levels. Older saved tone styles (Casual, Professional,
+// ...) are treated as "Clean" by the backend.
 const STYLES = [
-    { value: 'Verbatim', label: 'Verbatim', desc: 'Minimal changes, preserve speech' },
-    { value: 'Casual', label: 'Casual', desc: 'Relaxed, conversational tone' },
-    { value: 'Enthusiastic', label: 'Enthusiastic', desc: 'Energetic and expressive' },
-    { value: 'Software_Dev', label: 'Software Dev', desc: 'Technical language, code terms' },
-    { value: 'Professional', label: 'Professional', desc: 'Formal and polished' },
+    { value: 'Verbatim', label: 'Verbatim', desc: 'Every word kept; only punctuation, casing and written numbers' },
+    { value: 'Clean', label: 'Clean', desc: 'Fillers, repeats and corrections removed; your wording kept' },
+    { value: 'Formatted', label: 'Formatted', desc: 'Clean, plus the layout of the app you are typing into' },
 ];
 
 function statusColor(status: string, enabled: boolean): string {
@@ -46,14 +46,14 @@ export function PostProcessingTab({
         <div className="pp-tab">
 
             {/* ── Grammar Correction ──────────────────────────────── */}
-            <h3 className="settings-section-title">Grammar Correction</h3>
+            <h3 className="settings-section-title">Grammar correction</h3>
 
             <div className="setting-card">
                 <div className="setting-card-header">
                     <div className="setting-card-label">
                         <span className="status-dot" style={{ background: statusColor(llmStatus, enableGrammarLM) }} />
                         <span>Grammar LLM</span>
-                        <span className="setting-card-meta">FlowScribe Qwen 2.5 0.5B · GGUF</span>
+                        <span className="setting-card-meta">FlowScribe V3 (beta) · Qwen3.5 0.8B</span>
                     </div>
                     <label className={`switch ${llmLoading || llmNotDownloaded ? 'switch--disabled' : ''}`} htmlFor="grammar-llm-toggle">
                         <input
@@ -76,7 +76,7 @@ export function PostProcessingTab({
 
                 {llmNotDownloaded && (
                     <p className="setting-card-desc" style={{ color: 'var(--error)', marginTop: '8px' }}>
-                        Model not downloaded. Download FlowScribe Qwen from the <strong>Models</strong> tab.
+                        Model not downloaded. Download FlowScribe V3 from the <strong>Models</strong> tab.
                     </p>
                 )}
 
@@ -136,7 +136,7 @@ export function PostProcessingTab({
             {/* ── Transcription Style ─────────────────────────────── */}
             <div className="setting-card" style={{ marginTop: '12px' }}>
                 <div className="setting-card-header">
-                    <span className="setting-card-label-plain">Transcription Style</span>
+                    <span className="setting-card-label-plain">Transcription style</span>
                     {!llmLoaded && (
                         <span className="setting-card-meta">requires Grammar LLM</span>
                     )}

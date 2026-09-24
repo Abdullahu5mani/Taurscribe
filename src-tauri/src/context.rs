@@ -207,13 +207,7 @@ pub fn build_dynamic_prompt(custom_vocab: &[String], include_active_window: bool
             let clean_ctx = ctx.trim();
             if !clean_ctx.is_empty() {
                 // Shorten window title if too long
-                let short_ctx = if clean_ctx.len() > 60 {
-                    let mut s = clean_ctx[..57].to_string();
-                    s.push_str("...");
-                    s
-                } else {
-                    clean_ctx.to_string()
-                };
+                let short_ctx = crate::utils::truncate_utf8_with_ellipsis(clean_ctx, 60);
                 parts.push(format!("Active: {}", short_ctx));
 
                 let domain_kw = infer_domain_keywords(clean_ctx);
@@ -230,13 +224,7 @@ pub fn build_dynamic_prompt(custom_vocab: &[String], include_active_window: bool
 
     let joined = parts.join(". ");
     // Cap at 250 characters so prompt tokens leave maximum space for Whisper audio transcript
-    let prompt = if joined.len() > 250 {
-        let mut truncated = joined[..247].to_string();
-        truncated.push_str("...");
-        truncated
-    } else {
-        joined
-    };
+    let prompt = crate::utils::truncate_utf8_with_ellipsis(&joined, 250);
 
     Some(prompt)
 }
@@ -244,13 +232,11 @@ pub fn build_dynamic_prompt(custom_vocab: &[String], include_active_window: bool
 /// Reads `custom_vocabulary` (array of strings) and `context_bias_enabled` (bool)
 /// from the application's persisted `settings.json`.
 pub fn load_custom_vocabulary_from_settings() -> (Vec<String>, bool) {
-    let Ok(models_dir) = crate::utils::get_models_dir() else {
+    // The store's settings.json (not next to the models folder, which can be
+    // moved to another drive in Settings → Storage).
+    let Some(settings_path) = crate::mcp_server::settings_path() else {
         return (Vec::new(), true);
     };
-    let settings_path = models_dir
-        .parent()
-        .unwrap_or(&models_dir)
-        .join("settings.json");
 
     if !settings_path.is_file() {
         return (Vec::new(), true);
@@ -281,6 +267,85 @@ pub fn load_custom_vocabulary_from_settings() -> (Vec<String>, bool) {
         .unwrap_or(true);
 
     (vocab, enabled)
+}
+
+// ── App category (FlowScribe v3 `<app=...>` tag) ─────────────────────────────
+
+/// Maps an app name / window title to the category FlowScribe v3 was trained
+/// on. Checked in order, so specific apps win over generic words.
+pub fn app_category_for(title: &str) -> &'static str {
+    let t = title.to_lowercase();
+    let tokens: std::collections::HashSet<&str> =
+        t.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    // Single words match whole words ("zed" not in "authorized"); phrases and
+    // file extensions match as substrings.
+    let has = |words: &[&str]| {
+        words.iter().any(|w| if w.contains(' ') || w.starts_with('.') { t.contains(w) } else { tokens.contains(w) })
+    };
+    if has(&["terminal", "iterm", "iterm2", "warp", "ghostty", "powershell", "command prompt", "cmd.exe", "alacritty", "kitty", "wezterm", "konsole", "bash", "zsh"]) {
+        "terminal"
+    } else if has(&["visual studio", "vs code", "vscode", "xcode", "cursor", "zed", "intellij", "pycharm", "webstorm", "android studio", "sublime", "neovim", "vim", "github", "gitlab", ".rs", ".ts", ".py", ".js", ".go"]) {
+        "code_editor"
+    } else if has(&["chatgpt", "claude", "gemini", "perplexity", "copilot", "grok", "deepseek"]) {
+        "ai_prompt"
+    } else if has(&["mail", "outlook", "gmail", "thunderbird", "spark", "superhuman", "proton"]) {
+        "email"
+    } else if has(&["slack", "teams", "discord", "messages", "whatsapp", "telegram", "signal", "messenger", "imessage", "google chat", "wechat"]) {
+        "chat"
+    } else if has(&["calendar", "reminders", "todoist", "things", "ticktick", "asana", "trello", "linear", "jira"]) {
+        "calendar_task"
+    } else if has(&["notes", "obsidian", "notion", "bear", "evernote", "onenote", "logseq", "craft"]) {
+        "notes"
+    } else if has(&["word", "pages", "google docs", "docs.google", "libreoffice", "writer", "scrivener", "overleaf"]) {
+        "document"
+    } else if has(&["google search", "bing", "duckduckgo", "new tab", "search"]) {
+        "search"
+    } else {
+        "generic"
+    }
+}
+
+/// Category of the app the user is dictating into right now.
+pub fn active_app_category() -> &'static str {
+    let mut title = get_active_context().unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    if let Some(window) = macos_focused_window_title() {
+        // The app name alone can't tell Gmail from Slack in a browser.
+        title = format!("{title} {window}");
+    }
+    app_category_for(&title)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_focused_window_title() -> Option<String> {
+    use accessibility_sys::{kAXErrorSuccess, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide};
+    use core_foundation::{
+        base::{CFRelease, CFTypeRef, TCFType},
+        string::{CFString, CFStringRef},
+    };
+
+    unsafe {
+        let system = AXUIElementCreateSystemWide();
+        if system.is_null() {
+            return None;
+        }
+        let copy = |el: accessibility_sys::AXUIElementRef, attr: &str| -> Option<CFTypeRef> {
+            let key = CFString::new(attr);
+            let mut out: CFTypeRef = std::ptr::null();
+            let err = AXUIElementCopyAttributeValue(el, key.as_CFTypeRef() as *const _, &mut out);
+            (err == kAXErrorSuccess && !out.is_null()).then_some(out)
+        };
+        let app = copy(system, "AXFocusedApplication");
+        CFRelease(system as CFTypeRef);
+        let app = app?;
+        let window = copy(app as accessibility_sys::AXUIElementRef, "AXFocusedWindow");
+        CFRelease(app);
+        let window = window?;
+        let title = copy(window as accessibility_sys::AXUIElementRef, "AXTitle");
+        CFRelease(window);
+        let title = CFString::wrap_under_create_rule(title? as CFStringRef).to_string();
+        (!title.trim().is_empty()).then_some(title)
+    }
 }
 
 /// Tauri command to inspect current active window and preview the assembled decoder prompt.
@@ -329,6 +394,18 @@ mod context_tests {
         let raw = "Welcome to taurscribe, make sure you use USECALLBACK here.";
         let cleaned = apply_custom_vocabulary_casing(raw, &vocab);
         assert_eq!(cleaned, "Welcome to Taurscribe, make sure you use useCallback here.");
+    }
+
+    #[test]
+    fn test_app_category_for() {
+        assert_eq!(app_category_for("Slack"), "chat");
+        assert_eq!(app_category_for("Google Chrome Inbox (3) - jane@acme.com - Gmail"), "email");
+        assert_eq!(app_category_for("Code main.rs — taurscribe"), "code_editor");
+        assert_eq!(app_category_for("iTerm2"), "terminal");
+        assert_eq!(app_category_for("Safari ChatGPT"), "ai_prompt");
+        assert_eq!(app_category_for("Finder"), "generic");
+        assert_eq!(app_category_for("Passwords"), "generic");
+        assert_eq!(app_category_for("Request authorized"), "generic");
     }
 
     #[test]

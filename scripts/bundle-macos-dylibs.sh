@@ -128,30 +128,17 @@ if ! ls "$DYLIB_DIR"/*.dylib 1>/dev/null 2>&1; then
   fi
 fi
 
-# Create unversioned and major-version symlinks for llama.cpp/ggml dylibs so @rpath resolution succeeds
+# Create major-version and unversioned symlinks for every versioned dylib
+# (libggml-base.0.24.0.dylib -> libggml-base.0.dylib -> libggml-base.dylib) so
+# @rpath resolution succeeds. Generic, so new libraries (libllama-common since
+# llama-cpp-2 0.1.157) are picked up without editing this list.
 for f in "$DYLIB_DIR"/*.dylib; do
-  [ -f "$f" ] || continue
+  [ -f "$f" ] && [ ! -L "$f" ] || continue
   bn=$(basename "$f")
-  case "$bn" in
-    libggml-base.*.*.*.dylib)
-      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml-base.0.dylib" && ln -sf "libggml-base.0.dylib" "libggml-base.dylib")
-      ;;
-    libggml-cpu.*.*.*.dylib)
-      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml-cpu.0.dylib" && ln -sf "libggml-cpu.0.dylib" "libggml-cpu.dylib")
-      ;;
-    libggml-metal.*.*.*.dylib)
-      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml-metal.0.dylib" && ln -sf "libggml-metal.0.dylib" "libggml-metal.dylib")
-      ;;
-    libggml.*.*.*.dylib)
-      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml.0.dylib" && ln -sf "libggml.0.dylib" "libggml.dylib")
-      ;;
-    libllama.*.*.*.dylib)
-      (cd "$DYLIB_DIR" && ln -sf "$bn" "libllama.0.dylib" && ln -sf "libllama.0.dylib" "libllama.dylib")
-      ;;
-    libggml-blas.*.*.*.dylib)
-      (cd "$DYLIB_DIR" && ln -sf "$bn" "libggml-blas.0.dylib" && ln -sf "libggml-blas.0.dylib" "libggml-blas.dylib")
-      ;;
-  esac
+  if [[ "$bn" =~ ^(lib[A-Za-z0-9_-]+)\.([0-9]+)\.[0-9]+\.[0-9]+\.dylib$ ]]; then
+    name="${BASH_REMATCH[1]}"; major="${BASH_REMATCH[2]}"
+    (cd "$DYLIB_DIR" && ln -sf "$bn" "$name.$major.dylib" && ln -sf "$name.$major.dylib" "$name.dylib")
+  fi
 done
 
 # Generate tauri.macos.conf.json with framework paths (Tauri validates these at build time;
@@ -160,9 +147,13 @@ if ls "$DYLIB_DIR"/*.dylib 1>/dev/null 2>&1; then
   echo "bundle-macos-dylibs: Bundled dylibs:"
   ls -la "$DYLIB_DIR"/*.dylib
   FRAMEWORKS_JSON="["
+  # Ship only the major-version names (libggml-base.0.dylib …): the binary and the
+  # dylibs all load each other through @rpath/<name>.0.dylib. Listing the fully
+  # versioned file and the unversioned symlink too would copy each library 3x.
   for f in "$DYLIB_DIR"/*.dylib; do
     [ -f "$f" ] || continue
     bn=$(basename "$f")
+    [[ "$bn" =~ ^lib[A-Za-z0-9_-]+\.[0-9]+\.dylib$ ]] || continue
     FRAMEWORKS_JSON="$FRAMEWORKS_JSON\"./macos-dylibs/$bn\","
   done
   FRAMEWORKS_JSON="${FRAMEWORKS_JSON%,}]"

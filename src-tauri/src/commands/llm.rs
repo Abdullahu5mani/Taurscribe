@@ -1,16 +1,11 @@
-use crate::llm::{get_grammar_llm_dir, LLMEngine};
+use crate::llm::LLMEngine;
 use crate::state::AudioState;
 use tauri::State;
 
-const GGUF_FILENAME: &str = "model_q4_k_m.gguf";
-
-/// Returns true if the grammar LLM model file exists and can be loaded.
+/// Returns true if the FlowScribe model file exists and can be loaded.
 #[tauri::command]
 pub fn check_grammar_llm_available() -> bool {
-    match get_grammar_llm_dir() {
-        Ok(dir) => dir.join(GGUF_FILENAME).exists(),
-        Err(_) => false,
-    }
+    crate::llm::v3_model_path().is_some()
 }
 
 #[tauri::command]
@@ -81,7 +76,7 @@ pub fn check_llm_status(state: State<'_, AudioState>) -> bool {
     llm_guard.is_some()
 }
 
-/// Grammar correction: fix punctuation and grammar. Uses same prompt as format_transcript.
+/// Clean up a transcript with FlowScribe.
 #[tauri::command]
 pub async fn correct_text(
     state: State<'_, AudioState>,
@@ -97,13 +92,29 @@ pub async fn correct_text(
         text.len()
     );
     let llm_handle = state.llm.clone();
-    let style = style.clone(); // Clone for the closure
+    // v3 context: which recognizer produced the text, the clean-up level, the
+    // app being typed into (still frontmost at this point) and the dictionary.
+    let engine_tag = match *state.active_engine.lock().unwrap() {
+        crate::types::ASREngine::Whisper => "whisper",
+        crate::types::ASREngine::Granite => "granite",
+        crate::types::ASREngine::Qwen3 => "qwen3",
+    };
+    let request = crate::llm::FlowRequest {
+        engine: engine_tag.to_string(),
+        level: crate::llm::level_for_style(style.as_deref()).to_string(),
+        app: crate::context::active_app_category().to_string(),
+        vocab: crate::context::load_custom_vocabulary_from_settings().0,
+        prev: None,
+    };
 
     let output = tauri::async_runtime::spawn_blocking(move || {
         let mut llm_guard = llm_handle.lock().unwrap();
         if let Some(engine) = llm_guard.as_mut() {
-            println!("[LLM] Running grammar correction...");
-            match engine.format_transcript(&text, style.as_deref()) {
+            println!(
+                "[LLM] Cleaning transcript (engine={}, level={}, app={}, vocab={})",
+                request.engine, request.level, request.app, request.vocab.len()
+            );
+            match engine.clean_transcript(&text, &request) {
                 Ok(formatted) => {
                     println!("[LLM] Correction finished. Output length: {}", formatted.len());
                     Ok(formatted)
@@ -114,7 +125,7 @@ pub async fn correct_text(
                 }
             }
         } else {
-            Err("LLM not initialized. Place the grammar model (model_q4_k_m.gguf) in taurscribe-runtime/models/qwen_finetuned_gguf.".to_string())
+            Err("LLM not initialized. Download FlowScribe V3 from the Models tab.".to_string())
         }
     })
     .await

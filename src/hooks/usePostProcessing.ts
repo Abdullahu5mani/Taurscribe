@@ -30,7 +30,7 @@ export function usePostProcessing(
     const [muteBackgroundAudio, setMuteBackgroundAudioState] = useState(false);
     const [llmBackend, setLlmBackendState] = useState<"gpu" | "cpu">("gpu");
     const [asrBackend, setAsrBackendState] = useState<"gpu" | "cpu">("gpu");
-    const [transcriptionStyle, setTranscriptionStyleState] = useState("Casual");
+    const [transcriptionStyle, setTranscriptionStyleState] = useState("Clean");
 
     // Gate auto-load effects until settings are loaded from store,
     // so the LLM initialises with the correct backend from the start.
@@ -62,7 +62,8 @@ export function usePostProcessing(
             if (denoise != null) setEnableDenoiseState(denoise);
             if (overlay != null) setEnableOverlayState(overlay);
             if (muteBg != null) setMuteBackgroundAudioState(muteBg);
-            if (style != null) setTranscriptionStyleState(style);
+            // Older tone styles (Casual, Professional, ...) became the "Clean" level.
+            if (style != null) setTranscriptionStyleState(["Verbatim", "Clean", "Formatted"].includes(style) ? style : "Clean");
             if (backend != null) setLlmBackendState(backend);
             if (asrBe != null) setAsrBackendState(asrBe);
 
@@ -153,7 +154,7 @@ export function usePostProcessing(
                 if (!available) {
                     setLlmStatus("Not Downloaded");
                     setEnableGrammarLM(false);
-                    setHeaderStatus("Grammar LLM not downloaded. Open Settings > Models to download FlowScribe Qwen.", 8000);
+                    setHeaderStatus("FlowScribe is not downloaded. Open Settings > Models to download FlowScribe V3.", 8000);
                     onOpenSettings?.();
                     return;
                 }
@@ -168,7 +169,7 @@ export function usePostProcessing(
                 });
             }).catch(() => {
                 setLlmStatus("Not Downloaded");
-                setHeaderStatus("Grammar LLM not downloaded. Open Settings > Models to download FlowScribe Qwen.", 8000);
+                setHeaderStatus("FlowScribe is not downloaded. Open Settings > Models to download FlowScribe V3.", 8000);
                 onOpenSettings?.();
             });
         } else if (!enableGrammarLM) {

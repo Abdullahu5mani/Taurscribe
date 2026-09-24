@@ -1,5 +1,7 @@
-//! LLM engine for transcript grammar correction.
-//! Loads FlowScribe Qwen 2.5 0.5B (GGUF Q4_K_M) from %LOCALAPPDATA%\Taurscribe\models\qwen_finetuned_gguf.
+//! LLM engine for transcript clean-up (FlowScribe).
+//!
+//! FlowScribe v3 (Qwen3.5-0.8B, F16, models/flowscribe_v3) takes tags for the
+//! speech engine, clean-up level, target app and the user's dictionary.
 //! n_gpu_layers=0 forces CPU; change to -1 or layer count for GPU.
 
 use anyhow::{Error, Result};
@@ -12,25 +14,263 @@ use llama_cpp_2::token::LlamaToken;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, OnceLock};
 
-const GGUF_FILENAME: &str = "model_q4_k_m.gguf";
+pub const V3_DIR: &str = "flowscribe_v3";
+pub const V3_FILENAME: &str = "flowscribe-v3-f16.gguf";
+
+/// Must match the system prompt used in training (scripts/flowscribe_train/prepare_data.py).
+const V3_SYSTEM: &str = "You are FlowScribe. Rewrite the dictation in <text> as the speaker meant it, following the tags. Output only the result.";
+
+/// What v3 needs to know besides the transcript.
+#[derive(Debug, Clone)]
+pub struct FlowRequest {
+    /// "whisper" | "granite" | "qwen3"
+    pub engine: String,
+    /// "verbatim" | "clean" | "formatted"
+    pub level: String,
+    /// App category, see `context::app_category_for`.
+    pub app: String,
+    pub vocab: Vec<String>,
+    /// Text already in the document right before this dictation, if known.
+    pub prev: Option<String>,
+}
+
+/// Maps the saved style setting onto a v3 clean-up level. Older tone styles
+/// (Casual, Professional, ...) map to "clean".
+pub fn level_for_style(style: Option<&str>) -> &'static str {
+    match style.map(|s| s.to_ascii_lowercase()) {
+        Some(s) if s == "verbatim" => "verbatim",
+        Some(s) if s == "formatted" => "formatted",
+        _ => "clean",
+    }
+}
+
+pub fn v3_model_path() -> Option<std::path::PathBuf> {
+    // Dev/test override: FLOWSCRIBE_V3_GGUF=/path/to/model.gguf
+    if let Ok(p) = std::env::var("FLOWSCRIBE_V3_GGUF") {
+        let p = std::path::PathBuf::from(p);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let path = crate::utils::get_models_dir().ok()?.join(V3_DIR).join(V3_FILENAME);
+    path.exists().then_some(path)
+}
+
+/// True when the tail of `tokens` is one short sequence repeated 4+ times
+/// (small models under greedy decoding can fall into "I, I, I, ..." loops).
+fn is_looping(tokens: &[LlamaToken]) -> bool {
+    (1..=8).any(|n| {
+        let reps = 4;
+        tokens.len() >= n * reps && {
+            let tail = &tokens[tokens.len() - n * reps..];
+            tail.chunks(n).all(|c| c == &tail[..n])
+        }
+    })
+}
+
+/// Output far longer than the input, or a word sequence repeated 4+ times in
+/// a row, means the generation went wrong.
+pub fn output_looks_broken(output: &str, input: &str) -> bool {
+    if output.len() > input.len() * 8 / 5 + 40 {
+        return true;
+    }
+    let words: Vec<&str> = output.split_whitespace().collect();
+    (1..=6).any(|n| {
+        words.len() >= 4 * n
+            && (0..=words.len() - 4 * n).any(|i| (1..4).all(|k| words[i + k * n..i + (k + 1) * n] == words[i..i + n]))
+    })
+}
+
+// ── Number guard ─────────────────────────────────────────────────────────────
+// Every number FlowScribe writes must be traceable to what was said: digits in
+// the transcript, a spoken number ("two thousand three hundred and forty five"),
+// a time ("three thirty" -> 3, 30) or a year/code ("twenty twenty five" ->
+// 2025). A 0.8B model occasionally rewrites 25% as 20% or $2,345.60 as $2,300;
+// pasting the transcript is safer than a wrong amount.
+
+fn number_word(w: &str) -> Option<(u64, bool)> {
+    // (value, is_tens)
+    const UNITS: [&str; 20] = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+    const ORD_UNITS: [&str; 20] = ["zeroth", "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth",
+        "ninth", "tenth", "eleventh", "twelfth", "thirteenth", "fourteenth", "fifteenth", "sixteenth", "seventeenth",
+        "eighteenth", "nineteenth"];
+    const TENS: [&str; 8] = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+    const ORD_TENS: [&str; 8] = ["twentieth", "thirtieth", "fortieth", "fiftieth", "sixtieth", "seventieth", "eightieth", "ninetieth"];
+    if let Some(i) = UNITS.iter().position(|u| *u == w).or_else(|| ORD_UNITS.iter().position(|u| *u == w)) {
+        return Some((i as u64, false));
+    }
+    TENS.iter().position(|t| *t == w).or_else(|| ORD_TENS.iter().position(|t| *t == w)).map(|i| (20 + 10 * i as u64, true))
+}
+
+fn scale_word(w: &str) -> Option<u64> {
+    match w {
+        "hundred" => Some(100),
+        "thousand" => Some(1_000),
+        "million" => Some(1_000_000),
+        "billion" => Some(1_000_000_000),
+        _ => None,
+    }
+}
+
+/// Numbers in `text` in order: digit groups as written ("$5,000" -> 5000,
+/// "2,345.60" -> 2345, 60) and number phrases by their standard reading.
+fn ordered_numbers(text: &str) -> Vec<u64> {
+    let lower = text.to_lowercase().replace('-', " ");
+    let mut tokens: Vec<String> = Vec::new();
+    let mut chars = lower.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() {
+            let mut t = String::new();
+            while let Some(&d) = chars.peek() {
+                if d.is_ascii_digit() || d == ',' || d == '.' {
+                    t.push(d);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            tokens.push(t.trim_end_matches([',', '.']).to_string());
+        } else if c.is_ascii_alphabetic() {
+            let mut t = String::new();
+            while let Some(&d) = chars.peek() {
+                if d.is_ascii_alphabetic() {
+                    t.push(d);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            tokens.push(t);
+        } else {
+            chars.next();
+        }
+    }
+
+    let mut values = Vec::new();
+    let (mut cur, mut total, mut active) = (0u64, 0u64, false);
+    let mut last_tens = false;
+    let mut last_scale = false;
+    let flush = |values: &mut Vec<u64>, cur: &mut u64, total: &mut u64, active: &mut bool| {
+        if *active {
+            values.push(*total + *cur);
+        }
+        *cur = 0;
+        *total = 0;
+        *active = false;
+    };
+    for (i, w) in tokens.iter().enumerate() {
+        let next = tokens.get(i + 1).map(String::as_str).unwrap_or("");
+        if w.starts_with(|c: char| c.is_ascii_digit()) {
+            flush(&mut values, &mut cur, &mut total, &mut active);
+            let cleaned = w.replace(',', "");
+            let (int_part, frac) = cleaned.split_once('.').unwrap_or((&cleaned, ""));
+            if let Ok(v) = int_part.parse() {
+                values.push(v);
+            }
+            if let Ok(v) = frac.parse() {
+                values.push(v);
+            }
+            last_tens = false;
+            last_scale = false;
+            continue;
+        }
+        if w == "a" && !active && scale_word(next).is_some() {
+            cur = 1;
+            active = true;
+            last_tens = false;
+            last_scale = false;
+            continue;
+        }
+        if w == "and" && active && number_word(next).is_some() {
+            continue;
+        }
+        if let (Some(s), true) = (scale_word(w), active) {
+            if s == 100 {
+                cur = cur.max(1) * 100;
+            } else {
+                total += cur.max(1) * s;
+                cur = 0;
+            }
+            last_scale = true;
+            last_tens = false;
+            continue;
+        }
+        let Some((val, is_tens)) = number_word(w) else {
+            flush(&mut values, &mut cur, &mut total, &mut active);
+            last_tens = false;
+            last_scale = false;
+            continue;
+        };
+        let continues = active && ((!is_tens && val < 10 && last_tens) || last_scale);
+        if !continues {
+            flush(&mut values, &mut cur, &mut total, &mut active);
+            active = true;
+        }
+        cur += val;
+        last_tens = is_tens;
+        last_scale = false;
+    }
+    flush(&mut values, &mut cur, &mut total, &mut active);
+    values
+}
+
+fn allowed_numbers(input: &str) -> std::collections::HashSet<String> {
+    let seq: Vec<String> = ordered_numbers(input).iter().map(u64::to_string).collect();
+    let mut allowed: std::collections::HashSet<String> = seq.iter().cloned().collect();
+    allowed.insert("0".into()); // "4:00" from "four"
+    for n in 2..=4 {
+        for w in seq.windows(n) {
+            allowed.insert(w.concat()); // years, codes, times written as one number
+        }
+    }
+    allowed
+}
+
+/// True when every number in `output` can be traced to `input`.
+pub fn numbers_supported(output: &str, input: &str) -> bool {
+    let allowed = allowed_numbers(input);
+    let mut rest = output;
+    while let Some(start) = rest.find(|c: char| c.is_ascii_digit()) {
+        let tail = &rest[start..];
+        let end = tail.find(|c: char| !(c.is_ascii_digit() || c == ',' || c == '.')).unwrap_or(tail.len());
+        let token = tail[..end].trim_end_matches([',', '.']).replace(',', "");
+        rest = &tail[end.max(1)..];
+        let (int_part, frac) = token.split_once('.').unwrap_or((&token, ""));
+        let int_norm = int_part.trim_start_matches('0');
+        let int_norm = if int_norm.is_empty() { "0" } else { int_norm };
+        if !allowed.contains(int_norm) {
+            return false;
+        }
+        if !frac.is_empty() && !allowed.contains(frac) && !allowed.contains(frac.trim_start_matches('0')) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Builds the v3 prompt exactly as the training data renders it (Qwen3.5 chat
+/// template with an empty think block).
+pub fn build_v3_prompt(text: &str, req: &FlowRequest) -> String {
+    let clean = |s: &str| s.replace(['<', '>'], "").replace('\n', " ");
+    let mut tags = format!("<engine={}> <level={}> <app={}>", req.engine, req.level, req.app);
+    let vocab: Vec<String> = req.vocab.iter().map(|v| clean(v)).filter(|v| !v.trim().is_empty()).take(40).collect();
+    if !vocab.is_empty() {
+        tags.push_str(&format!(" <vocab={}>", vocab.join("; ")));
+    }
+    let mut user = tags;
+    if let Some(prev) = req.prev.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        user.push_str(&format!("\n<prev>{}</prev>", clean(prev)));
+    }
+    user.push_str(&format!("\n<text>{}</text>", text.trim()));
+    format!(
+        "<|im_start|>system\n{V3_SYSTEM}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    )
+}
 const GRAMMAR_CONTEXT_TOKENS: u32 = 2048;
 
 /// Global backend instance (initialized once)
 static BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
-
-/// Grammar LLM model path: GRAMMAR_LLM_DIR env override, or AppData default.
-pub fn get_grammar_llm_dir() -> Result<std::path::PathBuf, String> {
-    // 1. Explicit path from env override
-    if let Ok(dir) = std::env::var("GRAMMAR_LLM_DIR") {
-        let path = std::path::PathBuf::from(&dir);
-        if path.join(GGUF_FILENAME).exists() {
-            return Ok(path);
-        }
-    }
-    // 2. AppData/Taurscribe/models/qwen_finetuned_gguf
-    let models_dir = crate::utils::get_models_dir()?;
-    Ok(models_dir.join("qwen_finetuned_gguf"))
-}
 
 // Internal structure that holds model and context together
 struct ModelContext {
@@ -50,20 +290,14 @@ pub struct LLMEngine {
 }
 
 impl LLMEngine {
-    /// Create LLM from taurscribe-runtime/models/qwen_finetuned_gguf (or AppData fallback).
+    /// Load FlowScribe v3 from models/flowscribe_v3.
     /// Uses CUDA when available (via llama-cpp-2 features) and use_gpu is true.
     pub fn new(use_gpu: bool) -> Result<Self> {
-        let base_path = get_grammar_llm_dir().map_err(Error::msg)?;
-        let model_path = base_path.join(GGUF_FILENAME);
+        let model_path = v3_model_path().ok_or_else(|| {
+            Error::msg("FlowScribe model not found. Download FlowScribe V3 from the Models tab.")
+        })?;
 
-        if !model_path.exists() {
-            return Err(Error::msg(format!(
-                "Grammar LLM model not found. Expected at: {:?}\nDownload FlowScribe Qwen 2.5 0.5B via the Downloads tab.",
-                model_path
-            )));
-        }
-
-        println!("[LLM] Loading grammar model from: {:?}", model_path);
+        println!("[LLM] Loading FlowScribe v3 from: {:?}", model_path);
 
         // Initialize backend (once, shared across instances)
         let backend = BACKEND.get_or_init(|| {
@@ -196,11 +430,15 @@ impl LLMEngine {
         }
 
         // Create sampler chain: temperature -> top_p -> greedy
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(temperature as f32),
-            LlamaSampler::top_p(0.95, 1),
-            LlamaSampler::greedy(),
-        ]);
+        let mut sampler = if temperature <= 0.0 {
+            LlamaSampler::greedy()
+        } else {
+            LlamaSampler::chain_simple([
+                LlamaSampler::temp(temperature as f32),
+                LlamaSampler::top_p(0.95, 1),
+                LlamaSampler::greedy(),
+            ])
+        };
 
         // UTF-8 decoder for token_to_piece
         let mut decoder = encoding_rs::UTF_8.new_decoder();
@@ -240,6 +478,10 @@ impl LLMEngine {
         // Decode loop: generate one token at a time
         let gen_start = std::time::Instant::now();
         for i in 0..max_gen_tokens {
+            if is_looping(&generated_tokens) {
+                println!(" [stopped: repetition loop at token {}]", i);
+                break;
+            }
             if next_token == self.eos_token_id
                 || next_token == self.eos_im_end_id
                 || mc.model.is_eog_token(next_token)
@@ -310,37 +552,89 @@ impl LLMEngine {
         self.run_with_options(prompt, 512, 0.7)
     }
 
-    /// Format transcript for grammar correction. Uses ChatML-style prompt so the model
-    /// acts only as a copy editor (no chat, no greeting, no continuation).
-    /// Format transcript with a specific style.
-    pub fn format_transcript(&mut self, text: &str, style: Option<&str>) -> Result<String> {
+    /// Clean up a transcript with the tagged prompt from `req`.
+    pub fn clean_transcript(&mut self, text: &str, req: &FlowRequest) -> Result<String> {
         let text = text.trim();
         if text.is_empty() {
             return Ok(String::new());
         }
+        let prompt = build_v3_prompt(text, req);
+        // Output is close to the input's length (~4 chars per token); formatted
+        // email adds a few line breaks.
+        let max_tokens = text.len() / 3 + 48;
+        let output = self.run_with_options(&prompt, max_tokens, 0.0)?;
+        if output_looks_broken(&output, text) {
+            // Never paste a runaway generation; the plain transcript is safer.
+            println!("[LLM] v3 output rejected (loop or too long): {:?}; using the transcript as-is", output.chars().take(120).collect::<String>());
+            return Ok(text.to_string());
+        }
+        if !numbers_supported(&output, text) {
+            println!("[LLM] v3 output rejected (a number not in the transcript): {output:?}; using the transcript as-is");
+            return Ok(text.to_string());
+        }
+        Ok(output)
+    }
+}
 
-        // Use selected style or default to 'Verbatim'
-        let style_name = style.unwrap_or("Verbatim");
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // Qwen2.5 ChatML: strict copy-editor persona
-        let prompt = format!(
-            r#"<|im_start|>system
-You are a copy editor. Fix ONLY grammar, punctuation, and capitalization.
-Rules:
-- NEVER remove, add, or rephrase words
-- NEVER change the meaning or structure of the sentence
-- NEVER shorten or summarize
-- Keep every word the user said
-- Style: {}<|im_end|>
-<|im_start|>user
-{}<|im_end|>
-<|im_start|>assistant
-"#,
-            style_name, text
-        );
-        // Correction output is usually close to input length, but we give it room to breathe.
-        let max_tokens = (text.len() / 2) + 128;
-        let temperature = 0.3; // more deterministic, model tends to EOS sooner
-        self.run_with_options(&prompt, max_tokens, temperature)
+    /// Rendered by Qwen3.5's own chat template (enable_thinking=False) from the
+    /// training code's make_prompt; the app must send exactly this.
+    #[test]
+    fn v3_prompt_matches_training_template() {
+        let req = FlowRequest {
+            engine: "granite".into(),
+            level: "formatted".into(),
+            app: "email".into(),
+            vocab: vec!["Tauri".into(), "Jane".into()],
+            prev: Some("Hi team.".into()),
+        };
+        let expected = "<|im_start|>system\nYou are FlowScribe. Rewrite the dictation in <text> as the speaker meant it, following the tags. Output only the result.<|im_end|>\n<|im_start|>user\n<engine=granite> <level=formatted> <app=email> <vocab=Tauri; Jane>\n<prev>Hi team.</prev>\n<text>um lets ship the tory build friday</text><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+        assert_eq!(build_v3_prompt("um lets ship the tory build friday", &req), expected);
+    }
+
+    #[test]
+    fn broken_outputs_are_detected() {
+        assert!(output_looks_broken("Um, I, I, I, I, I, I", "um i think"));
+        assert!(output_looks_broken("the car is making a car is making a car is making a car is making a", "the car is making a noise"));
+        assert!(!output_looks_broken("Send the invoice to finance.", "um send the the invoice to finance"));
+        assert!(!output_looks_broken("I I think so.", "i i think so"));
+        let t = |v: &[i32]| v.iter().map(|&x| LlamaToken::new(x)).collect::<Vec<_>>();
+        assert!(is_looping(&t(&[5, 9, 9, 9, 9])));
+        assert!(is_looping(&t(&[1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3])));
+        assert!(!is_looping(&t(&[1, 2, 3, 4, 5, 6])));
+    }
+
+    #[test]
+    fn number_guard_matches_prototype() {
+        let cases = [
+            ("25% reduction", "twenty five percent reduction", true),
+            ("20% reduction", "twenty five percent reduction", false),
+            ("$2,345.60 by the 28th", "two thousand three hundred and forty five dollars and sixty cents by the twenty eighth", true),
+            ("$2,300 by the 28th", "two thousand three hundred and forty five dollars and sixty cents by the twenty eighth", false),
+            ("October 2025", "october twenty twenty five", true),
+            ("October 2020", "october twenty twenty five", false),
+            ("at 3:30", "at three thirty", true),
+            ("api-7f92b", "api dash seven f nine two b", true),
+            ("5-minute warm-up, 3 sets of 12", "five minute warm up three sets of twelve", true),
+            ("1,500 dollars", "fifteen hundred dollars", true),
+            ("a 100 people", "a hundred people", true),
+            ("from $5,000 to $7,000", "from $5,000 to $7,000", true),
+            ("Friday at 4:00", "friday at four", true),
+            ("Send the invoice to finance.", "um send the invoice to finance", true),
+        ];
+        for (out, inp, want) in cases {
+            assert_eq!(numbers_supported(out, inp), want, "{out} <- {inp}");
+        }
+    }
+
+    #[test]
+    fn legacy_styles_map_to_clean() {
+        assert_eq!(level_for_style(Some("Verbatim")), "verbatim");
+        assert_eq!(level_for_style(Some("Formatted")), "formatted");
+        assert_eq!(level_for_style(Some("Casual")), "clean");
+        assert_eq!(level_for_style(None), "clean");
     }
 }
