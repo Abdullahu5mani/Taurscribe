@@ -45,6 +45,7 @@ function installFakeTauri() {
 
 
 const OverlayGallery = lazy(() => import("./OverlayGallery"));
+const OverlaySequence = lazy(() => import("./OverlayGallery").then((m) => ({ default: m.OverlaySequence })));
 const DemoApp = lazy(() => import("./demoBackend").then(({ installDemoBackend }) => {
   installDemoBackend();
   return import("../App");
@@ -55,6 +56,7 @@ export function Preview({ view }: { view: string }) {
   if (view === "app") return <Suspense fallback={null}><DemoApp /></Suspense>;
   installFakeTauri();
   const noop = () => {};
+  if (view === "overlay/sequence") return <Suspense fallback={null}><OverlaySequence /></Suspense>;
   if (view === "overlay") return <Suspense fallback={null}><OverlayGallery /></Suspense>;
   if (view === "wizard") {
     return (

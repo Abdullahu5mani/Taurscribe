@@ -1,245 +1,139 @@
-<!--
-Logo and tagline section
--->
 <div align="center">
-  <img src="public/logos/taurscribe-logo.svg" width="120" alt="Taurscribe Logo" />
+  <img src="public/logos/taurscribe-logo.svg" width="96" alt="Taurscribe logo" />
   <h1>Taurscribe</h1>
-  <strong>Local speech-to-text that respects your privacy</strong>
-
-<br/>
-
-**Private • Offline • GPU-Accelerated • Instant**
-
-![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)
-![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)
-![Tauri](https://img.shields.io/badge/Tauri-24C8D5?style=for-the-badge&logo=tauri&logoColor=white)
-
+  <p>Dictation and meeting notes that run entirely on your own computer.</p>
 </div>
 
----
+<p align="center">
+  <img src="assets/readme/dictation.gif" width="720" alt="Recording a dictation in Taurscribe: press record, speak, and the cleaned-up text appears at the top of the feed" />
+</p>
+
+Hold a hotkey, talk, let go. Taurscribe transcribes what you said, cleans it up, and pastes it into whatever app you're typing in. It can also record your calls in Zoom, Meet, Teams and the rest, and gives you a transcript split by speaker.
+
+Nothing is sent anywhere. The speech models run on your machine, so it works offline, on a plane, or on a laptop with no account at all. The only time it touches the network is when you download a model.
+
+It runs on macOS, Windows and Linux, and uses your GPU when it can (Metal on Macs, CUDA or Vulkan elsewhere).
+
+## Dictation
+
+Press **Ctrl + Option** on a Mac (**Ctrl + Win** on Windows and Linux) in any app and start talking. A small pill shows up at the bottom of the screen while you speak, then the text lands where your cursor is.
 
 <p align="center">
-  <img src="assets/screenshots/UI.png" width="85%" alt="Taurscribe Interface" />
-  <br/>
-  <i>Clean, focused interface. Status and settings at a glance.</i>
+  <img src="assets/readme/overlay.gif" width="360" alt="The recording overlay: live waveform and timer, then Transcribing, then Pasted" />
+</p>
+
+Every dictation also goes into the feed in the main window, so you can copy it again later. You pick the speech engine and model in the bottom bar, and the model unloads itself after a while if you don't use it, so it isn't holding onto memory all day.
+
+## FlowScribe: cleanup that knows what you meant
+
+Speech recognizers write down exactly what you said, "um"s and restarts included. FlowScribe is a small language model I trained to turn that into what you meant to write:
+
+```
+you said:   um lets meet at three no wait four in the tory channel
+you get:    Let's meet at 4 in the Tauri channel.
+```
+
+It drops fillers and false starts, takes your corrections ("three, no wait, four"), writes numbers, dates, emails and file paths properly, and turns "comma" or "new paragraph" into punctuation. It knows which app you're typing into, so an email comes out formatted like an email and a terminal command stays a command. Words from your dictionary get spelled your way even when the recognizer mishears them.
+
+It never rewrites your tone or adds anything. If its output ever contains a number that wasn't in what you said, or it starts repeating itself, Taurscribe throws it away and pastes the plain transcript instead.
+
+You can choose how much it changes: **Verbatim** (punctuation and casing only), **Clean** (the default), or **Formatted**.
+
+FlowScribe V3 is a fine-tune of Qwen3.5 0.8B and is still in beta. The weights and training details are on [Hugging Face](https://huggingface.co/Abdullahu5mani/flowscribe-qwen3.5-0.8b-v3), and the data generation and training scripts are in [`scripts/flowscribe_data`](scripts/flowscribe_data) and [`scripts/flowscribe_train`](scripts/flowscribe_train).
+
+<p align="center">
+  <img src="assets/readme/settings-grammar.png" width="640" alt="Writing settings with FlowScribe V3 loaded and the Verbatim, Clean and Formatted styles" />
+</p>
+
+## Meetings
+
+When a call starts, Taurscribe notices, whether it's in the Zoom, Teams or Slack desktop app or in a browser tab. You get a banner offering to record, or you can have it record on its own. No bot joins your call.
+
+It records your microphone and the call audio as two separate channels, so it always knows which lines are yours. The other side gets split by speaker. Name someone once and they're recognized by voice in later calls.
+
+<p align="center">
+  <img src="assets/readme/meetings.png" width="720" alt="The Meetings tab: a list of recorded calls and a transcript split into You, Priya and Marcus" />
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/live-transcription.png" width="85%" alt="Live Transcription" />
-  <br/>
-  <i>Real-time streaming with instant visual feedback and live output.</i>
+  <img src="assets/readme/vault.png" width="560" alt="The Speaker Vault listing people Taurscribe recognizes across calls" />
 </p>
+
+Transcripts can be searched, copied, or exported as Markdown. If you use Claude, ChatGPT or Cursor, you can let them search your transcripts through MCP. It's read-only and off until you turn it on.
+
+## Models
+
+You download only the models you want, from the Models tab. Every download is checked against a pinned SHA-256 before it's used.
+
+| Model | Size | Languages | Notes |
+|---|---|---|---|
+| **Granite Speech 5** (IBM) | 948 MB | English | Fast and accurate for dictation. Non-commercial license (CC BY-NC-SA 4.0). |
+| **Qwen3-ASR** 0.6B / 1.7B | 1.6 / 4.1 GB | Multilingual | Newer and still marked experimental. |
+| **Whisper** (OpenAI) | 31 MB – 2.9 GB | 99 languages | Runs on anything. On Apple Silicon it uses the Neural Engine for the encoder. |
+| **FlowScribe V3** | 1.5 GB | English | The cleanup model above. Optional. |
+| Speaker models | 28 MB + 199 MB | Any | Voiceprints (CAM++) and speaker separation (Nemotron 3) for meetings. |
+
+Granite and Qwen3-ASR run through [transcribe.cpp](https://github.com/LegendarySpy/transcribe.cpp), Whisper through [whisper.cpp](https://github.com/ggerganov/whisper.cpp), and FlowScribe through [llama.cpp](https://github.com/ggml-org/llama.cpp). They're all unquantized, except the Whisper sizes you choose to download quantized.
 
 <p align="center">
-  <img src="assets/screenshots/Settings.png" width="85%" alt="Settings" />
-  <br/>
-  <i>Model management, hotkeys, and post-processing — all in one place.</i>
+  <img src="assets/readme/settings-models.png" width="640" alt="The Models tab with Granite Speech 5 and Qwen3-ASR" />
 </p>
 
----
+## The rest of it
 
-## What is Taurscribe?
+<p align="center">
+  <img src="assets/readme/modes.gif" width="560" alt="Switching between the Mic, Meetings and Files tabs" />
+</p>
 
-Taurscribe is a desktop application for local, offline speech-to-text transcription. Unlike cloud-based solutions, everything runs on your machine — your audio never leaves your computer.
+- **Files.** Drop in audio or video files (WAV, MP3, M4A, FLAC, OGG and more) and get transcripts back.
+- **Dictionary and snippets.** Add names and jargon so they're spelled right, or set up text that expands from a short phrase.
+- **Storage.** Keep models and recordings on an external drive if your main disk is small. There's a speed test that tells you how much slower model loading will be from that drive.
+- **Menu bar / tray icon.** It shows what Taurscribe is doing (recording, processing, a detected call) and has quick actions. You can hide it if you don't want it.
+- **Startup.** Launch at login and start hidden, so the hotkey is ready without a window in your way.
 
-Built on Tauri (Rust + React), Taurscribe gives you the speed and accuracy of cloud services with the privacy and control of local software. Choose your transcription engine, enable post-processing, and get publication-ready text instantly.
+<p align="center">
+  <img src="assets/readme/settings-storage.png" width="49%" alt="Storage settings with Models and Recordings folders and a speed test" />
+  <img src="assets/readme/settings-app.png" width="49%" alt="General settings: launch at login, start hidden, show menu bar icon" />
+</p>
 
-* **Local-first** — No cloud APIs, no tracking, no surprises
-* **Three engines** — Whisper (accuracy), Parakeet (speed), Cohere (alternative)
-* **Smart post-processing** — AI-powered grammar correction and spell-checking
-* **Cross-platform** — Windows, macOS, Linux
-* **GPU-accelerated** — Automatic hardware detection (NVIDIA CUDA, Apple Metal, AMD Vulkan)
+## Install
 
----
+Installers for macOS (Apple Silicon and Intel, macOS 14 or later), Windows (x64 and ARM64) and Linux (x64 `.deb` and tarball) are built on every push. You can get them from the latest [Build & Test run](https://github.com/Abdullahu5mani/Taurscribe/actions/workflows/build.yml). The [v0.1.0 release](https://github.com/Abdullahu5mani/Taurscribe/releases) predates the current engines, and a new release is coming.
 
-## Features
+The first time you open it, a short setup checks your hardware, recommends a model, and walks you through the permissions it needs (microphone, and on macOS accessibility so it can paste).
 
-### Transcription
+<p align="center">
+  <img src="assets/readme/wizard-welcome.png" width="560" alt="The first-run setup screen" />
+</p>
 
-| Feature | Details |
-|---------|---------|
-| **Multiple engines** | Switch engines on-the-fly; mutually exclusive to save VRAM |
-| **Real-time streaming** | Parakeet delivers sub-500ms latency; see words appear as you speak |
-| **Batch processing** | Drag audio/video files into the app for high-accuracy offline transcription |
-| **Global hotkey** | Press Ctrl+Win anywhere to record, even behind other windows |
-| **File support** | All common audio and video codecs |
+## Building from source
 
-### Text quality
-
-| Feature | Details |
-|---------|---------|
-| **Grammar & tone correction** | FlowScribe LLM v2 — 0.5B parameters, runs in <100ms on CPU |
-| **Tone styles** | Casual, Verbatim, Enthusiastic, Software Dev, Professional |
-| **Spell checking** | SymSpell dictionary with custom word-list support |
-| **Personalization** | User dictionary for consistent technical term transcription |
-
-### Control & integration
-
-| Feature | Details |
-|---------|---------|
-| **First-run wizard** | Hardware detection and engine onboarding |
-| **Quick settings** | One-click toggles for quality, tone, and spell-check |
-| **System tray** | Minimal background presence with LED status signaling |
-| **Model management** | Download, verify, and switch models without restarting |
-
----
-
-## FlowScribe LLM v2: Local text refinement
-
-Raw ASR output is often rough. [FlowScribe v2](https://huggingface.co/Abdullahu5mani/flowscribe-qwen2.5-0.5b-v2) is a fine-tuned, locally-hosted language model that runs in under 100ms:
-
-```
-Raw:       "im going to the coffee shop tomorrow at two"
-Refined:   "I'm going to the coffee shop tomorrow at 2 PM."
-```
-
-Handles punctuation, capitalization, contractions, tone adaptation, and technical term consistency — no cloud round-trip, no latency penalty.
-
----
-
-## Architecture
-
-### Two transcription strategies
-
-**Whisper — Buffered accuracy-first**
-
-Accumulates ~6 seconds of audio with voice activity detection, then sends to the encoder when speech is detected.
-
-```
-Microphone (16kHz mono)
-  ▼
-Ring Buffer (6s accumulation)
-  ▼
-Voice Activity Detector
-  ├─ Silence → wait
-  └─ Speech → send to encoder
-  ▼
-Whisper Encoder → Output
-```
-
-**Parakeet — Lock-free streaming**
-
-Uses a non-blocking ring buffer for sub-500ms latency. The inference process chases the write pointer, producing output continuously.
-
-```
-Microphone (48kHz stereo)
-  ▼
-Resampler (16kHz mono)
-  ▼
-Lock-Free Ring Buffer (write → read)
-  ▼
-Parakeet Engine (continuous inference)
-  ▼
-CTC Decoding → Output stream
-```
-
-Whisper optimizes for accuracy — best for meetings, interviews, archival. Parakeet optimizes for responsiveness — best for real-time note-taking and live captions.
-
-### Transcription engines
-
-| Engine | Latency | Primary use | Format |
-|--------|---------|-------------|--------|
-| **Whisper** | 2–10s | High-accuracy transcription | GGUF |
-| **Parakeet** | <500ms | Real-time streaming | ONNX |
-| **Cohere** | Varies | Alternative backbone | ONNX |
-
-Engines are **mutually exclusive** — switching unloads the previous one to free VRAM.
-
----
-
-## Hardware acceleration
-
-| OS | Whisper | Parakeet/ORT | Grammar LLM |
-|----|---------|--------------|-------------|
-| Windows x64 | CUDA, Vulkan | CUDA, DirectML, TensorRT | CUDA |
-| macOS | Accelerate | XNNPACK | Metal |
-| Linux x64 | CUDA, Vulkan | CUDA, TensorRT | CUDA |
-| Windows ARM64 | CPU | DirectML, XNNPACK | CPU |
-
-NVIDIA GPUs try CUDA first, falling back to DirectML to avoid reshape failures.
-
----
-
-## Technical stack
-
-| Layer | Tools | Responsibility |
-|-------|-------|----------------|
-| **Frontend** | React, TypeScript | UI, model switching, transcription display |
-| **IPC** | Tauri, Serde | Frontend ↔ Backend messaging |
-| **Audio** | CPAL, RingBuf (Rust) | Microphone capture, multi-threaded pipeline |
-| **Inference** | whisper.rs, parakeet.rs, ORT | Model loading, GPU dispatch, streaming |
-| **Post-process** | llama-cpp-2, SymSpell | Grammar LLM, spell-check |
-| **Platform** | Native APIs | Hotkeys, tray, file dialogs, permissions |
-
-### Engineering highlights
-
-* **Zero-copy audio pipeline** — Rust ownership prevents leaks
-* **Lock-free ring buffer** — Sub-millisecond Parakeet latency from wait-free structures
-* **Custom VAD** — Energy-based voice activity detection, ~45% idle CPU reduction
-* **Dynamic backend selection** — CUDA → Vulkan → CPU routing
-* **Quantized LLM** — FlowScribe v2 at 0.5B parameters, <100ms inference
-* **SHA-256 model verification** — 8KB chunk-by-chunk integrity checks on every download
-
----
-
-## Getting started
-
-### System requirements
-
-* GPU optional but recommended (NVIDIA/AMD/Metal for <1s latency)
-* 4GB+ RAM per active engine
-* 2GB+ disk per model
-
-### Installation
-
-1. Download from [Releases](https://github.com/Abdullahu5mani/Taurscribe/releases)
-2. Run installer (Windows, macOS, or Linux)
-3. Launch — Setup Wizard guides hardware and engine selection
-4. Download a model (smallest: `ggml-tiny.bin` ~75MB)
-5. Test: Press **Ctrl+Win**
-
----
-
-## Development
+You need [Rust](https://rustup.rs), [Bun](https://bun.sh), CMake, and the usual platform build tools (Xcode command line tools on macOS, Visual Studio Build Tools on Windows). CUDA and the Vulkan SDK are only needed for GPU builds on Windows and Linux.
 
 ```bash
-# Install dependencies
-npm install
+bun install
+bun run tauri dev
+```
 
-# Start dev server with live reload
-npm run tauri dev
+For a packaged build:
 
-# Build for production
-npm run tauri build
+```bash
+bun run build:macos      # macOS .app and .dmg
+bun run build:windows    # Windows installer
+```
 
-# Quick Rust check (faster than full build)
-cd src-tauri && cargo check
+Tests:
 
-# Run test suite
+```bash
 cd src-tauri && cargo test
 ```
 
-See [TESTING.md](./TESTING.md) for integration tests and the LibriSpeech accuracy eval pipeline.
+The slower tests that load real models (a JFK clip through every engine, memory leak checks, LibriSpeech accuracy) are marked `#[ignore]`. [TESTING.md](TESTING.md) explains how to run them.
 
----
+If you're working on the interface, `bun run dev` and then opening `http://localhost:1420/#preview/app` shows the whole app in a normal browser with example data, no Rust build needed. That's also where the screenshots above come from.
 
-## Acknowledgments
+## Thanks
 
-Built with:
-* **whisper.rs** — ggerganov/whisper.cpp
-* **ONNX Runtime** — Microsoft
-* **llama.cpp** — ggerganov
-* **Tauri** — Desktop framework
-* **React 19** — UI framework
+Taurscribe stands on a lot of other people's work: [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [llama.cpp](https://github.com/ggml-org/llama.cpp), [transcribe.cpp](https://github.com/LegendarySpy/transcribe.cpp), IBM's Granite Speech, the Qwen team, NVIDIA's Nemotron diarization model, 3D-Speaker's CAM++, and [Tauri](https://tauri.app).
 
----
-
-## Support & contributions
-
-* Issues: [GitHub Issues](https://github.com/Abdullahu5mani/Taurscribe/issues)
-* Discussions: [GitHub Discussions](https://github.com/Abdullahu5mani/Taurscribe/discussions)
-
----
-
-**Taurscribe: Speech-to-text on your terms.**
+Bug reports and ideas are welcome in [Issues](https://github.com/Abdullahu5mani/Taurscribe/issues).

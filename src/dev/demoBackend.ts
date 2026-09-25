@@ -40,7 +40,7 @@ const turn = (speaker_id: string, speaker_name: string, start: number, end: numb
 
 const meetings = [
     {
-        id: 12, session_id: "demo-12", title: "Weekly product sync", platform: "google_meet", app_name: "Google Chrome",
+        id: 12, session_id: "demo-12", title: "Weekly product sync", platform: "meet", app_name: "Google Chrome",
         url: "https://meet.google.com/abc-defg-hij", created_at: at(3 * HOUR), duration_ms: 31 * 60_000, category: "work",
         summary: [
             "Launch moves to October 14 so the Windows installer can ship with it.",
@@ -71,7 +71,7 @@ const meetings = [
         ],
     },
     {
-        id: 10, session_id: "demo-10", title: "Standup", platform: "microsoft_teams", app_name: "Microsoft Teams",
+        id: 10, session_id: "demo-10", title: "Standup", platform: "teams", app_name: "Microsoft Teams",
         url: "", created_at: at(50 * HOUR), duration_ms: 9 * 60_000, category: "work",
         summary: ["Overlay bug on external monitors is fixed.", "Qwen3 model download is faster with the new mirror."],
         action_items: [],
@@ -97,7 +97,7 @@ const settings: Record<string, unknown> = {
     setup_complete: true,
     active_engine: "granite",
     granite_model: "granite-speech-5-nc",
-    enable_grammar_lm: false,
+    enable_grammar_lm: true,
     enable_overlay: true,
     transcription_style: "Clean",
 };
@@ -165,7 +165,7 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "get_platform": return "macos";
         case "is_apple_silicon": return true;
         case "get_system_info": return { cpu_name: "Apple M4", cpu_cores: 10, ram_total_gb: 16, gpu_name: "Apple M4", cuda_available: false, vram_gb: null, backend_hint: "Metal" };
-        case "check_microphone_permission":
+        case "check_microphone_permission": return "granted";
         case "check_accessibility_permission":
         case "check_input_monitoring_permission": return true;
         case "list_input_devices": return ["MacBook Air Microphone", "AirPods Pro"];
@@ -189,6 +189,13 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "get_current_model": return null;
         case "get_auto_unload_status": return { timeout_seconds: 1800, remaining_seconds: 1500, is_loaded: true, last_activity_epoch: Math.floor(now / 1000) };
         case "check_grammar_llm_available": return true;
+        case "init_llm": return "FlowScribe V3 (beta) ready";
+        case "check_llm_status": return true;
+        case "init_granite":
+        case "init_qwen3":
+        case "switch_model": return ok("Granite Speech 5 loaded");
+        case "unload_current_model": return ok(null);
+        case "type_text": return ok(null);
 
         // Recording
         case "start_recording": startLevels(); return ok("/tmp/demo.wav");
