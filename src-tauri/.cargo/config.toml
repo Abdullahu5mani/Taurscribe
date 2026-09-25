@@ -50,6 +50,10 @@ rustflags = ["-C", "link-arg=/FORCE:MULTIPLE", "-C", "link-arg=/ignore:4006"]
 
 [env]
 MACOSX_DEPLOYMENT_TARGET = "14.0"
+# llama.cpp (llama-cpp-sys-2 >= 0.1.157) links OpenSSL for HTTPS model downloads
+# when it finds one. The app never uses that, and a Homebrew OpenSSL would make the
+# shipped libllama-common depend on /opt/homebrew (crash on Macs without it).
+CMAKE_DISABLE_FIND_PACKAGE_OpenSSL = "TRUE"
 # Meeting playback (opus crate): always build the bundled libopus statically,
 # never a system copy that users would not have.
 LIBOPUS_NO_PKG = "1"

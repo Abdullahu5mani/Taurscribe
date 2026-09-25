@@ -173,7 +173,7 @@ jobs:
           echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
 
       - name: Install Vulkan SDK (Windows)
-        if: matrix.platform == 'windows-latest' && matrix.arch == 'x86_64'
+        if: contains(matrix.platform, 'windows') && matrix.arch == 'x86_64'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
@@ -326,6 +326,14 @@ jobs:
           find src-tauri/target -maxdepth 5 -path '*/release/*' ! -path '*/build/*' \
             \( -name 'libllama*' -o -name 'libggml*' \) -delete 2>/dev/null || true
 
+      - name: Remove stale library symlinks from the Rust cache
+        if: ${{ !contains(matrix.platform, 'windows') }}
+        shell: bash
+        run: |
+          # After a llama.cpp upgrade the cache can hold libggml*.0.dylib links whose
+          # targets are gone; llama-cpp-sys-2 then fails with "File exists".
+          find src-tauri/target -maxdepth 4 -type l ! -exec test -e {} \; -print -delete 2>/dev/null || true
+
       - name: Build Rust binary
         # On Windows, this is handled by build-windows.ts in the Bundle step
         if: matrix.os_name != 'Windows'
@@ -363,6 +371,8 @@ jobs:
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          # transcribe.cpp's CUDA objects must be -fPIC to link into the app (mold rejects them otherwise).
+          TRANSCRIBE_CMAKE_ARGS: ${{ contains(matrix.platform, 'ubuntu') && '-DCMAKE_POSITION_INDEPENDENT_CODE=ON' || '' }}
           # Match Bundle step env vars so cargo doesn't see a changed environment and recompile
           CI: "true"
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -471,6 +481,8 @@ jobs:
           VK_LAYER_PATH: ${{ env.VK_LAYER_PATH }}
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          # transcribe.cpp's CUDA objects must be -fPIC to link into the app (mold rejects them otherwise).
+          TRANSCRIBE_CMAKE_ARGS: ${{ contains(matrix.platform, 'ubuntu') && '-DCMAKE_POSITION_INDEPENDENT_CODE=ON' || '' }}
           APPIMAGE_EXTRACT_AND_RUN: "1"
 
       # Portable: zip the binary + DLLs from the already-built release directory.

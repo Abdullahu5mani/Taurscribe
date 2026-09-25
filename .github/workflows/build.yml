@@ -246,7 +246,7 @@ jobs:
       # Windows Dependencies (Critical)
       # 1. Vulkan SDK: Required for whisper-rs Vulkan backend on Windows
       - name: Install Vulkan SDK (Windows)
-        if: matrix.platform == 'windows-latest' && matrix.arch == 'x86_64'
+        if: contains(matrix.platform, 'windows') && matrix.arch == 'x86_64'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
@@ -451,6 +451,14 @@ jobs:
 
       # Build Rust binary first (with target flag)
       # On Windows, this is handled by build-windows.ts in the Bundle step
+      - name: Remove stale library symlinks from the Rust cache
+        if: ${{ !contains(matrix.platform, 'windows') }}
+        shell: bash
+        run: |
+          # After a llama.cpp upgrade the cache can hold libggml*.0.dylib links whose
+          # targets are gone; llama-cpp-sys-2 then fails with "File exists".
+          find src-tauri/target -maxdepth 4 -type l ! -exec test -e {} \; -print -delete 2>/dev/null || true
+
       - name: Build Rust binary
         if: matrix.os_name != 'Windows'
         run: |
@@ -505,6 +513,8 @@ jobs:
           # and add a -L flag via RUSTFLAGS so rustc's linker invocation finds libvulkan.so.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          # transcribe.cpp's CUDA objects must be -fPIC to link into the app (mold rejects them otherwise).
+          TRANSCRIBE_CMAKE_ARGS: ${{ contains(matrix.platform, 'ubuntu') && '-DCMAKE_POSITION_INDEPENDENT_CODE=ON' || '' }}
           # Match Bundle step env vars so cargo doesn't see a changed environment and recompile
           CI: "true"
           NO_STRIP: "true"
@@ -610,6 +620,8 @@ jobs:
           # Linux: ensure the Vulkan SDK lib dir is on the linker search path.
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
+          # transcribe.cpp's CUDA objects must be -fPIC to link into the app (mold rejects them otherwise).
+          TRANSCRIBE_CMAKE_ARGS: ${{ contains(matrix.platform, 'ubuntu') && '-DCMAKE_POSITION_INDEPENDENT_CODE=ON' || '' }}
           # Linux AppImage: linuxdeploy requires FUSE to self-mount, but CI runners lack it.
           # This flag makes it extract to a temp directory instead.
           APPIMAGE_EXTRACT_AND_RUN: "1"
