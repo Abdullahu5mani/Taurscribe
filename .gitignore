@@ -37,11 +37,15 @@ CODEBASE_GUIDE.md
 ARCHITECTURE.pdf
 COHERE_SPEECH.md
 ENGINES.md
+TAURSCRIBE_AUDIT_REPORT.md
+docs/AUDIT_REPORT.md
 Taurscribe Pure.html
 
 # Test audio fixtures (large binary, not for the repo)
 *.wav
 *.mp3
+# App sound effects ship with the app
+!src/assets/sounds/*.wav
 
 # Runtime dir: ignore everything except the README and sample audio
 # (exceptions must come after the *.wav rule to take effect)
@@ -96,3 +100,36 @@ CODEBASE_GUIDE.pdf
 __pycache__/
 *.pyc
 *.exe
+
+# FlowScribe training: model weights, checkpoints, adapters, eval outputs and
+# datasets (large; the model is published on Hugging Face instead)
+scripts/flowscribe_train/hf/
+scripts/flowscribe_train/fused/
+scripts/flowscribe_train/adapters/
+scripts/flowscribe_train/data/
+scripts/flowscribe_train/eval/
+scripts/flowscribe_train/*.gguf
+scripts/flowscribe_train/*.safetensors
+scripts/flowscribe_data/out/
+scripts/flowscribe_data/.env
+
+# Local test harness environments and generated reports
+.venv/
+scripts/harness/.venv/
+scripts/harness/reports/
+
+# Logo design explorations (the app only ships public/logos/taurscribe-logo.svg)
+public/logo-concepts/
+public/logos/abstract/
+public/logos/candidates/
+public/logos/concepts/
+
+# Harness screenshots and TypeScript build caches
+scripts/harness/screenshots/
+*.tsbuildinfo
+
+# Retired code, scripts and notes (kept locally, not in the repo)
+archive/
+
+# Harness helper binaries (built from the .swift sources next to them)
+scripts/harness/bin/
