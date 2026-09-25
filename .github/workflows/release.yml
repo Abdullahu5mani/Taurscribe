@@ -351,6 +351,9 @@ jobs:
           WHISPER_NO_AVX2: "0"
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
+          # llama.cpp 0.1.157 (iqp.cpp) uses FMA intrinsics; every AVX2 CPU has FMA and F16C.
+          GGML_FMA: "ON"
+          GGML_F16C: "ON"
           CMAKE_CUDA_ARCHITECTURES: "75;86;89"
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
@@ -393,6 +396,9 @@ jobs:
           WHISPER_NO_AVX2: "0"
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
+          # llama.cpp 0.1.157 (iqp.cpp) uses FMA intrinsics; every AVX2 CPU has FMA and F16C.
+          GGML_FMA: "ON"
+          GGML_F16C: "ON"
           MACOSX_DEPLOYMENT_TARGET: "14.0"
           CMAKE_OSX_DEPLOYMENT_TARGET: "14.0"
 
@@ -453,6 +459,9 @@ jobs:
           WHISPER_NO_AVX2: "0"
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
+          # llama.cpp 0.1.157 (iqp.cpp) uses FMA intrinsics; every AVX2 CPU has FMA and F16C.
+          GGML_FMA: "ON"
+          GGML_F16C: "ON"
           CMAKE_CUDA_ARCHITECTURES: "75;86;89"
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}

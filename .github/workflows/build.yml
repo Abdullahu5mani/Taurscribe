@@ -481,6 +481,9 @@ jobs:
           WHISPER_NO_AVX2: "0"
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
+          # llama.cpp 0.1.157 (iqp.cpp) uses FMA intrinsics; every AVX2 CPU has FMA and F16C.
+          GGML_FMA: "ON"
+          GGML_F16C: "ON"
 
           # Force CUDA architectures:
           # In CI (headless), cmake cannot auto-detect the GPU architecture.
@@ -585,6 +588,9 @@ jobs:
           WHISPER_NO_AVX2: "0"
           GGML_AVX: "ON"
           GGML_AVX2: "ON"
+          # llama.cpp 0.1.157 (iqp.cpp) uses FMA intrinsics; every AVX2 CPU has FMA and F16C.
+          GGML_FMA: "ON"
+          GGML_F16C: "ON"
           
           # Force CUDA architectures:
           # In CI (headless), cmake cannot auto-detect the GPU architecture.
