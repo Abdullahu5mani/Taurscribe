@@ -35,7 +35,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SRC_TAURI="$PROJECT_ROOT/src-tauri"
 TARGET_DIR="${CARGO_TARGET_DIR:-$SRC_TAURI/target}"
-TARGET_TRIPLE="${TAURI_BUILD_TARGET:-$(rustc -vV 2>/dev/null | grep 'host:' | cut -d' ' -f2)}"
+# Tauri passes the --target triple to beforeBundleCommand as TAURI_ENV_TARGET_TRIPLE;
+# without it a cross build (x86_64 on an arm64 Mac) would bundle the host's libraries.
+TARGET_TRIPLE="${TAURI_BUILD_TARGET:-${TAURI_ENV_TARGET_TRIPLE:-$(rustc -vV 2>/dev/null | grep 'host:' | cut -d' ' -f2)}}"
 
 # Default to host target if not set (e.g. when building for current machine)
 if [ -z "$TARGET_TRIPLE" ]; then
@@ -115,7 +117,10 @@ echo "bundle-macos-dylibs: Running dylibbundler with search flags: ${SEARCH_FLAG
 
 # -od: use @executable_path; -b: bundle (copy) deps; -x: binary; -d: output dir; -p: rpath prefix
 # -s: additional search path for dylibs that aren't in standard locations
-dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks" "${SEARCH_FLAGS[@]}" || true
+# dylibbundler asks interactively for any library it can't find and loops forever on
+# empty input (a CI job once hung until its timeout). Answer "quit" so it stops; the
+# fallback below then copies what it can and reports what is missing.
+yes quit | dylibbundler -od -b -x "$BINARY" -d "$DYLIB_DIR" -p "@executable_path/../Frameworks" "${SEARCH_FLAGS[@]}" || true
 
 # Fallback: if dylibbundler didn't copy (e.g. binary was already bundled on prior run), copy from LLAMA_LIB_DIR or Frameworks
 if ! ls "$DYLIB_DIR"/*.dylib 1>/dev/null 2>&1; then

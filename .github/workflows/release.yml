@@ -179,6 +179,19 @@ jobs:
           version: 1.4.309.0
           cache: true
 
+      # transcribe.cpp's Vulkan backend needs SPIRV-Headers (CMake package), which the
+      # minimal Vulkan SDK install above doesn't include. Same version as the SDK.
+      - name: Install SPIRV-Headers (Windows)
+        if: contains(matrix.platform, 'windows') && matrix.arch == 'x86_64'
+        shell: bash
+        run: |
+          src="$(cygpath -m "$RUNNER_TEMP")/SPIRV-Headers"
+          prefix="$(cygpath -m "$RUNNER_TEMP")/spirv-headers"
+          git clone --depth 1 --branch vulkan-sdk-1.4.309.0 https://github.com/KhronosGroup/SPIRV-Headers.git "$src"
+          cmake -S "$src" -B "$src/build" -DSPIRV_HEADERS_ENABLE_TESTS=OFF
+          cmake --install "$src/build" --prefix "$prefix"
+          echo "CMAKE_PREFIX_PATH=$prefix" >> "$GITHUB_ENV"
+
       - name: Install Windows Build Dependencies
         if: contains(matrix.platform, 'windows')
         shell: pwsh

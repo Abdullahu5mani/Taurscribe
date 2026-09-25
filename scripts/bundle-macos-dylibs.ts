@@ -86,7 +86,7 @@ function findDlls(dir: string, results: string[] = []): string[] {
 function bundleWindowsDlls(): void {
   const srcTauri = join(cwd, "src-tauri");
   const targetDir = process.env.CARGO_TARGET_DIR ?? join(srcTauri, "target");
-  const targetTriple = process.env.TAURI_BUILD_TARGET ?? "";
+  const targetTriple = process.env.TAURI_BUILD_TARGET ?? process.env.TAURI_ENV_TARGET_TRIPLE ?? "";
 
   // Cross-compiled builds land in target/<triple>/release/build/
   const primaryBuildBase = targetTriple
