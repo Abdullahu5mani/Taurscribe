@@ -390,7 +390,10 @@ impl WhisperManager {
         );
 
         // Try to load with GPU acceleration first (unless force_cpu). If that fails, fallback to CPU.
-        let (ctx, backend) = if force_cpu {
+        // The standard Windows build has no whisper GPU backend. Attempting a
+        // GPU context there can succeed on CPU and then be mislabeled as CUDA.
+        let windows_cpu_build = cfg!(target_os = "windows") && !cfg!(feature = "windows-nvidia");
+        let (ctx, backend) = if force_cpu || windows_cpu_build {
             self.try_cpu(&absolute_path)?
         } else {
             self.try_gpu(&absolute_path)

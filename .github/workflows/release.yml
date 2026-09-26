@@ -518,6 +518,11 @@ jobs:
             Write-Host "Created portable zip with $($files.Count) file(s)"
           }
 
+      - name: Verify Windows installer and portable DLLs
+        if: matrix.os_name == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify-windows-artifacts.ps1 -TargetTriple '${{ matrix.target }}'
+
       # ── Rename artifacts for clean release names ──
       - name: Prepare release artifacts
         shell: bash

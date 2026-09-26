@@ -661,6 +661,11 @@ jobs:
             Write-Host "Created portable zip with $($files.Count) file(s)"
           }
 
+      - name: Verify Windows installer and portable DLLs
+        if: matrix.os_name == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify-windows-artifacts.ps1 -TargetTriple '${{ matrix.target }}'
+
       # --- Upload Artifacts ---
 
       # Windows: copy NSIS installer into workspace (CARGO_TARGET_DIR may be outside workspace)

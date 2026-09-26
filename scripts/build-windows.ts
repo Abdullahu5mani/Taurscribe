@@ -13,7 +13,8 @@
  *
  * This script:
  *   1. Builds the Rust binary via `cargo build --release`
- *   2. Detects DLLs in target/release/
+ *   2. Copies llama.cpp DLLs from its Cargo build output into target/release/
+ *      and detects the remaining runtime DLLs there
  *   3. Copies DLLs into src-tauri/ (so Tauri can find them)
  *   4. Writes resource map into tauri.windows.conf.json
  *   5. Runs `tauri build` (cargo is already up-to-date, so it's fast)
@@ -25,6 +26,7 @@ import {
   existsSync,
   readdirSync,
   readFileSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "fs";
@@ -38,12 +40,57 @@ const srcTauri = join(root, "src-tauri");
 const args = process.argv.slice(2);
 const targetIdx = args.indexOf("--target");
 const targetTriple = targetIdx !== -1 && args[targetIdx + 1] ? args[targetIdx + 1] : null;
+const featuresIdx = args.indexOf("--features");
+const features = featuresIdx !== -1 ? args[featuresIdx + 1] : null;
 
 // Determine release directory based on --target and CARGO_TARGET_DIR
 const targetDir = process.env.CARGO_TARGET_DIR || join(srcTauri, "target");
 const releaseDir = targetTriple
   ? join(targetDir, targetTriple, "release")
   : join(targetDir, "release");
+
+// llama-cpp-sys-2 0.1.157 builds these DLLs in out/bin but its Windows
+// build script looks for *.lib there when copying shared libraries to Cargo's
+// release directory. The app links, but an installer without llama.dll cannot
+// start it.
+const requiredLlamaDlls = ["llama.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll"];
+
+function stageLlamaDlls() {
+  const buildDir = join(releaseDir, "build");
+  if (!existsSync(buildDir)) {
+    failAndExit(`Missing Cargo build directory: ${buildDir}`);
+  }
+
+  const candidates = readdirSync(buildDir)
+    .filter((name) => name.startsWith("llama-cpp-sys-2-"))
+    .map((name) => join(buildDir, name, "out", "bin"))
+    .filter((dir) =>
+      existsSync(dir) && requiredLlamaDlls.every((dll) => existsSync(join(dir, dll)))
+    );
+  if (candidates.length === 0) {
+    failAndExit(
+      `llama.cpp runtime DLLs were not found under ${buildDir}. ` +
+      `Expected ${requiredLlamaDlls.join(", ")} in one out/bin directory.`
+    );
+  }
+
+  // Multiple Cargo build hashes can remain after a feature change. The most
+  // recently built llama.dll belongs to the build that just completed.
+  const sourceDir = candidates.sort((a, b) =>
+    statSync(join(b, "llama.dll")).mtimeMs - statSync(join(a, "llama.dll")).mtimeMs
+  )[0];
+  for (const dll of readdirSync(sourceDir).filter((name) =>
+    /^llama\.dll$|^ggml.*\.dll$/i.test(name)
+  )) {
+    const source = join(sourceDir, dll);
+    const destination = join(releaseDir, dll);
+    // Cargo may already have hard-linked the same DLL here. Remove only the
+    // release-directory link before copying so the build output stays intact.
+    if (existsSync(destination)) unlinkSync(destination);
+    copyFileSync(source, destination);
+    console.log(`   ✓ ${dll} (from ${sourceDir})`);
+  }
+}
 
 const windowsConfPath = join(srcTauri, "tauri.windows.conf.json");
 
@@ -101,6 +148,9 @@ if (targetTriple) {
   cargoArgs.push("--target", targetTriple);
   console.log(`Building for target: ${targetTriple}`);
 }
+if (features) {
+  cargoArgs.push("--features", features);
+}
 const cargoBuild = spawnSync("cargo", cargoArgs, {
   stdio: "inherit",
   cwd: srcTauri,
@@ -115,6 +165,7 @@ console.log("\n📦 Step 2: Detecting DLLs...\n");
 if (!existsSync(releaseDir)) {
   failAndExit(`❌ Release directory not found: ${releaseDir}`);
 }
+stageLlamaDlls();
 
 const allFiles = readdirSync(releaseDir);
 const foundDlls = allFiles.filter((file: string) =>
@@ -122,7 +173,7 @@ const foundDlls = allFiles.filter((file: string) =>
 );
 
 if (foundDlls.length === 0) {
-  console.warn("⚠ No DLLs found to bundle");
+  failAndExit("No runtime DLLs found to bundle");
 } else {
   console.log(`Found ${foundDlls.length} DLL(s):`);
   foundDlls.forEach((dll: string) => console.log(`   ✓ ${dll}`));

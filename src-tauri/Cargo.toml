@@ -1,6 +1,6 @@
 [package]
 name = "taurscribe"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -12,6 +12,7 @@ default-run = "taurscribe"
 # They need `--features dev-tools`, so `cargo build --release` (and the app bundle) only produce the app itself.
 [features]
 dev-tools = []
+windows-nvidia = ["transcribe-cpp/cuda", "transcribe-cpp/vulkan", "whisper-rs/cuda", "ort/cuda", "ort/tensorrt"]
 
 [[bin]]
 name = "audio_pipeline_bench"
@@ -205,15 +206,12 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
 ] }
 
-# 3. Windows (x86_64) -> CUDA + DirectML + TensorRT
-# CUDA: NVIDIA GPU acceleration (primary)
-# DirectML: Universal Windows GPU acceleration (AMD/Intel fallback)
-# TensorRT: NVIDIA optimized inference
-# WebGPU: Cross-platform GPU (additional fallback)
-# XNNPACK: CPU optimization
+# 3. Windows (x86_64) -> DirectML + CPU by default.
+# Enable windows-nvidia only for a separate GPU build. CUDA and Vulkan link
+# loader DLLs at process startup, before the app can choose a CPU fallback.
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
-transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false, features = ["cuda", "vulkan"] }
+transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false }
 windows = { version = "0.58", features = [
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
@@ -222,15 +220,10 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
 ] }
 
-# vulkan temporarily removed for Windows build
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
-    "cuda",
-] }
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 ort = { version = "2.0.0-rc.12", features = [
     "download-binaries",
-    "cuda",
     "directml",
-    "tensorrt",
     "xnnpack",
     "half",
 ] }
