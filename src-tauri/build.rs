@@ -29,8 +29,9 @@ fn main() {
         std::env::set_var("CMAKE_GENERATOR_TOOLSET", "ClangCL");
     }
 
-    // CUSTOM: Add CUDA library search path to fix linker errors (Windows only)
-    if target_os == "windows" {
+    // CUDA and Vulkan are only linked in the optional Windows NVIDIA build.
+    let windows_nvidia = std::env::var_os("CARGO_FEATURE_WINDOWS_NVIDIA").is_some();
+    if target_os == "windows" && windows_nvidia {
         let mut found = false;
 
         // 1. Try CUDA_PATH environment variable
@@ -64,8 +65,6 @@ fn main() {
         }
 
         if !found {
-            // Only warn if we are on Windows and clearly trying to use CUDA (implied by this logic existing)
-            // Ideally check features, but build.rs can't easily see enabled features of dependencies.
             println!(
                 "cargo:warning=Could not find CUDA libraries in CUDA_PATH or standard locations."
             );
@@ -78,7 +77,7 @@ fn main() {
     // CUSTOM: transcribe.cpp's Vulkan backend links vulkan-1.lib (Windows x64 build),
     // which only the Vulkan SDK provides.
     println!("cargo:rerun-if-env-changed=VULKAN_SDK");
-    if target_os == "windows" && target_arch == "x86_64" {
+    if target_os == "windows" && target_arch == "x86_64" && windows_nvidia {
         match std::env::var("VULKAN_SDK") {
             Ok(sdk) if std::path::Path::new(&sdk).join("Lib").exists() => {
                 println!("cargo:rustc-link-search=native={}", std::path::Path::new(&sdk).join("Lib").display());
