@@ -262,8 +262,10 @@ fn get_system_info_blocking() -> SystemInfo {
     let ram_total_gb = sys.total_memory() as f32 / 1_073_741_824.0; // bytes → GB
 
     let (gpu_name, cuda_available, vram_gb) = detect_gpu();
+    let cuda_backend_available = cuda_available
+        && (!cfg!(target_os = "windows") || cfg!(feature = "windows-nvidia"));
 
-    let backend_hint = if cuda_available {
+    let backend_hint = if cuda_backend_available {
         "CUDA".to_string()
     } else {
         #[cfg(target_os = "macos")]
@@ -275,7 +277,7 @@ fn get_system_info_blocking() -> SystemInfo {
             if gpu_name != "Unknown" {
                 #[cfg(target_os = "windows")]
                 {
-                    "DirectML / Vulkan".to_string()
+                    "DirectML / CPU".to_string()
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -351,6 +353,8 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
     let ram_used_gb = (sys.total_memory().saturating_sub(sys.available_memory())) as f32 / 1_073_741_824.0;
 
     let (gpu_name, cuda_available, vram_gb) = detect_gpu();
+    let cuda_backend_available = cuda_available
+        && (!cfg!(target_os = "windows") || cfg!(feature = "windows-nvidia"));
 
     let arch = std::env::consts::ARCH.to_string();
 
@@ -420,14 +424,16 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
     #[cfg(not(target_os = "windows"))]
     let directml_available = false;
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     let vulkan_available = true;
+    #[cfg(target_os = "windows")]
+    let vulkan_available = cfg!(feature = "windows-nvidia");
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let vulkan_available = false;
 
     let (neural_accelerator, ane_available) = if is_apple_silicon {
         ("Apple Neural Engine (16-Core ANE Matrix Hardware)".to_string(), true)
-    } else if cuda_available {
+    } else if cuda_backend_available {
         ("NVIDIA Tensor Cores (FP16 / INT8 Matrix Acceleration)".to_string(), false)
     } else {
         #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
@@ -493,12 +499,12 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
         } else {
             "whisper.cpp · Apple Metal GPU (Parallel Compute Shaders)".to_string()
         }
-    } else if cuda_available {
+    } else if cuda_backend_available {
         "whisper.cpp · NVIDIA CUDA 12 (cuBLAS Accelerated)".to_string()
     } else {
         #[cfg(target_os = "windows")]
         {
-            "whisper.cpp · DirectML / Vulkan 1.3 / CPU AVX2".to_string()
+            "whisper.cpp · CPU AVX2".to_string()
         }
         #[cfg(target_os = "linux")]
         {
@@ -512,16 +518,16 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
 
     let granite_framework = if is_apple_silicon {
         "transcribe.cpp · Metal GPU".to_string()
-    } else if cuda_available {
+    } else if cuda_backend_available {
         "transcribe.cpp · CUDA GPU".to_string()
     } else {
-        "transcribe.cpp · Vulkan GPU or CPU".to_string()
+        "transcribe.cpp · CPU".to_string()
     };
 
     // The grammar model (FlowScribe GGUF) runs on llama.cpp.
     let grammar_framework = if is_apple_silicon {
         "llama.cpp · Metal GPU".to_string()
-    } else if cuda_available {
+    } else if cuda_backend_available && !cfg!(target_os = "windows") {
         "llama.cpp · CUDA".to_string()
     } else {
         "llama.cpp · CPU".to_string()
