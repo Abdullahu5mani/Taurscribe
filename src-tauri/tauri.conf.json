@@ -46,6 +46,9 @@
       "icons/icon.ico"
     ],
     "resources": [],
+    "windows": {
+      "bundleVCRuntime": true
+    },
     "macOS": {
       "minimumSystemVersion": "14.0",
       "entitlements": "Entitlements.plist",
