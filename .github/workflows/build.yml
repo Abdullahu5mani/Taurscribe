@@ -41,18 +41,13 @@ jobs:
             acceleration: 'CPU'
 
           # --- 3. Windows (x86_64) ---
-          # Pinned to windows-2022 on purpose. windows-latest is now the
-          # Windows Server 2025 / Visual Studio 2026 image, and nvcc refuses any
-          # host compiler newer than VS 2022 — no CUDA release accepts it yet,
-          # so this cannot be fixed by moving the toolkit version.
-          # CUDA is enabled here for NVIDIA GPU acceleration.
           - platform: 'windows-2022'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
-            cuda: true
+            cuda: false
             os_name: 'Windows'
             arch: 'x86_64'
-            acceleration: 'CUDA'
+            acceleration: 'DirectML / CPU'
 
           # --- 4. Windows (ARM64) ---
           # Cross-compilation for Windows on ARM (Snapdragon, Surface Pro X).
@@ -243,10 +238,9 @@ jobs:
           # Verify Vulkan library is findable by linker
           ldconfig -p | grep libvulkan || echo "NOTE: libvulkan not in ldconfig cache, but SDK path is set via LD_LIBRARY_PATH"
 
-      # Windows Dependencies (Critical)
-      # 1. Vulkan SDK: Required for whisper-rs Vulkan backend on Windows
+      # Vulkan is only needed for an explicit NVIDIA/Vulkan build.
       - name: Install Vulkan SDK (Windows)
-        if: contains(matrix.platform, 'windows') && matrix.arch == 'x86_64'
+        if: contains(matrix.platform, 'windows') && matrix.cuda == true
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
@@ -255,7 +249,7 @@ jobs:
       # transcribe.cpp's Vulkan backend needs SPIRV-Headers (CMake package), which the
       # minimal Vulkan SDK install above doesn't include. Same version as the SDK.
       - name: Install SPIRV-Headers (Windows)
-        if: contains(matrix.platform, 'windows') && matrix.arch == 'x86_64'
+        if: contains(matrix.platform, 'windows') && matrix.cuda == true
         shell: bash
         run: |
           src="$(cygpath -m "$RUNNER_TEMP")/SPIRV-Headers"

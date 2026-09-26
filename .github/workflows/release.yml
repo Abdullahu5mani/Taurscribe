@@ -34,7 +34,7 @@ jobs:
           - platform: 'windows-2022'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
-            cuda: true
+            cuda: false
             os_name: 'Windows'
             arch: 'x86_64'
 
@@ -173,7 +173,7 @@ jobs:
           echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
 
       - name: Install Vulkan SDK (Windows)
-        if: contains(matrix.platform, 'windows') && matrix.arch == 'x86_64'
+        if: contains(matrix.platform, 'windows') && matrix.cuda == true
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
@@ -182,7 +182,7 @@ jobs:
       # transcribe.cpp's Vulkan backend needs SPIRV-Headers (CMake package), which the
       # minimal Vulkan SDK install above doesn't include. Same version as the SDK.
       - name: Install SPIRV-Headers (Windows)
-        if: contains(matrix.platform, 'windows') && matrix.arch == 'x86_64'
+        if: contains(matrix.platform, 'windows') && matrix.cuda == true
         shell: bash
         run: |
           src="$(cygpath -m "$RUNNER_TEMP")/SPIRV-Headers"
