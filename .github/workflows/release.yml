@@ -438,13 +438,86 @@ jobs:
           fi
         shell: bash
 
+      # ── Code signing (optional) ──
+      # Each step only turns signing on when its secrets exist, so forks and
+      # repos without certificates still produce (unsigned) builds.
+      #
+      # macOS secrets: APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
+      # APPLE_SIGNING_IDENTITY; for notarization also APPLE_ID, APPLE_PASSWORD
+      # (app-specific password) and APPLE_TEAM_ID. `tauri build` reads them from
+      # the environment, imports the certificate into a temporary keychain, signs
+      # the .app and notarizes it.
+      - name: Configure macOS signing and notarization
+        if: matrix.os_name == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ] || [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "::warning::APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY secrets are not set: the macOS build will not be signed or notarized"
+            exit 0
+          fi
+          {
+            echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE"
+            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+          } >> "$GITHUB_ENV"
+          if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            {
+              echo "APPLE_ID=$APPLE_ID"
+              echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+            echo "macOS signing and notarization enabled"
+          else
+            echo "::warning::APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID are not all set: the macOS build will be signed but not notarized"
+          fi
+
+      # Windows secrets: WINDOWS_CERTIFICATE (base64 .pfx) and
+      # WINDOWS_CERTIFICATE_PASSWORD. The certificate goes into the user store and
+      # its thumbprint into a config overlay that the Bundle step passes to
+      # `tauri build --config`, which then signs the exe and the NSIS installer.
+      - name: Configure Windows code signing
+        if: matrix.os_name == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) {
+            Write-Output "::warning::WINDOWS_CERTIFICATE secret is not set: the Windows build will not be signed"
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "taurscribe-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString -String "$env:WINDOWS_CERTIFICATE_PASSWORD" -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password |
+            Where-Object { $_.HasPrivateKey } | Select-Object -First 1
+          Remove-Item $pfx
+          if (-not $cert) { throw "WINDOWS_CERTIFICATE has no certificate with a private key" }
+          $config = @{ bundle = @{ windows = @{
+            certificateThumbprint = $cert.Thumbprint
+            digestAlgorithm = "sha256"
+            timestampUrl = "http://timestamp.digicert.com"
+          } } } | ConvertTo-Json -Depth 5
+          $configPath = Join-Path $env:RUNNER_TEMP "tauri.windows-signing.json"
+          Set-Content -Path $configPath -Value $config -Encoding utf8
+          "WINDOWS_SIGNING_CONFIG=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Output "Windows signing enabled (thumbprint $($cert.Thumbprint))"
+
       # ── Bundle ──
       - name: Bundle application
         run: |
           if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then unset CCACHE_DISABLE; fi
           if [ "${{ matrix.os_name }}" = "Windows" ]; then
             # Use build-windows.ts which handles DLL bundling
-            bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis
+            bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis \
+              ${WINDOWS_SIGNING_CONFIG:+--config "$WINDOWS_SIGNING_CONFIG"}
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
             bash scripts/bundle-linux-solibs.sh
             # rpm and appimage are dropped: packaging a ~1 GB payload (531 MB binary +
