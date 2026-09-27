@@ -696,6 +696,15 @@ mod tests {
     }
 
     #[test]
+    fn missing_selected_microphone_is_an_error_not_a_silent_track() {
+        use std::sync::{atomic::AtomicBool, Arc};
+        let (tx, _rx) = crossbeam_channel::bounded(4);
+        let stops = [Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false))];
+        // start_rig falls back to the default microphone on this error.
+        assert!(super::spawn_named_mic_capture("Taurscribe test mic that does not exist", tx, stops).is_err());
+    }
+
+    #[test]
     fn test_stereo_interleaving() {
         let mic = vec![0.1f32, 0.2, 0.3];
         let sys = vec![0.7f32, 0.8, 0.9];
