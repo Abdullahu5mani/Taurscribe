@@ -12,6 +12,7 @@ use crate::types::ASREngine;
 use crate::utils::clean_transcript;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, State};
@@ -53,7 +54,13 @@ fn register_cancel_flag(path: &str, job_id: Option<String>) -> Result<Arc<Atomic
     if jobs.contains_key(path) {
         return Err("This file is already being transcribed".into());
     }
-    jobs.insert(path.to_string(), FileJobState { flag: Arc::clone(&flag), job_id });
+    jobs.insert(
+        path.to_string(),
+        FileJobState {
+            flag: Arc::clone(&flag),
+            job_id,
+        },
+    );
     Ok(flag)
 }
 
@@ -87,7 +94,10 @@ pub async fn transcribe_file(
 ) -> Result<FileTranscriptionResult, String> {
     let model_operation = state.begin_model_operation()?;
     if state.engine_loading.load(Ordering::Acquire) {
-        return Err("ASR model is still loading; wait until the engine is ready before transcribing a file".to_string());
+        return Err(
+            "ASR model is still loading; wait until the engine is ready before transcribing a file"
+                .to_string(),
+        );
     }
 
     let cancel = register_cancel_flag(&path, job_id)?;
@@ -100,7 +110,10 @@ pub async fn transcribe_file(
         ASREngine::Granite => "granite",
         ASREngine::Qwen3 => "qwen3",
     };
-    if expected_engine.as_deref().is_some_and(|expected| expected != actual_engine) {
+    if expected_engine
+        .as_deref()
+        .is_some_and(|expected| expected != actual_engine)
+    {
         unregister_cancel_flag(&path);
         return Err("The active engine changed after this file was queued. Re-run it with the desired model.".into());
     }
@@ -109,7 +122,10 @@ pub async fn transcribe_file(
         ASREngine::Granite => state.granite.lock().unwrap().get_status().model_id,
         ASREngine::Qwen3 => state.qwen3.lock().unwrap().get_status().model_id,
     };
-    if expected_model_id.as_deref().is_some_and(|expected| Some(expected) != loaded_model.as_deref()) {
+    if expected_model_id
+        .as_deref()
+        .is_some_and(|expected| Some(expected) != loaded_model.as_deref())
+    {
         unregister_cancel_flag(&path);
         return Err("The loaded model changed after this file was queued. Re-run it with the desired model.".into());
     }
@@ -152,17 +168,23 @@ fn maybe_unload_after_file_batch(app: &AppHandle, state: &AudioState) {
             crate::memory::trim_process_memory();
             crate::tray::reconcile_model_loaded_tray(app, state);
             let _ = app.emit("model-unloaded", ());
-            let _ = app.emit("model-auto-unloaded", serde_json::json!({
-                "timeout_seconds": 1,
-                "unloaded_engines": unloaded,
-            }));
+            let _ = app.emit(
+                "model-auto-unloaded",
+                serde_json::json!({
+                    "timeout_seconds": 1,
+                    "unloaded_engines": unloaded,
+                }),
+            );
             let _ = crate::tray::update_tray_icon(app, crate::types::AppState::Ready);
         }
     }
 }
 
 #[tauri::command]
-pub async fn finish_file_transcription_batch(app: AppHandle, state: State<'_, AudioState>) -> Result<(), String> {
+pub async fn finish_file_transcription_batch(
+    app: AppHandle,
+    state: State<'_, AudioState>,
+) -> Result<(), String> {
     let state = (*state).clone();
     tauri::async_runtime::spawn_blocking(move || maybe_unload_after_file_batch(&app, &state))
         .await
@@ -170,7 +192,11 @@ pub async fn finish_file_transcription_batch(app: AppHandle, state: State<'_, Au
 }
 
 fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: Option<String>) {
-    let job_id = cancel_flags().lock().unwrap().get(path).and_then(|job| job.job_id.clone());
+    let job_id = cancel_flags()
+        .lock()
+        .unwrap()
+        .get(path)
+        .and_then(|job| job.job_id.clone());
     let _ = app.emit(
         "file-transcription-progress",
         FileTranscriptionProgress {
@@ -230,36 +256,189 @@ fn transcribe_file_blocking(
 
     emit_progress(app, path, 5, "decoding", None);
 
-    // Decode directly to mono so long stereo files don't materialize a full
-    // interleaved buffer before downmixing.
-    let (mut mono, sample_rate) =
-        crate::audio_decode::decode_audio_mono_f32(std::path::Path::new(path))?;
+    // Decode and transcribe bounded source windows. Keeping a whole imported
+    // file (and then a second resampled/speech copy) can exhaust memory.
+    let mut parts = Vec::<String>::new();
+    let (decoded_frames, sample_rate) = stream_file_windows(
+        Path::new(path),
+        16_000 * 120,
+        || ensure_not_cancelled(app, path, &cancel),
+        |window, decoded_so_far, expected_frames| {
+            ensure_not_cancelled(app, path, &cancel)?;
+            let text = transcribe_file_window(
+                app,
+                path,
+                active_engine,
+                &whisper,
+                &granite,
+                &qwen3,
+                &cancel,
+                window,
+            )?;
+            if !text.trim().is_empty() {
+                parts.push(text);
+            }
+            if let Some(total) = expected_frames.filter(|total| *total > 0) {
+                let percent = (53.0 + decoded_so_far as f64 / total as f64 * 42.0).min(95.0) as u8;
+                emit_progress(app, path, percent, "transcribing", None);
+            }
+            Ok(())
+        },
+    )?;
     if sample_rate == 0 {
         return Err("File has invalid sample rate".into());
     }
-    // History and speed metrics describe the source file, including silence
-    // removed later for ASR.
-    let audio_duration_ms = (mono.len() as f64 / sample_rate as f64 * 1000.0) as i64;
-
     ensure_not_cancelled(app, path, &cancel)?;
+    let audio_duration_ms = (decoded_frames as f64 / sample_rate as f64 * 1000.0) as i64;
+    let text = parts.join(" ");
 
-    emit_progress(app, path, 20, "decoding", None);
+    let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
+    let cleaned = clean_transcript(&text);
+    let final_text = crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
+    let processing_time_ms = transcribe_start.elapsed().as_millis() as i64;
 
-    // Resample to 16 kHz (all engines require this)
-    if sample_rate != 16000 {
-        let decoded_samples = mono.len();
-        let resampled = audio_preprocess::resample_mono_to_16k(&mono, sample_rate)?;
-        crate::memory::maybe_log_process_memory_with_sizes(
-            "file transcription after resample",
-            &[
-                ("decoded_mono_samples", decoded_samples),
-                ("resampled_samples", resampled.len()),
-            ],
-        );
-        drop(mono);
-        mono = resampled;
+    emit_progress(app, path, 100, "done", None);
+
+    Ok(FileTranscriptionResult {
+        transcript: final_text,
+        audio_duration_ms,
+        processing_time_ms,
+    })
+}
+
+/// Keep only one resampled ASR window while decoding, including a final short
+/// window. The callback receives source-frame progress for the UI.
+fn stream_file_windows<F, C>(
+    path: &Path,
+    window_samples: usize,
+    mut check_cancelled: C,
+    mut on_window: F,
+) -> Result<(u64, u32), String>
+where
+    F: FnMut(Vec<f32>, u64, Option<u64>) -> Result<(), String>,
+    C: FnMut() -> Result<(), String>,
+{
+    if window_samples == 0 {
+        return Err("Audio window must not be empty".into());
+    }
+    let mut pending = Vec::<f32>::new();
+    let mut resampler: Option<audio_preprocess::StreamingResampler16k> = None;
+    let (frames, rate) = crate::audio_decode::decode_audio_mono_stream(
+        path,
+        |samples, source_rate, decoded_so_far, expected_frames| {
+            check_cancelled()?;
+            if resampler.is_none() {
+                resampler = Some(audio_preprocess::StreamingResampler16k::new(source_rate)?);
+            }
+            pending.extend_from_slice(&resampler.as_mut().unwrap().push(samples)?);
+            while pending.len() >= window_samples {
+                check_cancelled()?;
+                on_window(
+                    pending.drain(..window_samples).collect(),
+                    decoded_so_far,
+                    expected_frames,
+                )?;
+            }
+            Ok(())
+        },
+    )?;
+    if let Some(mut resampler) = resampler {
+        pending.extend_from_slice(&resampler.finish()?);
+    }
+    if !pending.is_empty() {
+        check_cancelled()?;
+        on_window(pending, frames, Some(frames))?;
+    }
+    Ok((frames, rate))
+}
+
+#[cfg(test)]
+mod vm_feature_tests {
+    use super::*;
+
+    fn stereo_wav() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "taurscribe-vm-file-import-{}.wav",
+            rand::random::<u64>()
+        ));
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..156_000 {
+            writer.write_sample::<i16>((i % 500) as i16).unwrap();
+            writer.write_sample::<i16>((i % 300) as i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        path
     }
 
+    #[test]
+    fn vm_file_import_streams_bounded_windows_with_final_tail() {
+        let path = stereo_wav();
+        let mut sizes = Vec::new();
+        let mut progress = Vec::new();
+        let (frames, rate) = stream_file_windows(
+            &path,
+            16_000,
+            || Ok(()),
+            |window, decoded, expected| {
+                assert!(window.iter().all(|sample| sample.is_finite()));
+                sizes.push(window.len());
+                progress.push(decoded);
+                assert_eq!(expected, Some(156_000));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!((frames, rate), (156_000, 48_000));
+        assert_eq!(sizes, [16_000, 16_000, 16_000, 4_000]);
+        assert!(progress.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(progress.last(), Some(&frames));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn vm_file_import_cancellation_stops_before_another_window() {
+        let path = stereo_wav();
+        let cancelled = AtomicBool::new(false);
+        let mut windows = 0;
+        let result = stream_file_windows(
+            &path,
+            16_000,
+            || {
+                if cancelled.load(Ordering::Relaxed) {
+                    Err("Transcription cancelled".into())
+                } else {
+                    Ok(())
+                }
+            },
+            |_, _, _| {
+                windows += 1;
+                cancelled.store(true, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err(), "Transcription cancelled");
+        assert_eq!(windows, 1);
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+fn transcribe_file_window(
+    app: &AppHandle,
+    path: &str,
+    active_engine: ASREngine,
+    whisper: &Arc<Mutex<crate::whisper::WhisperManager>>,
+    granite: &Arc<Mutex<crate::gguf_asr::GgufAsrManager>>,
+    qwen3: &Arc<Mutex<crate::gguf_asr::GgufAsrManager>>,
+    cancel: &Arc<AtomicBool>,
+    mut mono: Vec<f32>,
+) -> Result<String, String> {
+    emit_progress(app, path, 20, "decoding", None);
     // Trim long edge silence before energy VAD.
     audio_preprocess::trim_file_buffer_edges_16k(&mut mono);
 
@@ -293,12 +472,7 @@ fn transcribe_file_blocking(
             "[FILE_TRANSCRIBE] No speech detected after VAD — skipping ASR ({}s audio)",
             mono_samples as f32 / 16000.0
         );
-        emit_progress(app, path, 100, "done", None);
-        return Ok(FileTranscriptionResult {
-            transcript: String::new(),
-            audio_duration_ms,
-            processing_time_ms: transcribe_start.elapsed().as_millis() as i64,
-        });
+        return Ok(String::new());
     }
 
     println!(
@@ -409,7 +583,8 @@ fn transcribe_file_blocking(
                 let t = match active_engine {
                     ASREngine::Granite => {
                         let mut g = granite.try_lock().map_err(|_| {
-                            "Granite engine is busy loading or processing another request".to_string()
+                            "Granite engine is busy loading or processing another request"
+                                .to_string()
                         })?;
                         if !g.get_status().loaded {
                             emit_progress(app, path, 45, "loading model", None);
@@ -451,17 +626,7 @@ fn transcribe_file_blocking(
         }
     };
 
-    let cleaned = clean_transcript(&text);
-    let final_text = crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
-    let processing_time_ms = transcribe_start.elapsed().as_millis() as i64;
-
-    emit_progress(app, path, 100, "done", None);
-
-    Ok(FileTranscriptionResult {
-        transcript: final_text,
-        audio_duration_ms,
-        processing_time_ms,
-    })
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -473,12 +638,30 @@ mod tests {
         let path = format!("/tmp/taurscribe-file-job-{}", rand::random::<u64>());
         let first = register_cancel_flag(&path, Some("first".into())).unwrap();
         assert!(register_cancel_flag(&path, Some("second".into())).is_err());
-        assert_eq!(cancel_flags().lock().unwrap().get(&path).unwrap().job_id.as_deref(), Some("first"));
+        assert_eq!(
+            cancel_flags()
+                .lock()
+                .unwrap()
+                .get(&path)
+                .unwrap()
+                .job_id
+                .as_deref(),
+            Some("first")
+        );
         unregister_cancel_flag(&path);
 
         let second = register_cancel_flag(&path, Some("second".into())).unwrap();
         assert!(!Arc::ptr_eq(&first, &second));
-        assert_eq!(cancel_flags().lock().unwrap().get(&path).unwrap().job_id.as_deref(), Some("second"));
+        assert_eq!(
+            cancel_flags()
+                .lock()
+                .unwrap()
+                .get(&path)
+                .unwrap()
+                .job_id
+                .as_deref(),
+            Some("second")
+        );
         unregister_cancel_flag(&path);
     }
 }
