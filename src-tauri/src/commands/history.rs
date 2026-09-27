@@ -29,7 +29,11 @@ fn ensure_history_db() -> Result<Connection, String> {
     let path = get_history_db_path()?;
     let conn = Connection::open(&path)
         .map_err(|e| format!("Failed to open history DB at {}: {}", path.display(), e))?;
+    init_history_schema(&conn)?;
+    Ok(conn)
+}
 
+fn init_history_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS transcriptions (
@@ -71,7 +75,7 @@ fn ensure_history_db() -> Result<Connection, String> {
         [],
     );
 
-    Ok(conn)
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -134,7 +138,21 @@ fn save_transcript_history_blocking(
     }
 
     let conn = ensure_history_db()?;
-    let created_at = Utc::now().to_rfc3339();
+    insert_history_row(&conn, &Utc::now().to_rfc3339(), &transcript, &engine, duration_ms, grammar_llm_used, processing_time_ms, model_id.as_deref(), audio_source.as_deref())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_history_row(
+    conn: &Connection,
+    created_at: &str,
+    transcript: &str,
+    engine: &str,
+    duration_ms: Option<i64>,
+    grammar_llm_used: bool,
+    processing_time_ms: Option<i64>,
+    model_id: Option<&str>,
+    audio_source: Option<&str>,
+) -> Result<(), String> {
     let grammar_flag: i64 = if grammar_llm_used { 1 } else { 0 };
 
     println!(
@@ -150,7 +168,7 @@ fn save_transcript_history_blocking(
     conn.execute(
         "INSERT INTO transcriptions (created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![created_at, transcript, engine, duration_ms, grammar_flag, processing_time_ms, model_id, audio_source.as_deref(), kind_for_source(audio_source.as_deref())],
+        params![created_at, transcript, engine, duration_ms, grammar_flag, processing_time_ms, model_id, audio_source, kind_for_source(audio_source)],
     )
     .map_err(|e| {
         eprintln!("[HISTORY] Failed to insert history row: {}", e);
@@ -180,12 +198,25 @@ fn list_transcript_history_blocking(
     let conn = ensure_history_db()?;
     let limit = limit.unwrap_or(50) as i64;
     let offset = offset.unwrap_or(0) as i64;
+    let out = query_history(&conn, limit, offset)?;
+
+    println!(
+        "[HISTORY] list_transcript_history: limit={}, offset={}, rows={}",
+        limit,
+        offset,
+        out.len()
+    );
+
+    Ok(out)
+}
+
+fn query_history(conn: &Connection, limit: i64, offset: i64) -> Result<Vec<TranscriptRecord>, String> {
 
     let mut stmt = conn
         .prepare(
             "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind
              FROM transcriptions
-             ORDER BY datetime(created_at) DESC
+             ORDER BY datetime(created_at) DESC, id DESC
              LIMIT ?1 OFFSET ?2",
         )
         .map_err(|e| {
@@ -221,14 +252,6 @@ fn list_transcript_history_blocking(
             format!("Failed to read history row: {}", e)
         })?);
     }
-
-    println!(
-        "[HISTORY] list_transcript_history: limit={}, offset={}, rows={}",
-        limit,
-        offset,
-        out.len()
-    );
-
     Ok(out)
 }
 
@@ -257,6 +280,51 @@ fn delete_transcript_history_blocking(id: i64) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mem_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        init_history_schema(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn rows_from_the_same_second_come_back_newest_first() {
+        let conn = mem_db();
+        for text in ["first", "second", "third"] {
+            insert_history_row(&conn, "2026-09-27T10:00:00.5+00:00", text, "whisper", None, false, None, None, None).unwrap();
+        }
+        insert_history_row(&conn, "2026-09-26T10:00:00+00:00", "older", "whisper", None, false, None, None, None).unwrap();
+        let rows = query_history(&conn, 10, 0).unwrap();
+        let texts: Vec<&str> = rows.iter().map(|r| r.transcript.as_str()).collect();
+        assert_eq!(texts, ["third", "second", "first", "older"]);
+        let page: Vec<String> = query_history(&conn, 2, 1).unwrap().into_iter().map(|r| r.transcript).collect();
+        assert_eq!(page, ["second", "first"]);
+    }
+
+    #[test]
+    fn inserted_rows_round_trip() {
+        let conn = mem_db();
+        insert_history_row(&conn, "2026-09-27T10:00:00+00:00", "hello", "qwen3", Some(1200), true, Some(300), Some("qwen3-asr-0.6b"), Some("talk.mp3")).unwrap();
+        let r = &query_history(&conn, 1, 0).unwrap()[0];
+        assert_eq!((r.engine.as_str(), r.duration_ms, r.grammar_llm_used), ("qwen3", Some(1200), true));
+        assert_eq!((r.processing_time_ms, r.model_id.as_deref()), (Some(300), Some("qwen3-asr-0.6b")));
+        assert_eq!((r.audio_source.as_deref(), r.kind.as_str()), (Some("talk.mp3"), "file"));
+    }
+
+    #[test]
+    fn schema_migrates_an_old_table_and_backfills_kind() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE transcriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, transcript TEXT NOT NULL,
+               engine TEXT NOT NULL, duration_ms INTEGER, grammar_llm_used INTEGER NOT NULL);
+             INSERT INTO transcriptions (created_at, transcript, engine, grammar_llm_used) VALUES ('2025-01-01T00:00:00+00:00', 'old', 'whisper', 0);",
+        )
+        .unwrap();
+        init_history_schema(&conn).unwrap();
+        init_history_schema(&conn).unwrap(); // idempotent
+        let r = &query_history(&conn, 5, 0).unwrap()[0];
+        assert_eq!((r.transcript.as_str(), r.kind.as_str(), r.model_id.as_deref()), ("old", "dictation", None));
+    }
 
     #[test]
     fn kind_backfill_matches_insert_rule() {

@@ -385,6 +385,9 @@ jobs:
 
       - name: Type-check E2E harness
         run: bun run check:e2e
+
+      - name: Frontend unit tests
+        run: bun run test
       
       # Enable Long File Paths in Registry: 
       # Even with git config, Windows OS limits paths to 260 chars unless this Registry key is set.
@@ -466,12 +469,21 @@ jobs:
           # targets are gone; llama-cpp-sys-2 then fails with "File exists".
           find src-tauri/target -maxdepth 4 -type l ! -exec test -e {} \; -print -delete 2>/dev/null || true
 
-      - name: Build Rust binary
+      - name: Build Rust binary (and run Rust tests)
         if: matrix.os_name != 'Windows'
         run: |
           if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then unset CCACHE_DISABLE; fi
           cd src-tauri
           cargo build --release --target ${{ matrix.target }}
+          # Rust unit + integration tests. They run in this step so they share its
+          # env (and therefore the release build's compiled native deps). Only on
+          # the native Apple Silicon runner: the Intel macOS target would run under
+          # Rosetta, and the Linux CUDA build links against driver stubs, so its
+          # test binaries cannot start on a GPU-less runner. Model-dependent tests
+          # are #[ignore]d and skipped.
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            cargo test --release --target ${{ matrix.target }} --lib --tests
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"            # Linux: unset in script so ccache + CMake launchers work

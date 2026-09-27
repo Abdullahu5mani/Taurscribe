@@ -62,6 +62,13 @@ pub struct AudioState {
     // Granite Speech 5 (GGUF through transcribe.cpp). Also shared across threads.
     pub granite: Arc<Mutex<GgufAsrManager>>,
 
+    // Status snapshots published by the engine managers on load/unload. Status
+    // commands read these instead of the engine locks, which a transcription
+    // holds for seconds (sync commands run on the macOS UI thread).
+    pub whisper_status: Arc<Mutex<crate::whisper::WhisperStatus>>,
+    pub granite_status: Arc<Mutex<crate::gguf_asr::GgufStatus>>,
+    pub qwen3_status: Arc<Mutex<crate::gguf_asr::GgufStatus>>,
+
     // The Voice Activity Detector. Also shared.
     pub vad: Arc<Mutex<VADManager>>,
 
@@ -132,6 +139,11 @@ pub struct AudioState {
 
     // Tracks if the most recent recording was in dual-channel mode
     pub last_recording_is_dual_channel: Arc<AtomicBool>,
+
+    // The meeting detected when the current recording started. Stopping saves
+    // the recording under this meeting even if the call has ended (or another
+    // call is detected) by the time the user presses Stop.
+    pub recording_meeting: Arc<Mutex<Option<crate::meeting_detector::MeetingInfo>>>,
 }
 
 impl AudioState {
@@ -184,6 +196,9 @@ impl AudioState {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
             recording_transition: Arc::new(AtomicBool::new(false)),
+            whisper_status: whisper.status_handle(),
+            granite_status: granite.status_handle(),
+            qwen3_status: qwen3.status_handle(),
             whisper: Arc::new(Mutex::new(whisper)),
             granite: Arc::new(Mutex::new(granite)),
             vad: Arc::new(Mutex::new(vad)),
@@ -207,6 +222,7 @@ impl AudioState {
             audio_source_mode: Arc::new(Mutex::new("mic".to_string())),
             auto_record_meetings: Arc::new(AtomicBool::new(false)),
             last_recording_is_dual_channel: Arc::new(AtomicBool::new(false)),
+            recording_meeting: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -247,6 +263,29 @@ impl AudioState {
             ASREngine::Qwen3 => Some(self.qwen3.clone()),
             ASREngine::Whisper => None,
         }
+    }
+
+    /// Whisper status without touching the engine lock.
+    pub fn whisper_snapshot(&self) -> crate::whisper::WhisperStatus {
+        self.whisper_status.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Granite / Qwen3 status without touching the engine lock (None for Whisper).
+    pub fn gguf_snapshot(&self, engine: ASREngine) -> Option<crate::gguf_asr::GgufStatus> {
+        let handle = match engine {
+            ASREngine::Granite => &self.granite_status,
+            ASREngine::Qwen3 => &self.qwen3_status,
+            ASREngine::Whisper => return None,
+        };
+        Some(handle.lock().unwrap_or_else(|e| e.into_inner()).clone())
+    }
+
+    /// True when any ASR engine has a model loaded (from the snapshots).
+    pub fn any_asr_loaded(&self) -> bool {
+        self.whisper_snapshot().model.is_some()
+            || [ASREngine::Granite, ASREngine::Qwen3]
+                .into_iter()
+                .any(|e| self.gguf_snapshot(e).is_some_and(|s| s.loaded))
     }
 
     /// Drops weights for every ASR engine that still has a model in memory.

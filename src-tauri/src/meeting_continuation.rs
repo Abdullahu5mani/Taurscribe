@@ -243,7 +243,8 @@ pub fn carry_names(
     }
     // Best old speaker for each new one, most overlap first; each old speaker used once.
     let mut pairs: Vec<((String, String), u64)> = overlap.into_iter().collect();
-    pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    // Ties broken by id so the result does not depend on HashMap order.
+    pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let mut used_new = std::collections::HashSet::new();
     let mut used_old = std::collections::HashSet::new();
     let mut rename: HashMap<String, (String, String)> = HashMap::new();
@@ -353,5 +354,33 @@ mod tests {
         assert_eq!(turns[0].speaker_name, "Bob");
         assert_eq!(turns[2].speaker_id, "person_bob", "Bob's later turns follow");
         assert_eq!(turns[1].speaker_name, "Speaker 2", "unnamed speakers are left alone");
+    }
+
+    #[test]
+    fn equal_overlaps_pick_the_same_name_every_time() {
+        let t = |id: &str, s: u64, e: u64| DiarizedTurn {
+            speaker_id: id.into(),
+            speaker_name: "Speaker 1".into(),
+            start_ms: s,
+            end_ms: e,
+            channel: 1,
+            text: String::new(),
+            snippet_path: None,
+            candidate_snippets: vec![],
+            current_snippet_idx: 0,
+        };
+        // The new caller overlaps Ann and Bob by exactly the same amount.
+        let old: Vec<crate::commands::meetings::StoredTurn> = vec![
+            ("person_bob".into(), "Bob".into(), 1000, 2000, 1, None, None),
+            ("person_ann".into(), "Ann".into(), 0, 1000, 1, None, None),
+        ];
+        // Each run builds fresh HashMaps with new random seeds; the result
+        // used to follow their iteration order.
+        for _ in 0..50 {
+            let mut turns = vec![t("speaker_remote_1", 0, 2000)];
+            carry_names(&mut turns, &old, 5_000);
+            assert_eq!(turns[0].speaker_name, "Ann");
+            assert_eq!(turns[0].speaker_id, "person_ann");
+        }
     }
 }

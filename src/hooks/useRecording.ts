@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { ModelInfo, GraniteModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
+import { ensureEngineModel } from "../utils/engineLoader";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
 import type { CommandResult, SessionNotice } from "../types/session";
 
@@ -256,120 +257,65 @@ export function useRecording({
         }
         const currentEngine = activeEngineRef.current;
 
-        if (currentEngine === "whisper") {
-            if (models.length === 0) {
-                setHeaderStatus("No Whisper models installed! Please download one.", 5000);
-                showNotice({
-                    level: "warning",
-                    code: "model_missing",
+        // Make sure the active engine's model is loaded (utils/engineLoader.ts).
+        const engineSetup = {
+            whisper: {
+                installed: models,
+                selected: (currentModel ?? "").trim(),
+                select: setCurrentModel as ((id: string) => void) | null,
+                label: "Whisper model",
+                missingHeader: "No Whisper models installed! Please download one.",
+                missingNotice: {
                     title: "No Whisper model installed",
                     message: "Download a Whisper model or switch to another installed engine before recording.",
-                    sticky: true,
-                });
-                setIsSettingsOpen(true);
-                return;
-            }
-            const useGpu = asrBackend === "gpu";
-            let targetWhisperId = (currentModel ?? "").trim();
-            if (!targetWhisperId) {
-                setHeaderStatus("Auto-selecting model...", 60_000);
-                setSessionPhase?.("loading_model");
-                targetWhisperId = models[0].id;
-                setCurrentModel(targetWhisperId);
-                try {
-                    const result = await invoke<CommandResult<string>>("switch_model", { modelId: targetWhisperId, useGpu });
-                    if (!result.ok) throw result.error ?? new Error("Failed to auto-select model");
-                    setLoadedEngine("whisper");
-                    setHeaderStatus("Model selected: " + targetWhisperId);
-                    showNotice(null);
-                } catch (e) {
-                    const error = e as { code?: string; message?: string };
-                    setHeaderStatus("Failed to auto-select model: " + error.message, 5000);
-                    setSessionPhase?.("error");
-                    showNotice(commandErrorToNotice(error, "Whisper model failed to load"));
-                    return;
-                }
-            } else {
-                try {
-                    const loadedId = ((await invoke("get_current_model")) ?? null) as string | null;
-                    const normalizedLoaded = (loadedId ?? "").trim();
-                    if (!normalizedLoaded || normalizedLoaded !== targetWhisperId) {
-                        setHeaderStatus("Loading Whisper model...", 60_000);
-                        setSessionPhase?.("loading_model");
-                        const result = await invoke<CommandResult<string>>("switch_model", { modelId: targetWhisperId, useGpu });
-                        if (!result.ok) throw result.error ?? new Error("Failed to load Whisper model");
-                        setLoadedEngine("whisper");
-                        setHeaderStatus("Whisper model loaded");
-                        showNotice(null);
-                    }
-                } catch (e) {
-                    const error = e as { code?: string; message?: string };
-                    setHeaderStatus("Failed to load Whisper model: " + error.message, 5000);
-                    setSessionPhase?.("error");
-                    showNotice(commandErrorToNotice(error, "Whisper model failed to load"));
-                    return;
-                }
-            }
-        }
-
-        if (currentEngine === "granite") {
-            if (graniteModels.length === 0) {
-                setHeaderStatus("No Granite models installed!", 5000);
-                showNotice({
-                    level: "warning",
-                    code: "model_missing",
+                } as { title: string; message: string } | null,
+            },
+            granite: {
+                installed: graniteModels,
+                selected: currentGraniteModel ?? "",
+                select: null,
+                label: "Granite",
+                missingHeader: "No Granite models installed!",
+                missingNotice: {
                     title: "Granite is not installed",
                     message: "Download Granite from Settings or switch to Whisper or Qwen3 before recording.",
-                    sticky: true,
-                });
-                setIsSettingsOpen(true);
-                return;
+                },
+            },
+            qwen3: {
+                installed: qwen3Models,
+                selected: currentQwen3Model ?? "",
+                select: null,
+                label: "Qwen3-ASR",
+                missingHeader: "No Qwen3-ASR model installed. Download it from Settings.",
+                missingNotice: null,
+            },
+        }[currentEngine];
+        if (engineSetup.installed.length === 0) {
+            setHeaderStatus(engineSetup.missingHeader, 5000);
+            if (engineSetup.missingNotice) {
+                showNotice({ level: "warning", code: "model_missing", sticky: true, ...engineSetup.missingNotice });
             }
-            try {
-                const targetModel = currentGraniteModel || graniteModels[0].id;
-                const pStatus = await invoke("get_granite_status") as { loaded: boolean; model_id?: string | null };
-                if (!pStatus.loaded || pStatus.model_id !== targetModel) {
-                    setHeaderStatus("Loading Granite...", 60_000);
-                    setSessionPhase?.("loading_model");
-                    const result = await invoke<CommandResult<string>>("init_granite", { modelId: targetModel, useGpu: asrBackend === "gpu" });
-                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Granite");
-                    setLoadedEngine("granite");
-                    setHeaderStatus("Granite model loaded");
-                    showNotice(null);
-                }
-            } catch (e) {
-                const error = e as { code?: string; message?: string };
-                setHeaderStatus("Failed to initialize Granite: " + error.message, 5000);
-                setSessionPhase?.("error");
-                showNotice(commandErrorToNotice(error, "Granite failed to load"));
-                return;
-            }
+            setIsSettingsOpen(true);
+            return;
         }
-
-        if (currentEngine === "qwen3") {
-            if (qwen3Models.length === 0) {
-                setHeaderStatus("No Qwen3-ASR model installed. Download it from Settings.", 5000);
-                setIsSettingsOpen(true);
-                return;
+        const targetModel = engineSetup.selected || engineSetup.installed[0].id;
+        if (!engineSetup.selected) engineSetup.select?.(targetModel);
+        try {
+            const outcome = await ensureEngineModel(currentEngine, targetModel, asrBackend === "gpu", () => {
+                setHeaderStatus(`Loading ${engineSetup.label}...`, 60_000);
+                setSessionPhase?.("loading_model");
+            });
+            if (outcome === "loaded") {
+                setLoadedEngine(currentEngine);
+                setHeaderStatus(`${engineSetup.label} loaded`);
+                showNotice(null);
             }
-            try {
-                const target = currentQwen3Model || qwen3Models[0].id;
-                const status = await invoke<{ loaded: boolean; model_id?: string }>("get_qwen3_status");
-                if (!status.loaded || status.model_id !== target) {
-                    setHeaderStatus("Loading Qwen3-ASR...", 60_000);
-                    setSessionPhase?.("loading_model");
-                    const result = await invoke<CommandResult<string>>("init_qwen3", { modelId: target, useGpu: asrBackend === "gpu" });
-                    if (!result.ok) throw result.error ?? new Error("Failed to initialize Qwen3-ASR");
-                    setLoadedEngine("qwen3");
-                    setHeaderStatus("Qwen3-ASR loaded");
-                    showNotice(null);
-                }
-            } catch (e) {
-                const error = e as { code?: string; message?: string };
-                setHeaderStatus("Failed to initialize Qwen3-ASR: " + error.message, 5000);
-                setSessionPhase?.("error");
-                return;
-            }
+        } catch (e) {
+            const error = e as { code?: string; message?: string };
+            setHeaderStatus(`Failed to load ${engineSetup.label}: ${error.message}`, 5000);
+            setSessionPhase?.("error");
+            showNotice(commandErrorToNotice(error, `${engineSetup.label} failed to load`));
+            return;
         }
 
         try {

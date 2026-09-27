@@ -4,23 +4,26 @@ use crate::types::{ASREngine, AppState, EngineSelectionState, HotkeyBinding};
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, State};
 
+// ── Non-blocking engine status ──────────────────────────────────────────────
+//
+// The engine mutexes are held for the whole of an inference (seconds to
+// minutes). These commands are synchronous, so Tauri runs them on the macOS
+// main thread, and the UI polls them every few seconds: waiting on those locks
+// froze the app during transcription. They read the status snapshots the
+// managers publish on every load and unload instead (`AudioState::*_snapshot`).
+
 /// Ask the backend what hardware is running the AI (CPU vs GPU)
 /// Returns the backend of whichever engine is currently active
 #[tauri::command]
 pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
-    // Status polling must never wait for inference on the UI thread.
-    let active = *state.active_engine.try_lock().map_err(|_| "Engine selection is busy".to_string())?;
+    Ok(backend_info(&state))
+}
+
+fn backend_info(state: &AudioState) -> String {
+    let active = *state.active_engine.lock().unwrap();
     match active {
-        ASREngine::Granite => {
-            let granite = state.granite.try_lock().map_err(|_| "Model is busy".to_string())?;
-            let status = granite.get_status();
-            Ok(status.backend)
-        }
-        ASREngine::Whisper => {
-            let whisper = state.whisper.try_lock().map_err(|_| "Model is busy".to_string())?;
-            Ok(format!("{}", whisper.get_backend()))
-        }
-        ASREngine::Qwen3 => Ok(state.qwen3.try_lock().map_err(|_| "Model is busy".to_string())?.get_status().backend),
+        ASREngine::Whisper => state.whisper_snapshot().backend,
+        engine => state.gguf_snapshot(engine).map(|s| s.backend).unwrap_or_default(),
     }
 }
 
@@ -28,12 +31,11 @@ pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
 pub fn get_engine_selection_state(
     state: State<AudioState>,
 ) -> Result<EngineSelectionState, String> {
-    engine_selection_snapshot(&state)
+    Ok(engine_selection_state(&state))
 }
 
-fn engine_selection_snapshot(state: &AudioState) -> Result<EngineSelectionState, String> {
-    // Status polling must never wait for inference on the UI thread.
-    let active = *state.active_engine.try_lock().map_err(|_| "Engine selection is busy".to_string())?;
+fn engine_selection_state(state: &AudioState) -> EngineSelectionState {
+    let active = *state.active_engine.lock().unwrap();
     let active_engine = match active {
         ASREngine::Whisper => "whisper",
         ASREngine::Granite => "granite",
@@ -43,81 +45,39 @@ fn engine_selection_snapshot(state: &AudioState) -> Result<EngineSelectionState,
 
     let (selected_model_id, loaded_engine, loaded_model_id, backend) = match active {
         ASREngine::Whisper => {
-            let whisper = state.whisper.try_lock().map_err(|_| "Model is busy".to_string())?;
-            let loaded = whisper.get_current_model().cloned();
-            let backend = format!("{}", whisper.get_backend());
+            let whisper = state.whisper_snapshot();
+            let loaded = whisper.model.clone();
             (
-                loaded.clone(),
+                whisper.model,
                 loaded.as_ref().map(|_| "whisper".to_string()),
                 loaded,
-                backend,
+                whisper.backend,
             )
         }
-        ASREngine::Granite => {
-            let granite_status = state.granite.try_lock().map_err(|_| "Model is busy".to_string())?.get_status();
-            let loaded = if granite_status.loaded {
-                granite_status.model_id.clone()
-            } else {
-                None
-            };
+        ASREngine::Granite | ASREngine::Qwen3 => {
+            let status = state.gguf_snapshot(active).expect("GGUF engine");
+            let family = if active == ASREngine::Granite { "granite" } else { "qwen3" };
+            let loaded = status.loaded.then(|| status.model_id.clone()).flatten();
             (
-                granite_status.model_id.clone(),
-                loaded.as_ref().map(|_| "granite".to_string()),
+                status.model_id.clone(),
+                loaded.as_ref().map(|_| family.to_string()),
                 loaded,
-                granite_status.backend,
-            )
-        }
-        ASREngine::Qwen3 => {
-            let qwen3_status = state.qwen3.try_lock().map_err(|_| "Model is busy".to_string())?.get_status();
-            let loaded = qwen3_status
-                .loaded
-                .then(|| qwen3_status.model_id.clone())
-                .flatten();
-            (
-                qwen3_status.model_id.clone(),
-                loaded.as_ref().map(|_| "qwen3".to_string()),
-                loaded,
-                qwen3_status.backend,
+                status.backend,
             )
         }
     };
 
-    Ok(EngineSelectionState {
+    EngineSelectionState {
         active_engine,
         selected_model_id,
         loaded_engine,
         loaded_model_id,
         backend,
         engine_loading: state.engine_loading.load(Ordering::Relaxed),
-    })
+    }
 }
 
-/// Change the active ASR engine
-#[tauri::command]
-pub fn set_active_engine(
-    app: AppHandle,
-    state: State<AudioState>,
-    engine: String,
-) -> Result<String, String> {
-    let new_engine = match engine.to_lowercase().as_str() {
-        "whisper" => ASREngine::Whisper,
-        "granite" | "granitespeech" | "granite_speech" | "granite-speech" | "parakeet" => ASREngine::Granite,
-        "qwen3" | "qwen3-asr" | "qwen3_asr" => ASREngine::Qwen3,
-        _ => return Err(format!("Unknown engine: {}", engine)),
-    };
 
-    *state.active_engine.lock().unwrap() = new_engine;
-    println!("[ENGINE] Active engine switched to: {:?}", new_engine);
-    let loaded = state.model_loaded.load(Ordering::Relaxed);
-    tray::update_tray_model_item(&app, loaded);
-    Ok(format!("Engine switched to {:?}", new_engine))
-}
-
-/// Ask which engine is active
-#[tauri::command]
-pub fn get_active_engine(state: State<AudioState>) -> Result<ASREngine, String> {
-    Ok(*state.active_engine.lock().unwrap())
-}
 
 /// Return the current hotkey binding
 #[tauri::command]
@@ -153,11 +113,6 @@ pub fn set_input_device(state: State<AudioState>, name: Option<String>) {
     *state.selected_input_device.lock().unwrap() = name;
 }
 
-/// Return the current close-button behavior ("tray" or "quit")
-#[tauri::command]
-pub fn get_close_behavior(state: State<AudioState>) -> String {
-    state.close_behavior.lock().unwrap().clone()
-}
 
 /// Set the close-button behavior. "tray" hides to tray; "quit" exits the process.
 #[tauri::command]
@@ -232,27 +187,90 @@ pub fn set_tray_state(
 }
 
 #[cfg(test)]
-mod tests {
+mod status_tests {
     use super::*;
+    use crate::gguf_asr::GgufAsrManager;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn test_state() -> AudioState {
+        AudioState::new(
+            crate::whisper::WhisperManager::new(),
+            GgufAsrManager::granite(),
+            crate::vad::VADManager::new().unwrap(),
+            GgufAsrManager::qwen3(),
+        )
+    }
+
+    /// Runs `f` on another thread and fails if it does not return promptly
+    /// (the old code blocked until the engine lock was released).
+    fn returns_promptly<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(2)).expect("status command blocked on a busy engine")
+    }
 
     #[test]
-    fn status_poll_returns_while_inference_holds_the_model() {
-        let state = AudioState::new(
-            crate::whisper::WhisperManager::new(),
-            crate::gguf_asr::GgufAsrManager::granite(),
-            crate::vad::VADManager::new().unwrap(),
-            crate::gguf_asr::GgufAsrManager::qwen3(),
-        );
-        let held = state.whisper.lock().unwrap();
-        let worker_state = state.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            tx.send(engine_selection_snapshot(&worker_state).is_err()).unwrap();
-        });
-        let response = rx.recv_timeout(std::time::Duration::from_secs(1));
-        drop(held);
-        worker.join().unwrap();
-        assert_eq!(response.unwrap(), true);
-        assert!(engine_selection_snapshot(&state).is_ok());
+    fn status_commands_do_not_wait_for_a_transcribing_engine() {
+        for engine in [ASREngine::Whisper, ASREngine::Granite, ASREngine::Qwen3] {
+            let state = test_state();
+            *state.active_engine.lock().unwrap() = engine;
+            // Read once while idle, like the UI's first poll.
+            let idle = engine_selection_state(&state);
+            // Hold the engine the way a long transcription does.
+            let (locked_tx, locked_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let holder = {
+                let state = state.clone();
+                std::thread::spawn(move || {
+                    let _whisper;
+                    let _gguf;
+                    match engine {
+                        ASREngine::Whisper => _whisper = Some(state.whisper.lock().unwrap()),
+                        ASREngine::Granite => _gguf = Some(state.granite.lock().unwrap()),
+                        ASREngine::Qwen3 => _gguf = Some(state.qwen3.lock().unwrap()),
+                    }
+                    locked_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                })
+            };
+            locked_rx.recv().unwrap();
+            let busy = {
+                let state = state.clone();
+                returns_promptly(move || engine_selection_state(&state))
+            };
+            assert_eq!(busy.active_engine, idle.active_engine, "{engine:?}");
+            assert_eq!(busy.loaded_model_id, idle.loaded_model_id, "{engine:?}");
+            let state2 = state.clone();
+            returns_promptly(move || backend_info(&state2));
+            // What get_granite_status / get_qwen3_status / get_current_model return.
+            let state3 = state.clone();
+            returns_promptly(move || (state3.gguf_snapshot(engine), state3.whisper_snapshot()));
+            let state4 = state.clone();
+            returns_promptly(move || state4.any_asr_loaded());
+            release_tx.send(()).unwrap();
+            holder.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn snapshots_follow_the_managers_while_locked() {
+        let state = test_state();
+        assert_eq!(state.whisper_snapshot().model, None);
+        assert!(!state.gguf_snapshot(ASREngine::Granite).unwrap().loaded);
+        assert!(state.gguf_snapshot(ASREngine::Whisper).is_none());
+        assert!(!state.any_asr_loaded());
+        // Unload publishes too, and the snapshot stays readable while the
+        // engine lock is held.
+        let mut granite = state.granite.lock().unwrap();
+        granite.unload();
+        let status = state.gguf_snapshot(ASREngine::Granite).unwrap();
+        assert_eq!((status.loaded, status.backend.as_str()), (false, "none"));
+        drop(granite);
+        let whisper = state.whisper.lock().unwrap();
+        assert_eq!(state.whisper_snapshot().backend, "CPU");
+        drop(whisper);
     }
 }

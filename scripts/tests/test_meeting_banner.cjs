@@ -6,10 +6,14 @@ const vm = require('node:vm');
 const path = require('node:path');
 const ts = require('typescript');
 
-const source = fs.readFileSync(path.join(__dirname, '../../src/components/MeetingBanner.tsx'), 'utf8');
-const compiled = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
-}).outputText;
+function transpile(relativePath) {
+  const source = fs.readFileSync(path.join(__dirname, '../../src', relativePath), 'utf8');
+  return ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText;
+}
+const compiled = transpile('components/MeetingBanner.tsx');
+const autoRecordCompiled = transpile('utils/autoRecord.ts');
 
 async function scenario(action, delay, expectedStarts) {
   const states = [], refs = [], effects = [], pending = [];
@@ -47,6 +51,14 @@ async function scenario(action, delay, expectedStarts) {
       }
       if (name === './settings/types') {
         return { MEETING_KEYS: { showBanner: 'banner', autoRecordDelay: 'delay' }, DEFAULT_AUTORECORD_DELAY: 5 };
+      }
+      if (name === '../utils/autoRecord') {
+        // Share this scenario's fake timers with the helper module.
+        const module = { exports: {} };
+        vm.runInNewContext(autoRecordCompiled, {
+          exports: module.exports, setInterval: context.setInterval, clearInterval: context.clearInterval,
+        });
+        return module.exports;
       }
       if (name.endsWith('.css')) return {};
       throw Error(name);

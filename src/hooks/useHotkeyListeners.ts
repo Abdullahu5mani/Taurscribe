@@ -21,9 +21,6 @@ interface UseHotkeyListenersParams {
     // Stable handler refs (always point to latest closure)
     handleStartRecordingRef: React.RefObject<(fromHotkey?: boolean) => Promise<void>>;
     handleStopRecordingRef: React.RefObject<() => Promise<void>>;
-    handlePauseRecordingRef: React.RefObject<() => Promise<void>>;
-    handleResumeRecordingRef: React.RefObject<() => Promise<void>>;
-    handleCancelRecordingRef: React.RefObject<() => Promise<void>>;
     handleTranscriptionChunkRef: React.RefObject<(text: string) => void>;
     playErrorRef: React.RefObject<() => void>;
     setHeaderStatusRef: React.RefObject<(msg: string, dur?: number) => void>;
@@ -53,9 +50,6 @@ export function useHotkeyListeners({
     asrModelCountsRef,
     handleStartRecordingRef,
     handleStopRecordingRef,
-    handlePauseRecordingRef,
-    handleResumeRecordingRef,
-    handleCancelRecordingRef,
     handleTranscriptionChunkRef,
     playErrorRef,
     setHeaderStatusRef,
@@ -83,7 +77,6 @@ export function useHotkeyListeners({
         let unlistenAudioFallback: (() => void) | undefined;
         let unlistenAudioDisconnect: (() => void) | undefined;
         let unlistenWriteError: (() => void) | undefined;
-        let unlistenOverlayAction: (() => void) | undefined;
         let unlistenModelUnloaded: (() => void) | undefined;
         let unlistenAudioLevel: (() => void) | undefined;
 
@@ -250,27 +243,6 @@ export function useHotkeyListeners({
                 }
             });
 
-            const unsub7 = await listen<string>("overlay-action", async (event) => {
-                const action = String(event.payload);
-                if (action === "pause") {
-                    await handlePauseRecordingRef.current?.();
-                    return;
-                }
-                if (action === "resume") {
-                    await handleResumeRecordingRef.current?.();
-                    return;
-                }
-                if (action === "cancel") {
-                    if (stopInProgressRef.current) return;
-                    stopInProgressRef.current = true;
-                    try {
-                        await handleCancelRecordingRef.current?.();
-                    } finally {
-                        stopInProgressRef.current = false;
-                    }
-                }
-            });
-
             const unsub8 = await listen("model-unloaded", () => {
                 setLoadedEngine(null);
                 setHeaderStatusRef.current?.(
@@ -308,12 +280,11 @@ export function useHotkeyListeners({
                 unlistenAudioFallback = unsub5;
                 unlistenAudioDisconnect = unsub6;
                 unlistenWriteError = unsubWriteError;
-                unlistenOverlayAction = unsub7;
                 unlistenModelUnloaded = unsub8;
                 unlistenAudioLevel = unsub9;
             } else {
                 unsub1(); unsub2(); unsubToggle(); unsub3(); unsub4();
-                unsub5(); unsub6(); unsubWriteError(); unsub7(); unsub8(); unsub9();
+                unsub5(); unsub6(); unsubWriteError(); unsub8(); unsub9();
             }
         };
 
@@ -329,7 +300,6 @@ export function useHotkeyListeners({
             unlistenAudioFallback?.();
             unlistenAudioDisconnect?.();
             unlistenWriteError?.();
-            unlistenOverlayAction?.();
             unlistenModelUnloaded?.();
             unlistenAudioLevel?.();
         };

@@ -488,7 +488,13 @@ fn relocated_path(value: &str, old: &Path, new: &Path) -> Option<String> {
     Path::new(value)
         .strip_prefix(old)
         .ok()
-        .map(|relative| new.join(relative).to_string_lossy().into_owned())
+        .map(|relative| {
+            if relative.as_os_str().is_empty() {
+                new.to_string_lossy().into_owned()
+            } else {
+                new.join(relative).to_string_lossy().into_owned()
+            }
+        })
 }
 
 /// Recordings keep absolute paths in the history database; point only paths
@@ -840,6 +846,83 @@ mod tests {
         assert!(r.write_mb_s > 0.0 && r.read_mb_s > 0.0);
         assert!(!dir.join(".taurscribe-speed-test").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn db_with_paths(audio: &[&str], snippets: &str) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::commands::meetings::ensure_meetings_schema(&conn).unwrap();
+        for (i, a) in audio.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO meetings (session_id, title, platform, app_name, url, created_at, duration_ms, audio_path, transcript_raw, category)
+                 VALUES (?1, 't', 'p', 'a', '', '', 0, ?2, '', 'general')",
+                rusqlite::params![format!("s{i}"), a],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO meeting_turns (meeting_id, speaker_id, speaker_name, start_ms, end_ms, channel, text, snippet_path, candidate_snippets)
+             VALUES (1, 'x', 'X', 0, 1, 1, '', NULL, ?1)",
+            [snippets],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn audio_paths(conn: &rusqlite::Connection) -> Vec<String> {
+        conn.prepare("SELECT audio_path FROM meetings ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewrite_paths_moves_only_files_under_the_old_folder() {
+        let mut conn = db_with_paths(
+            &["/data/meetings/a.webm", "/data/meetings-old/b.webm", "/data/meetings"],
+            r#"["/data/meetings/s1.wav","/data/meetings-old/s2.wav"]"#,
+        );
+        rewrite_recording_paths_in_db(&mut conn, Path::new("/data/meetings"), Path::new("/ext/rec")).unwrap();
+        assert_eq!(audio_paths(&conn), ["/ext/rec/a.webm", "/data/meetings-old/b.webm", "/ext/rec"]);
+        let cands: String = conn.query_row("SELECT candidate_snippets FROM meeting_turns", [], |r| r.get(0)).unwrap();
+        assert_eq!(cands, r#"["/ext/rec/s1.wav","/data/meetings-old/s2.wav"]"#);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewrite_paths_does_not_repeat_when_new_path_extends_old() {
+        let mut conn = db_with_paths(&["/data/meetings/a.webm"], r#"["/data/meetings/s1.wav"]"#);
+        rewrite_recording_paths_in_db(&mut conn, Path::new("/data/meetings/"), Path::new("/data/meetings-ext")).unwrap();
+        assert_eq!(audio_paths(&conn), ["/data/meetings-ext/a.webm"]);
+        let cands: String = conn.query_row("SELECT candidate_snippets FROM meeting_turns", [], |r| r.get(0)).unwrap();
+        assert_eq!(cands, r#"["/data/meetings-ext/s1.wav"]"#);
+    }
+
+    #[test]
+    fn rewrite_paths_tolerates_missing_tables() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        rewrite_recording_paths_in_db(&mut conn, Path::new("/a"), Path::new("/b")).unwrap();
+    }
+
+    #[test]
+    fn nearest_existing_walks_up_to_a_real_folder() {
+        let tmp = std::env::temp_dir();
+        assert_eq!(nearest_existing(&tmp.join("no-such-dir-ts").join("deeper")), Some(tmp.clone()));
+        assert_eq!(nearest_existing(&tmp), Some(tmp));
+    }
+
+    #[test]
+    fn dir_size_counts_nested_files() {
+        let root = std::env::temp_dir().join(format!("ts-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("x/y")).unwrap();
+        std::fs::write(root.join("a"), [0u8; 10]).unwrap();
+        std::fs::write(root.join("x/y/b"), [0u8; 5]).unwrap();
+        assert_eq!(dir_size(&root), 15);
+        assert_eq!(dir_size(&root.join("missing")), 0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

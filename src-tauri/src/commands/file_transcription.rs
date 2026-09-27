@@ -532,7 +532,7 @@ fn transcribe_file_window(
     // File jobs run on a worker thread. On macOS, active-window context uses
     // the Accessibility API and must not be queried from this thread. Custom
     // vocabulary remains safe and still provides the intended decoder bias.
-    let dynamic_prompt = crate::context::build_dynamic_prompt(&custom_vocab, false);
+    let dynamic_prompt = crate::context::build_dynamic_prompt(&custom_vocab, None);
     if context_bias_enabled {
         println!("[FILE_TRANSCRIBE] Active-window context bias skipped for worker-thread file transcription");
     }

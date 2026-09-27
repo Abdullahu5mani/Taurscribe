@@ -209,61 +209,6 @@ fn clean_action_task(raw: &str) -> String {
     }
 }
 
-/// Parses an LLM JSON completion into `MeetingSummaryOutput`
-pub fn parse_llm_summary_json(json_str: &str, fallback: MeetingSummaryOutput) -> MeetingSummaryOutput {
-    // Attempt direct parse or extract JSON block {...}
-    let candidate = if let (Some(s), Some(e)) = (json_str.find('{'), json_str.rfind('}')) {
-        &json_str[s..=e]
-    } else {
-        json_str
-    };
-
-    #[derive(Deserialize)]
-    struct LlmResponse {
-        title: Option<String>,
-        category: Option<String>,
-        summary: Option<Vec<String>>,
-        action_items: Option<Vec<LlmActionItem>>,
-    }
-
-    #[derive(Deserialize)]
-    struct LlmActionItem {
-        task: String,
-        assignee: Option<String>,
-        status: Option<String>,
-    }
-
-    if let Ok(parsed) = serde_json::from_str::<LlmResponse>(candidate) {
-        let title = parsed.title.filter(|t| !t.trim().is_empty()).unwrap_or(fallback.title);
-        let category = parsed.category.filter(|c| !c.trim().is_empty()).unwrap_or(fallback.category);
-        let summary = parsed.summary.filter(|s| !s.is_empty()).unwrap_or(fallback.summary);
-
-        let action_items = if let Some(items) = parsed.action_items {
-            items
-                .into_iter()
-                .enumerate()
-                .map(|(i, item)| ActionItem {
-                    id: format!("action_{}", i + 1),
-                    task: item.task,
-                    assignee: item.assignee.unwrap_or_else(|| "You".to_string()),
-                    status: item.status.unwrap_or_else(|| "todo".to_string()),
-                })
-                .collect()
-        } else {
-            fallback.action_items
-        };
-
-        MeetingSummaryOutput {
-            title,
-            category,
-            summary,
-            action_items,
-        }
-    } else {
-        fallback
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,27 +250,11 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_llm_summary_json() {
-        let json_input = r#"{
-            "title": "Google Meet Sprint Sync",
-            "category": "Standup",
-            "summary": ["Reviewed PRs", "Fixed speaker crackle bug"],
-            "action_items": [
-                { "task": "Ship v0.2.0 build", "assignee": "Bob", "status": "todo" }
-            ]
-        }"#;
-
-        let fallback = MeetingSummaryOutput {
-            title: "Default".to_string(),
-            category: "General".to_string(),
-            summary: vec![],
-            action_items: vec![],
-        };
-
-        let parsed = parse_llm_summary_json(json_input, fallback);
-        assert_eq!(parsed.title, "Google Meet Sprint Sync");
-        assert_eq!(parsed.category, "Standup");
-        assert_eq!(parsed.summary.len(), 2);
-        assert_eq!(parsed.action_items[0].assignee, "Bob");
+    fn heuristics_on_empty_meeting() {
+        let out = extract_summary_heuristics(&[], "Call");
+        assert_eq!(out.title, "Call");
+        assert_eq!(out.category, "General");
+        assert!(out.action_items.is_empty());
+        assert_eq!(out.summary.len(), 1);
     }
 }

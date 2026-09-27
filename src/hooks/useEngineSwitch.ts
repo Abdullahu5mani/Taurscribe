@@ -4,7 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import type { ModelInfo, GraniteModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { DownloadProgress } from "../components/settings/types";
-import type { CommandResult, SessionNotice } from "../types/session";
+import type { SessionNotice } from "../types/session";
+import { loadEngineModel } from "../utils/engineLoader";
 
 export type ASREngine = "whisper" | "granite" | "qwen3";
 
@@ -122,8 +123,7 @@ export function useEngineSwitch({
         const displayName = models.find(m => m.id === modelId)?.display_name || modelId;
 
         await withEngineLoad("whisper", `Loading ${displayName}...`, async () => {
-            const result = await invoke<CommandResult<string>>("switch_model", { modelId, useGpu: asrBackend === "gpu" });
-            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Whisper");
+            await loadEngineModel("whisper", modelId, asrBackend === "gpu");
 
             if (activeEngine !== "whisper") {
                 setActiveEngine("whisper");
@@ -215,8 +215,7 @@ export function useEngineSwitch({
         }
 
         await withEngineLoad("granite", `Loading ${displayName}...`, async () => {
-            const result = await invoke<CommandResult<string>>("init_granite", { modelId: targetModel, useGpu: asrBackend === "gpu" });
-            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Granite");
+            await loadEngineModel("granite", targetModel, asrBackend === "gpu");
 
             setCurrentGraniteModel(targetModel);
             setActiveEngine("granite");
@@ -264,11 +263,7 @@ export function useEngineSwitch({
             if (status?.loaded && status.model_id === targetModel) return;
         }
         await withEngineLoad("qwen3", "Loading Qwen3-ASR...", async () => {
-            const result = await invoke<CommandResult<string>>("init_qwen3", {
-                modelId: targetModel,
-                useGpu: asrBackend === "gpu",
-            });
-            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Qwen3-ASR");
+            await loadEngineModel("qwen3", targetModel, asrBackend === "gpu");
             setCurrentQwen3Model(targetModel);
             setActiveEngine("qwen3");
             activeEngineRef.current = "qwen3";
@@ -315,8 +310,7 @@ export function useEngineSwitch({
             if (engine === "whisper") {
                 const displayName = models.find(m => m.id === currentModel)?.display_name || currentModel;
                 setLoadingMessage(`Reloading ${displayName} on ${label}...`);
-                const result = await invoke<CommandResult<string>>("switch_model", { modelId: currentModel, useGpu });
-                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Whisper to ${label}`);
+                await loadEngineModel("whisper", currentModel ?? "", useGpu);
                 setLoadedEngine("whisper");
                 const info = await invoke("get_backend_info");
                 setBackendInfo(info as string);
@@ -324,8 +318,7 @@ export function useEngineSwitch({
                 setSessionNotice?.(null);
             } else if (engine === "granite") {
                 const targetModel = currentGraniteModel || graniteModels[0]?.id;
-                const result = await invoke<CommandResult<string>>("init_granite", { modelId: targetModel, useGpu });
-                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Granite to ${label}`);
+                await loadEngineModel("granite", targetModel, useGpu);
                 setLoadedEngine("granite");
                 const info = await invoke("get_backend_info");
                 setBackendInfo(info as string);
@@ -333,8 +326,7 @@ export function useEngineSwitch({
                 setSessionNotice?.(null);
             } else if (engine === "qwen3") {
                 const qid = currentQwen3Model || qwen3Models[0]?.id;
-                const result = await invoke<CommandResult<string>>("init_qwen3", { modelId: qid, useGpu });
-                if (!result.ok) throw new Error(result.error?.message ?? `Failed to switch Qwen3-ASR to ${label}`);
+                await loadEngineModel("qwen3", qid, useGpu);
                 setLoadedEngine("qwen3");
                 setBackendInfo(await invoke<string>("get_backend_info"));
                 setHeaderStatus(`Qwen3-ASR running on ${label}`);

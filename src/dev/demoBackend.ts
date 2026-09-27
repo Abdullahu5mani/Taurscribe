@@ -171,7 +171,6 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "list_input_devices": return ["MacBook Air Microphone", "AirPods Pro"];
         case "get_active_input_device": return "MacBook Air Microphone";
         case "get_hotkey": return { keys: ["ControlLeft", "MetaLeft"], mode: "hold" };
-        case "get_close_behavior": return "tray";
 
         // Models
         case "get_download_status":
@@ -190,7 +189,6 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "get_auto_unload_status": return { timeout_seconds: 1800, remaining_seconds: 1500, is_loaded: true, last_activity_epoch: Math.floor(now / 1000) };
         case "check_grammar_llm_available": return true;
         case "init_llm": return "FlowScribe V3 (beta) ready";
-        case "check_llm_status": return true;
         case "init_granite":
         case "init_qwen3":
         case "switch_model": return ok("Granite Speech 5 loaded");

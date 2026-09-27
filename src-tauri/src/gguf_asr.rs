@@ -133,6 +133,10 @@ pub struct GgufAsrManager {
     sentence_case: bool,
     engine: Option<GgufAsr>,
     model_id: Option<String>,
+    /// Copy of `get_status()` kept up to date by `initialize` / `unload`, so the
+    /// UI can read it without waiting on this manager's lock (held for a whole
+    /// transcription).
+    snapshot: Arc<std::sync::Mutex<GgufStatus>>,
 }
 
 pub type GraniteManager = GgufAsrManager;
@@ -154,7 +158,22 @@ impl GgufAsrManager {
             sentence_case,
             engine: None,
             model_id: None,
+            snapshot: Arc::new(std::sync::Mutex::new(GgufStatus {
+                loaded: false,
+                model_id: None,
+                backend: "none".to_string(),
+            })),
         }
+    }
+
+    /// Shared, always-current status; readable while the manager is locked.
+    pub fn status_handle(&self) -> Arc<std::sync::Mutex<GgufStatus>> {
+        self.snapshot.clone()
+    }
+
+    fn publish_status(&self) {
+        let status = self.get_status();
+        *self.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = status;
     }
 
     pub fn get_status(&self) -> GgufStatus {
@@ -174,6 +193,7 @@ impl GgufAsrManager {
             println!("[{}] Unloaded", self.family.to_uppercase());
         }
         self.model_id = None;
+        self.publish_status();
         crate::memory::trim_process_memory();
     }
 
@@ -221,6 +241,7 @@ impl GgufAsrManager {
         let message = format!("{} loaded ({})", spec.display_name, engine.backend());
         self.engine = Some(engine);
         self.model_id = Some(spec.id.to_string());
+        self.publish_status();
         Ok(message)
     }
 

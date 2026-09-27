@@ -61,16 +61,6 @@ pub fn set_state(app: &AppHandle, payload: OverlayStatePayload) {
     let _ = (app, payload);
 }
 
-/// Restores focus to the app that was active when the overlay opened.
-pub fn restore_focus(app: &AppHandle) {
-    #[cfg(target_os = "macos")]
-    let _ = app;
-    #[cfg(target_os = "windows")]
-    webview::restore_focus(app);
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let _ = app;
-}
-
 /// Feed a microphone level (0..1) to the overlay waveform. The Windows WebView
 /// listens to the "audio-level" event itself, so this only drives macOS.
 pub fn push_level(app: &AppHandle, level: f32) {
@@ -123,18 +113,8 @@ mod webview {
     use super::OverlayStatePayload;
     use tauri::{AppHandle, Emitter, Manager};
 
-    use std::sync::{Mutex, OnceLock};
-
-    static LAST_FOREGROUND_HWND: OnceLock<Mutex<usize>> = OnceLock::new();
-
-    fn last_foreground_hwnd() -> &'static Mutex<usize> {
-        LAST_FOREGROUND_HWND.get_or_init(|| Mutex::new(0))
-    }
-
     pub fn show(app: &AppHandle) {
         if let Some(overlay) = app.get_webview_window("overlay") {
-            remember_foreground_window();
-
             let monitor = active_monitor(app).or_else(|| overlay.primary_monitor().ok().flatten());
 
             if let Some(m) = monitor {
@@ -164,10 +144,6 @@ mod webview {
         if let Some(overlay) = app.get_webview_window("overlay") {
             let _ = overlay.emit("overlay-state", payload);
         }
-    }
-
-    pub fn restore_focus(_app: &AppHandle) {
-        restore_foreground_window();
     }
 
     /// Returns the monitor containing the foreground window (the app the user
@@ -271,43 +247,6 @@ mod webview {
                 && cy >= pos.y
                 && cy < pos.y + size.height as i32
         })
-    }
-
-    fn remember_foreground_window() {
-        use std::ffi::c_void;
-
-        extern "system" {
-            fn GetForegroundWindow() -> *mut c_void;
-        }
-
-        let hwnd = unsafe { GetForegroundWindow() };
-        if hwnd.is_null() {
-            return;
-        }
-
-        if let Ok(mut slot) = last_foreground_hwnd().lock() {
-            *slot = hwnd as usize;
-        }
-    }
-
-    fn restore_foreground_window() {
-        use std::ffi::c_void;
-
-        extern "system" {
-            fn IsWindow(hwnd: *mut c_void) -> i32;
-            fn SetForegroundWindow(hwnd: *mut c_void) -> i32;
-        }
-
-        let hwnd = match last_foreground_hwnd().lock() {
-            Ok(slot) if *slot != 0 => *slot as *mut c_void,
-            _ => return,
-        };
-
-        unsafe {
-            if IsWindow(hwnd) != 0 {
-                let _ = SetForegroundWindow(hwnd);
-            }
-        }
     }
 }
 

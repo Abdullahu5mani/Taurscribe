@@ -57,19 +57,6 @@ pub fn set_overlay_state(
     );
 }
 
-/// Forwards an action from the overlay HUD back to the main application UI.
-#[tauri::command]
-pub fn request_overlay_action(app: tauri::AppHandle, action: String) -> Result<(), String> {
-    match action.as_str() {
-        "pause" | "resume" | "cancel" => {
-            app.emit("overlay-action", action.clone())
-                .map_err(|e| format!("Failed to emit overlay action: {}", e))?;
-            crate::overlay::restore_focus(&app);
-            Ok(())
-        }
-        _ => Err(format!("Unknown overlay action: {}", action)),
-    }
-}
 
 /// Returns the names of all available audio input devices on this machine.
 /// Sorts audio devices to prioritize virtual ALSA/PipeWire PCMs ("default", "sysdefault", "pipewire", "pulse")
@@ -119,11 +106,6 @@ pub async fn list_input_devices() -> Vec<String> {
     .unwrap_or_default()
 }
 
-/// Alias for `list_input_devices` providing device enumeration and prioritization.
-#[tauri::command]
-pub async fn list_audio_devices() -> Vec<String> {
-    list_input_devices().await
-}
 
 /// Returns the name of the microphone that will actually be used for the next recording.
 /// If the user has selected a specific device, returns that; otherwise returns the system default.
@@ -225,10 +207,6 @@ pub async fn get_system_info() -> Result<SystemInfo, String> {
         .map_err(|e| format!("get_system_info task failed: {}", e))
 }
 
-#[tauri::command]
-pub fn get_process_memory_stats() -> crate::memory::ProcessMemoryStats {
-    crate::memory::process_memory_stats()
-}
 
 /// CPU name for display. ARM Linux reports no brand string (its /proc/cpuinfo
 /// has no "model name"), so fall back to the board's device-tree model, then the
@@ -1390,10 +1368,6 @@ pub struct AutoUnloadStatus {
     pub last_activity_epoch: u64,
 }
 
-#[tauri::command]
-pub fn get_auto_unload_timeout(state: tauri::State<'_, AudioState>) -> u64 {
-    state.auto_unload_seconds.load(std::sync::atomic::Ordering::Relaxed)
-}
 
 #[tauri::command]
 pub fn set_auto_unload_timeout(
@@ -1405,10 +1379,6 @@ pub fn set_auto_unload_timeout(
     Ok(())
 }
 
-#[tauri::command]
-pub fn touch_activity(state: tauri::State<'_, AudioState>) {
-    state.touch_activity();
-}
 
 #[tauri::command]
 pub fn get_auto_unload_status(state: tauri::State<'_, AudioState>) -> AutoUnloadStatus {

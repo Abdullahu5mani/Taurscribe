@@ -1,6 +1,5 @@
 // Module declarations
 mod audio;
-mod audio_input;
 pub mod audio_decode;
 pub mod audio_dual_channel;
 pub mod audio_preprocess;
@@ -326,7 +325,6 @@ pub fn run() {
             commands::set_tray_icon_visible,
             commands::get_system_info,
             commands::get_hardware_diagnostics,
-            commands::get_process_memory_stats,
             commands::start_recording,
             commands::stop_recording,
             commands::get_backend_info,
@@ -340,14 +338,10 @@ pub fn run() {
             commands::list_qwen3_models,
             commands::init_qwen3,
             commands::get_qwen3_status,
-            commands::set_active_engine,
-            commands::get_active_engine,
             commands::set_tray_state,
             commands::check_grammar_llm_available,
             commands::init_llm,
             commands::unload_llm,
-            commands::run_llm_inference,
-            commands::check_llm_status,
             commands::correct_text,
             commands::type_text,
             commands::save_transcript_history,
@@ -363,7 +357,6 @@ pub fn run() {
             commands::set_hotkey,
             commands::set_hotkey_suppressed,
             commands::list_input_devices,
-            commands::list_audio_devices,
             commands::get_active_input_device,
             commands::set_input_device,
             commands::show_overlay,
@@ -373,7 +366,6 @@ pub fn run() {
             storage::set_storage_location,
             storage::measure_storage_speed,
             storage::open_storage_location,
-            commands::request_overlay_action,
             commands::mute_system_audio,
             commands::unmute_system_audio,
             commands::check_microphone_permission,
@@ -389,12 +381,9 @@ pub fn run() {
             commands::unload_current_model,
             commands::relaunch_app,
             commands::factory_reset_app_data,
-            commands::get_close_behavior,
             commands::set_close_behavior,
-            commands::get_auto_unload_timeout,
             commands::set_auto_unload_timeout,
             commands::get_auto_unload_status,
-            commands::touch_activity,
             commands::pause_recording,
             commands::resume_recording,
             commands::cancel_recording,
@@ -426,7 +415,6 @@ pub fn run() {
             commands::delete_speaker_from_vault,
             commands::cycle_speaker_turn_snippet,
             commands::cycle_vault_speaker_snippet,
-            commands::generate_meeting_summary,
             commands::export_meeting_notes,
             crate::context::get_active_context_preview
         ])

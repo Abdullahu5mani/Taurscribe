@@ -548,6 +548,13 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
     if cancelled { Err("Download cancelled by user".to_string()) } else { result }
 }
 
+/// Creates a file to download into. On failure the error goes through `fail`
+/// (which cleans up the model's other files and tells the UI) rather than
+/// straight back to the caller.
+fn create_download_file(path: &std::path::Path, fail: impl FnOnce(&str) -> String) -> Result<File, String> {
+    File::create(path).map_err(|e| fail(&format!("Failed to create file: {}", e)))
+}
+
 /// Fetches the LFS pointer for a HuggingFace file and returns its SHA-256 hash.
 /// Returns None if the fetch fails or the response is not an LFS pointer.
 async fn fetch_hf_lfs_sha256(
@@ -725,8 +732,8 @@ async fn download_model_inner(
             }
 
             let total_size = res.content_length().unwrap_or(0);
-            let mut file = File::create(&download_path)
-                .map_err(|e| format!("Failed to create file: {}", e))?;
+            // Through emit_error so earlier files are cleaned up and the UI hears about it.
+            let mut file = create_download_file(&download_path, |msg| emit_error(app, model_id, i, files_count, msg))?;
 
             let mut downloaded: u64 = 0;
             let mut stream = res.bytes_stream();
@@ -1230,6 +1237,37 @@ mod tests {
         assert!(!second.load(Ordering::Relaxed));
         assert!(!begin_finish_cancel_flag(&id, &second));
         unregister_cancel_flag(&id, &second);
+    }
+
+    #[test]
+    fn failing_to_create_a_download_file_cleans_up_and_reports() {
+        let dir = std::env::temp_dir().join(format!("ts-dl-create-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("blocked")).unwrap();
+        let config = ModelConfig {
+            repo: "test/repo",
+            branch: "main",
+            files: vec![
+                ModelFile { filename: "first.bin", remote_path: "first.bin", sha1: "" },
+                ModelFile { filename: "blocked", remote_path: "blocked", sha1: "" },
+            ],
+            subdirectory: None,
+        };
+        // The first file was already downloaded when the second one fails.
+        std::fs::write(dir.join("first.bin"), b"partial").unwrap();
+        let mut failed_with = None;
+        // A directory in the way makes File::create fail.
+        let err = create_download_file(&dir.join("blocked"), |msg| {
+            failed_with = Some(msg.to_string());
+            delete_model_files(&config, &dir);
+            "reported".to_string()
+        })
+        .unwrap_err();
+        assert_eq!(err, "reported");
+        assert!(failed_with.unwrap().starts_with("Failed to create file"));
+        assert!(!dir.join("first.bin").exists(), "earlier files are cleaned up");
+        assert!(create_download_file(&dir.join("ok.bin"), |_| unreachable!()).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

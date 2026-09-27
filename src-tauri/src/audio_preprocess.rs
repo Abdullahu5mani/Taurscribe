@@ -149,22 +149,26 @@ fn resample_mono_ratio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<
     )
     .map_err(|e| format!("Resampler init failed: {:?}", e))?;
 
-    let estimated_len = ((samples.len() as f64 * to_rate as f64 / from_rate as f64).ceil()
-        as usize)
-        .saturating_add(RESAMPLE_CHUNK);
-    let mut resampled = Vec::with_capacity(estimated_len);
+    // The last chunk is zero-padded to a full chunk, which used to leave up to
+    // ~0.2 s of silence after every resampled buffer (every live chunk and every
+    // file). Keep exactly len * ratio samples; feed silence if the resampler has
+    // not produced that many yet.
+    let expected_len = (samples.len() as f64 * to_rate as f64 / from_rate as f64).round() as usize;
+    let mut resampled = Vec::with_capacity(expected_len + RESAMPLE_CHUNK);
     let mut input = vec![Vec::with_capacity(RESAMPLE_CHUNK)];
-    for chunk in samples.chunks(RESAMPLE_CHUNK) {
+    let mut chunks = samples.chunks(RESAMPLE_CHUNK);
+    while resampled.len() < expected_len {
         input[0].clear();
-        input[0].extend_from_slice(chunk);
-        if input[0].len() < RESAMPLE_CHUNK {
-            input[0].resize(RESAMPLE_CHUNK, 0.0);
+        if let Some(chunk) = chunks.next() {
+            input[0].extend_from_slice(chunk);
         }
+        input[0].resize(RESAMPLE_CHUNK, 0.0);
         let waves_out = resampler
             .process(&input, None)
             .map_err(|e| format!("Resample failed: {:?}", e))?;
         resampled.extend_from_slice(&waves_out[0]);
     }
+    resampled.truncate(expected_len);
 
     Ok(resampled)
 }
@@ -469,6 +473,121 @@ pub fn preprocess_assembled_speech_16k(speech: &mut Vec<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sine(freq: f32, rate: u32, secs: f32) -> Vec<f32> {
+        (0..(rate as f32 * secs) as usize)
+            .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / rate as f32).sin() * 0.5)
+            .collect()
+    }
+
+    #[test]
+    fn resampled_length_matches_the_duration() {
+        for (rate, len) in [(48_000u32, 48_000usize), (48_000, 288_000), (44_100, 44_100), (44_100, 12_345), (8_000, 8_000), (22_050, 1)] {
+            let input = vec![0.1f32; len];
+            let out = resample_mono_to_16k(&input, rate).unwrap();
+            let expected = (len as f64 * 16_000.0 / rate as f64).round() as usize;
+            assert_eq!(out.len(), expected, "{len} samples at {rate} Hz");
+        }
+        assert!(resample_mono_to_16k(&[], 48_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resampling_keeps_the_signal_in_time() {
+        // A click 0.5 s in must still be ~0.5 s in after resampling (no filter delay).
+        let mut input = vec![0.0f32; 48_000];
+        input[24_000] = 1.0;
+        let out = resample_mono_to_16k(&input, 48_000).unwrap();
+        let peak = out
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap())
+            .unwrap()
+            .0;
+        assert!((peak as i64 - 8_000).abs() <= 2, "peak at {peak}");
+    }
+
+    #[test]
+    fn resampling_preserves_a_tone_to_the_last_sample() {
+        let out = resample_mono_to_16k(&sine(440.0, 48_000, 1.0), 48_000).unwrap();
+        let tail_rms = global_rms(&out[out.len() - 1600..]);
+        assert!((tail_rms - 0.5 / 2f32.sqrt()).abs() < 0.05, "tail rms {tail_rms}");
+        let head_rms = global_rms(&out[..1600]);
+        assert!((head_rms - 0.5 / 2f32.sqrt()).abs() < 0.05, "head rms {head_rms}");
+    }
+
+    #[test]
+    fn upsample_round_trip_keeps_length() {
+        let input = sine(300.0, 16_000, 0.73);
+        let up = resample_mono_ratio(&input, 16_000, 48_000).unwrap();
+        assert_eq!(up.len(), input.len() * 3);
+        let back = resample_mono_ratio(&up, 48_000, 16_000).unwrap();
+        assert_eq!(back.len(), input.len());
+        let err: f32 = input.iter().zip(&back).map(|(a, b)| (a - b).abs()).sum::<f32>() / input.len() as f32;
+        assert!(err < 0.02, "mean abs error {err}");
+    }
+
+    #[test]
+    fn downmix_averages_channels() {
+        assert_eq!(downmix_interleaved_to_mono(&[1.0, -1.0, 0.5, 0.5], 2), vec![0.0, 0.5]);
+        assert!((downmix_interleaved_to_mono(&[0.3, 0.6, 0.9], 3)[0] - 0.6).abs() < 1e-6);
+        assert_eq!(downmix_interleaved_to_mono(&[0.1, 0.2], 1), vec![0.1, 0.2]);
+        assert_eq!(downmix_interleaved_to_mono(&[0.1, 0.2], 0), vec![0.1, 0.2]);
+        // A trailing partial frame is averaged over the samples it has.
+        assert_eq!(downmix_interleaved_to_mono(&[0.2, 0.4, 0.8], 2), vec![0.3, 0.8]);
+    }
+
+    #[test]
+    fn edge_trim_removes_long_silence_but_keeps_short_gaps() {
+        let silence = |ms: usize| vec![0.0f32; 16 * ms];
+        let speech = sine(300.0, 16_000, 1.0);
+        let mut padded = silence(1000);
+        padded.extend(&speech);
+        padded.extend(silence(1000));
+        let trimmed = trim_file_edges_16k(&padded);
+        assert!(trimmed.len() >= speech.len() && trimmed.len() < speech.len() + 16 * 60, "{}", trimmed.len());
+
+        let mut short = silence(200);
+        short.extend(&speech);
+        assert_eq!(trim_file_edges_16k(&short).len(), short.len());
+
+        assert!(trim_file_edges_16k(&[]).is_empty());
+        let quiet = silence(2000);
+        assert_eq!(trim_file_edges_16k(&quiet).len(), quiet.len());
+    }
+
+    #[test]
+    fn level_assist_boosts_quiet_audio_within_the_gain_cap() {
+        let mut quiet = vec![0.01f32; 1600];
+        apply_level_assist(&mut quiet);
+        assert!((quiet[0] - 0.1).abs() < 1e-4);
+        let mut very_quiet = vec![0.001f32; 1600];
+        apply_level_assist(&mut very_quiet);
+        assert!((very_quiet[0] - 0.01).abs() < 1e-5, "capped at +20 dB");
+        let mut loud = vec![0.2f32; 1600];
+        apply_level_assist(&mut loud);
+        assert_eq!(loud[0], 0.2);
+    }
+
+    #[test]
+    fn dc_removal_and_high_pass_centre_the_signal() {
+        let mut v: Vec<f32> = sine(440.0, 16_000, 0.5).iter().map(|s| s + 0.3).collect();
+        remove_dc(&mut v);
+        let mean = v.iter().sum::<f32>() / v.len() as f32;
+        assert!(mean.abs() < 1e-3);
+        let mut offset = vec![0.5f32; 16_000];
+        highpass_80hz_16k(&mut offset);
+        assert!(offset[15_999].abs() < 1e-3, "constant input decays to zero");
+    }
+
+    #[test]
+    fn noise_floor_uses_the_quietest_frames() {
+        let mut v = vec![0.001f32; 16_000];
+        v.extend(vec![0.5f32; 16_000]);
+        let floor = estimate_noise_floor_rms(&v, 16_000);
+        assert!((floor - 0.001).abs() < 1e-4, "{floor}");
+        assert_eq!(estimate_noise_floor_rms(&[], 16_000), 0.0);
+        assert!(peak_to_floor_snr(&v, 16_000) > 100.0);
+    }
 
     /// No fixture file — verifies the assembled-speech chain does not explode and clamps output.
     #[test]

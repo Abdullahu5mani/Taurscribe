@@ -352,7 +352,7 @@ function App() {
     isRecording, isRecordingRef, isPaused, isProcessingTranscript,
     latestLatency,
     isDualChannelRecording, dualLevels,
-    handleStartRecording, handlePauseRecording, handleResumeRecording, handleStopRecording, handleCancelRecording, handleTranscriptionChunk,
+    handleStartRecording, handleStopRecording, handleTranscriptionChunk,
   } = useRecording({
     activeEngineRef: activeEngineForwarded,
     models, graniteModels, qwen3Models, currentModel, currentGraniteModel, currentQwen3Model,
@@ -582,9 +582,6 @@ function App() {
   // ── Stable handler refs for useHotkeyListeners ──
   const handleStartRecordingRef = useSyncedRef(handleStartRecording);
   const handleStopRecordingRef = useSyncedRef(handleStopRecording);
-  const handlePauseRecordingRef = useSyncedRef(handlePauseRecording);
-  const handleResumeRecordingRef = useSyncedRef(handleResumeRecording);
-  const handleCancelRecordingRef = useSyncedRef(handleCancelRecording);
   const handleTranscriptionChunkRef = useSyncedRef(handleTranscriptionChunk);
   const asrModelCountsRef = useRef({
     whisper: 0,
@@ -673,9 +670,6 @@ function App() {
     asrModelCountsRef,
     handleStartRecordingRef,
     handleStopRecordingRef,
-    handlePauseRecordingRef,
-    handleResumeRecordingRef,
-    handleCancelRecordingRef,
     handleTranscriptionChunkRef,
     playErrorRef,
     setHeaderStatusRef,

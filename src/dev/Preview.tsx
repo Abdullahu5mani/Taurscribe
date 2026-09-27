@@ -21,7 +21,6 @@ const FAKE: Record<string, unknown> = {
   get_platform: "macos",
   is_apple_silicon: true,
   get_system_info: { cpu_name: "Apple M4", cpu_cores: 10, ram_total_gb: 16, gpu_name: "Apple M4", cuda_available: false, vram_gb: null, backend_hint: "Metal" },
-  get_close_behavior: "tray",
   get_storage_locations: [
     { area: "models", path: "/Volumes/ExternalSSD/TaurscribeData/models", default_path: "/Users/me/Library/Application Support/Taurscribe/models", is_custom: true, is_other_drive: true, is_removable: true, available: true, used_bytes: 7.1e9, free_bytes: 412e9, drive_name: "ExternalSSD" },
     { area: "recordings", path: "/Users/me/Library/Application Support/Taurscribe/meetings", default_path: "/Users/me/Library/Application Support/Taurscribe/meetings", is_custom: false, is_other_drive: false, is_removable: false, available: true, used_bytes: 184e6, free_bytes: 96e9, drive_name: "Macintosh HD" },

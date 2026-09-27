@@ -30,6 +30,16 @@ export function genId(): string {
 // ── Core replacement functions ───────────────────────────────────────────────
 
 /**
+ * Case-insensitive whole-word pattern for user text. `\b` is ASCII-only and
+ * needs a word character on the inside, so it never matched "café" or
+ * triggers like "/sig"; Unicode lookarounds treat any letter/digit as a word
+ * character and work whatever the term starts or ends with.
+ */
+function wholeWordRegex(term: string): RegExp {
+    return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(term)}(?![\\p{L}\\p{N}_])`, "giu");
+}
+
+/**
  * Apply custom dictionary substitutions (case-insensitive, whole-word).
  * Runs early in the pipeline to fix proper nouns before grammar correction.
  */
@@ -37,9 +47,10 @@ export function applyDictionary(text: string, dict: DictEntry[]): string {
     if (!dict.length) return text;
     let result = text;
     for (const entry of dict) {
-        if (!entry.soundsLike.trim() || !entry.correct.trim()) continue;
-        const regex = new RegExp(`\\b${escapeRegex(entry.soundsLike)}\\b`, "gi");
-        result = result.replace(regex, entry.correct);
+        const term = entry.soundsLike.trim();
+        if (!term || !entry.correct.trim()) continue;
+        // A replacer function inserts the text as-is ("$&" or "$$" in a string would be expanded).
+        result = result.replace(wholeWordRegex(term), () => entry.correct);
     }
     return result;
 }
@@ -52,9 +63,9 @@ export function applySnippets(text: string, snippets: SnippetEntry[]): string {
     if (!snippets.length) return text;
     let result = text;
     for (const snippet of snippets) {
-        if (!snippet.trigger.trim() || !snippet.expansion.trim()) continue;
-        const regex = new RegExp(`\\b${escapeRegex(snippet.trigger)}\\b`, "gi");
-        result = result.replace(regex, snippet.expansion);
+        const trigger = snippet.trigger.trim();
+        if (!trigger || !snippet.expansion.trim()) continue;
+        result = result.replace(wholeWordRegex(trigger), () => snippet.expansion);
     }
     return result;
 }
