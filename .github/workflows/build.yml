@@ -391,6 +391,9 @@ jobs:
 
       - name: Type-check E2E harness
         run: bun run check:e2e
+
+      - name: Frontend unit tests
+        run: bun run test
       
       # Enable Long File Paths in Registry: 
       # Even with git config, Windows OS limits paths to 260 chars unless this Registry key is set.

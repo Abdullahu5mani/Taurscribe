@@ -282,3 +282,107 @@ pub fn assemble_speech_audio(
 
     Ok(assembled)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tone(secs: f32, amp: f32) -> Vec<f32> {
+        (0..(16_000.0 * secs) as usize)
+            .map(|i| (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 16_000.0).sin() * amp)
+            .collect()
+    }
+
+    fn silence(secs: f32) -> Vec<f32> {
+        vec![0.0; (16_000.0 * secs) as usize]
+    }
+
+    #[test]
+    fn energy_vad_ramps_between_thresholds() {
+        let mut vad = VADManager::new().unwrap();
+        assert_eq!(vad.is_speech(&[]).unwrap(), 0.0);
+        assert_eq!(vad.is_speech(&[0.004; 800]).unwrap(), 0.0);
+        assert_eq!(vad.is_speech(&[0.03; 800]).unwrap(), 1.0);
+        let mid = vad.is_speech(&[0.015; 800]).unwrap();
+        assert!((mid - 0.5).abs() < 1e-3, "{mid}");
+    }
+
+    #[test]
+    fn max_speech_prob_stops_at_the_frame_limit() {
+        let mut vad = VADManager::new().unwrap();
+        let mut audio = silence(1.0);
+        audio.extend(tone(0.5, 0.5));
+        assert_eq!(vad.max_speech_prob(&audio, 10), 0.0);
+        assert_eq!(vad.max_speech_prob(&audio, 1000), 1.0);
+        assert_eq!(vad.max_speech_prob(&audio, 0), 0.0);
+        assert_eq!(vad.max_speech_prob(&[], 10), 0.0);
+    }
+
+    #[test]
+    fn hysteresis_finds_separate_speech_segments() {
+        let mut vad = VADManager::new().unwrap();
+        let mut audio = silence(1.0);
+        audio.extend(tone(1.0, 0.3));
+        audio.extend(silence(2.0));
+        audio.extend(tone(0.5, 0.3));
+        let segs = vad.get_speech_timestamps_hysteresis(&audio, 200, 0.5, 0.2).unwrap();
+        assert_eq!(segs.len(), 2, "{segs:?}");
+        assert!((segs[0].0 - 0.8).abs() < 0.06, "{segs:?}");
+        assert!(segs[0].1 > 2.0 && segs[0].1 < 2.4, "{segs:?}");
+        assert!((segs[1].0 - 3.8).abs() < 0.06, "{segs:?}");
+        assert!((segs[1].1 - audio.len() as f32 / 16_000.0).abs() < 1e-3, "open segment runs to the end");
+    }
+
+    #[test]
+    fn hysteresis_ignores_single_frame_blips_and_merges_short_gaps() {
+        let mut vad = VADManager::new().unwrap();
+        let mut blip = silence(1.0);
+        blip.extend(tone(0.05, 0.5));
+        blip.extend(silence(1.0));
+        assert!(vad.get_speech_timestamps_hysteresis(&blip, 100, 0.5, 0.2).unwrap().is_empty());
+
+        let mut gap = tone(1.0, 0.3);
+        gap.extend(silence(0.1));
+        gap.extend(tone(1.0, 0.3));
+        let segs = vad.get_speech_timestamps_hysteresis(&gap, 300, 0.5, 0.2).unwrap();
+        assert_eq!(segs.len(), 1, "{segs:?}");
+    }
+
+    #[test]
+    fn assembled_audio_drops_long_silences() {
+        let mut audio = silence(2.0);
+        audio.extend(tone(1.0, 0.3));
+        audio.extend(silence(3.0));
+        audio.extend(tone(1.0, 0.3));
+        audio.extend(silence(2.0));
+        let speech = assemble_speech_audio(&audio, None).unwrap();
+        // Two seconds of speech plus 100 ms padding each side and the 800 ms hangover edge.
+        assert!(speech.len() >= 32_000 && speech.len() <= 32_000 + 4 * 1_600 + 1_600, "{}", speech.len());
+        assert!(speech.len() < audio.len() / 2);
+    }
+
+    #[test]
+    fn assembled_audio_keeps_short_pauses() {
+        let mut audio = tone(1.0, 0.3);
+        audio.extend(silence(0.3));
+        audio.extend(tone(1.0, 0.3));
+        let speech = assemble_speech_audio(&audio, None).unwrap();
+        assert_eq!(speech.len(), audio.len());
+    }
+
+    #[test]
+    fn assembled_audio_of_silence_is_empty() {
+        assert!(assemble_speech_audio(&silence(3.0), None).unwrap().is_empty());
+        assert!(assemble_speech_audio(&[], None).unwrap().is_empty());
+        // Quiet hiss below the absolute floor is not speech either.
+        assert!(assemble_speech_audio(&vec![0.001; 48_000], None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn assembled_audio_honours_cancellation() {
+        let cancel = Arc::new(AtomicBool::new(true));
+        assert!(assemble_speech_audio(&tone(1.0, 0.3), Some(&cancel)).is_err());
+        cancel.store(false, Ordering::Relaxed);
+        assert!(assemble_speech_audio(&tone(1.0, 0.3), Some(&cancel)).is_ok());
+    }
+}

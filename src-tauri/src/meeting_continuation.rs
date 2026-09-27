@@ -243,7 +243,8 @@ pub fn carry_names(
     }
     // Best old speaker for each new one, most overlap first; each old speaker used once.
     let mut pairs: Vec<((String, String), u64)> = overlap.into_iter().collect();
-    pairs.sort_by(|a, b| b.1.cmp(&a.1));
+    // Ties broken by id so the result does not depend on HashMap order.
+    pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let mut used_new = std::collections::HashSet::new();
     let mut used_old = std::collections::HashSet::new();
     let mut rename: HashMap<String, (String, String)> = HashMap::new();

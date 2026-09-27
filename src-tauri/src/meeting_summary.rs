@@ -212,10 +212,10 @@ fn clean_action_task(raw: &str) -> String {
 /// Parses an LLM JSON completion into `MeetingSummaryOutput`
 pub fn parse_llm_summary_json(json_str: &str, fallback: MeetingSummaryOutput) -> MeetingSummaryOutput {
     // Attempt direct parse or extract JSON block {...}
-    let candidate = if let (Some(s), Some(e)) = (json_str.find('{'), json_str.rfind('}')) {
-        &json_str[s..=e]
-    } else {
-        json_str
+    // A '}' before the first '{' (e.g. "} ... {") must not be sliced backwards.
+    let candidate = match (json_str.find('{'), json_str.rfind('}')) {
+        (Some(s), Some(e)) if s < e => &json_str[s..=e],
+        _ => json_str,
     };
 
     #[derive(Deserialize)]
@@ -241,10 +241,11 @@ pub fn parse_llm_summary_json(json_str: &str, fallback: MeetingSummaryOutput) ->
         let action_items = if let Some(items) = parsed.action_items {
             items
                 .into_iter()
+                .filter(|item| !item.task.trim().is_empty())
                 .enumerate()
                 .map(|(i, item)| ActionItem {
                     id: format!("action_{}", i + 1),
-                    task: item.task,
+                    task: clean_action_task(&item.task),
                     assignee: item.assignee.unwrap_or_else(|| "You".to_string()),
                     status: item.status.unwrap_or_else(|| "todo".to_string()),
                 })
@@ -327,5 +328,63 @@ mod tests {
         assert_eq!(parsed.category, "Standup");
         assert_eq!(parsed.summary.len(), 2);
         assert_eq!(parsed.action_items[0].assignee, "Bob");
+    }
+
+    fn fallback() -> MeetingSummaryOutput {
+        MeetingSummaryOutput {
+            title: "Default".to_string(),
+            category: "General".to_string(),
+            summary: vec!["fallback".to_string()],
+            action_items: vec![],
+        }
+    }
+
+    #[test]
+    fn llm_json_with_braces_out_of_order_falls_back() {
+        // Used to panic slicing json_str[s..=e] with s > e.
+        assert_eq!(parse_llm_summary_json("} not json {", fallback()), fallback());
+        assert_eq!(parse_llm_summary_json("", fallback()), fallback());
+        assert_eq!(parse_llm_summary_json("no braces", fallback()), fallback());
+    }
+
+    #[test]
+    fn llm_json_is_extracted_from_surrounding_prose() {
+        let out = parse_llm_summary_json(
+            "Sure! Here is the summary:\n```json\n{\"title\": \"Q3 plan\", \"summary\": [\"Agreed on scope\"]}\n```",
+            fallback(),
+        );
+        assert_eq!(out.title, "Q3 plan");
+        assert_eq!(out.summary, vec!["Agreed on scope".to_string()]);
+        assert_eq!(out.category, "General");
+    }
+
+    #[test]
+    fn llm_json_blank_fields_keep_fallback_values() {
+        let out = parse_llm_summary_json(r#"{"title": "  ", "category": "", "summary": []}"#, fallback());
+        assert_eq!(out, fallback());
+    }
+
+    #[test]
+    fn llm_action_items_drop_empty_tasks_and_get_defaults() {
+        let out = parse_llm_summary_json(
+            r#"{"action_items": [{"task": "  "}, {"task": "send the deck"}, {"task": "Book room", "assignee": "Ann", "status": "done"}]}"#,
+            fallback(),
+        );
+        assert_eq!(out.action_items.len(), 2);
+        assert_eq!(out.action_items[0].id, "action_1");
+        assert_eq!(out.action_items[0].task, "Send the deck");
+        assert_eq!(out.action_items[0].assignee, "You");
+        assert_eq!(out.action_items[0].status, "todo");
+        assert_eq!(out.action_items[1].id, "action_2");
+        assert_eq!(out.action_items[1].status, "done");
+    }
+
+    #[test]
+    fn heuristics_on_empty_meeting() {
+        let out = extract_summary_heuristics(&[], "Call");
+        assert_eq!(out.title, "Call");
+        assert_eq!(out.category, "General");
+        assert!(out.action_items.is_empty());
+        assert_eq!(out.summary.len(), 1);
     }
 }

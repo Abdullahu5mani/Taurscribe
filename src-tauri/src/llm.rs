@@ -153,7 +153,7 @@ fn ordered_numbers(text: &str) -> Vec<u64> {
     let mut last_scale = false;
     let flush = |values: &mut Vec<u64>, cur: &mut u64, total: &mut u64, active: &mut bool| {
         if *active {
-            values.push(*total + *cur);
+            values.push(total.saturating_add(*cur));
         }
         *cur = 0;
         *total = 0;
@@ -186,10 +186,11 @@ fn ordered_numbers(text: &str) -> Vec<u64> {
             continue;
         }
         if let (Some(s), true) = (scale_word(w), active) {
+            // Saturating: "hundred hundred hundred ..." must not overflow.
             if s == 100 {
-                cur = cur.max(1) * 100;
+                cur = cur.max(1).saturating_mul(100);
             } else {
-                total += cur.max(1) * s;
+                total = total.saturating_add(cur.max(1).saturating_mul(s));
                 cur = 0;
             }
             last_scale = true;
@@ -207,7 +208,7 @@ fn ordered_numbers(text: &str) -> Vec<u64> {
             flush(&mut values, &mut cur, &mut total, &mut active);
             active = true;
         }
-        cur += val;
+        cur = cur.saturating_add(val);
         last_tens = is_tens;
         last_scale = false;
     }
@@ -628,6 +629,68 @@ mod tests {
         for (out, inp, want) in cases {
             assert_eq!(numbers_supported(out, inp), want, "{out} <- {inp}");
         }
+    }
+
+    #[test]
+    fn spoken_numbers_are_read_in_order() {
+        assert_eq!(ordered_numbers("two thousand three hundred and forty five"), vec![2345]);
+        assert_eq!(ordered_numbers("one million two hundred thousand"), vec![1_200_000]);
+        assert_eq!(ordered_numbers("a hundred and five"), vec![105]);
+        assert_eq!(ordered_numbers("three thirty"), vec![3, 30]);
+        assert_eq!(ordered_numbers("twenty twenty five"), vec![20, 25]);
+        assert_eq!(ordered_numbers("the 3rd of $1,250.75"), vec![3, 1250, 75]);
+        assert_eq!(ordered_numbers("twenty-one"), vec![21]);
+        assert_eq!(ordered_numbers("no numbers here"), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn huge_spoken_numbers_do_not_overflow() {
+        let words = vec!["hundred"; 40].join(" ");
+        assert_eq!(ordered_numbers(&format!("one {words}")), vec![u64::MAX]);
+        let billions = vec!["nine hundred ninety nine billion"; 30].join(" ");
+        assert!(!ordered_numbers(&billions).is_empty());
+        assert!(!numbers_supported("5", &format!("one {words}")));
+    }
+
+    #[test]
+    fn number_guard_edge_cases() {
+        // Leading zeros and a bare "0" are fine; digits glued to letters still count.
+        assert!(numbers_supported("Room 007", "room zero zero seven"));
+        assert!(numbers_supported("at 4:00", "at four"));
+        assert!(!numbers_supported("v2 launch", "the launch"));
+        // A trailing period or comma is punctuation, not a decimal.
+        assert!(numbers_supported("I have 3.", "i have three"));
+        assert!(numbers_supported("Buy 2, then 5.", "buy two then five"));
+        // Wrong decimals are caught.
+        assert!(!numbers_supported("$4.99", "four dollars ninety five"));
+    }
+
+    #[test]
+    fn broken_output_length_limit() {
+        let input = "a".repeat(100);
+        assert!(!output_looks_broken(&"b".repeat(200), &input));
+        assert!(output_looks_broken(&"b".repeat(201), &input));
+        assert!(!output_looks_broken("", ""));
+        assert!(!is_looping(&[]));
+    }
+
+    #[test]
+    fn prompt_strips_tag_characters_and_limits_vocab() {
+        let req = FlowRequest {
+            engine: "whisper".into(),
+            level: "clean".into(),
+            app: "generic".into(),
+            vocab: (0..50).map(|i| format!("<w{i}>")).chain(["  ".to_string()]).collect(),
+            prev: Some("line one\n<b>two</b>  ".into()),
+        };
+        let p = build_v3_prompt("  hello  ", &req);
+        assert!(p.contains("<vocab=w0; w1;"));
+        assert!(p.contains("w39>") && !p.contains("w40"));
+        assert!(p.contains("<prev>line one btwo/b</prev>"));
+        assert!(p.contains("<text>hello</text>"));
+        let bare = FlowRequest { vocab: vec![], prev: Some("   ".into()), ..req };
+        let p = build_v3_prompt("x", &bare);
+        assert!(!p.contains("<vocab=") && !p.contains("<prev>"));
     }
 
     #[test]

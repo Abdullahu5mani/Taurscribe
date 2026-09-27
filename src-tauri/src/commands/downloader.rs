@@ -725,8 +725,10 @@ async fn download_model_inner(
             }
 
             let total_size = res.content_length().unwrap_or(0);
-            let mut file = File::create(&download_path)
-                .map_err(|e| format!("Failed to create file: {}", e))?;
+            // Through emit_error so earlier files are cleaned up and the UI hears about it.
+            let mut file = File::create(&download_path).map_err(|e| {
+                emit_error(app, model_id, i, files_count, &format!("Failed to create file: {}", e))
+            })?;
 
             let mut downloaded: u64 = 0;
             let mut stream = res.bytes_stream();

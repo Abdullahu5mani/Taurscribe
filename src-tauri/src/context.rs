@@ -376,12 +376,34 @@ pub fn apply_custom_vocabulary_casing(text: &str, custom_vocab: &[String]) -> St
         if clean_term.is_empty() {
             continue;
         }
-        let pattern = format!(r"(?i)\b{}\b", regex::escape(clean_term));
-        if let Ok(re) = regex::Regex::new(&pattern) {
-            result = re.replace_all(&result, clean_term).to_string();
-        }
+        result = replace_whole_word_ci(&result, clean_term, clean_term);
     }
     result
+}
+
+/// Case-insensitive whole-word replacement. `\b` only works when the term starts
+/// and ends with a word character, so "C++" or ".NET" never matched; instead
+/// each match is kept only when the characters around it are not word characters.
+/// The replacement is inserted literally (a `$` in a term is not a group reference).
+fn replace_whole_word_ci(text: &str, term: &str, replacement: &str) -> String {
+    let Ok(re) = regex::Regex::new(&format!("(?i){}", regex::escape(term))) else {
+        return text.to_string();
+    };
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for m in re.find_iter(text) {
+        let before = text[..m.start()].chars().next_back();
+        let after = text[m.end()..].chars().next();
+        if before.is_some_and(is_word) || after.is_some_and(is_word) {
+            continue;
+        }
+        out.push_str(&text[last..m.start()]);
+        out.push_str(replacement);
+        last = m.end();
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 #[cfg(test)]
@@ -394,6 +416,69 @@ mod context_tests {
         let raw = "Welcome to taurscribe, make sure you use USECALLBACK here.";
         let cleaned = apply_custom_vocabulary_casing(raw, &vocab);
         assert_eq!(cleaned, "Welcome to Taurscribe, make sure you use useCallback here.");
+    }
+
+    #[test]
+    fn vocabulary_casing_handles_symbols_and_dollar_signs() {
+        let vocab = vec!["C++".to_string(), ".NET".to_string(), "$HOME".to_string(), "Node.js".to_string()];
+        let raw = "we use c++ and .net, set $home, then run node.js";
+        assert_eq!(
+            apply_custom_vocabulary_casing(raw, &vocab),
+            "we use C++ and .NET, set $HOME, then run Node.js"
+        );
+    }
+
+    #[test]
+    fn vocabulary_casing_only_matches_whole_words() {
+        let vocab = vec!["Rust".to_string(), "C".to_string()];
+        assert_eq!(apply_custom_vocabulary_casing("trust rust, crusty", &vocab), "trust Rust, crusty");
+        assert_eq!(apply_custom_vocabulary_casing("abc c++ c", &vocab), "abc C++ C");
+        assert_eq!(apply_custom_vocabulary_casing("rust_lang rustacean", &vocab), "rust_lang rustacean");
+    }
+
+    #[test]
+    fn vocabulary_casing_handles_unicode_and_blank_terms() {
+        let vocab = vec!["  ".to_string(), "Zoë".to_string(), "Café".to_string()];
+        assert_eq!(apply_custom_vocabulary_casing("ask zoë at the café", &vocab), "ask Zoë at the Café");
+        assert_eq!(apply_custom_vocabulary_casing("zoëy", &vocab), "zoëy");
+        assert_eq!(apply_custom_vocabulary_casing("", &vocab), "");
+        assert_eq!(apply_custom_vocabulary_casing("same", &[]), "same");
+    }
+
+    #[test]
+    fn prompt_skips_blank_vocab_and_joins_terms() {
+        let vocab = vec![" Tauri ".to_string(), "".to_string(), "Rust".to_string()];
+        assert_eq!(build_dynamic_prompt(&vocab, false).as_deref(), Some("Tauri, Rust"));
+        assert!(build_dynamic_prompt(&["   ".to_string()], false).is_none());
+    }
+
+    #[test]
+    fn prompt_truncation_keeps_utf8_valid() {
+        let vocab: Vec<String> = (0..80).map(|i| format!("Café{i}🙂")).collect();
+        let prompt = build_dynamic_prompt(&vocab, false).unwrap();
+        assert!(prompt.len() <= 250 && prompt.ends_with("..."));
+    }
+
+    #[test]
+    fn app_categories_cover_each_bucket() {
+        assert_eq!(app_category_for("Microsoft Outlook"), "email");
+        assert_eq!(app_category_for("Notion – Roadmap"), "notes");
+        assert_eq!(app_category_for("Linear"), "calendar_task");
+        assert_eq!(app_category_for("Microsoft Word - Report.docx"), "document");
+        assert_eq!(app_category_for("DuckDuckGo"), "search");
+        assert_eq!(app_category_for("Claude"), "ai_prompt");
+        assert_eq!(app_category_for("zsh — 80x24"), "terminal");
+        assert_eq!(app_category_for("lib.rs - taurscribe"), "code_editor");
+        assert_eq!(app_category_for(""), "generic");
+        // Whole-word matching: "things" in a sentence is still a word, but "Mailbox" is not "mail".
+        assert_eq!(app_category_for("Mailbox Pro"), "generic");
+    }
+
+    #[test]
+    fn domain_keywords_for_other_domains() {
+        assert!(infer_domain_keywords("Epic Hyperspace - Clinical").contains(&"patient"));
+        assert!(infer_domain_keywords("DocuSign Envelope").contains(&"clause"));
+        assert!(infer_domain_keywords("Finder").is_empty());
     }
 
     #[test]

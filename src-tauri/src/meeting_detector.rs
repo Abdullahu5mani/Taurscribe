@@ -617,6 +617,34 @@ mod tests {
     }
 
     #[test]
+    fn meeting_urls_ignore_lookalike_hosts_and_bad_codes() {
+        assert_eq!(classify_meeting_url("https://meet.google.com.evil.com/abc-defg-hij"), None);
+        assert_eq!(classify_meeting_url("https://notzoom.us/j/123"), None);
+        assert_eq!(classify_meeting_url("https://teams.microsoft.com.example.org/v2/"), None);
+        assert_eq!(classify_meeting_url("https://meet.google.com/ab-defg-hij"), None);
+        assert_eq!(classify_meeting_url("https://meet.google.com/ab1-defg-hij"), None);
+        assert_eq!(classify_meeting_url("https://meet.google.com/abc-defg-hij-klm"), None);
+    }
+
+    #[test]
+    fn meeting_urls_tolerate_case_ports_and_missing_scheme() {
+        assert_eq!(classify_meeting_url("HTTPS://MEET.GOOGLE.COM/ABC-DEFG-HIJ"), Some("meet"));
+        assert_eq!(classify_meeting_url("meet.google.com/abc-defg-hij"), Some("meet"));
+        assert_eq!(classify_meeting_url("https://zoom.us:443/j/123"), Some("zoom"));
+        assert_eq!(classify_meeting_url("https://meet.google.com/abc-defg-hij#frag"), Some("meet"));
+        assert_eq!(classify_meeting_url("https://web.webex.com/meeting/abc"), Some("webex"));
+        assert_eq!(classify_meeting_url("https://acme.webex.com/"), None);
+    }
+
+    #[test]
+    fn prejoin_titles_match_whole_title_for_bare_app_names() {
+        assert!(is_prejoin_window_title("Google Meet"));
+        assert!(is_prejoin_window_title("  meet".trim()));
+        assert!(!is_prejoin_window_title("Meet with Sam"));
+        assert!(!is_prejoin_window_title(""));
+    }
+
+    #[test]
     fn test_meeting_detector_scan() {
         let manager = MeetingDetectorManager::new();
         let status = manager.get_status();

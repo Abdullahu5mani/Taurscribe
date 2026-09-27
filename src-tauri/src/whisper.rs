@@ -223,24 +223,30 @@ impl WhisperManager {
 
     /// Helper: Turn a kryptic ID like "tiny.en-q5_1" into "Tiny English (Q5_1)"
     fn format_model_name(id: &str) -> String {
-        let mut name = String::new();
-
-        // 1. Determine size
-        if id.contains("tiny") {
-            name.push_str("Tiny");
+        // 1. Determine size. Unknown files keep their raw ID: a language suffix
+        // alone (" Multilingual") would not tell the user which file it is.
+        let size = if id.contains("tiny") {
+            "Tiny"
         } else if id.contains("base") {
-            name.push_str("Base");
+            "Base"
         } else if id.contains("small") {
-            name.push_str("Small");
+            "Small"
         } else if id.contains("medium") {
-            name.push_str("Medium");
+            "Medium"
         } else if id.contains("large-v3-turbo") {
-            name.push_str("Large V3 Turbo");
+            "Large V3 Turbo"
         } else if id.contains("large-v3") {
-            name.push_str("Large V3");
+            "Large V3"
+        } else if id.contains("large-v2") {
+            "Large V2"
+        } else if id.contains("large-v1") {
+            "Large V1"
         } else if id.contains("large") {
-            name.push_str("Large");
-        }
+            "Large"
+        } else {
+            return id.to_string();
+        };
+        let mut name = size.to_string();
 
         // 2. Determine Language
         if id.contains(".en") {
@@ -256,11 +262,6 @@ impl WhisperManager {
             name.push_str(" (Q5_1)");
         } else if id.contains("q8_0") {
             name.push_str(" (Q8_0)");
-        }
-
-        // Fallback: if we couldn't parse it, just return the raw ID
-        if name.is_empty() {
-            return id.to_string();
         }
 
         name
@@ -812,5 +813,26 @@ impl WhisperManager {
             mono = resampled;
         }
         Ok(mono)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WhisperManager;
+
+    #[test]
+    fn model_names_describe_size_language_and_quantization() {
+        assert_eq!(WhisperManager::format_model_name("tiny.en-q5_1"), "Tiny English (Q5_1)");
+        assert_eq!(WhisperManager::format_model_name("base"), "Base Multilingual");
+        assert_eq!(WhisperManager::format_model_name("medium.en-q5_0"), "Medium English (Q5_0)");
+        assert_eq!(WhisperManager::format_model_name("large-v3-turbo-q8_0"), "Large V3 Turbo Multilingual (Q8_0)");
+        assert_eq!(WhisperManager::format_model_name("large-v3"), "Large V3 Multilingual");
+        assert_eq!(WhisperManager::format_model_name("large-v2"), "Large V2 Multilingual");
+    }
+
+    #[test]
+    fn unknown_model_files_keep_their_id() {
+        assert_eq!(WhisperManager::format_model_name("custom-finetune"), "custom-finetune");
+        assert_eq!(WhisperManager::format_model_name(""), "");
     }
 }

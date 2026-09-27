@@ -217,9 +217,21 @@ fn like_arg(word: &str) -> String {
 
 /// ~160 characters around the first match.
 fn snippet(text: &str, word: &str) -> String {
-    let lower = text.to_lowercase();
     let chars: Vec<char> = text.chars().collect();
-    let at = lower.find(&word.to_lowercase()).map(|b| lower[..b].chars().count()).unwrap_or(0);
+    // Lowercasing can change the length ("İ" becomes two chars), so remember
+    // which original character each lowercased character came from.
+    let mut lower = String::with_capacity(text.len());
+    let mut origin = Vec::with_capacity(text.len());
+    for (i, c) in chars.iter().enumerate() {
+        for l in c.to_lowercase() {
+            lower.push(l);
+            origin.push(i);
+        }
+    }
+    let at = lower
+        .find(&word.to_lowercase())
+        .and_then(|b| origin.get(lower[..b].chars().count()).copied())
+        .unwrap_or(0);
     let start = at.saturating_sub(60);
     let end = (at + 100).min(chars.len());
     let mut s: String = chars[start..end].iter().collect();
@@ -491,6 +503,67 @@ mod tests {
         assert!(m.contains("# Budget sync") && m.contains("[0:03] Sarah: Yes, the budget is final."), "{m}");
         assert!(list_meetings(&d, None, None, Some("sarah".into()), 20).unwrap().contains("#7"));
         assert!(list_people(&d).unwrap().contains("Sarah · 0 meeting(s)"));
+    }
+
+    #[test]
+    fn snippet_centres_on_the_match() {
+        let text = format!("{}needle{}", "a".repeat(200), "b".repeat(200));
+        let s = snippet(&text, "NEEDLE");
+        assert!(s.starts_with('…') && s.ends_with('…'));
+        assert!(s.contains("needle"));
+        assert_eq!(s.chars().count(), 160 + 2);
+        assert_eq!(snippet("short text", "missing"), "short text");
+        assert_eq!(snippet("line one\nline two", ""), "line one line two");
+    }
+
+    #[test]
+    fn snippet_survives_text_whose_lowercase_is_longer() {
+        // "İ" lowercases to two chars; the match index used to overshoot the
+        // original text and panic slicing chars[start..end].
+        let text = format!("{}x", "İ".repeat(200));
+        let s = snippet(&text, "x");
+        assert!(s.ends_with('x'), "{s}");
+        let s = snippet(&format!("{}budget{}", "İ".repeat(100), "z".repeat(10)), "budget");
+        assert!(s.contains("budget"), "{s}");
+    }
+
+    #[test]
+    fn like_arguments_escape_wildcards() {
+        assert_eq!(like_arg("100%"), "%100\\%%");
+        assert_eq!(like_arg("a_b"), "%a\\_b%");
+        assert_eq!(like_arg("c:\\x"), "%c:\\\\x%");
+        assert_eq!(like_all("t", 2), "t LIKE ? ESCAPE '\\' AND t LIKE ? ESCAPE '\\'");
+    }
+
+    #[test]
+    fn clock_formats_minutes_and_hours() {
+        assert_eq!(clock(0), "0:00");
+        assert_eq!(clock(65_000), "1:05");
+        assert_eq!(clock(3_725_000), "1:02:05");
+    }
+
+    #[test]
+    fn date_bounds_include_the_whole_last_day() {
+        let (lo, hi) = date_bounds(&Some("2026-09-01".into()), &Some("2026-09-02".into()));
+        assert_eq!(lo, "2026-09-01");
+        assert!("2026-09-02T23:59:59+00:00" < hi.as_str());
+        assert!("2026-09-03T00:00:00+00:00" > hi.as_str());
+        let (lo, hi) = date_bounds(&None, &None);
+        assert_eq!(lo, "");
+        assert!("9999-12-31" < hi.as_str());
+    }
+
+    #[test]
+    fn tool_calls_validate_arguments() {
+        let d = db();
+        assert!(call_tool(&d, "search", &json!({})).is_err());
+        assert!(call_tool(&d, "get_meeting", &json!({})).is_err());
+        assert!(call_tool(&d, "nope", &json!({})).is_err());
+        assert!(call_tool(&d, "get_transcript", &json!({"id": 999})).unwrap_err().contains("No transcript #999"));
+        let t = call_tool(&d, "get_transcript", &json!({"id": 2})).unwrap();
+        assert!(t.contains("from file lecture.mp3") && t.contains("Lecture about budget planning"), "{t}");
+        // Limits are clamped rather than rejected.
+        assert!(call_tool(&d, "list_transcripts", &json!({"limit": -5})).unwrap().starts_with("1 transcript(s)"));
     }
 
     #[test]
