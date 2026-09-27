@@ -122,6 +122,11 @@ pub struct AudioState {
 
     // Tracks if the most recent recording was in dual-channel mode
     pub last_recording_is_dual_channel: Arc<AtomicBool>,
+
+    // The meeting detected when the current recording started. Stopping saves
+    // the recording under this meeting even if the call has ended (or another
+    // call is detected) by the time the user presses Stop.
+    pub recording_meeting: Arc<Mutex<Option<crate::meeting_detector::MeetingInfo>>>,
 }
 
 impl AudioState {
@@ -176,6 +181,7 @@ impl AudioState {
             audio_source_mode: Arc::new(Mutex::new("mic".to_string())),
             auto_record_meetings: Arc::new(AtomicBool::new(false)),
             last_recording_is_dual_channel: Arc::new(AtomicBool::new(false)),
+            recording_meeting: Arc::new(Mutex::new(None)),
         }
     }
 

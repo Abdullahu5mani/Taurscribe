@@ -1,26 +1,73 @@
 use crate::state::AudioState;
 use crate::tray;
 use crate::types::{ASREngine, AppState, EngineSelectionState, HotkeyBinding};
+use crate::gguf_asr::{GgufAsrManager, GgufStatus};
 use std::sync::atomic::Ordering;
+use std::sync::{Mutex, TryLockError};
 use tauri::{AppHandle, State};
+
+// ── Non-blocking engine status ──────────────────────────────────────────────
+//
+// The engine mutexes are held for the whole of an inference (seconds to
+// minutes). These commands are synchronous, so Tauri runs them on the macOS
+// main thread, and the UI polls them every few seconds: waiting on those locks
+// froze the whole app during transcription. They now `try_lock` and, while an
+// engine is busy, answer from the last status they read (an engine can't be
+// loaded or unloaded while it is transcribing, so that status is still true).
+
+#[derive(Clone)]
+struct WhisperStatus {
+    model: Option<String>,
+    backend: String,
+}
+
+static WHISPER_STATUS: Mutex<Option<WhisperStatus>> = Mutex::new(None);
+static GRANITE_STATUS: Mutex<Option<GgufStatus>> = Mutex::new(None);
+static QWEN3_STATUS: Mutex<Option<GgufStatus>> = Mutex::new(None);
+
+/// Reads `engine` through `read` when it is free and remembers the result in
+/// `cache`; while it is locked elsewhere, returns the cached value (or
+/// `fallback` if it was never read) instead of waiting.
+fn read_or_cached<M, T: Clone>(
+    engine: &Mutex<M>,
+    cache: &Mutex<Option<T>>,
+    read: impl Fn(&M) -> T,
+    fallback: impl FnOnce() -> T,
+) -> T {
+    let value = match engine.try_lock() {
+        Ok(guard) => read(&guard),
+        Err(TryLockError::Poisoned(p)) => read(&p.into_inner()),
+        Err(TryLockError::WouldBlock) => {
+            return cache.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(fallback);
+        }
+    };
+    *cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(value.clone());
+    value
+}
+
+fn whisper_status(state: &AudioState) -> WhisperStatus {
+    read_or_cached(
+        &state.whisper,
+        &WHISPER_STATUS,
+        |w| WhisperStatus { model: w.get_current_model().cloned(), backend: format!("{}", w.get_backend()) },
+        || WhisperStatus { model: None, backend: "busy".into() },
+    )
+}
+
+fn gguf_status(engine: &Mutex<GgufAsrManager>, cache: &Mutex<Option<GgufStatus>>) -> GgufStatus {
+    read_or_cached(engine, cache, |m| m.get_status(), || GgufStatus { loaded: false, model_id: None, backend: "busy".into() })
+}
 
 /// Ask the backend what hardware is running the AI (CPU vs GPU)
 /// Returns the backend of whichever engine is currently active
 #[tauri::command]
 pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
     let active = *state.active_engine.lock().unwrap();
-    match active {
-        ASREngine::Granite => {
-            let granite = state.granite.lock().unwrap();
-            let status = granite.get_status();
-            Ok(status.backend)
-        }
-        ASREngine::Whisper => {
-            let whisper = state.whisper.lock().unwrap();
-            Ok(format!("{}", whisper.get_backend()))
-        }
-        ASREngine::Qwen3 => Ok(state.qwen3.lock().unwrap().get_status().backend),
-    }
+    Ok(match active {
+        ASREngine::Granite => gguf_status(&state.granite, &GRANITE_STATUS).backend,
+        ASREngine::Whisper => whisper_status(&state).backend,
+        ASREngine::Qwen3 => gguf_status(&state.qwen3, &QWEN3_STATUS).backend,
+    })
 }
 
 #[tauri::command]
@@ -35,47 +82,29 @@ pub fn get_engine_selection_state(
     }
     .to_string();
 
-    let whisper_model = state.whisper.lock().unwrap().get_current_model().cloned();
-    let granite_status = state.granite.lock().unwrap().get_status();
-    let qwen3_status = state.qwen3.lock().unwrap().get_status();
-
     let (selected_model_id, loaded_engine, loaded_model_id, backend) = match active {
         ASREngine::Whisper => {
-            let loaded = whisper_model.clone();
-            let backend = {
-                let whisper = state.whisper.lock().unwrap();
-                format!("{}", whisper.get_backend())
-            };
+            let whisper = whisper_status(&state);
+            let loaded = whisper.model.clone();
             (
-                whisper_model.clone(),
+                whisper.model,
                 loaded.as_ref().map(|_| "whisper".to_string()),
                 loaded,
-                backend,
+                whisper.backend,
             )
         }
-        ASREngine::Granite => {
-            let loaded = if granite_status.loaded {
-                granite_status.model_id.clone()
+        ASREngine::Granite | ASREngine::Qwen3 => {
+            let (status, family) = if active == ASREngine::Granite {
+                (gguf_status(&state.granite, &GRANITE_STATUS), "granite")
             } else {
-                None
+                (gguf_status(&state.qwen3, &QWEN3_STATUS), "qwen3")
             };
+            let loaded = status.loaded.then(|| status.model_id.clone()).flatten();
             (
-                granite_status.model_id.clone(),
-                loaded.as_ref().map(|_| "granite".to_string()),
+                status.model_id.clone(),
+                loaded.as_ref().map(|_| family.to_string()),
                 loaded,
-                granite_status.backend,
-            )
-        }
-        ASREngine::Qwen3 => {
-            let loaded = qwen3_status
-                .loaded
-                .then(|| qwen3_status.model_id.clone())
-                .flatten();
-            (
-                qwen3_status.model_id.clone(),
-                loaded.as_ref().map(|_| "qwen3".to_string()),
-                loaded,
-                qwen3_status.backend,
+                status.backend,
             )
         }
     };
@@ -227,4 +256,46 @@ pub fn set_tray_state(
     tray::update_tray_menu(&app, loaded, meeting_info, is_recording);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    use std::sync::{mpsc, Arc};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn busy_engine_answers_from_cache_without_waiting() {
+        let engine = Arc::new(Mutex::new(7u32));
+        let cache: Mutex<Option<u32>> = Mutex::new(None);
+        assert_eq!(read_or_cached(&engine, &cache, |v| *v, || 0), 7);
+
+        let (locked_tx, locked_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let holder = {
+            let engine = engine.clone();
+            std::thread::spawn(move || {
+                let mut g = engine.lock().unwrap();
+                *g = 99; // "mid-inference" — not visible until released
+                locked_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+        };
+        locked_rx.recv().unwrap();
+        let t = Instant::now();
+        assert_eq!(read_or_cached(&engine, &cache, |v| *v, || 0), 7);
+        assert!(t.elapsed() < Duration::from_millis(100));
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert_eq!(read_or_cached(&engine, &cache, |v| *v, || 0), 99);
+    }
+
+    #[test]
+    fn busy_engine_never_read_uses_fallback() {
+        let engine = Mutex::new(1u8);
+        let cache: Mutex<Option<u8>> = Mutex::new(None);
+        let _held = engine.lock().unwrap();
+        assert_eq!(read_or_cached(&engine, &cache, |v| *v, || 42), 42);
+        assert!(cache.lock().unwrap().is_none());
+    }
 }

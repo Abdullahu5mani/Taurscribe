@@ -180,11 +180,11 @@ pub async fn start_recording(
         return Ok(CommandResult::err("already_recording", "Already recording"));
     }
 
-    if let Some(key) = crate::meeting_continuation::call_key(
-        state.meeting_detector.get_status().active_meetings.first(),
-    ) {
+    let meeting_at_start = state.meeting_detector.get_status().active_meetings.into_iter().next();
+    if let Some(key) = crate::meeting_continuation::call_key(meeting_at_start.as_ref()) {
         crate::meeting_continuation::claim_for_recording(&key);
     }
+    *state.recording_meeting.lock().unwrap() = meeting_at_start;
 
     // Clone the whole state — every field is Arc<…> so this is just ref-count bumps.
     let state = (*state).clone();
@@ -196,6 +196,7 @@ pub async fn start_recording(
     .await;
     if !matches!(&result, Ok(Ok(_))) {
         crate::meeting_continuation::release_recording_claim();
+        *state_for_event.recording_meeting.lock().unwrap() = None;
     }
     result.map(|result| match result {
         Ok(message) => {
@@ -326,13 +327,13 @@ fn start_recording_blocking(
             let _ = app_handle.emit("audio-fallback", device_name);
         }
 
-        let cfg: cpal::StreamConfig = device
+        let supported = device
             .default_input_config()
             .or_else(|e| {
                 println!("[WARNING] default_input_config failed: {}, falling back to iterating supported configs", e);
                 device.supported_input_configs()
                     .map_err(|_err| cpal::DefaultStreamConfigError::DeviceNotAvailable)?
-                    .find(|c| c.sample_format() == cpal::SampleFormat::F32 || c.sample_format() == cpal::SampleFormat::I16)
+                    .find(|c| crate::audio::is_supported_input_format(c.sample_format()))
                     .map(|c| c.with_max_sample_rate())
                     .ok_or(cpal::DefaultStreamConfigError::StreamTypeNotSupported)
             })
@@ -345,10 +346,13 @@ fn start_recording_blocking(
                 } else {
                     format!("Failed to get audio config: {}", msg)
                 }
-            })?
-            .into();
+            })?;
+        // Keep the device's sample format: the stream is opened in it (see
+        // build_input_stream_f32), since many mics only deliver integers.
+        let sample_format = supported.sample_format();
+        let cfg: cpal::StreamConfig = supported.into();
 
-        (cfg.channels, cfg.sample_rate.0, Some(device), Some(cfg))
+        (cfg.channels, cfg.sample_rate.0, Some(device), Some((cfg, sample_format)))
     };
 
     // 2. Prepare Output File
@@ -824,6 +828,8 @@ fn start_recording_blocking(
             .filter(|pid| *pid > 0 && *pid != 99999);
         let target = meeting_pid.map(DualChannelTarget::Process).unwrap_or(DualChannelTarget::System);
         println!("[INFO] Dual-channel callers track: {:?}", target);
+        // The microphone chosen in Settings (None = system default).
+        let meeting_mic = state.selected_input_device.lock().unwrap().clone();
 
         let dc_handle = match crate::audio_dual_channel::start_dual_channel_capture(
             target,
@@ -832,6 +838,7 @@ fn start_recording_blocking(
             whisper_tx_clone.clone(),
             app_handle.clone(),
             dual_stop.clone(),
+            meeting_mic.clone(),
         ) {
             Ok(handle) => handle,
             Err(e) if target != DualChannelTarget::System => {
@@ -843,6 +850,7 @@ fn start_recording_blocking(
                     whisper_tx_clone,
                     app_handle.clone(),
                     dual_stop.clone(),
+                    meeting_mic,
                 )?
             }
             Err(e) => return Err(e),
@@ -866,13 +874,14 @@ fn start_recording_blocking(
     }
 
     let device = cpal_device.ok_or("No input device available for standard recording")?;
-    let config = cpal_config.ok_or("No input audio configuration available")?;
+    let (config, sample_format) = cpal_config.ok_or("No input audio configuration available")?;
 
     let app_for_error = app_handle.clone();
-    let stream = device
-        .build_input_stream(
+    let stream = crate::audio::build_input_stream_f32(
+            &device,
             &config,
-            move |data: &[f32], _: &_| {
+            sample_format,
+            move |data: &[f32]| {
                 // File writer always gets raw (unprocessed) audio
                 file_tx_clone.try_send(data.to_vec()).ok();
 
@@ -919,7 +928,6 @@ fn start_recording_blocking(
                     }),
                 );
             },
-            None,
         )
         .map_err(|e| {
             let msg = e.to_string();
@@ -953,6 +961,13 @@ fn start_recording_blocking(
     });
 
     Ok(format!("Recording started: {}", path.display()))
+}
+
+/// The meeting a stopped recording belongs to: the one detected when it started,
+/// even if the call has since ended or another call is now detected. A meeting
+/// recording started before any call was detected takes the call detected now.
+fn meeting_for_saving<M>(at_start: Option<M>, at_stop: Option<M>, is_dual_channel: bool) -> Option<M> {
+    at_start.or(if is_dual_channel { at_stop } else { None })
 }
 
 fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) {
@@ -1050,6 +1065,7 @@ pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandRes
     };
     let last_recording_path = state.last_recording_path.lock().unwrap().clone();
     let session_transcript = state.session_transcript.clone();
+    *state.recording_meeting.lock().unwrap() = None;
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         teardown_recording(recording, 0);
@@ -1984,7 +2000,11 @@ pub async fn stop_recording(
     let vad_arc = state.vad.clone();
 
     let is_dual_channel = state.last_recording_is_dual_channel.load(Ordering::SeqCst);
-    let active_meeting = state.meeting_detector.get_status().active_meetings.into_iter().next();
+    let active_meeting = meeting_for_saving(
+        state.recording_meeting.lock().unwrap().take(),
+        state.meeting_detector.get_status().active_meetings.into_iter().next(),
+        is_dual_channel,
+    );
     // A dual-channel recording is a meeting recording even when no meeting app was
     // detected: it is saved to the meetings area (as "Direct Audio") instead of
     // being treated as dictation.
@@ -2133,6 +2153,19 @@ mod tests {
         append_transcript_with_word_overlap(&mut transcript, "second sentence");
 
         assert_eq!(transcript, "first sentence second sentence");
+    }
+
+    #[test]
+    fn stopped_recording_keeps_the_meeting_it_started_in() {
+        // Left the call before pressing Stop: still that call, not "Direct Audio".
+        assert_eq!(meeting_for_saving(Some("standup"), None, true), Some("standup"));
+        // Switched calls: the recording belongs to the first one.
+        assert_eq!(meeting_for_saving(Some("standup"), Some("1:1"), true), Some("standup"));
+        // Meeting recording started before the call was detected.
+        assert_eq!(meeting_for_saving(None, Some("1:1"), true), Some("1:1"));
+        // A dictation is not turned into a meeting by a call that starts later.
+        assert_eq!(meeting_for_saving(None, Some("1:1"), false), None);
+        assert_eq!(meeting_for_saving(Some("standup"), None, false), Some("standup"));
     }
 
     #[test]

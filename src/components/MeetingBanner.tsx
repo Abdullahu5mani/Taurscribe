@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import { MEETING_KEYS, DEFAULT_AUTORECORD_DELAY } from "./settings/types";
+import { scheduleAutoRecord } from "../utils/autoRecord";
 import "./MeetingBanner.css";
 
 export interface MeetingInfo {
@@ -27,7 +28,7 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
     const [dismissedMeetingKey, setDismissedMeetingKey] = useState<string | null>(null);
     const [autoRecordCountdown, setAutoRecordCountdown] = useState<number | null>(null);
     const [bannerEnabled, setBannerEnabled] = useState(true);
-    const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const cancelAutoRecordRef = useRef<(() => void) | null>(null);
 
     const isRecordingRef = useRef(isRecording);
     isRecordingRef.current = isRecording;
@@ -35,10 +36,8 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
     onStartDualRecordingRef.current = onStartDualRecording;
 
     const cancelAutoRecord = () => {
-        if (countdownTimerRef.current) {
-            clearInterval(countdownTimerRef.current);
-            countdownTimerRef.current = null;
-        }
+        cancelAutoRecordRef.current?.();
+        cancelAutoRecordRef.current = null;
         setAutoRecordCountdown(null);
     };
 
@@ -63,36 +62,24 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
             return;
         }
 
-        Promise.all([
-            invoke<boolean>("get_auto_record_meetings"),
-            Store.load("settings.json").then((s) => s.get<number>(MEETING_KEYS.autoRecordDelay)).catch(() => undefined),
-        ])
-            .then(([autoRecord, savedDelay]) => {
-                if (autoRecord && !isRecordingRef.current) {
-                    cancelAutoRecord();
-                    let timeLeft = savedDelay ?? DEFAULT_AUTORECORD_DELAY;
-                    if (timeLeft <= 0) {
-                        onStartDualRecordingRef.current();
-                        return;
-                    }
-                    setAutoRecordCountdown(timeLeft);
-                    countdownTimerRef.current = setInterval(() => {
-                        timeLeft -= 1;
-                        if (timeLeft <= 0) {
-                            cancelAutoRecord();
-                            if (!isRecordingRef.current) {
-                                onStartDualRecordingRef.current();
-                            }
-                        } else {
-                            setAutoRecordCountdown(timeLeft);
-                        }
-                    }, 1000);
-                }
-            })
-            .catch(() => {});
+        // Cancelling also covers the settings read still in flight, so a
+        // dismissal or a call that ends meanwhile can't start a recording.
+        const cancel = scheduleAutoRecord({
+            loadSettings: () =>
+                Promise.all([
+                    invoke<boolean>("get_auto_record_meetings"),
+                    Store.load("settings.json").then((s) => s.get<number>(MEETING_KEYS.autoRecordDelay)).catch(() => undefined),
+                ]).then(([autoRecord, delay]) => [autoRecord, delay ?? undefined] as [boolean, number | undefined]),
+            defaultDelay: DEFAULT_AUTORECORD_DELAY,
+            isRecording: () => isRecordingRef.current,
+            start: () => onStartDualRecordingRef.current(),
+            onCountdown: setAutoRecordCountdown,
+        });
+        cancelAutoRecordRef.current = cancel;
 
         return () => {
-            cancelAutoRecord();
+            cancel();
+            if (cancelAutoRecordRef.current === cancel) cancelAutoRecordRef.current = null;
         };
     }, [meetingKey, isDismissed]);
 

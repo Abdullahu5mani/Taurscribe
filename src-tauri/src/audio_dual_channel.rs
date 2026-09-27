@@ -102,6 +102,8 @@ struct CaptureRig {
     sys_rx: crossbeam_channel::Receiver<Vec<f32>>,
     mic_thread: std::thread::JoinHandle<()>,
     sys_thread: std::thread::JoinHandle<()>,
+    /// Stops a microphone opened through cpal (a mic other than the default).
+    mic_stop: Arc<AtomicBool>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -109,6 +111,7 @@ impl CaptureRig {
     /// Stops the session (which unblocks the readers) and joins them.
     fn shutdown(self) -> (crossbeam_channel::Receiver<Vec<f32>>, crossbeam_channel::Receiver<Vec<f32>>) {
         self.session.stop();
+        self.mic_stop.store(true, Ordering::Relaxed);
         let _ = self.mic_thread.join();
         let _ = self.sys_thread.join();
         (self.mic_rx, self.sys_rx)
@@ -116,7 +119,7 @@ impl CaptureRig {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>) -> Result<CaptureRig, String> {
+fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_device: Option<&str>) -> Result<CaptureRig, String> {
     use meeting_record::{capture, CaptureOptions, CaptureTarget, MicrophoneSource};
 
     let capture_target = match target {
@@ -124,28 +127,47 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>) -> Result
         DualChannelTarget::Process(pid) => CaptureTarget::Process { pid },
     };
 
-    let session = Arc::new(
-        capture::start(
-            capture_target,
-            CaptureOptions {
-                mono: true,
-                microphone: Some(MicrophoneSource::Default),
-            },
-        )
-        .map_err(|e| format!("Failed to initialize dual-channel audio capture: {}", e))?,
-    );
+    let (mic_tx, mic_rx) = bounded::<Vec<f32>>(256);
+    let (sys_tx, sys_rx) = bounded::<Vec<f32>>(256);
+
+    // meeting-record can only open the system default microphone, so a mic
+    // chosen in Settings is captured through cpal instead.
+    let mic_stop = Arc::new(AtomicBool::new(false));
+    let custom_mic = mic_device.and_then(|name| {
+        spawn_named_mic_capture(name, mic_tx.clone(), [stop_signal.clone(), mic_stop.clone()])
+            .unwrap_or_else(|e| {
+                eprintln!("[WARN] Selected microphone '{}' unavailable for the meeting ({}); using the default", name, e);
+                None
+            })
+    });
+
+    let session = capture::start(
+        capture_target,
+        CaptureOptions {
+            mono: true,
+            microphone: if custom_mic.is_some() { None } else { Some(MicrophoneSource::Default) },
+        },
+    )
+    .map_err(|e| format!("Failed to initialize dual-channel audio capture: {}", e));
+    let session = match session {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            mic_stop.store(true, Ordering::Relaxed);
+            if let Some(h) = custom_mic {
+                let _ = h.join();
+            }
+            return Err(e);
+        }
+    };
 
     println!(
         "[INFO] Dual-channel capture session initialized (target: {:?})",
         capture_target
     );
 
-    let (mic_tx, mic_rx) = bounded::<Vec<f32>>(256);
-    let (sys_tx, sys_rx) = bounded::<Vec<f32>>(256);
-
     let session_mic = session.clone();
     let stop_mic = stop_signal.clone();
-    let mic_thread = std::thread::spawn(move || {
+    let mic_thread = if let Some(handle) = custom_mic { handle } else { std::thread::spawn(move || {
         crate::platform_tuning::apply_thread_performance_affinity();
         let mut mic_frames = 0usize;
         let mic_started = std::time::Instant::now();
@@ -173,7 +195,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>) -> Result
             }
         }
         println!("[CAPTURE] mic delivered {:.2}s of 48k samples over {:.2}s wall", mic_frames as f64 / 48_000.0, mic_started.elapsed().as_secs_f64());
-    });
+    }) };
 
     let session_sys = session.clone();
     let stop_sys = stop_signal.clone();
@@ -206,7 +228,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>) -> Result
         println!("[CAPTURE] callers delivered {:.2}s of 48k samples over {:.2}s wall", sys_frames as f64 / 48_000.0, sys_started.elapsed().as_secs_f64());
     });
 
-    Ok(CaptureRig { session, mic_rx, sys_rx, mic_thread, sys_thread })
+    Ok(CaptureRig { session, mic_rx, sys_rx, mic_thread, sys_thread, mic_stop })
 }
 
 /// (pid, owning app bundle path) of every process currently doing audio IO.
@@ -234,10 +256,11 @@ pub fn start_dual_channel_capture(
     whisper_tx: Sender<Vec<f32>>,
     app_handle: AppHandle,
     stop_signal: Arc<AtomicBool>,
+    mic_device: Option<String>,
 ) -> Result<DualChannelCaptureHandle, String> {
     use std::collections::VecDeque;
 
-    let rig = start_rig(target, &stop_signal)?;
+    let rig = start_rig(target, &stop_signal, mic_device.as_deref())?;
 
     let stop_combiner = stop_signal.clone();
     let stop_for_rig = stop_signal.clone();
@@ -326,7 +349,8 @@ pub fn start_dual_channel_capture(
                             "[WARN] Meeting app started audio in process(es) {:?} outside the callers tap; restarting the tap",
                             new_pids
                         );
-                        let (old_mic_rx, old_sys_rx) = restart_rig(&mut rig, DualChannelTarget::Process(pid), &stop_for_rig);
+                        let (old_mic_rx, old_sys_rx) =
+                            restart_rig(&mut rig, DualChannelTarget::Process(pid), &stop_for_rig, mic_device.as_deref());
                         // Keep whatever the old session had already delivered.
                         while let Ok(frames) = old_mic_rx.try_recv() {
                             mic_deque.extend(frames);
@@ -473,13 +497,16 @@ fn restart_rig(
     rig: &mut CaptureRig,
     target: DualChannelTarget,
     stop_signal: &Arc<AtomicBool>,
+    mic_device: Option<&str>,
 ) -> (crossbeam_channel::Receiver<Vec<f32>>, crossbeam_channel::Receiver<Vec<f32>>) {
     // The crate allows one capture session at a time: stop before starting anew.
+    // A cpal microphone has to be released too before the new rig reopens it.
     rig.session.stop();
-    let fresh = start_rig(target, stop_signal).or_else(|e| {
+    rig.mic_stop.store(true, Ordering::Relaxed);
+    let fresh = start_rig(target, stop_signal, mic_device).or_else(|e| {
         eprintln!("[WARN] Restarting the meeting tap failed ({}); falling back to system audio", e);
         update_diagnostics(|d| d.fell_back_to_system = true);
-        start_rig(DualChannelTarget::System, stop_signal)
+        start_rig(DualChannelTarget::System, stop_signal, mic_device)
     });
     match fresh {
         Ok(new_rig) => std::mem::replace(rig, new_rig).shutdown(),
@@ -489,6 +516,81 @@ fn restart_rig(
             let (_, empty_sys) = bounded::<Vec<f32>>(1);
             (empty_mic, empty_sys)
         }
+    }
+}
+
+/// Captures the input device named `name` through cpal on its own thread,
+/// sending mono 48 kHz chunks to `tx` until either `stops` flag is set.
+/// Returns Ok(None) when `name` is the system default microphone (the capture
+/// session's own microphone track is used then), and an error when the device
+/// is missing or cannot be opened.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+fn spawn_named_mic_capture(
+    name: &str,
+    tx: Sender<Vec<f32>>,
+    stops: [Arc<AtomicBool>; 2],
+) -> Result<Option<std::thread::JoinHandle<()>>, String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
+
+    let host = cpal::default_host();
+    let default_name = host.default_input_device().and_then(|d| d.name().ok());
+    if default_name.as_deref() == Some(name) {
+        return Ok(None);
+    }
+    if !host.input_devices().map_err(|e| e.to_string())?.any(|d| d.name().ok().as_deref() == Some(name)) {
+        return Err("device not found".into());
+    }
+
+    // cpal streams are not Send on macOS: open and own it on the capture thread.
+    let name = name.to_string();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    let handle = std::thread::spawn(move || {
+        use cpal::traits::StreamTrait;
+        let opened = (|| -> Result<cpal::Stream, String> {
+            let device = cpal::default_host()
+                .input_devices()
+                .map_err(|e| e.to_string())?
+                .find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                .ok_or("device not found")?;
+            let supported = device.default_input_config().map_err(|e| e.to_string())?;
+            let format = supported.sample_format();
+            let config: cpal::StreamConfig = supported.into();
+            let (channels, rate) = (config.channels as u32, config.sample_rate.0 as f64);
+            let stream = crate::audio::build_input_stream_f32(
+                &device,
+                &config,
+                format,
+                move |data: &[f32]| {
+                    // Never block the audio callback; a full queue drops the chunk.
+                    let _ = tx.try_send(process_chunk_to_mono_48k(data.to_vec(), channels, rate));
+                },
+                |e| eprintln!("[ERROR] Meeting microphone stream error: {}", e),
+            )
+            .map_err(|e| e.to_string())?;
+            stream.play().map_err(|e| e.to_string())?;
+            println!("[INFO] Dual-channel mic track: '{}' via cpal ({} ch, {} Hz, {:?})", name, channels, rate, format);
+            Ok(stream)
+        })();
+        match opened {
+            Ok(stream) => {
+                let _ = ready_tx.send(Ok(()));
+                while !stops.iter().any(|s| s.load(Ordering::Relaxed)) {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                drop(stream);
+            }
+            Err(e) => {
+                let _ = ready_tx.send(Err(e));
+            }
+        }
+    });
+    match ready_rx.recv() {
+        Ok(Ok(())) => Ok(Some(handle)),
+        Ok(Err(e)) => {
+            let _ = handle.join();
+            Err(e)
+        }
+        Err(_) => Err("microphone thread exited".into()),
     }
 }
 
@@ -549,6 +651,7 @@ pub fn start_dual_channel_capture(
     _whisper_tx: Sender<Vec<f32>>,
     _app_handle: AppHandle,
     _stop_signal: Arc<AtomicBool>,
+    _mic_device: Option<String>,
 ) -> Result<DualChannelCaptureHandle, String> {
     Err("Dual-channel meeting audio capture is not supported on Linux".into())
 }

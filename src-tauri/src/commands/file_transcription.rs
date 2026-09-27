@@ -109,10 +109,13 @@ pub async fn transcribe_file(
         ASREngine::Granite => state.granite.lock().unwrap().get_status().model_id,
         ASREngine::Qwen3 => state.qwen3.lock().unwrap().get_status().model_id,
     };
-    if expected_model_id.as_deref().is_some_and(|expected| Some(expected) != loaded_model.as_deref()) {
-        unregister_cancel_flag(&path);
-        return Err("The loaded model changed after this file was queued. Re-run it with the desired model.".into());
-    }
+    let model_to_load = match model_for_file_job(expected_model_id.as_deref(), loaded_model.as_deref()) {
+        Ok(m) => m,
+        Err(e) => {
+            unregister_cancel_flag(&path);
+            return Err(e);
+        }
+    };
     let path_for_task = path.clone();
     let app_for_task = app.clone();
 
@@ -125,6 +128,7 @@ pub async fn transcribe_file(
             granite,
             qwen3,
             cancel,
+            model_to_load,
         )
     })
     .await
@@ -202,6 +206,20 @@ fn ensure_not_cancelled(
     }
 }
 
+/// Checks a queued file job against the engine's loaded model. Returns the model
+/// to load when none is loaded (auto-unload freed it after the last job): the one
+/// the file was queued with, not whichever model the engine would pick by default.
+/// A different loaded model means the user switched models after queueing.
+fn model_for_file_job(expected: Option<&str>, loaded: Option<&str>) -> Result<Option<String>, String> {
+    match (expected, loaded) {
+        (Some(expected), Some(loaded)) if expected != loaded => {
+            Err("The loaded model changed after this file was queued. Re-run it with the desired model.".into())
+        }
+        (Some(expected), None) => Ok(Some(expected.to_string())),
+        _ => Ok(None),
+    }
+}
+
 fn transcribe_file_blocking(
     app: &AppHandle,
     path: &str,
@@ -210,6 +228,7 @@ fn transcribe_file_blocking(
     granite: Arc<Mutex<crate::gguf_asr::GgufAsrManager>>,
     qwen3: Arc<Mutex<crate::gguf_asr::GgufAsrManager>>,
     cancel: Arc<AtomicBool>,
+    model_to_load: Option<String>,
 ) -> Result<FileTranscriptionResult, String> {
     let transcribe_start = std::time::Instant::now();
     // Validate extension
@@ -360,7 +379,7 @@ fn transcribe_file_blocking(
                 })?;
                 if !w.is_loaded() {
                     emit_progress(app, path, 45, "loading model", None);
-                    w.initialize(None, false)?;
+                    w.initialize(model_to_load.as_deref(), false)?;
                 }
                 emit_progress(app, path, 53, "transcribing", None);
                 let t = w.transcribe_audio_data(raw_chunk, dynamic_prompt.as_deref())?;
@@ -413,7 +432,7 @@ fn transcribe_file_blocking(
                         })?;
                         if !g.get_status().loaded {
                             emit_progress(app, path, 45, "loading model", None);
-                            g.initialize(None, false)?;
+                            g.initialize(model_to_load.as_deref(), false)?;
                         }
                         g.transcribe_chunk_cancellable(raw_chunk, 16000, &cancel)
                     }
@@ -423,7 +442,7 @@ fn transcribe_file_blocking(
                         })?;
                         if !q.get_status().loaded {
                             emit_progress(app, path, 45, "loading model", None);
-                            q.initialize(None, false)?;
+                            q.initialize(model_to_load.as_deref(), false)?;
                         }
                         q.transcribe_chunk_cancellable(raw_chunk, 16000, &cancel)
                     }
@@ -467,6 +486,16 @@ fn transcribe_file_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unloaded_engine_loads_the_model_the_file_was_queued_with() {
+        assert_eq!(model_for_file_job(Some("small.en-q5_1"), None), Ok(Some("small.en-q5_1".to_string())));
+        assert_eq!(model_for_file_job(Some("small.en-q5_1"), Some("small.en-q5_1")), Ok(None));
+        assert!(model_for_file_job(Some("small.en-q5_1"), Some("base.en")).is_err());
+        // No expectation: use whatever is loaded, or the engine's default.
+        assert_eq!(model_for_file_job(None, Some("base.en")), Ok(None));
+        assert_eq!(model_for_file_job(None, None), Ok(None));
+    }
 
     #[test]
     fn same_path_jobs_cannot_replace_each_others_progress_identity() {
