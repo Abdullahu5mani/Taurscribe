@@ -1,6 +1,6 @@
 use crate::diarization::DiarizedTurn;
 use crate::meeting_detector::{MeetingDetectionStatus, MeetingInfo};
-use crate::meeting_summary::{extract_summary_heuristics, ActionItem, MeetingSummaryOutput};
+use crate::meeting_summary::{extract_summary_heuristics, ActionItem};
 use crate::state::AudioState;
 use chrono::Utc;
 use dirs::data_local_dir;
@@ -1303,68 +1303,6 @@ pub async fn cycle_vault_speaker_snippet(
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
-#[tauri::command]
-pub async fn generate_meeting_summary(
-    meeting_id: i64,
-    state: State<'_, AudioState>,
-) -> Result<MeetingSummaryOutput, String> {
-    let detail = get_meeting_detail(meeting_id).await?;
-
-    // Try local LLM if loaded
-    let llm_handle = state.llm.clone();
-    let has_llm = {
-        let guard = llm_handle.lock().unwrap();
-        guard.is_some()
-    };
-
-    if has_llm {
-        // Construct prompt with diarized conversation turns
-        let mut conversation = String::new();
-        for t in &detail.turns {
-            conversation.push_str(&format!("{}: {}\n", t.speaker_name, t.text));
-        }
-
-        let system_prompt = "You are an executive meeting assistant. Output valid JSON only with keys: title (string), category (string), summary (array of bullet strings), action_items (array of objects with task, assignee, status).";
-        let user_prompt = format!("Transcript:\n{}\n\nGenerate JSON meeting summary:", conversation);
-        let combined = format!("System: {}\nUser: {}\nAssistant: ", system_prompt, user_prompt);
-
-        let llm_res: Option<String> = {
-            let mut guard = llm_handle.lock().unwrap();
-            if let Some(engine) = guard.as_mut() {
-                engine.run_with_options(&combined, 512, 0.3).ok()
-            } else {
-                None
-            }
-        };
-
-        if let Some(text) = llm_res {
-            let fallback = extract_summary_heuristics(&detail.turns, &detail.title);
-            let parsed = crate::meeting_summary::parse_llm_summary_json(&text, fallback);
-            let _ = update_meeting(
-                meeting_id,
-                parsed.title.clone(),
-                parsed.category.clone(),
-                parsed.summary.clone(),
-                parsed.action_items.clone(),
-            )
-            .await;
-            return Ok(parsed);
-        }
-    }
-
-    // Fallback heuristic output
-    let output = extract_summary_heuristics(&detail.turns, &detail.title);
-    let _ = update_meeting(
-        meeting_id,
-        output.title.clone(),
-        output.category.clone(),
-        output.summary.clone(),
-        output.action_items.clone(),
-    )
-    .await;
-
-    Ok(output)
-}
 
 #[tauri::command]
 pub async fn export_meeting_notes(meeting_id: i64, format: String) -> Result<String, String> {

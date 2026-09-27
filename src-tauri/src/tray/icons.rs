@@ -126,24 +126,8 @@ pub fn update_tray_menu(
 /// actually holds a model (possibly none). Avoids a stuck "loaded" UI when unload
 /// succeeded but the new init failed.
 pub fn reconcile_model_loaded_tray(app: &AppHandle, state: &AudioState) {
-    let loaded = {
-        let w_ok = state
-            .whisper
-            .lock()
-            .map(|g| g.get_current_model().is_some())
-            .unwrap_or(false);
-        let g_ok = state
-            .granite
-            .lock()
-            .map(|g| g.get_status().loaded)
-            .unwrap_or(false);
-        let q_ok = state
-            .qwen3
-            .lock()
-            .map(|g| g.get_status().loaded)
-            .unwrap_or(false);
-        w_ok || g_ok || q_ok
-    };
+    // Snapshots, not engine locks: this runs from tray callbacks on the main thread.
+    let loaded = state.any_asr_loaded();
     state.model_loaded.store(loaded, Ordering::Relaxed);
     update_tray_model_item(app, loaded);
 }

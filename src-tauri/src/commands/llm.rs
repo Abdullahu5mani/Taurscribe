@@ -39,46 +39,12 @@ pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<Str
     }
 }
 
-#[tauri::command]
-pub async fn run_llm_inference(
-    state: State<'_, AudioState>,
-    prompt: String,
-) -> Result<String, String> {
-    // We need to lock the LLM, but generating text is slow, so we shouldn't hold the lock
-    // for the entire generation if we can help it, BUT LLMEngine is not Clone.
-    // So we must hold the lock or wrap it in another mutex.
-    // Since inference is sequential single-user, holding the lock is fine for now.
 
-    // However, LLMEngine::run function is synchronous. We should run it in blocking task.
-    // But we can't pass the MutexGuard to another thread easily if it's not 'static scope.
-    // We will use a slightly different pattern for async wrapping.
-
-    let llm_handle = state.llm.clone();
-    let prompt = prompt.clone();
-
-    let output = tauri::async_runtime::spawn_blocking(move || {
-        let mut llm_guard = llm_handle.lock().unwrap();
-        if let Some(engine) = llm_guard.as_mut() {
-            engine.run(&prompt).map_err(|e| e.to_string())
-        } else {
-            Err("LLM not initialized. Call init_llm first.".to_string())
-        }
-    })
-    .await
-    .map_err(|e| format!("Join Error: {}", e))??;
-
-    Ok(output)
-}
-
-#[tauri::command]
-pub fn check_llm_status(state: State<'_, AudioState>) -> bool {
-    let llm_guard = state.llm.lock().unwrap();
-    llm_guard.is_some()
-}
 
 /// Clean up a transcript with FlowScribe.
 #[tauri::command]
 pub async fn correct_text(
+    app: tauri::AppHandle,
     state: State<'_, AudioState>,
     text: String,
     style: Option<String>,
@@ -99,10 +65,15 @@ pub async fn correct_text(
         crate::types::ASREngine::Granite => "granite",
         crate::types::ASREngine::Qwen3 => "qwen3",
     };
+    // The Accessibility lookup waits for the main thread (see
+    // context::on_main_thread), so do it on the blocking pool, not a Tokio worker.
+    let app_category = tauri::async_runtime::spawn_blocking(move || crate::context::active_app_category(&app))
+        .await
+        .unwrap_or("generic");
     let request = crate::llm::FlowRequest {
         engine: engine_tag.to_string(),
         level: crate::llm::level_for_style(style.as_deref()).to_string(),
-        app: crate::context::active_app_category().to_string(),
+        app: app_category.to_string(),
         vocab: crate::context::load_custom_vocabulary_from_settings().0,
         prev: None,
     };

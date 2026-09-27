@@ -222,9 +222,629 @@ pub async fn start_recording(
     .map_err(|e| format!("start_recording task failed: {}", e))
 }
 
-/// The blocking core of start_recording, run inside spawn_blocking.
-/// Receives a cloned AudioState (cheap — all fields are Arc) instead of
-/// 13 individually-cloned Arc parameters.
+/// A microphone stream to open: the device and the configuration (with its
+/// native sample format) picked by `select_input_device`.
+struct MicConfig {
+    device: cpal::Device,
+    config: cpal::StreamConfig,
+    sample_format: cpal::SampleFormat,
+}
+
+/// Picks the microphone: the one chosen in Settings, else (Linux with
+/// PipeWire/Pulse) the virtual PCM, else the system default; then its default
+/// configuration, or the first supported one in a sample format we convert.
+fn select_input_device(app_handle: &AppHandle, state: &AudioState) -> Result<MicConfig, String> {
+    let host = cpal::default_host();
+    let preferred = state.selected_input_device.lock().unwrap().clone();
+
+    let mut device_opt = None;
+    let mut fallback_triggered = false;
+
+    if let Some(ref name) = preferred {
+        device_opt = host
+            .input_devices()
+            .ok()
+            .and_then(|mut iter| iter.find(|d| d.name().ok().as_deref() == Some(name.as_str())));
+
+        if device_opt.is_none() {
+            println!(
+                "[WARNING] Preferred input device '{}' not found, falling back to default",
+                name
+            );
+            fallback_triggered = true;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux, detect if PipeWire / PulseAudio is active
+        let is_pipewire = std::env::var("PIPEWIRE_REMOTE").is_ok()
+            || std::env::var("XDG_RUNTIME_DIR")
+                .map(|p| {
+                    std::path::Path::new(&p).join("pipewire-0").exists()
+                        || std::path::Path::new(&p).join("pulse/native").exists()
+                })
+                .unwrap_or(false);
+
+        // If no preferred device, or if preferred device is a raw hardware "hw:X,Y" PCM while PipeWire is active,
+        // prioritize the virtual ALSA/PipeWire PCM ("default" or "pipewire") to eliminate EBUSY device lock contention.
+        let prefer_virtual = device_opt.is_none()
+            || (is_pipewire
+                && preferred
+                    .as_deref()
+                    .map(|s| s.starts_with("hw:") || s.contains("hw:"))
+                    .unwrap_or(false));
+
+        if prefer_virtual {
+            if let Ok(devices) = host.input_devices() {
+                let dev_list: Vec<_> = devices.collect();
+                if let Some(d) = dev_list.into_iter().find(|d| {
+                    if let Ok(name) = d.name() {
+                        name == "default"
+                            || name.to_lowercase().contains("pipewire")
+                            || name == "pulse"
+                    } else {
+                        false
+                    }
+                }) {
+                    println!("[INFO] Linux PipeWire audio: Selected virtual PCM '{}' to eliminate EBUSY device lock contention", d.name().unwrap_or_default());
+                    device_opt = Some(d);
+                }
+            }
+        }
+    }
+
+    if device_opt.is_none() {
+        device_opt = host.default_input_device();
+    }
+
+    let device =
+        device_opt.ok_or("No input device found. Check that a microphone is connected.")?;
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "Unknown Device".to_string());
+
+    println!("[INFO] Using input device: {}", device_name);
+
+    if fallback_triggered {
+        let _ = app_handle.emit("audio-fallback", device_name);
+    }
+
+    let supported = device
+        .default_input_config()
+        .or_else(|e| {
+            println!("[WARNING] default_input_config failed: {}, falling back to iterating supported configs", e);
+            device.supported_input_configs()
+                .map_err(|_err| cpal::DefaultStreamConfigError::DeviceNotAvailable)?
+                .find(|c| crate::audio::is_supported_input_format(c.sample_format()))
+                .map(|c| c.with_max_sample_rate())
+                .ok_or(cpal::DefaultStreamConfigError::StreamTypeNotSupported)
+        })
+        .map_err(|e| {
+            // macOS: permission denial often surfaces as a vague
+            // CoreAudio error during config or stream creation.
+            let msg = e.to_string();
+            if msg.contains("permission") || msg.contains("denied") || msg.contains("not supported") {
+                "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+            } else {
+                format!("Failed to get audio config: {}", msg)
+            }
+        })?;
+    // Keep the device's sample format: the stream is opened in it (see
+    // build_input_stream_f32), since many mics only deliver integers.
+    let sample_format = supported.sample_format();
+    let cfg: cpal::StreamConfig = supported.into();
+
+    Ok(MicConfig { device, config: cfg, sample_format })
+}
+
+/// VAD-gated transcription — shared logic for Whisper, Granite and Qwen3.
+/// Both managers expose the same `transcribe_chunk(&[f32], u32) -> Result<String, _>` API,
+/// so the entire accumulate → normalize → VAD-check → transcribe → emit pipeline
+/// lives here once instead of being copy-pasted per engine.
+///
+/// Returns the transcript text if speech was detected and transcription succeeded,
+/// or `None` when the chunk was silence or the transcription was empty.
+#[allow(clippy::too_many_arguments)]
+fn vad_gated_transcribe(
+    chunk: &mut Vec<f32>,
+    sample_rate: u32,
+    vad: &std::sync::Arc<std::sync::Mutex<crate::vad::VADManager>>,
+    transcribe: &mut impl FnMut(&[f32], u32) -> Result<String, String>,
+    method: &str,
+    emoji: &str,
+    app: &AppHandle,
+    session_transcript: &std::sync::Arc<std::sync::Mutex<String>>,
+    user_denoise: bool,
+    denoiser_arc: &Arc<Mutex<Option<Denoiser>>>,
+) -> bool {
+    let mut denoise_guard = denoiser_arc.lock().unwrap();
+    let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
+        chunk.as_slice(),
+        sample_rate,
+        user_denoise,
+        denoise_guard.as_mut(),
+    );
+    drop(denoise_guard);
+
+    if pcm16.is_empty() {
+        return false;
+    }
+
+    // Scan the full chunk frame-by-frame and take the peak speech probability.
+    // Evaluating only the first 32 ms (one Silero frame) of a 6-second chunk is
+    // unreliable: the LSTM needs several warmup frames from a cold state, and speech
+    // can begin anywhere in the window. Threshold 0.25 matches assemble_speech_audio's
+    // second Silero pass (onset=0.28) — Silero returns 0.25–0.40 for clean speech.
+    let is_speech = vad.lock().unwrap().max_speech_prob(&pcm16, usize::MAX);
+
+    if is_speech > 0.25 {
+        println!(
+            "[PROCESSING] {} Speech ({:.0}%) - {} transcribing {:.2}s chunk...",
+            emoji,
+            is_speech * 100.0,
+            method,
+            pcm16.len() as f32 / 16000.0,
+        );
+        let start = std::time::Instant::now();
+        match transcribe(&pcm16, 16000) {
+            Ok(text) if !text.trim().is_empty() => {
+                let text = if matches!(method, "Whisper") {
+                    strip_whitelisted_sound_captions(&text)
+                } else {
+                    text
+                };
+                if text.trim().is_empty() {
+                    return false;
+                }
+                let elapsed = start.elapsed().as_millis() as u32;
+                println!(
+                    "[TRANSCRIPT] {} \"{}\" (took {}ms)",
+                    emoji,
+                    text.trim(),
+                    elapsed
+                );
+                let _ = app.emit(
+                    "transcription-chunk",
+                    crate::types::TranscriptionChunk {
+                        text: text.clone(),
+                        processing_time_ms: elapsed,
+                        method: method.to_string(),
+                    },
+                );
+                {
+                    let mut st = session_transcript.lock().unwrap();
+                    if !st.is_empty() {
+                        st.push(' ');
+                    }
+                    st.push_str(text.trim());
+                }
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                eprintln!("[ERROR] {} transcription error: {}", method, e);
+                false
+            }
+        }
+    } else {
+        println!(
+            "[VAD] 🔇 Silence ({:.0}%) - Skipping {} chunk",
+            (1.0 - is_speech) * 100.0,
+            method,
+        );
+        false
+    }
+}
+
+/// Thread 1: writes every captured frame to the session WAV until `stop` is set
+/// and the channel is drained.
+fn spawn_writer_thread(
+    writer: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+    file_rx: crossbeam_channel::Receiver<Vec<f32>>,
+    stop: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut writer = writer;
+        loop {
+            match file_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(samples) => {
+                    for sample in samples {
+                        writer.write_sample(sample).ok();
+                    }
+                    // macOS fix: CoreAudio may keep the audio callback alive
+                    // briefly after Stream::drop() when called from a non-main
+                    // thread, so the channel stays open and we never hit the
+                    // Timeout branch. Check the stop signal here too.
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        // Drain any remaining
+        while let Ok(samples) = file_rx.try_recv() {
+            for sample in samples {
+                writer.write_sample(sample).ok();
+            }
+        }
+        writer.finalize().ok();
+        println!("WAV file saved.");
+    })
+}
+
+/// Thread 2, the live transcriber: cuts the captured audio into chunks, runs
+/// each through preprocessing + VAD + the active engine, and emits the text.
+struct LiveTranscriber {
+    app: AppHandle,
+    active_engine: ASREngine,
+    sample_rate: u32,
+    whisper: Arc<Mutex<crate::whisper::WhisperManager>>,
+    /// Granite / Qwen3 manager (None for Whisper).
+    gguf: Option<Arc<Mutex<crate::gguf_asr::GgufAsrManager>>>,
+    vad: Arc<Mutex<crate::vad::VADManager>>,
+    session_transcript: Arc<Mutex<String>>,
+    denoise: bool,
+    denoiser: Arc<Mutex<Option<Denoiser>>>,
+    /// Callbacks and samples the capture side dropped because this thread was behind.
+    dropped_callbacks: Arc<AtomicU64>,
+    dropped_samples: Arc<AtomicU64>,
+}
+
+impl LiveTranscriber {
+    fn spawn(self, whisper_rx: crossbeam_channel::Receiver<Vec<f32>>, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || self.run(whisper_rx, stop))
+    }
+
+    /// VAD-gated transcription of one chunk on the active engine.
+    fn transcribe_gated(&self, chunk: &mut Vec<f32>, buffered_samples: usize, context: &str) {
+        if let Some(gguf) = &self.gguf {
+            let mut manager = gguf.lock().unwrap();
+            let mut transcribe = |c: &[f32], sr| manager.transcribe_chunk(c, sr, None);
+            vad_gated_transcribe(
+                chunk,
+                self.sample_rate,
+                &self.vad,
+                &mut transcribe,
+                engine_label(self.active_engine),
+                "🔊",
+                &self.app,
+                &self.session_transcript,
+                self.denoise,
+                &self.denoiser,
+            );
+        } else {
+            crate::memory::maybe_log_process_memory_with_sizes(
+                context,
+                &[
+                    ("buffer_len_samples", buffered_samples),
+                    ("chunk_samples", chunk.len()),
+                    ("chunk_audio_bytes", chunk.len() * std::mem::size_of::<f32>()),
+                ],
+            );
+            let mut wm = self.whisper.lock().unwrap();
+            let mut transcribe = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
+            vad_gated_transcribe(
+                chunk,
+                self.sample_rate,
+                &self.vad,
+                &mut transcribe,
+                "Whisper",
+                "🎙️",
+                &self.app,
+                &self.session_transcript,
+                self.denoise,
+                &self.denoiser,
+            );
+        }
+    }
+
+    /// Whisper on a short final tail without the VAD gate: a single word can be
+    /// quieter than the gate but every sample of it matters.
+    fn transcribe_whisper_tail_ungated(&self, tail: &[f32]) {
+        let mut dg = self.denoiser.lock().unwrap();
+        let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(tail, self.sample_rate, self.denoise, dg.as_mut());
+        drop(dg);
+        let mut wm = self.whisper.lock().unwrap();
+        if let Ok(text) = wm.transcribe_chunk(&pcm16, 16000) {
+            let text = strip_whitelisted_sound_captions(&text);
+            if !text.trim().is_empty() {
+                println!("[TRANSCRIPT] 🎙️ (Tail) \"{}\"", text.trim());
+                let _ = self.app.emit(
+                    "transcription-chunk",
+                    crate::types::TranscriptionChunk {
+                        text: text.clone(),
+                        processing_time_ms: 0,
+                        method: "Whisper".to_string(),
+                    },
+                );
+                let mut st = self.session_transcript.lock().unwrap();
+                if !st.is_empty() {
+                    st.push(' ');
+                }
+                st.push_str(text.trim());
+            }
+        }
+    }
+
+    fn run(self, whisper_rx: crossbeam_channel::Receiver<Vec<f32>>, stop: Arc<AtomicBool>) {
+        // Apply P-core affinity, elevated priority, and disable EcoQoS on Windows hybrid CPUs
+        crate::platform_tuning::apply_thread_performance_affinity();
+
+        let sample_rate = self.sample_rate;
+        let mut buffer: VecDeque<f32> = VecDeque::new();
+        let chunk_size = live_chunk_samples(self.active_engine, sample_rate);
+        let max_buffer_size = chunk_size * 2;
+        // Pre-allocated scratch buffer reused each iteration to avoid per-chunk Vec allocation
+        let mut chunk = Vec::with_capacity(chunk_size);
+        println!("[INFO] Runtime Transcriber thread started (Engine: {:?})", self.active_engine);
+
+        while !stop.load(Ordering::Relaxed) {
+            let samples = match whisper_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(s) => s,
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            };
+
+            buffer.extend(samples);
+            while buffer.len() >= chunk_size {
+                if buffer.len() > max_buffer_size {
+                    println!("[WARNING] Buffer full, dropping old audio to catch up");
+                    discard_audio_front(&mut buffer, chunk_size);
+                }
+                pop_audio_chunk(&mut buffer, chunk_size, &mut chunk);
+                self.transcribe_gated(&mut chunk, buffer.len(), "recording whisper live chunk start");
+            }
+        }
+
+        println!("[INFO] Recording stopped, processing remaining audio...");
+        // Drain any remaining samples from the channel into the buffer
+        while let Ok(samples) = whisper_rx.try_recv() {
+            buffer.extend(samples);
+        }
+
+        // Pad 400ms of silence so trailing words aren't clipped by the
+        // transcription engine. This is better than keeping the mic open
+        // longer because it adds zero background noise.
+        let silence_samples = (sample_rate as usize) * 400 / 1000;
+        buffer.extend(std::iter::repeat(0.0_f32).take(silence_samples));
+
+        // Flush full-sized chunks from the tail buffer, at the live chunk size.
+        while buffer.len() >= chunk_size {
+            pop_audio_chunk(&mut buffer, chunk_size, &mut chunk);
+            self.transcribe_gated(&mut chunk, buffer.len(), "recording whisper final flush chunk");
+        }
+
+        // Flush the sub-chunk tail (< chunk_size but > 0.1s)
+        // For short tails (< 3s, e.g. a single word), bypass VAD entirely —
+        // VAD is designed for filtering silence in long streams, not for
+        // gating short utterances where every sample matters.
+        if !buffer.is_empty() && buffer.len() as f32 / sample_rate as f32 > 0.1 {
+            let mut tail: Vec<f32> = buffer.drain(..).collect();
+            let tail_secs = tail.len() as f32 / sample_rate as f32;
+            if self.active_engine == ASREngine::Whisper && tail_secs < 3.0 {
+                println!("[PROCESSING] 🎙️ Short tail ({:.2}s) — bypassing VAD for Whisper", tail_secs);
+                self.transcribe_whisper_tail_ungated(&tail);
+            } else {
+                self.transcribe_gated(&mut tail, 0, "recording whisper tail");
+            }
+        }
+
+        let dropped_callbacks = self.dropped_callbacks.load(Ordering::Relaxed);
+        if dropped_callbacks > 0 {
+            let dropped_samples = self.dropped_samples.load(Ordering::Relaxed);
+            println!(
+                "[AUDIO_DROP] Transcriber queue dropped {} callback(s), {} sample(s) total",
+                dropped_callbacks, dropped_samples
+            );
+        }
+
+        println!("[INFO] Transcriber thread finished");
+    }
+}
+
+/// Thread 3: emits the mic level every 50 ms. The capture callback only stores
+/// the level (as f32 bits); emitting from the callback fails on Windows, where
+/// the WASAPI callback runs on a COM apartment thread.
+fn spawn_level_thread(app: AppHandle, audio_level: Arc<AtomicU32>, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let level = f32::from_bits(audio_level.load(Ordering::Relaxed));
+            let _ = app.emit("audio-level", level);
+            crate::overlay::push_level(&app, level);
+        }
+    })
+}
+
+/// Where the capture side sends audio, and the counters it updates.
+struct CaptureSinks {
+    file_tx: crossbeam_channel::Sender<Vec<f32>>,
+    whisper_tx: crossbeam_channel::Sender<Vec<f32>>,
+    audio_level: Arc<AtomicU32>,
+    dropped_callbacks: Arc<AtomicU64>,
+    dropped_samples: Arc<AtomicU64>,
+}
+
+fn permission_aware_stream_error(msg: String, what: &str) -> String {
+    if msg.contains("permission") || msg.contains("denied") {
+        "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+    } else {
+        format!("Failed to {} audio stream: {}", what, msg)
+    }
+}
+
+/// Opens and starts the microphone stream. The callback never blocks: it
+/// `try_send`s raw audio to the WAV writer and a mono mix to the transcriber.
+fn start_mic_stream(app_handle: &AppHandle, mic: MicConfig, sinks: CaptureSinks) -> Result<cpal::Stream, String> {
+    let channels = mic.config.channels as usize;
+    let CaptureSinks { file_tx, whisper_tx, audio_level, dropped_callbacks, dropped_samples } = sinks;
+    let level_counter = AtomicU32::new(0);
+    let app_for_error = app_handle.clone();
+    let stream = crate::audio::build_input_stream_f32(
+        &mic.device,
+        &mic.config,
+        mic.sample_format,
+        move |data: &[f32]| {
+            // File writer always gets raw (unprocessed) audio
+            file_tx.try_send(data.to_vec()).ok();
+
+            let mono_data: Vec<f32> = if channels > 1 {
+                data.chunks(channels)
+                    .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
+                    .collect()
+            } else {
+                data.to_vec()
+            };
+
+            // RNNoise + universal chain run in the transcriber thread (48 kHz → 16 kHz order).
+
+            // Store audio level in atomic for the emitter thread to pick up.
+            // Only compute every ~5 callbacks to avoid unnecessary work.
+            let cnt = level_counter.fetch_add(1, Ordering::Relaxed);
+            if cnt % 5 == 0 && !data.is_empty() {
+                let rms = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+                let level = (rms / 0.015_f32).min(1.0_f32).sqrt();
+                audio_level.store(level.to_bits(), Ordering::Relaxed);
+            }
+
+            let mono_len = mono_data.len();
+            if whisper_tx.try_send(mono_data).is_err() {
+                let dropped = dropped_callbacks.fetch_add(1, Ordering::Relaxed) + 1;
+                dropped_samples.fetch_add(mono_len as u64, Ordering::Relaxed);
+                if dropped == 1 || dropped % 100 == 0 {
+                    eprintln!(
+                        "[AUDIO_DROP] Transcriber queue dropped {} callback(s); latest={} samples",
+                        dropped, mono_len
+                    );
+                }
+            }
+        },
+        move |err| {
+            eprintln!("[ERROR] Audio input stream error: {}", err);
+            let _ = app_for_error.emit(
+                "audio-disconnected",
+                serde_json::json!({
+                    "code": "audio_device_disconnected",
+                    "message": err.to_string(),
+                }),
+            );
+        },
+    )
+    .map_err(|e| permission_aware_stream_error(e.to_string(), "open"))?;
+
+    stream.play().map_err(|e| permission_aware_stream_error(e.to_string(), "start"))?;
+    Ok(stream)
+}
+
+/// Starts two-channel meeting capture (mic + the detected meeting app's audio,
+/// or all system audio if there is no meeting or its process tap fails).
+fn start_meeting_capture(
+    app_handle: &AppHandle,
+    state: &AudioState,
+    file_tx: crossbeam_channel::Sender<Vec<f32>>,
+    whisper_tx: crossbeam_channel::Sender<Vec<f32>>,
+) -> Result<crate::audio_dual_channel::DualChannelCaptureHandle, String> {
+    use crate::audio_dual_channel::DualChannelTarget;
+    let dual_stop = Arc::new(AtomicBool::new(false));
+
+    // Tap only the detected meeting's app, so other apps' sound (notifications,
+    // music, anything else playing) stays out of the callers channel. Without a
+    // detected meeting (or for the simulator's synthetic pid) fall back to the
+    // whole system mix.
+    let meeting_pid = state
+        .meeting_detector
+        .get_status()
+        .active_meetings
+        .first()
+        .map(|m| m.pid)
+        .filter(|pid| *pid > 0 && *pid != 99999);
+    let target = meeting_pid.map(DualChannelTarget::Process).unwrap_or(DualChannelTarget::System);
+    println!("[INFO] Dual-channel callers track: {:?}", target);
+    // The microphone chosen in Settings (None = system default).
+    let meeting_mic = state.selected_input_device.lock().unwrap().clone();
+
+    match crate::audio_dual_channel::start_dual_channel_capture(
+        target,
+        48000,
+        file_tx.clone(),
+        whisper_tx.clone(),
+        app_handle.clone(),
+        dual_stop.clone(),
+        meeting_mic.clone(),
+    ) {
+        Ok(handle) => Ok(handle),
+        Err(e) if target != DualChannelTarget::System => {
+            eprintln!("[WARN] Meeting-process capture failed ({}); falling back to system audio", e);
+            crate::audio_dual_channel::start_dual_channel_capture(
+                DualChannelTarget::System,
+                48000,
+                file_tx,
+                whisper_tx,
+                app_handle.clone(),
+                dual_stop,
+                meeting_mic,
+            )
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Resets per-session state (engine context, VAD, transcript, denoiser) and
+/// creates the session WAV. Returns its path and writer.
+fn prepare_session(
+    state: &AudioState,
+    is_dual_channel: bool,
+    channels: u16,
+    sample_rate: u32,
+    denoise_enabled: bool,
+) -> Result<(std::path::PathBuf, hound::WavWriter<std::io::BufWriter<std::fs::File>>), String> {
+    let recordings_dir = get_recordings_dir()?;
+    let prefix = if is_dual_channel { "meeting" } else { "recording" };
+    let filename = format!("{}_{}.wav", prefix, chrono::Utc::now().timestamp());
+    let path = recordings_dir.join(&filename);
+
+    println!("[INFO] Saving recording to: {}", path.display());
+
+    // Reset AI context (start fresh for a new recording)
+    match *state.active_engine.lock().unwrap() {
+        ASREngine::Whisper => state.whisper.lock().unwrap().clear_context(),
+        ASREngine::Granite => state.granite.lock().unwrap().clear_context(),
+        ASREngine::Qwen3 => state.qwen3.lock().unwrap().clear_context(),
+    }
+    state.vad.lock().unwrap().reset_state();
+
+    *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
+    state.session_transcript.lock().unwrap().clear();
+
+    // Create a fresh denoiser for this session (RNNoise GRU state must not leak across sessions)
+    if denoise_enabled {
+        *state.denoiser.lock().unwrap() = Some(Denoiser::new());
+        println!("[INFO] RNNoise denoiser enabled for this session");
+    } else {
+        *state.denoiser.lock().unwrap() = None;
+    }
+
+    let spec = hound::WavSpec {
+        channels,
+        sample_rate,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
+    Ok((path, writer))
+}
+
+/// The blocking core of start_recording, run inside spawn_blocking: pick the
+/// input, prepare the session, start the writer / transcriber / level threads,
+/// then start the capture (mic stream or two-channel meeting capture).
 fn start_recording_blocking(
     app_handle: AppHandle,
     state: AudioState,
@@ -246,157 +866,21 @@ fn start_recording_blocking(
 
     state.last_recording_is_dual_channel.store(is_dual_channel, Ordering::SeqCst);
 
-    // 1. Setup Audio Config & Device
-    let (config_channels, config_sample_rate, cpal_device, cpal_config) = if is_dual_channel {
+    // 1. Input: stereo 48 kHz for meetings, else the selected microphone.
+    let (mic, channels, sample_rate) = if is_dual_channel {
         println!("[INFO] Dual-Channel System Loopback & Mic Recorder selected (stereo 48 kHz)");
-        (2u16, 48000u32, None, None)
+        (None, 2u16, 48000u32)
     } else {
-        let host = cpal::default_host();
-        let preferred = state.selected_input_device.lock().unwrap().clone();
-
-        let mut device_opt = None;
-        let mut fallback_triggered = false;
-
-        if let Some(ref name) = preferred {
-            device_opt = host
-                .input_devices()
-                .ok()
-                .and_then(|mut iter| iter.find(|d| d.name().ok().as_deref() == Some(name.as_str())));
-
-            if device_opt.is_none() {
-                println!(
-                    "[WARNING] Preferred input device '{}' not found, falling back to default",
-                    name
-                );
-                fallback_triggered = true;
-            }
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            // On Linux, detect if PipeWire / PulseAudio is active
-            let is_pipewire = std::env::var("PIPEWIRE_REMOTE").is_ok()
-                || std::env::var("XDG_RUNTIME_DIR")
-                    .map(|p| {
-                        std::path::Path::new(&p).join("pipewire-0").exists()
-                            || std::path::Path::new(&p).join("pulse/native").exists()
-                    })
-                    .unwrap_or(false);
-
-            // If no preferred device, or if preferred device is a raw hardware "hw:X,Y" PCM while PipeWire is active,
-            // prioritize the virtual ALSA/PipeWire PCM ("default" or "pipewire") to eliminate EBUSY device lock contention.
-            let prefer_virtual = device_opt.is_none()
-                || (is_pipewire
-                    && preferred
-                        .as_deref()
-                        .map(|s| s.starts_with("hw:") || s.contains("hw:"))
-                        .unwrap_or(false));
-
-            if prefer_virtual {
-                if let Ok(devices) = host.input_devices() {
-                    let dev_list: Vec<_> = devices.collect();
-                    if let Some(d) = dev_list.into_iter().find(|d| {
-                        if let Ok(name) = d.name() {
-                            name == "default"
-                                || name.to_lowercase().contains("pipewire")
-                                || name == "pulse"
-                        } else {
-                            false
-                        }
-                    }) {
-                        println!("[INFO] Linux PipeWire audio: Selected virtual PCM '{}' to eliminate EBUSY device lock contention", d.name().unwrap_or_default());
-                        device_opt = Some(d);
-                    }
-                }
-            }
-        }
-
-        if device_opt.is_none() {
-            device_opt = host.default_input_device();
-        }
-
-        let device =
-            device_opt.ok_or("No input device found. Check that a microphone is connected.")?;
-        let device_name = device
-            .name()
-            .unwrap_or_else(|_| "Unknown Device".to_string());
-
-        println!("[INFO] Using input device: {}", device_name);
-
-        if fallback_triggered {
-            let _ = app_handle.emit("audio-fallback", device_name);
-        }
-
-        let supported = device
-            .default_input_config()
-            .or_else(|e| {
-                println!("[WARNING] default_input_config failed: {}, falling back to iterating supported configs", e);
-                device.supported_input_configs()
-                    .map_err(|_err| cpal::DefaultStreamConfigError::DeviceNotAvailable)?
-                    .find(|c| crate::audio::is_supported_input_format(c.sample_format()))
-                    .map(|c| c.with_max_sample_rate())
-                    .ok_or(cpal::DefaultStreamConfigError::StreamTypeNotSupported)
-            })
-            .map_err(|e| {
-                // macOS: permission denial often surfaces as a vague
-                // CoreAudio error during config or stream creation.
-                let msg = e.to_string();
-                if msg.contains("permission") || msg.contains("denied") || msg.contains("not supported") {
-                    "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
-                } else {
-                    format!("Failed to get audio config: {}", msg)
-                }
-            })?;
-        // Keep the device's sample format: the stream is opened in it (see
-        // build_input_stream_f32), since many mics only deliver integers.
-        let sample_format = supported.sample_format();
-        let cfg: cpal::StreamConfig = supported.into();
-
-        (cfg.channels, cfg.sample_rate.0, Some(device), Some((cfg, sample_format)))
+        let mic = select_input_device(&app_handle, &state)?;
+        let (c, r) = (mic.config.channels, mic.config.sample_rate.0);
+        (Some(mic), c, r)
     };
 
-    // 2. Prepare Output File
-    let recordings_dir = get_recordings_dir()?;
-    let prefix = if is_dual_channel { "meeting" } else { "recording" };
-    let filename = format!("{}_{}.wav", prefix, chrono::Utc::now().timestamp());
-    let path = recordings_dir.join(&filename);
+    // 2. Session WAV and per-session state.
+    let (path, writer) = prepare_session(&state, is_dual_channel, channels, sample_rate, denoise_enabled)?;
 
-    println!("[INFO] Saving recording to: {}", path.display());
-
-    // 3. Reset AI Context (Start fresh for new recording)
-    let active_engine = *state.active_engine.lock().unwrap();
-    match active_engine {
-        ASREngine::Whisper => state.whisper.lock().unwrap().clear_context(),
-        ASREngine::Granite => state.granite.lock().unwrap().clear_context(),
-        ASREngine::Qwen3 => state.qwen3.lock().unwrap().clear_context(),
-    }
-    // Reset Silero VAD LSTM state so prior session context doesn't bleed in
-    state.vad.lock().unwrap().reset_state();
-
-    *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
-    state.session_transcript.lock().unwrap().clear();
-
-    // Create a fresh denoiser for this session (RNNoise GRU state must not leak across sessions)
-    if denoise_enabled {
-        *state.denoiser.lock().unwrap() = Some(Denoiser::new());
-        println!("[INFO] RNNoise denoiser enabled for this session");
-    } else {
-        *state.denoiser.lock().unwrap() = None;
-    }
-
-    // 4. Create proper WAV header settings
-    let spec = hound::WavSpec {
-        channels: config_channels,
-        sample_rate: config_sample_rate,
-        bits_per_sample: 32,
-        sample_format: hound::SampleFormat::Float,
-    };
-
-    let writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
-
-    // 5. Create COMMUNICATION PIPES (Channels)
-    // Bounded: prevents unbounded memory growth if file writer or transcriber falls behind.
-    // Audio callback uses try_send so it never blocks the real-time capture thread.
+    // 3. Channels. Bounded so a slow writer or transcriber cannot grow memory
+    // without limit; the capture side uses try_send and never blocks.
     //
     // A slow encode pass (Qwen3 on a 15-second chunk, Whisper on CPU) can take several
     // seconds. At 48 kHz / 1024-sample callbacks (~21 ms each) a 32-message bound fills
@@ -404,560 +888,67 @@ fn start_recording_blocking(
     // disappeared" symptom. 512 messages ≈ 10.7 s of headroom.
     let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5s headroom at 48kHz/1024
     let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(512);
-
-    let file_tx_clone = file_tx.clone();
-    let whisper_tx_clone = whisper_tx.clone();
-    let transcriber_dropped_callbacks = Arc::new(AtomicU64::new(0));
-    let transcriber_dropped_samples = Arc::new(AtomicU64::new(0));
-    let transcriber_dropped_callbacks_writer = transcriber_dropped_callbacks.clone();
-    let transcriber_dropped_samples_writer = transcriber_dropped_samples.clone();
-
-    let sample_rate = config_sample_rate;
-
+    let dropped_callbacks = Arc::new(AtomicU64::new(0));
+    let dropped_samples = Arc::new(AtomicU64::new(0));
+    let audio_level = Arc::new(AtomicU32::new(0));
     let level_stop = Arc::new(AtomicBool::new(false));
-    let level_stop_clone1 = level_stop.clone();
-    let level_stop_clone2 = level_stop.clone();
-    let level_stop_clone3 = level_stop.clone();
 
-    // 6. SPAWN THREAD 1: THE FILE SAVER
-    let writer_thread = std::thread::spawn(move || {
-        let mut writer = writer;
-        loop {
-            match file_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                Ok(samples) => {
-                    for sample in samples {
-                        writer.write_sample(sample).ok();
-                    }
-                    // macOS fix: CoreAudio may keep the audio callback alive
-                    // briefly after Stream::drop() when called from a non-main
-                    // thread, so the channel stays open and we never hit the
-                    // Timeout branch. Check the stop signal here too.
-                    if level_stop_clone1.load(Ordering::Relaxed) {
-                        break;
-                    }
-                }
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                    if level_stop_clone1.load(Ordering::Relaxed) {
-                        break;
-                    }
-                }
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-
-        // Drain any remaining
-        while let Ok(samples) = file_rx.try_recv() {
-            for sample in samples {
-                writer.write_sample(sample).ok();
-            }
-        }
-        writer.finalize().ok();
-        println!("WAV file saved.");
-    });
-
-    // Pull shared references out of state for the transcriber thread
-    let whisper = state.whisper.clone();
+    // 4. Worker threads.
+    let writer_thread = spawn_writer_thread(writer, file_rx, level_stop.clone());
     let active_engine = *state.active_engine.lock().unwrap();
-    // Granite / Qwen3 manager (None for Whisper).
-    let gguf = state.gguf_manager(active_engine);
-    let engine_label = engine_label(active_engine);
-    let vad = state.vad.clone();
-    let session_transcript = state.session_transcript.clone();
-    let denoiser_arc = state.denoiser.clone();
-    let recording_handle_arc = state.recording_handle.clone();
-    let denoise_enabled_thread = denoise_enabled;
-    let transcriber_dropped_callbacks_reader = transcriber_dropped_callbacks.clone();
-    let transcriber_dropped_samples_reader = transcriber_dropped_samples.clone();
-
-    /// VAD-gated transcription — shared logic for Whisper, Granite and Qwen3.
-    /// Both managers expose the same `transcribe_chunk(&[f32], u32) -> Result<String, _>` API,
-    /// so the entire accumulate → normalize → VAD-check → transcribe → emit pipeline
-    /// lives here once instead of being copy-pasted per engine.
-    ///
-    /// Returns the transcript text if speech was detected and transcription succeeded,
-    /// or `None` when the chunk was silence or the transcription was empty.
-    #[allow(clippy::too_many_arguments)]
-    fn vad_gated_transcribe(
-        chunk: &mut Vec<f32>,
-        sample_rate: u32,
-        vad: &std::sync::Arc<std::sync::Mutex<crate::vad::VADManager>>,
-        transcribe: &mut impl FnMut(&[f32], u32) -> Result<String, String>,
-        method: &str,
-        emoji: &str,
-        app: &AppHandle,
-        session_transcript: &std::sync::Arc<std::sync::Mutex<String>>,
-        user_denoise: bool,
-        denoiser_arc: &Arc<Mutex<Option<Denoiser>>>,
-    ) -> bool {
-        let mut denoise_guard = denoiser_arc.lock().unwrap();
-        let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
-            chunk.as_slice(),
-            sample_rate,
-            user_denoise,
-            denoise_guard.as_mut(),
-        );
-        drop(denoise_guard);
-
-        if pcm16.is_empty() {
-            return false;
-        }
-
-        // Scan the full chunk frame-by-frame and take the peak speech probability.
-        // Evaluating only the first 32 ms (one Silero frame) of a 6-second chunk is
-        // unreliable: the LSTM needs several warmup frames from a cold state, and speech
-        // can begin anywhere in the window. Threshold 0.25 matches assemble_speech_audio's
-        // second Silero pass (onset=0.28) — Silero returns 0.25–0.40 for clean speech.
-        let is_speech = vad.lock().unwrap().max_speech_prob(&pcm16, usize::MAX);
-
-        if is_speech > 0.25 {
-            println!(
-                "[PROCESSING] {} Speech ({:.0}%) - {} transcribing {:.2}s chunk...",
-                emoji,
-                is_speech * 100.0,
-                method,
-                pcm16.len() as f32 / 16000.0,
-            );
-            let start = std::time::Instant::now();
-            match transcribe(&pcm16, 16000) {
-                Ok(text) if !text.trim().is_empty() => {
-                    let text = if matches!(method, "Whisper") {
-                        strip_whitelisted_sound_captions(&text)
-                    } else {
-                        text
-                    };
-                    if text.trim().is_empty() {
-                        return false;
-                    }
-                    let elapsed = start.elapsed().as_millis() as u32;
-                    println!(
-                        "[TRANSCRIPT] {} \"{}\" (took {}ms)",
-                        emoji,
-                        text.trim(),
-                        elapsed
-                    );
-                    let _ = app.emit(
-                        "transcription-chunk",
-                        crate::types::TranscriptionChunk {
-                            text: text.clone(),
-                            processing_time_ms: elapsed,
-                            method: method.to_string(),
-                        },
-                    );
-                    {
-                        let mut st = session_transcript.lock().unwrap();
-                        if !st.is_empty() {
-                            st.push(' ');
-                        }
-                        st.push_str(text.trim());
-                    }
-                    true
-                }
-                Ok(_) => false,
-                Err(e) => {
-                    eprintln!("[ERROR] {} transcription error: {}", method, e);
-                    false
-                }
-            }
-        } else {
-            println!(
-                "[VAD] 🔇 Silence ({:.0}%) - Skipping {} chunk",
-                (1.0 - is_speech) * 100.0,
-                method,
-            );
-            false
-        }
+    let transcriber_thread = LiveTranscriber {
+        app: app_handle.clone(),
+        active_engine,
+        sample_rate,
+        whisper: state.whisper.clone(),
+        gguf: state.gguf_manager(active_engine),
+        vad: state.vad.clone(),
+        session_transcript: state.session_transcript.clone(),
+        denoise: denoise_enabled,
+        denoiser: state.denoiser.clone(),
+        dropped_callbacks: dropped_callbacks.clone(),
+        dropped_samples: dropped_samples.clone(),
     }
+    .spawn(whisper_rx, level_stop.clone());
+    let level_thread = spawn_level_thread(app_handle.clone(), audio_level.clone(), level_stop.clone());
 
-    // 7. SPAWN THREAD 2: THE REAL-TIME TRANSCRIBER
-    let app_clone = app_handle.clone();
-    let transcriber_thread = std::thread::spawn(move || {
-        // Apply P-core affinity, elevated priority, and disable EcoQoS on Windows hybrid CPUs
-        crate::platform_tuning::apply_thread_performance_affinity();
-
-        let mut buffer: VecDeque<f32> = VecDeque::new();
-        let chunk_size = live_chunk_samples(active_engine, sample_rate);
-        let max_buffer_size = chunk_size * 2;
-        // Pre-allocated scratch buffer reused each iteration to avoid per-chunk Vec allocation
-        let mut chunk = Vec::with_capacity(chunk_size);
-        println!(
-            "[INFO] Runtime Transcriber thread started (Engine: {:?})",
-            active_engine
-        );
-
-        while !level_stop_clone2.load(Ordering::Relaxed) {
-            let samples = match whisper_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                Ok(s) => s,
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+    // 5. Capture. On failure stop the level thread too (the writer and
+    // transcriber exit on their own once the senders are dropped).
+    let capture = match mic {
+        None => start_meeting_capture(&app_handle, &state, file_tx.clone(), whisper_tx.clone()).map(|handle| {
+            println!("[INFO] Dual-channel recording started: {}", path.display());
+            (None, Some(handle))
+        }),
+        Some(mic) => {
+            let sinks = CaptureSinks {
+                file_tx: file_tx.clone(),
+                whisper_tx: whisper_tx.clone(),
+                audio_level,
+                dropped_callbacks,
+                dropped_samples,
             };
-
-            buffer.extend(samples);
-            while buffer.len() >= chunk_size {
-                if buffer.len() > max_buffer_size {
-                    println!("[WARNING] Buffer full, dropping old audio to catch up");
-                    discard_audio_front(&mut buffer, chunk_size);
-                }
-                pop_audio_chunk(&mut buffer, chunk_size, &mut chunk);
-                if let Some(gguf) = &gguf {
-                    let mut manager = gguf.lock().unwrap();
-                    let mut transcribe = |c: &[f32], sr| manager.transcribe_chunk(c, sr, None);
-                    vad_gated_transcribe(
-                        &mut chunk,
-                        sample_rate,
-                        &vad,
-                        &mut transcribe,
-                        engine_label,
-                        "🔊",
-                        &app_clone,
-                        &session_transcript,
-                        denoise_enabled_thread,
-                        &denoiser_arc,
-                    );
-                } else {
-                    crate::memory::maybe_log_process_memory_with_sizes(
-                        "recording whisper live chunk start",
-                        &[
-                            ("buffer_len_samples", buffer.len()),
-                            ("chunk_samples", chunk.len()),
-                            ("chunk_audio_bytes", chunk.len() * std::mem::size_of::<f32>()),
-                        ],
-                    );
-                    let mut wm = whisper.lock().unwrap();
-                    let mut transcribe =
-                        |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                    vad_gated_transcribe(
-                        &mut chunk,
-                        sample_rate,
-                        &vad,
-                        &mut transcribe,
-                        "Whisper",
-                        "🎙️",
-                        &app_clone,
-                        &session_transcript,
-                        denoise_enabled_thread,
-                        &denoiser_arc,
-                    );
-                }
-            }
+            start_mic_stream(&app_handle, mic, sinks).map(|s| (Some(SendStream(s)), None))
         }
-
-        println!("[INFO] Recording stopped, processing remaining audio...");
-        // Drain any remaining samples from the channel into the buffer
-        while let Ok(samples) = whisper_rx.try_recv() {
-            buffer.extend(samples);
+    };
+    let (stream, dual) = match capture {
+        Ok(c) => c,
+        Err(e) => {
+            level_stop.store(true, Ordering::Relaxed);
+            return Err(e);
         }
+    };
 
-        // Pad 400ms of silence so trailing words aren't clipped by the
-        // transcription engine. This is better than keeping the mic open
-        // longer because it adds zero background noise.
-        let silence_samples = (sample_rate as usize) * 400 / 1000;
-        buffer.extend(std::iter::repeat(0.0_f32).take(silence_samples));
-
-        // Flush full-sized chunks from the tail buffer, at the live chunk size.
-        while buffer.len() >= chunk_size {
-            pop_audio_chunk(&mut buffer, chunk_size, &mut chunk);
-            if let Some(gguf) = &gguf {
-                let mut manager = gguf.lock().unwrap();
-                let mut transcribe = |c: &[f32], sr| manager.transcribe_chunk(c, sr, None);
-                vad_gated_transcribe(
-                    &mut chunk,
-                    sample_rate,
-                    &vad,
-                    &mut transcribe,
-                    engine_label,
-                    "🔊",
-                    &app_clone,
-                    &session_transcript,
-                    denoise_enabled_thread,
-                    &denoiser_arc,
-                );
-            } else {
-                crate::memory::maybe_log_process_memory_with_sizes(
-                    "recording whisper final flush chunk",
-                    &[
-                        ("remaining_buffer_samples", buffer.len()),
-                        ("chunk_samples", chunk.len()),
-                    ],
-                );
-                let mut wm = whisper.lock().unwrap();
-                let mut t = |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                vad_gated_transcribe(
-                    &mut chunk,
-                    sample_rate,
-                    &vad,
-                    &mut t,
-                    "Whisper",
-                    "🎙️",
-                    &app_clone,
-                    &session_transcript,
-                    denoise_enabled_thread,
-                    &denoiser_arc,
-                );
-            }
-        }
-
-        // Flush the sub-chunk tail (< chunk_size but > 0.1s)
-        // For short tails (< 3s, e.g. a single word), bypass VAD entirely —
-        // VAD is designed for filtering silence in long streams, not for
-        // gating short utterances where every sample matters.
-        if !buffer.is_empty() && buffer.len() as f32 / sample_rate as f32 > 0.1 {
-            let mut tail: Vec<f32> = buffer.drain(..).collect();
-            let tail_secs = tail.len() as f32 / sample_rate as f32;
-            let use_vad = tail_secs >= 3.0;
-            match active_engine {
-                ASREngine::Whisper => {
-                    let mut wm = whisper.lock().unwrap();
-                    if use_vad {
-                        let mut t =
-                            |c: &[f32], sr| wm.transcribe_chunk(c, sr).map_err(|e| e.to_string());
-                        vad_gated_transcribe(
-                            &mut tail,
-                            sample_rate,
-                            &vad,
-                            &mut t,
-                            "Whisper",
-                            "🎙️",
-                            &app_clone,
-                            &session_transcript,
-                            denoise_enabled_thread,
-                            &denoiser_arc,
-                        );
-                    } else {
-                        println!(
-                            "[PROCESSING] 🎙️ Short tail ({:.2}s) — bypassing VAD for Whisper",
-                            tail_secs
-                        );
-                        let mut dg = denoiser_arc.lock().unwrap();
-                        let pcm16 = audio_preprocess::preprocess_live_transcribe_chunk(
-                            &tail,
-                            sample_rate,
-                            denoise_enabled_thread,
-                            dg.as_mut(),
-                        );
-                        drop(dg);
-                        if let Ok(text) = wm.transcribe_chunk(&pcm16, 16000) {
-                            let text = strip_whitelisted_sound_captions(&text);
-                            if !text.trim().is_empty() {
-                                println!("[TRANSCRIPT] 🎙️ (Tail) \"{}\"", text.trim());
-                                let _ = app_clone.emit(
-                                    "transcription-chunk",
-                                    crate::types::TranscriptionChunk {
-                                        text: text.clone(),
-                                        processing_time_ms: 0,
-                                        method: "Whisper".to_string(),
-                                    },
-                                );
-                                let mut st = session_transcript.lock().unwrap();
-                                if !st.is_empty() {
-                                    st.push(' ');
-                                }
-                                st.push_str(text.trim());
-                            }
-                        }
-                    }
-                }
-                ASREngine::Granite | ASREngine::Qwen3 => {
-                    let gguf = gguf.as_ref().expect("GGUF engine");
-                    let mut manager = gguf.lock().unwrap();
-                    let mut transcribe = |c: &[f32], sr| manager.transcribe_chunk(c, sr, None);
-                    vad_gated_transcribe(
-                        &mut tail,
-                        sample_rate,
-                        &vad,
-                        &mut transcribe,
-                        engine_label,
-                        "🔊",
-                        &app_clone,
-                        &session_transcript,
-                        denoise_enabled_thread,
-                        &denoiser_arc,
-                    );
-                }
-            }
-        }
-
-        let dropped_callbacks = transcriber_dropped_callbacks_reader.load(Ordering::Relaxed);
-        if dropped_callbacks > 0 {
-            let dropped_samples = transcriber_dropped_samples_reader.load(Ordering::Relaxed);
-            println!(
-                "[AUDIO_DROP] Transcriber queue dropped {} callback(s), {} sample(s) total",
-                dropped_callbacks, dropped_samples
-            );
-        }
-
-        println!("[INFO] Transcriber thread finished");
-    });
-
-    let channels = config_channels as usize;
-
-    // Audio level metering: the cpal callback writes a float (as AtomicU32 bits)
-    // and a dedicated thread reads it every 50ms to emit the Tauri event.
-    // We do NOT call emit() from inside the cpal callback because on Windows
-    // the WASAPI callback runs on a COM apartment thread where Tauri IPC fails.
-    let audio_level = Arc::new(AtomicU32::new(0u32));
-    let audio_level_writer = audio_level.clone();
-    let level_counter = Arc::new(AtomicU32::new(0));
-    let level_counter_clone = level_counter.clone();
-
-    let app_for_level = app_handle.clone();
-
-    let level_thread = std::thread::spawn(move || {
-        while !level_stop_clone3.load(Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            let bits = audio_level.load(Ordering::Relaxed);
-            let level = f32::from_bits(bits);
-            let _ = app_for_level.emit("audio-level", level);
-            crate::overlay::push_level(&app_for_level, level);
-        }
-    });
-
-    if is_dual_channel {
-        use crate::audio_dual_channel::DualChannelTarget;
-        let dual_stop = Arc::new(AtomicBool::new(false));
-
-        // Tap only the detected meeting's app, so other apps' sound (notifications,
-        // music, anything else playing) stays out of the callers channel. Without a
-        // detected meeting (or for the simulator's synthetic pid) fall back to the
-        // whole system mix.
-        let meeting_pid = state
-            .meeting_detector
-            .get_status()
-            .active_meetings
-            .first()
-            .map(|m| m.pid)
-            .filter(|pid| *pid > 0 && *pid != 99999);
-        let target = meeting_pid.map(DualChannelTarget::Process).unwrap_or(DualChannelTarget::System);
-        println!("[INFO] Dual-channel callers track: {:?}", target);
-        // The microphone chosen in Settings (None = system default).
-        let meeting_mic = state.selected_input_device.lock().unwrap().clone();
-
-        let dc_handle = match crate::audio_dual_channel::start_dual_channel_capture(
-            target,
-            48000,
-            file_tx_clone.clone(),
-            whisper_tx_clone.clone(),
-            app_handle.clone(),
-            dual_stop.clone(),
-            meeting_mic.clone(),
-        ) {
-            Ok(handle) => handle,
-            Err(e) if target != DualChannelTarget::System => {
-                eprintln!("[WARN] Meeting-process capture failed ({}); falling back to system audio", e);
-                crate::audio_dual_channel::start_dual_channel_capture(
-                    DualChannelTarget::System,
-                    48000,
-                    file_tx_clone,
-                    whisper_tx_clone,
-                    app_handle.clone(),
-                    dual_stop.clone(),
-                    meeting_mic,
-                )?
-            }
-            Err(e) => return Err(e),
-        };
-
-        *recording_handle_arc.lock().unwrap() = Some(RecordingHandle {
-            stream: None,
-            file_tx,
-            whisper_tx,
-            writer_thread,
-            transcriber_thread,
-            level_stop,
-            level_thread,
-            is_dual_channel: true,
-            dual_channel_stop: Some(dc_handle.stop_signal),
-            dual_channel_thread: Some(dc_handle.capture_thread),
-        });
-
-        println!("[INFO] Dual-channel recording started: {}", path.display());
-        return Ok(format!("Recording started: {}", path.display()));
-    }
-
-    let device = cpal_device.ok_or("No input device available for standard recording")?;
-    let (config, sample_format) = cpal_config.ok_or("No input audio configuration available")?;
-
-    let app_for_error = app_handle.clone();
-    let stream = crate::audio::build_input_stream_f32(
-            &device,
-            &config,
-            sample_format,
-            move |data: &[f32]| {
-                // File writer always gets raw (unprocessed) audio
-                file_tx_clone.try_send(data.to_vec()).ok();
-
-                let mono_data: Vec<f32> = if channels > 1 {
-                    data.chunks(channels)
-                        .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
-                        .collect()
-                } else {
-                    data.to_vec()
-                };
-
-                // RNNoise + universal chain run in the transcriber thread (48 kHz → 16 kHz order).
-
-                // Store audio level in atomic for the emitter thread to pick up.
-                // Only compute every ~5 callbacks to avoid unnecessary work.
-                let cnt = level_counter_clone.fetch_add(1, Ordering::Relaxed);
-                if cnt % 5 == 0 && !data.is_empty() {
-                    let rms = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
-                    let level = (rms / 0.015_f32).min(1.0_f32).sqrt();
-                    audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
-                }
-
-                let mono_len = mono_data.len();
-                if whisper_tx_clone.try_send(mono_data).is_err() {
-                    let dropped_callbacks =
-                        transcriber_dropped_callbacks_writer.fetch_add(1, Ordering::Relaxed) + 1;
-                    transcriber_dropped_samples_writer
-                        .fetch_add(mono_len as u64, Ordering::Relaxed);
-                    if dropped_callbacks == 1 || dropped_callbacks % 100 == 0 {
-                        eprintln!(
-                            "[AUDIO_DROP] Transcriber queue dropped {} callback(s); latest={} samples",
-                            dropped_callbacks, mono_len
-                        );
-                    }
-                }
-            },
-            move |err| {
-                eprintln!("[ERROR] Audio input stream error: {}", err);
-                let _ = app_for_error.emit(
-                    "audio-disconnected",
-                    serde_json::json!({
-                        "code": "audio_device_disconnected",
-                        "message": err.to_string(),
-                    }),
-                );
-            },
-        )
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("permission") || msg.contains("denied") {
-                "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
-            } else {
-                format!("Failed to open audio stream: {}", msg)
-            }
-        })?;
-
-    stream.play().map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("permission") || msg.contains("denied") {
-            "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
-        } else {
-            format!("Failed to start audio stream: {}", msg)
-        }
-    })?;
-
-    *recording_handle_arc.lock().unwrap() = Some(RecordingHandle {
-        stream: Some(SendStream(stream)),
+    *state.recording_handle.lock().unwrap() = Some(RecordingHandle {
+        stream,
         file_tx,
         whisper_tx,
         writer_thread,
         transcriber_thread,
         level_stop,
         level_thread,
-        is_dual_channel: false,
-        dual_channel_stop: None,
-        dual_channel_thread: None,
+        is_dual_channel,
+        dual_channel_stop: dual.as_ref().map(|d| d.stop_signal.clone()),
+        dual_channel_thread: dual.map(|d| d.capture_thread),
     });
 
     Ok(format!("Recording started: {}", path.display()))
@@ -1780,6 +1771,7 @@ fn stop_recording_blocking(
     vad_arc: Arc<std::sync::Mutex<crate::vad::VADManager>>,
     is_meeting: bool,
     meeting_info: Option<crate::meeting_detector::MeetingInfo>,
+    app: AppHandle,
 ) -> Result<(String, Option<i64>), String> {
     // Brief tail capture for OS audio scheduling; silence padding in the
     // transcriber thread handles the actual word-boundary safety margin.
@@ -1860,7 +1852,10 @@ fn stop_recording_blocking(
         // Build dynamic decoder prompt combining user custom vocabulary and active window context
         let (custom_vocab, context_bias_enabled) =
             crate::context::load_custom_vocabulary_from_settings();
-        let prompt = crate::context::build_dynamic_prompt(&custom_vocab, context_bias_enabled);
+        // The window title needs the Accessibility API on macOS, which must be
+        // called on the main thread; this runs on a worker thread.
+        let active_window = if context_bias_enabled { crate::context::active_window_title(&app) } else { None };
+        let prompt = crate::context::build_dynamic_prompt(&custom_vocab, active_window.as_deref());
         if let Some(ref p) = prompt {
             println!(
                 "[CONTEXT] Dynamic decoder prompt ({} chars): \"{}\"",
@@ -2021,6 +2016,7 @@ pub async fn stop_recording(
 
     // --- Heavy work: dispatched off the main thread via spawn_blocking so the
     //     macOS AppKit event loop stays responsive (thread joins, VAD, Whisper). ---
+    let app_for_final = app.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {
         stop_recording_blocking(
             recording,
@@ -2032,6 +2028,7 @@ pub async fn stop_recording(
             vad_arc,
             is_meeting,
             active_meeting,
+            app_for_final,
         )
     })
     .await;

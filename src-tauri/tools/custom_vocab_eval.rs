@@ -182,7 +182,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 2. Custom Vocabulary Injected: Build dynamic prompt & apply casing
         let vocab_strings: Vec<String> = tc.target_terms.iter().map(|s| s.to_string()).collect();
-        let dynamic_prompt = build_dynamic_prompt(&vocab_strings, false);
+        let dynamic_prompt = build_dynamic_prompt(&vocab_strings, None);
         let raw_injected = whisper.transcribe_audio_data(&pcm, dynamic_prompt.as_deref())?;
         let cleaned_injected = clean_transcript(&raw_injected);
         let hyp_injected = apply_custom_vocabulary_casing(&cleaned_injected, &vocab_strings);

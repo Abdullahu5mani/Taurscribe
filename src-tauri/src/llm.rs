@@ -548,11 +548,6 @@ impl LLMEngine {
         Ok(cleaned)
     }
 
-    /// Run with default 512 max tokens and 0.7 temperature (for general inference).
-    pub fn run(&mut self, prompt: &str) -> Result<String> {
-        self.run_with_options(prompt, 512, 0.7)
-    }
-
     /// Clean up a transcript with the tagged prompt from `req`.
     pub fn clean_transcript(&mut self, text: &str, req: &FlowRequest) -> Result<String> {
         let text = text.trim();

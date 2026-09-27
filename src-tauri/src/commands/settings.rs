@@ -1,9 +1,7 @@
 use crate::state::AudioState;
 use crate::tray;
 use crate::types::{ASREngine, AppState, EngineSelectionState, HotkeyBinding};
-use crate::gguf_asr::{GgufAsrManager, GgufStatus};
 use std::sync::atomic::Ordering;
-use std::sync::{Mutex, TryLockError};
 use tauri::{AppHandle, State};
 
 // ── Non-blocking engine status ──────────────────────────────────────────────
@@ -11,52 +9,8 @@ use tauri::{AppHandle, State};
 // The engine mutexes are held for the whole of an inference (seconds to
 // minutes). These commands are synchronous, so Tauri runs them on the macOS
 // main thread, and the UI polls them every few seconds: waiting on those locks
-// froze the whole app during transcription. They now `try_lock` and, while an
-// engine is busy, answer from the last status they read (an engine can't be
-// loaded or unloaded while it is transcribing, so that status is still true).
-
-#[derive(Clone)]
-struct WhisperStatus {
-    model: Option<String>,
-    backend: String,
-}
-
-static WHISPER_STATUS: Mutex<Option<WhisperStatus>> = Mutex::new(None);
-static GRANITE_STATUS: Mutex<Option<GgufStatus>> = Mutex::new(None);
-static QWEN3_STATUS: Mutex<Option<GgufStatus>> = Mutex::new(None);
-
-/// Reads `engine` through `read` when it is free and remembers the result in
-/// `cache`; while it is locked elsewhere, returns the cached value (or
-/// `fallback` if it was never read) instead of waiting.
-fn read_or_cached<M, T: Clone>(
-    engine: &Mutex<M>,
-    cache: &Mutex<Option<T>>,
-    read: impl Fn(&M) -> T,
-    fallback: impl FnOnce() -> T,
-) -> T {
-    let value = match engine.try_lock() {
-        Ok(guard) => read(&guard),
-        Err(TryLockError::Poisoned(p)) => read(&p.into_inner()),
-        Err(TryLockError::WouldBlock) => {
-            return cache.lock().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(fallback);
-        }
-    };
-    *cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(value.clone());
-    value
-}
-
-fn whisper_status(state: &AudioState) -> WhisperStatus {
-    read_or_cached(
-        &state.whisper,
-        &WHISPER_STATUS,
-        |w| WhisperStatus { model: w.get_current_model().cloned(), backend: format!("{}", w.get_backend()) },
-        || WhisperStatus { model: None, backend: "busy".into() },
-    )
-}
-
-fn gguf_status(engine: &Mutex<GgufAsrManager>, cache: &Mutex<Option<GgufStatus>>) -> GgufStatus {
-    read_or_cached(engine, cache, |m| m.get_status(), || GgufStatus { loaded: false, model_id: None, backend: "busy".into() })
-}
+// froze the app during transcription. They read the status snapshots the
+// managers publish on every load and unload instead (`AudioState::*_snapshot`).
 
 /// Ask the backend what hardware is running the AI (CPU vs GPU)
 /// Returns the backend of whichever engine is currently active
@@ -68,9 +22,8 @@ pub fn get_backend_info(state: State<AudioState>) -> Result<String, String> {
 fn backend_info(state: &AudioState) -> String {
     let active = *state.active_engine.lock().unwrap();
     match active {
-        ASREngine::Granite => gguf_status(&state.granite, &GRANITE_STATUS).backend,
-        ASREngine::Whisper => whisper_status(state).backend,
-        ASREngine::Qwen3 => gguf_status(&state.qwen3, &QWEN3_STATUS).backend,
+        ASREngine::Whisper => state.whisper_snapshot().backend,
+        engine => state.gguf_snapshot(engine).map(|s| s.backend).unwrap_or_default(),
     }
 }
 
@@ -92,7 +45,7 @@ fn engine_selection_state(state: &AudioState) -> EngineSelectionState {
 
     let (selected_model_id, loaded_engine, loaded_model_id, backend) = match active {
         ASREngine::Whisper => {
-            let whisper = whisper_status(state);
+            let whisper = state.whisper_snapshot();
             let loaded = whisper.model.clone();
             (
                 whisper.model,
@@ -102,11 +55,8 @@ fn engine_selection_state(state: &AudioState) -> EngineSelectionState {
             )
         }
         ASREngine::Granite | ASREngine::Qwen3 => {
-            let (status, family) = if active == ASREngine::Granite {
-                (gguf_status(&state.granite, &GRANITE_STATUS), "granite")
-            } else {
-                (gguf_status(&state.qwen3, &QWEN3_STATUS), "qwen3")
-            };
+            let status = state.gguf_snapshot(active).expect("GGUF engine");
+            let family = if active == ASREngine::Granite { "granite" } else { "qwen3" };
             let loaded = status.loaded.then(|| status.model_id.clone()).flatten();
             (
                 status.model_id.clone(),
@@ -127,32 +77,7 @@ fn engine_selection_state(state: &AudioState) -> EngineSelectionState {
     }
 }
 
-/// Change the active ASR engine
-#[tauri::command]
-pub fn set_active_engine(
-    app: AppHandle,
-    state: State<AudioState>,
-    engine: String,
-) -> Result<String, String> {
-    let new_engine = match engine.to_lowercase().as_str() {
-        "whisper" => ASREngine::Whisper,
-        "granite" | "granitespeech" | "granite_speech" | "granite-speech" | "parakeet" => ASREngine::Granite,
-        "qwen3" | "qwen3-asr" | "qwen3_asr" => ASREngine::Qwen3,
-        _ => return Err(format!("Unknown engine: {}", engine)),
-    };
 
-    *state.active_engine.lock().unwrap() = new_engine;
-    println!("[ENGINE] Active engine switched to: {:?}", new_engine);
-    let loaded = state.model_loaded.load(Ordering::Relaxed);
-    tray::update_tray_model_item(&app, loaded);
-    Ok(format!("Engine switched to {:?}", new_engine))
-}
-
-/// Ask which engine is active
-#[tauri::command]
-pub fn get_active_engine(state: State<AudioState>) -> Result<ASREngine, String> {
-    Ok(*state.active_engine.lock().unwrap())
-}
 
 /// Return the current hotkey binding
 #[tauri::command]
@@ -188,11 +113,6 @@ pub fn set_input_device(state: State<AudioState>, name: Option<String>) {
     *state.selected_input_device.lock().unwrap() = name;
 }
 
-/// Return the current close-button behavior ("tray" or "quit")
-#[tauri::command]
-pub fn get_close_behavior(state: State<AudioState>) -> String {
-    state.close_behavior.lock().unwrap().clone()
-}
 
 /// Set the close-button behavior. "tray" hides to tray; "quit" exits the process.
 #[tauri::command]
@@ -269,43 +189,9 @@ pub fn set_tray_state(
 #[cfg(test)]
 mod status_tests {
     use super::*;
-    use std::sync::{mpsc, Arc};
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn busy_engine_answers_from_cache_without_waiting() {
-        let engine = Arc::new(Mutex::new(7u32));
-        let cache: Mutex<Option<u32>> = Mutex::new(None);
-        assert_eq!(read_or_cached(&engine, &cache, |v| *v, || 0), 7);
-
-        let (locked_tx, locked_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel::<()>();
-        let holder = {
-            let engine = engine.clone();
-            std::thread::spawn(move || {
-                let mut g = engine.lock().unwrap();
-                *g = 99; // "mid-inference" — not visible until released
-                locked_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-            })
-        };
-        locked_rx.recv().unwrap();
-        let t = Instant::now();
-        assert_eq!(read_or_cached(&engine, &cache, |v| *v, || 0), 7);
-        assert!(t.elapsed() < Duration::from_millis(100));
-        release_tx.send(()).unwrap();
-        holder.join().unwrap();
-        assert_eq!(read_or_cached(&engine, &cache, |v| *v, || 0), 99);
-    }
-
-    #[test]
-    fn busy_engine_never_read_uses_fallback() {
-        let engine = Mutex::new(1u8);
-        let cache: Mutex<Option<u8>> = Mutex::new(None);
-        let _held = engine.lock().unwrap();
-        assert_eq!(read_or_cached(&engine, &cache, |v| *v, || 42), 42);
-        assert!(cache.lock().unwrap().is_none());
-    }
+    use crate::gguf_asr::GgufAsrManager;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     fn test_state() -> AudioState {
         AudioState::new(
@@ -359,8 +245,32 @@ mod status_tests {
             assert_eq!(busy.loaded_model_id, idle.loaded_model_id, "{engine:?}");
             let state2 = state.clone();
             returns_promptly(move || backend_info(&state2));
+            // What get_granite_status / get_qwen3_status / get_current_model return.
+            let state3 = state.clone();
+            returns_promptly(move || (state3.gguf_snapshot(engine), state3.whisper_snapshot()));
+            let state4 = state.clone();
+            returns_promptly(move || state4.any_asr_loaded());
             release_tx.send(()).unwrap();
             holder.join().unwrap();
         }
+    }
+
+    #[test]
+    fn snapshots_follow_the_managers_while_locked() {
+        let state = test_state();
+        assert_eq!(state.whisper_snapshot().model, None);
+        assert!(!state.gguf_snapshot(ASREngine::Granite).unwrap().loaded);
+        assert!(state.gguf_snapshot(ASREngine::Whisper).is_none());
+        assert!(!state.any_asr_loaded());
+        // Unload publishes too, and the snapshot stays readable while the
+        // engine lock is held.
+        let mut granite = state.granite.lock().unwrap();
+        granite.unload();
+        let status = state.gguf_snapshot(ASREngine::Granite).unwrap();
+        assert_eq!((status.loaded, status.backend.as_str()), (false, "none"));
+        drop(granite);
+        let whisper = state.whisper.lock().unwrap();
+        assert_eq!(state.whisper_snapshot().backend, "CPU");
+        drop(whisper);
     }
 }

@@ -5,7 +5,8 @@ import { MODELS, MEETING_KEYS } from "../components/settings/types";
 import type { DownloadableModel } from "../components/settings/types";
 import type { ModelInfo, GraniteModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
-import type { CommandResult, EngineSelectionState } from "../types/session";
+import type { EngineSelectionState } from "../types/session";
+import { loadEngineModel } from "../utils/engineLoader";
 
 interface UseInitialLoadParams {
     // Model state setters
@@ -214,13 +215,7 @@ export function useInitialLoad({
                         setLoadingMessage(`Loading Granite (${targetModel})...`);
                         try {
                             if (cancelled) return;
-                            const result = await invoke<CommandResult<string>>("init_granite", {
-                                modelId: targetModel,
-                                useGpu: useGpuPref,
-                            });
-                            if (!result.ok) {
-                                throw new Error(result.error?.message ?? "Failed to load Granite");
-                            }
+                            await loadEngineModel("granite", targetModel, useGpuPref);
                             if (cancelled) return;
                             setCurrentGraniteModel(targetModel);
                             setLoadedEngine("granite");
@@ -244,11 +239,7 @@ export function useInitialLoad({
                         setIsLoading(true);
                         setLoadingMessage("Loading Qwen3-ASR...");
                         try {
-                            const result = await invoke<CommandResult<string>>("init_qwen3", {
-                                modelId: target,
-                                useGpu: useGpuPref,
-                            });
-                            if (!result.ok) throw new Error(result.error?.message ?? "Failed to load Qwen3-ASR");
+                            await loadEngineModel("qwen3", target, useGpuPref);
                             if (cancelled) return;
                             setCurrentQwen3Model(target);
                             setLoadedEngine("qwen3");

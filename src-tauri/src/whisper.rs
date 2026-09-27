@@ -31,6 +31,16 @@ fn infer_whisper_backend_from_system_info(info: &str) -> Option<GpuBackend> {
     None
 }
 
+/// Language passed to the decoder. English-only models (`*.en`) are told the
+/// speech is English. Multilingual models detect the language themselves:
+/// forcing "en" on them made non-English speech come out as English.
+fn decode_language(model_id: Option<&str>) -> Option<&'static str> {
+    match model_id {
+        Some(id) if id.contains(".en") => Some("en"),
+        _ => None,
+    }
+}
+
 fn log_whisper_system_report(context: &str, info: &str) {
     println!(
         "[WHISPER] GGML / whisper.cpp system info — {} (verify GPU flags below)",
@@ -108,6 +118,16 @@ pub struct WhisperManager {
     backend: GpuBackend,             // Current hardware being used (CPU/GPU)
     current_model: Option<String>,   // Name of the currently loaded model
     resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>, // (Sample Rate, Chunk Size, Resampler)
+    /// Copy of (model, backend) kept up to date by `initialize` / `unload`, so the
+    /// UI can read it without waiting on this manager's lock.
+    snapshot: std::sync::Arc<std::sync::Mutex<WhisperStatus>>,
+}
+
+/// What is loaded, readable while a transcription holds the manager's lock.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhisperStatus {
+    pub model: Option<String>,
+    pub backend: String,
 }
 
 // Suppress noisy C++ logs from whisper.cpp.
@@ -146,7 +166,21 @@ impl WhisperManager {
             backend: GpuBackend::Cpu,       // Assume CPU until we prove otherwise
             current_model: None,            // No model selected yet
             resampler: None,
+            snapshot: std::sync::Arc::new(std::sync::Mutex::new(WhisperStatus {
+                model: None,
+                backend: GpuBackend::Cpu.to_string(),
+            })),
         }
+    }
+
+    /// Shared, always-current status; readable while the manager is locked.
+    pub fn status_handle(&self) -> std::sync::Arc<std::sync::Mutex<WhisperStatus>> {
+        self.snapshot.clone()
+    }
+
+    fn publish_status(&self) {
+        let status = WhisperStatus { model: self.current_model.clone(), backend: self.backend.to_string() };
+        *self.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = status;
     }
 
     /// Helper: Find the folder where models are stored (AppData/Local/Taurscribe/models)
@@ -307,6 +341,7 @@ impl WhisperManager {
             self.context = None;
             self.current_model = None;
             self.backend = GpuBackend::Cpu;
+            self.publish_status();
             // Also clear resampler to save a bit more
             self.resampler = None;
             crate::memory::trim_process_memory();
@@ -402,6 +437,7 @@ impl WhisperManager {
         self.context = Some(ctx);
         self.backend = backend.clone();
         self.current_model = Some(target_model.to_string());
+        self.publish_status();
 
         let backend_msg = format!("Backend: {}", backend);
         println!("[INFO] {}", backend_msg);
@@ -622,7 +658,7 @@ impl WhisperManager {
         .min(8) as i32;
         params.set_n_threads(n_threads);
         params.set_translate(false);
-        params.set_language(Some("en"));
+        params.set_language(decode_language(self.current_model.as_deref()));
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -753,7 +789,7 @@ impl WhisperManager {
             .unwrap_or(8);
         params.set_n_threads(n_threads);
         params.set_translate(false);
-        params.set_language(Some("en"));
+        params.set_language(decode_language(self.current_model.as_deref()));
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -828,6 +864,18 @@ mod tests {
         assert_eq!(WhisperManager::format_model_name("large-v3-turbo-q8_0"), "Large V3 Turbo Multilingual (Q8_0)");
         assert_eq!(WhisperManager::format_model_name("large-v3"), "Large V3 Multilingual");
         assert_eq!(WhisperManager::format_model_name("large-v2"), "Large V2 Multilingual");
+    }
+
+    #[test]
+    fn only_english_models_are_forced_to_english() {
+        use super::decode_language;
+        assert_eq!(decode_language(Some("tiny.en-q5_1")), Some("en"));
+        assert_eq!(decode_language(Some("medium.en")), Some("en"));
+        // Multilingual models (including large-v3 and turbo) detect the language.
+        assert_eq!(decode_language(Some("base-q5_1")), None);
+        assert_eq!(decode_language(Some("large-v3-turbo-q5_0")), None);
+        assert_eq!(decode_language(Some("small")), None);
+        assert_eq!(decode_language(None), None);
     }
 
     #[test]

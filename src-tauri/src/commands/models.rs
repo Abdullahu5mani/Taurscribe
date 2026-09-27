@@ -14,15 +14,11 @@ pub async fn list_models() -> Result<Vec<whisper::ModelInfo>, String> {
         .map_err(|e| format!("list_models task failed: {e}"))?
 }
 
-/// Ask which model is currently loaded
+/// Ask which model is currently loaded (from the status snapshot, so it never
+/// waits for a transcription that holds the Whisper lock).
 #[tauri::command]
 pub async fn get_current_model(state: State<'_, AudioState>) -> Result<Option<String>, String> {
-    let whisper = state.whisper.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        Ok(whisper.lock().map_err(|e| e.to_string())?.get_current_model().cloned())
-    })
-    .await
-    .map_err(|e| format!("get_current_model task failed: {e}"))?
+    Ok(state.whisper_snapshot().model)
 }
 
 /// Command to swap the AI model (e.g. from Tiny to Large)
@@ -160,7 +156,8 @@ pub fn list_granite_models() -> Result<Vec<GgufModelInfo>, String> {
 
 #[tauri::command]
 pub fn get_granite_status(state: State<AudioState>) -> Result<GgufStatus, String> {
-    Ok(state.granite.lock().map_err(|e| e.to_string())?.get_status())
+    // Sync command (main thread on macOS): read the snapshot, never the engine lock.
+    Ok(state.gguf_snapshot(ASREngine::Granite).expect("GGUF engine"))
 }
 
 #[tauri::command]
@@ -180,7 +177,7 @@ pub fn list_qwen3_models() -> Result<Vec<GgufModelInfo>, String> {
 
 #[tauri::command]
 pub fn get_qwen3_status(state: State<AudioState>) -> Result<GgufStatus, String> {
-    Ok(state.qwen3.lock().map_err(|e| e.to_string())?.get_status())
+    Ok(state.gguf_snapshot(ASREngine::Qwen3).expect("GGUF engine"))
 }
 
 #[tauri::command]

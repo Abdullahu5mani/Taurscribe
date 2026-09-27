@@ -187,7 +187,11 @@ pub fn infer_domain_keywords(window_title: &str) -> Vec<&'static str> {
 ///
 /// Combines user-specified custom vocabulary terms with active window context and
 /// domain keywords while staying within Whisper's prompt window limit (<250 characters).
-pub fn build_dynamic_prompt(custom_vocab: &[String], include_active_window: bool) -> Option<String> {
+///
+/// `active_window` is the focused window's title, or None to leave it out. It is
+/// passed in rather than looked up here because on macOS the lookup must run on
+/// the main thread (see `active_window_title`).
+pub fn build_dynamic_prompt(custom_vocab: &[String], active_window: Option<&str>) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
 
     // 1. User custom vocabulary has the highest priority
@@ -202,8 +206,8 @@ pub fn build_dynamic_prompt(custom_vocab: &[String], include_active_window: bool
     }
 
     // 2. Active window context & domain keywords (if enabled)
-    if include_active_window {
-        if let Some(ctx) = get_active_context() {
+    {
+        if let Some(ctx) = active_window {
             let clean_ctx = ctx.trim();
             if !clean_ctx.is_empty() {
                 // Shorten window title if too long
@@ -306,14 +310,62 @@ pub fn app_category_for(title: &str) -> &'static str {
 }
 
 /// Category of the app the user is dictating into right now.
-pub fn active_app_category() -> &'static str {
-    let mut title = get_active_context().unwrap_or_default();
-    #[cfg(target_os = "macos")]
-    if let Some(window) = macos_focused_window_title() {
+pub fn active_app_category(app: &tauri::AppHandle) -> &'static str {
+    let title = on_main_thread(app, || {
+        let title = get_active_context().unwrap_or_default();
         // The app name alone can't tell Gmail from Slack in a browser.
-        title = format!("{title} {window}");
-    }
+        #[cfg(target_os = "macos")]
+        let title = match macos_focused_window_title() {
+            Some(window) => format!("{title} {window}"),
+            None => title,
+        };
+        title
+    })
+    .unwrap_or_default();
     app_category_for(&title)
+}
+
+/// Title of the focused window, for the Whisper prompt. Safe to call from any
+/// thread except the main thread (on macOS it waits for the main thread).
+pub fn active_window_title(app: &tauri::AppHandle) -> Option<String> {
+    on_main_thread(app, get_active_context).flatten()
+}
+
+/// How long a worker waits for the main thread to answer an Accessibility query.
+const MAIN_THREAD_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Runs `f` on the main thread and waits for its result. The macOS
+/// Accessibility API (AXUIElement…) must be called from the main thread; the
+/// dictation final pass and `correct_text` run on worker threads. Elsewhere the
+/// lookups are thread-safe and `f` runs directly. None if the main thread does
+/// not answer within `MAIN_THREAD_TIMEOUT` (never call this from the main thread
+/// on macOS: it would wait for itself until the timeout).
+fn on_main_thread<T: Send + 'static>(app: &tauri::AppHandle, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    #[cfg(target_os = "macos")]
+    {
+        run_via(|job| app.run_on_main_thread(job).map_err(|e| e.to_string()), f, MAIN_THREAD_TIMEOUT)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, MAIN_THREAD_TIMEOUT);
+        Some(f())
+    }
+}
+
+/// Hands `f` to `dispatch` (which runs it somewhere else) and waits up to
+/// `timeout` for the result.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn run_via<T: Send + 'static>(
+    dispatch: impl FnOnce(Box<dyn FnOnce() + Send>) -> Result<(), String>,
+    f: impl FnOnce() -> T + Send + 'static,
+    timeout: std::time::Duration,
+) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    dispatch(Box::new(move || {
+        let _ = tx.send(f());
+    }))
+    .ok()?;
+    rx.recv_timeout(timeout).ok()
 }
 
 #[cfg(target_os = "macos")]
@@ -354,8 +406,9 @@ pub fn get_active_context_preview(
     custom_vocab: Vec<String>,
     include_window: bool,
 ) -> Result<serde_json::Value, String> {
+    // Sync command: Tauri runs it on the main thread, where AX calls are allowed.
     let active_window = get_active_context();
-    let prompt = build_dynamic_prompt(&custom_vocab, include_window);
+    let prompt = build_dynamic_prompt(&custom_vocab, active_window.as_deref().filter(|_| include_window));
 
     Ok(serde_json::json!({
         "active_window": active_window,
@@ -446,16 +499,47 @@ mod context_tests {
     }
 
     #[test]
+    fn prompt_includes_the_given_window_and_its_domain_words() {
+        let vocab = vec!["Tauri".to_string()];
+        let p = build_dynamic_prompt(&vocab, Some("  Visual Studio Code - main.rs  ")).unwrap();
+        assert_eq!(p, "Tauri. Active: Visual Studio Code - main.rs. function, async, await, commit, merge, repo, branch, debug");
+        let only_window = build_dynamic_prompt(&[], Some("Finder")).unwrap();
+        assert_eq!(only_window, "Active: Finder");
+        assert!(build_dynamic_prompt(&[], Some("   ")).is_none());
+    }
+
+    #[test]
+    fn main_thread_helper_returns_the_result_or_times_out() {
+        use std::time::Duration;
+        // Dispatcher that runs the job on another thread, like run_on_main_thread.
+        let spawn = |job: Box<dyn FnOnce() + Send>| {
+            std::thread::spawn(job);
+            Ok(())
+        };
+        assert_eq!(run_via(spawn, || 41 + 1, Duration::from_secs(2)), Some(42));
+        // A main thread that never runs the job must not hang the caller.
+        let never = |job: Box<dyn FnOnce() + Send>| {
+            std::mem::forget(job);
+            Ok(())
+        };
+        let t = std::time::Instant::now();
+        assert_eq!(run_via(never, || 1, Duration::from_millis(50)), None);
+        assert!(t.elapsed() < Duration::from_secs(1));
+        // Dispatch failure (e.g. app shutting down).
+        assert_eq!(run_via(|_| Err("closed".into()), || 1, Duration::from_secs(1)), None);
+    }
+
+    #[test]
     fn prompt_skips_blank_vocab_and_joins_terms() {
         let vocab = vec![" Tauri ".to_string(), "".to_string(), "Rust".to_string()];
-        assert_eq!(build_dynamic_prompt(&vocab, false).as_deref(), Some("Tauri, Rust"));
-        assert!(build_dynamic_prompt(&["   ".to_string()], false).is_none());
+        assert_eq!(build_dynamic_prompt(&vocab, None).as_deref(), Some("Tauri, Rust"));
+        assert!(build_dynamic_prompt(&["   ".to_string()], None).is_none());
     }
 
     #[test]
     fn prompt_truncation_keeps_utf8_valid() {
         let vocab: Vec<String> = (0..80).map(|i| format!("Café{i}🙂")).collect();
-        let prompt = build_dynamic_prompt(&vocab, false).unwrap();
+        let prompt = build_dynamic_prompt(&vocab, None).unwrap();
         assert!(prompt.len() <= 250 && prompt.ends_with("..."));
     }
 
@@ -510,7 +594,7 @@ mod context_tests {
     #[test]
     fn test_build_dynamic_prompt_with_vocab() {
         let vocab = vec!["Taurscribe".to_string(), "Montalais".to_string()];
-        let prompt = build_dynamic_prompt(&vocab, false).unwrap();
+        let prompt = build_dynamic_prompt(&vocab, None).unwrap();
         assert!(prompt.contains("Taurscribe"));
         assert!(prompt.contains("Montalais"));
     }
@@ -518,13 +602,13 @@ mod context_tests {
     #[test]
     fn test_build_dynamic_prompt_empty() {
         let vocab: Vec<String> = Vec::new();
-        assert!(build_dynamic_prompt(&vocab, false).is_none());
+        assert!(build_dynamic_prompt(&vocab, None).is_none());
     }
 
     #[test]
     fn test_prompt_length_capping() {
         let long_vocab: Vec<String> = (0..50).map(|i| format!("SuperLongTechnicalWord_{i}")).collect();
-        let prompt = build_dynamic_prompt(&long_vocab, false).unwrap();
+        let prompt = build_dynamic_prompt(&long_vocab, None).unwrap();
         assert!(prompt.len() <= 250);
         assert!(prompt.ends_with("..."));
     }
