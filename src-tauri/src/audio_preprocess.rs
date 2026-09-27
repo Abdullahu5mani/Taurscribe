@@ -43,6 +43,95 @@ const SINC_PARAMS: SincInterpolationParameters = SincInterpolationParameters {
 
 const RESAMPLE_CHUNK: usize = 1024 * 10;
 
+/// Preserve the sinc filter's state while a file is decoded packet by packet.
+/// Only a partial input block is retained between calls.
+pub struct StreamingResampler16k {
+    from_rate: u32,
+    resampler: Option<SincFixedIn<f32>>,
+    pending: Vec<f32>,
+    input: Vec<Vec<f32>>,
+    total_input: u64,
+    total_output: usize,
+}
+
+impl StreamingResampler16k {
+    pub fn new(from_rate: u32) -> Result<Self, String> {
+        if from_rate == 0 {
+            return Err("File has invalid sample rate".into());
+        }
+        let resampler = if from_rate == 16_000 {
+            None
+        } else {
+            Some(
+                SincFixedIn::<f32>::new(
+                    16_000.0 / from_rate as f64,
+                    2.0,
+                    SINC_PARAMS,
+                    RESAMPLE_CHUNK,
+                    1,
+                )
+                .map_err(|e| format!("Resampler init failed: {e:?}"))?,
+            )
+        };
+        Ok(Self {
+            from_rate,
+            resampler,
+            pending: Vec::with_capacity(RESAMPLE_CHUNK),
+            input: vec![Vec::with_capacity(RESAMPLE_CHUNK)],
+            total_input: 0,
+            total_output: 0,
+        })
+    }
+
+    pub fn push(&mut self, samples: &[f32]) -> Result<Vec<f32>, String> {
+        self.total_input = self.total_input.saturating_add(samples.len() as u64);
+        if self.resampler.is_none() {
+            self.total_output += samples.len();
+            return Ok(samples.to_vec());
+        }
+        self.pending.extend_from_slice(samples);
+        let mut out = Vec::new();
+        while self.pending.len() >= RESAMPLE_CHUNK {
+            self.input[0].clear();
+            self.input[0].extend(self.pending.drain(..RESAMPLE_CHUNK));
+            let block = self
+                .resampler
+                .as_mut()
+                .unwrap()
+                .process(&self.input, None)
+                .map_err(|e| format!("Resample failed: {e:?}"))?;
+            out.extend_from_slice(&block[0]);
+        }
+        self.total_output += out.len();
+        Ok(out)
+    }
+
+    pub fn finish(&mut self) -> Result<Vec<f32>, String> {
+        if self.resampler.is_none() {
+            return Ok(Vec::new());
+        }
+        let target = ((self.total_input as u128 * 16_000 + self.from_rate as u128 / 2)
+            / self.from_rate as u128) as usize;
+        if self.total_output >= target {
+            self.pending.clear();
+            return Ok(Vec::new());
+        }
+        self.input[0].clear();
+        self.input[0].extend(self.pending.drain(..));
+        self.input[0].resize(RESAMPLE_CHUNK, 0.0);
+        let block = self
+            .resampler
+            .as_mut()
+            .unwrap()
+            .process(&self.input, None)
+            .map_err(|e| format!("Resample failed: {e:?}"))?;
+        let mut out = block[0].clone();
+        out.truncate(target - self.total_output);
+        self.total_output += out.len();
+        Ok(out)
+    }
+}
+
 fn resample_mono_ratio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, String> {
     if from_rate == to_rate {
         return Ok(samples.to_vec());
@@ -392,5 +481,27 @@ mod tests {
         assert!(v
             .iter()
             .all(|&x| x.is_finite() && (-1.0..=1.0).contains(&x)));
+    }
+
+    #[test]
+    fn streaming_resampler_keeps_filter_state_across_irregular_packets() {
+        for source_rate in [44_100, 48_000] {
+            let source: Vec<f32> = (0..source_rate * 5 + 12_345)
+                .map(|i| {
+                    (2.0 * std::f32::consts::PI * 440.0 * i as f32 / source_rate as f32).sin() * 0.2
+                })
+                .collect();
+            let mut stream = StreamingResampler16k::new(source_rate).unwrap();
+            let mut output = Vec::new();
+            for packet in source.chunks(1379) {
+                output.extend(stream.push(packet).unwrap());
+            }
+            output.extend(stream.finish().unwrap());
+            let expected_len = ((source.len() as u128 * 16_000 + source_rate as u128 / 2)
+                / source_rate as u128) as usize;
+            assert_eq!(output.len(), expected_len);
+            let whole = resample_mono_to_16k(&source, source_rate).unwrap();
+            assert_eq!(output, whole[..expected_len]);
+        }
     }
 }

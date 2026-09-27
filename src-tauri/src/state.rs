@@ -5,7 +5,7 @@ use crate::types::{ASREngine, HotkeyBinding};
 use crate::vad::VADManager;
 use crate::whisper::WhisperManager;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex, RwLock,
 };
 
@@ -19,6 +19,15 @@ struct ModelActivity {
 pub struct ModelOperationGuard {
     activity: Arc<Mutex<ModelActivity>>,
     exclusive: bool,
+}
+
+/// Serializes recording setup and teardown, including the final transcription.
+pub struct RecordingTransitionGuard(Arc<AtomicBool>);
+
+impl Drop for RecordingTransitionGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl Drop for ModelOperationGuard {
@@ -45,6 +54,7 @@ pub struct AudioState {
     // macOS fix: Arc-wrapped so it can be cloned into spawn_blocking closures
     // in start_recording / stop_recording async commands.
     pub recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
+    recording_transition: Arc<AtomicBool>,
 
     // The Whisper AI engine. Wrapped in Arc<Mutex<>> so it can be shared and used by multiple threads.
     pub whisper: Arc<Mutex<WhisperManager>>,
@@ -125,24 +135,44 @@ pub struct AudioState {
 }
 
 impl AudioState {
+    pub fn begin_recording_transition(&self) -> Result<RecordingTransitionGuard, String> {
+        self.recording_transition
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| {
+                "A recording is starting or finishing; try again in a moment".to_string()
+            })?;
+        Ok(RecordingTransitionGuard(self.recording_transition.clone()))
+    }
+
     pub fn begin_model_operation(&self) -> Result<ModelOperationGuard, String> {
         let mut activity = self.model_activity.lock().map_err(|e| e.to_string())?;
         if activity.exclusive {
             return Err("A model switch is in progress".into());
         }
         activity.active_operations += 1;
-        Ok(ModelOperationGuard { activity: self.model_activity.clone(), exclusive: false })
+        Ok(ModelOperationGuard {
+            activity: self.model_activity.clone(),
+            exclusive: false,
+        })
     }
 
     pub fn begin_exclusive_model_operation(&self) -> Result<ModelOperationGuard, String> {
         let mut activity = self.model_activity.lock().map_err(|e| e.to_string())?;
-        if activity.exclusive || activity.active_operations > 0
-            || self.recording_handle.lock().map_err(|e| e.to_string())?.is_some()
+        if activity.exclusive
+            || activity.active_operations > 0
+            || self
+                .recording_handle
+                .lock()
+                .map_err(|e| e.to_string())?
+                .is_some()
         {
             return Err("An audio or model operation is in progress".into());
         }
         activity.exclusive = true;
-        Ok(ModelOperationGuard { activity: self.model_activity.clone(), exclusive: true })
+        Ok(ModelOperationGuard {
+            activity: self.model_activity.clone(),
+            exclusive: true,
+        })
     }
 
     pub fn new(
@@ -153,6 +183,7 @@ impl AudioState {
     ) -> Self {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
+            recording_transition: Arc::new(AtomicBool::new(false)),
             whisper: Arc::new(Mutex::new(whisper)),
             granite: Arc::new(Mutex::new(granite)),
             vad: Arc::new(Mutex::new(vad)),
@@ -224,9 +255,16 @@ impl AudioState {
         // Keep this gate locked through the entire unload. New operations cannot
         // start between the idle check and dropping the weights.
         let activity = self.model_activity.lock().map_err(|e| e.to_string())?;
-        if activity.active_operations > 0 || activity.exclusive
-            || self.recording_handle.lock().map_err(|e| e.to_string())?.is_some()
-            || self.engine_loading.load(std::sync::atomic::Ordering::Acquire)
+        if activity.active_operations > 0
+            || activity.exclusive
+            || self
+                .recording_handle
+                .lock()
+                .map_err(|e| e.to_string())?
+                .is_some()
+            || self
+                .engine_loading
+                .load(std::sync::atomic::Ordering::Acquire)
         {
             return Err("An audio or model operation is in progress".into());
         }
@@ -278,5 +316,39 @@ mod model_activity_tests {
         assert!(state.begin_model_operation().is_err());
         drop(switch);
         assert!(state.unload_all_loaded_asr().is_ok());
+    }
+
+    #[test]
+    fn recording_transitions_cannot_overlap() {
+        let state = AudioState::new(
+            WhisperManager::new(),
+            GgufAsrManager::granite(),
+            VADManager::new().unwrap(),
+            GgufAsrManager::qwen3(),
+        );
+        let first = state.begin_recording_transition().unwrap();
+        assert!(state.begin_recording_transition().is_err());
+        assert!(state.clone().begin_recording_transition().is_err());
+        drop(first);
+        assert!(state.begin_recording_transition().is_ok());
+    }
+
+    #[test]
+    fn vm_recording_transition_is_exclusive_across_threads() {
+        let state = AudioState::new(
+            WhisperManager::new(),
+            GgufAsrManager::granite(),
+            VADManager::new().unwrap(),
+            GgufAsrManager::qwen3(),
+        );
+        let held = state.begin_recording_transition().unwrap();
+        let other = state.clone();
+        let denied = std::thread::spawn(move || other.begin_recording_transition().is_err());
+        assert!(denied.join().unwrap());
+        drop(held);
+        let other = state.clone();
+        let allowed = std::thread::spawn(move || other.begin_recording_transition().is_ok());
+        assert!(allowed.join().unwrap());
+        assert!(state.begin_recording_transition().is_ok());
     }
 }

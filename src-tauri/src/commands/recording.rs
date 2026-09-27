@@ -126,7 +126,9 @@ fn transcribe_final_pass(
         "[FINAL_PASS] Transcribing saved recording ({:.2}s)...",
         audio.len() as f32 / 16000.0
     );
-    let mut manager = manager.lock().map_err(|_| "ASR lock poisoned".to_string())?;
+    let mut manager = manager
+        .lock()
+        .map_err(|_| "ASR lock poisoned".to_string())?;
 
     if audio.len() <= FINAL_PASS_FULL_MAX_SAMPLES {
         return manager.transcribe_chunk(&audio, 16000, None);
@@ -150,7 +152,11 @@ fn transcribe_final_pass(
 /// stopped outside the UI (control server, tray), and the UI's own flag would
 /// otherwise go stale and keep showing RECORDING.
 fn emit_recording_state(app: &AppHandle, state: &AudioState) {
-    let is_recording = state.recording_handle.lock().map(|h| h.is_some()).unwrap_or(false);
+    let is_recording = state
+        .recording_handle
+        .lock()
+        .map(|h| h.is_some())
+        .unwrap_or(false);
     let _ = app.emit(
         "recording-state",
         serde_json::json!({
@@ -174,16 +180,11 @@ pub async fn start_recording(
     denoise: Option<bool>,
     audio_source: Option<String>,
 ) -> Result<CommandResult<String>, String> {
+    let _recording_transition = state.begin_recording_transition()?;
     let _model_operation = state.begin_model_operation()?;
     // Guard: reject if already recording (e.g. spam hotkey)
     if state.recording_handle.lock().unwrap().is_some() {
         return Ok(CommandResult::err("already_recording", "Already recording"));
-    }
-
-    if let Some(key) = crate::meeting_continuation::call_key(
-        state.meeting_detector.get_status().active_meetings.first(),
-    ) {
-        crate::meeting_continuation::claim_for_recording(&key);
     }
 
     // Clone the whole state — every field is Arc<…> so this is just ref-count bumps.
@@ -197,28 +198,29 @@ pub async fn start_recording(
     if !matches!(&result, Ok(Ok(_))) {
         crate::meeting_continuation::release_recording_claim();
     }
-    result.map(|result| match result {
-        Ok(message) => {
-            emit_recording_state(&app_for_event, &state_for_event);
-            CommandResult::ok(message)
-        }
-        Err(message) => {
-            let lower = message.to_lowercase();
-            let code = if lower.contains("microphone permission denied") {
-                "mic_permission_denied"
-            } else if lower.contains("no input device found")
-                || lower.contains("no microphone found")
-            {
-                "no_input_device"
-            } else if lower.contains("already recording") {
-                "already_recording"
-            } else {
-                "recording_start_failed"
-            };
-            CommandResult::err(code, message)
-        }
-    })
-    .map_err(|e| format!("start_recording task failed: {}", e))
+    result
+        .map(|result| match result {
+            Ok(message) => {
+                emit_recording_state(&app_for_event, &state_for_event);
+                CommandResult::ok(message)
+            }
+            Err(message) => {
+                let lower = message.to_lowercase();
+                let code = if lower.contains("microphone permission denied") {
+                    "mic_permission_denied"
+                } else if lower.contains("no input device found")
+                    || lower.contains("no microphone found")
+                {
+                    "no_input_device"
+                } else if lower.contains("already recording") {
+                    "already_recording"
+                } else {
+                    "recording_start_failed"
+                };
+                CommandResult::err(code, message)
+            }
+        })
+        .map_err(|e| format!("start_recording task failed: {}", e))
 }
 
 /// The blocking core of start_recording, run inside spawn_blocking.
@@ -243,7 +245,18 @@ fn start_recording_blocking(
         return Err("Dual-channel meeting audio capture is not supported on Linux".into());
     }
 
-    state.last_recording_is_dual_channel.store(is_dual_channel, Ordering::SeqCst);
+    state
+        .last_recording_is_dual_channel
+        .store(is_dual_channel, Ordering::SeqCst);
+
+    let meeting_info = if is_dual_channel {
+        state.meeting_detector.get_status().active_meetings.into_iter().next()
+    } else {
+        None
+    };
+    if let Some(key) = crate::meeting_continuation::call_key(meeting_info.as_ref()) {
+        crate::meeting_continuation::claim_for_recording(&key);
+    }
 
     // 1. Setup Audio Config & Device
     let (config_channels, config_sample_rate, cpal_device, cpal_config) = if is_dual_channel {
@@ -257,10 +270,9 @@ fn start_recording_blocking(
         let mut fallback_triggered = false;
 
         if let Some(ref name) = preferred {
-            device_opt = host
-                .input_devices()
-                .ok()
-                .and_then(|mut iter| iter.find(|d| d.name().ok().as_deref() == Some(name.as_str())));
+            device_opt = host.input_devices().ok().and_then(|mut iter| {
+                iter.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+            });
 
             if device_opt.is_none() {
                 println!(
@@ -326,7 +338,7 @@ fn start_recording_blocking(
             let _ = app_handle.emit("audio-fallback", device_name);
         }
 
-        let cfg: cpal::StreamConfig = device
+        let cfg = device
             .default_input_config()
             .or_else(|e| {
                 println!("[WARNING] default_input_config failed: {}, falling back to iterating supported configs", e);
@@ -345,16 +357,24 @@ fn start_recording_blocking(
                 } else {
                     format!("Failed to get audio config: {}", msg)
                 }
-            })?
-            .into();
+            })?;
 
-        (cfg.channels, cfg.sample_rate.0, Some(device), Some(cfg))
+        (cfg.channels(), cfg.sample_rate().0, Some(device), Some(cfg))
     };
 
     // 2. Prepare Output File
     let recordings_dir = get_recordings_dir()?;
-    let prefix = if is_dual_channel { "meeting" } else { "recording" };
-    let filename = format!("{}_{}.wav", prefix, chrono::Utc::now().timestamp());
+    let prefix = if is_dual_channel {
+        "meeting"
+    } else {
+        "recording"
+    };
+    let filename = format!(
+        "{}_{}_{:016x}.wav",
+        prefix,
+        chrono::Utc::now().timestamp_millis(),
+        rand::random::<u64>()
+    );
     let path = recordings_dir.join(&filename);
 
     println!("[INFO] Saving recording to: {}", path.display());
@@ -369,7 +389,6 @@ fn start_recording_blocking(
     // Reset Silero VAD LSTM state so prior session context doesn't bleed in
     state.vad.lock().unwrap().reset_state();
 
-    *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
     state.session_transcript.lock().unwrap().clear();
 
     // Create a fresh denoiser for this session (RNNoise GRU state must not leak across sessions)
@@ -388,7 +407,14 @@ fn start_recording_blocking(
         sample_format: hound::SampleFormat::Float,
     };
 
-    let writer = hound::WavWriter::create(&path, spec).map_err(|e| e.to_string())?;
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| format!("Could not create recording {}: {e}", path.display()))?;
+    let writer = hound::WavWriter::new(std::io::BufWriter::new(file), spec)
+        .map_err(|e| format!("Could not initialize recording {}: {e}", path.display()))?;
+    *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
 
     // 5. Create COMMUNICATION PIPES (Channels)
     // Bounded: prevents unbounded memory growth if file writer or transcriber falls behind.
@@ -416,39 +442,59 @@ fn start_recording_blocking(
     let level_stop_clone3 = level_stop.clone();
 
     // 6. SPAWN THREAD 1: THE FILE SAVER
-    let writer_thread = std::thread::spawn(move || {
+    let writer_path = path.clone();
+    let app_for_writer = app_handle.clone();
+    let writer_failure = Arc::new(Mutex::new(None::<String>));
+    let writer_failure_for_thread = writer_failure.clone();
+    let writer_thread = std::thread::spawn(move || -> Result<(), String> {
         let mut writer = writer;
-        loop {
-            match file_rx.recv_timeout(std::time::Duration::from_millis(50)) {
-                Ok(samples) => {
-                    for sample in samples {
-                        writer.write_sample(sample).ok();
+        let result = (|| -> Result<(), String> {
+            loop {
+                match file_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(samples) => {
+                        for sample in samples {
+                            writer.write_sample(sample).map_err(|e| {
+                                format!("Could not write recording {}: {e}", writer_path.display())
+                            })?;
+                        }
+                        // CoreAudio may keep the callback alive briefly after the stream drops.
+                        if level_stop_clone1.load(Ordering::Relaxed) {
+                            break;
+                        }
                     }
-                    // macOS fix: CoreAudio may keep the audio callback alive
-                    // briefly after Stream::drop() when called from a non-main
-                    // thread, so the channel stays open and we never hit the
-                    // Timeout branch. Check the stop signal here too.
-                    if level_stop_clone1.load(Ordering::Relaxed) {
-                        break;
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        if level_stop_clone1.load(Ordering::Relaxed) {
+                            break;
+                        }
                     }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
                 }
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                    if level_stop_clone1.load(Ordering::Relaxed) {
-                        break;
-                    }
-                }
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             }
-        }
 
-        // Drain any remaining
-        while let Ok(samples) = file_rx.try_recv() {
-            for sample in samples {
-                writer.write_sample(sample).ok();
+            // Drain samples already captured before the stop signal.
+            while let Ok(samples) = file_rx.try_recv() {
+                for sample in samples {
+                    writer.write_sample(sample).map_err(|e| {
+                        format!("Could not write recording {}: {e}", writer_path.display())
+                    })?;
+                }
             }
+            writer.finalize().map_err(|e| {
+                format!(
+                    "Could not finalize recording {}: {e}",
+                    writer_path.display()
+                )
+            })?;
+            Ok(())
+        })();
+        if let Err(message) = &result {
+            eprintln!("[ERROR] {message}");
+            *writer_failure_for_thread.lock().unwrap() = Some(message.clone());
+            let _ = app_for_writer.emit("recording-write-error", message);
+        } else {
+            println!("WAV file saved.");
         }
-        writer.finalize().ok();
-        println!("WAV file saved.");
+        result
     });
 
     // Pull shared references out of state for the transcriber thread
@@ -615,7 +661,10 @@ fn start_recording_blocking(
                         &[
                             ("buffer_len_samples", buffer.len()),
                             ("chunk_samples", chunk.len()),
-                            ("chunk_audio_bytes", chunk.len() * std::mem::size_of::<f32>()),
+                            (
+                                "chunk_audio_bytes",
+                                chunk.len() * std::mem::size_of::<f32>(),
+                            ),
                         ],
                     );
                     let mut wm = whisper.lock().unwrap();
@@ -806,6 +855,15 @@ fn start_recording_blocking(
             crate::overlay::push_level(&app_for_level, level);
         }
     });
+    struct StopLevelOnDrop(Option<Arc<AtomicBool>>);
+    impl Drop for StopLevelOnDrop {
+        fn drop(&mut self) {
+            if let Some(signal) = self.0.take() {
+                signal.store(true, Ordering::Release);
+            }
+        }
+    }
+    let mut level_failure_guard = StopLevelOnDrop(Some(level_stop.clone()));
 
     if is_dual_channel {
         use crate::audio_dual_channel::DualChannelTarget;
@@ -815,18 +873,18 @@ fn start_recording_blocking(
         // music, anything else playing) stays out of the callers channel. Without a
         // detected meeting (or for the simulator's synthetic pid) fall back to the
         // whole system mix.
-        let meeting_pid = state
-            .meeting_detector
-            .get_status()
-            .active_meetings
-            .first()
+        let meeting_pid = meeting_info.as_ref()
             .map(|m| m.pid)
             .filter(|pid| *pid > 0 && *pid != 99999);
-        let target = meeting_pid.map(DualChannelTarget::Process).unwrap_or(DualChannelTarget::System);
+        let preferred_microphone = state.selected_input_device.lock().unwrap().clone();
+        let target = meeting_pid
+            .map(DualChannelTarget::Process)
+            .unwrap_or(DualChannelTarget::System);
         println!("[INFO] Dual-channel callers track: {:?}", target);
 
         let dc_handle = match crate::audio_dual_channel::start_dual_channel_capture(
             target,
+            preferred_microphone.clone(),
             48000,
             file_tx_clone.clone(),
             whisper_tx_clone.clone(),
@@ -835,9 +893,13 @@ fn start_recording_blocking(
         ) {
             Ok(handle) => handle,
             Err(e) if target != DualChannelTarget::System => {
-                eprintln!("[WARN] Meeting-process capture failed ({}); falling back to system audio", e);
+                eprintln!(
+                    "[WARN] Meeting-process capture failed ({}); falling back to system audio",
+                    e
+                );
                 crate::audio_dual_channel::start_dual_channel_capture(
                     DualChannelTarget::System,
+                    preferred_microphone,
                     48000,
                     file_tx_clone,
                     whisper_tx_clone,
@@ -857,9 +919,17 @@ fn start_recording_blocking(
             level_stop,
             level_thread,
             is_dual_channel: true,
+            meeting_info,
             dual_channel_stop: Some(dc_handle.stop_signal),
             dual_channel_thread: Some(dc_handle.capture_thread),
         });
+        level_failure_guard.0 = None;
+        if let Some(message) = writer_failure.lock().unwrap().clone() {
+            if let Some(handle) = recording_handle_arc.lock().unwrap().take() {
+                let _ = teardown_recording(handle, 0);
+            }
+            return Err(message);
+        }
 
         println!("[INFO] Dual-channel recording started: {}", path.display());
         return Ok(format!("Recording started: {}", path.display()));
@@ -869,66 +939,65 @@ fn start_recording_blocking(
     let config = cpal_config.ok_or("No input audio configuration available")?;
 
     let app_for_error = app_handle.clone();
-    let stream = device
-        .build_input_stream(
-            &config,
-            move |data: &[f32], _: &_| {
-                // File writer always gets raw (unprocessed) audio
-                file_tx_clone.try_send(data.to_vec()).ok();
+    let stream = crate::audio_input::build_input_stream(
+        &device,
+        &config,
+        move |data: &[f32], _: &_| {
+            // File writer always gets raw (unprocessed) audio
+            file_tx_clone.try_send(data.to_vec()).ok();
 
-                let mono_data: Vec<f32> = if channels > 1 {
-                    data.chunks(channels)
-                        .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
-                        .collect()
-                } else {
-                    data.to_vec()
-                };
-
-                // RNNoise + universal chain run in the transcriber thread (48 kHz → 16 kHz order).
-
-                // Store audio level in atomic for the emitter thread to pick up.
-                // Only compute every ~5 callbacks to avoid unnecessary work.
-                let cnt = level_counter_clone.fetch_add(1, Ordering::Relaxed);
-                if cnt % 5 == 0 && !data.is_empty() {
-                    let rms = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
-                    let level = (rms / 0.015_f32).min(1.0_f32).sqrt();
-                    audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
-                }
-
-                let mono_len = mono_data.len();
-                if whisper_tx_clone.try_send(mono_data).is_err() {
-                    let dropped_callbacks =
-                        transcriber_dropped_callbacks_writer.fetch_add(1, Ordering::Relaxed) + 1;
-                    transcriber_dropped_samples_writer
-                        .fetch_add(mono_len as u64, Ordering::Relaxed);
-                    if dropped_callbacks == 1 || dropped_callbacks % 100 == 0 {
-                        eprintln!(
-                            "[AUDIO_DROP] Transcriber queue dropped {} callback(s); latest={} samples",
-                            dropped_callbacks, mono_len
-                        );
-                    }
-                }
-            },
-            move |err| {
-                eprintln!("[ERROR] Audio input stream error: {}", err);
-                let _ = app_for_error.emit(
-                    "audio-disconnected",
-                    serde_json::json!({
-                        "code": "audio_device_disconnected",
-                        "message": err.to_string(),
-                    }),
-                );
-            },
-            None,
-        )
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("permission") || msg.contains("denied") {
-                "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+            let mono_data: Vec<f32> = if channels > 1 {
+                data.chunks(channels)
+                    .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
+                    .collect()
             } else {
-                format!("Failed to open audio stream: {}", msg)
+                data.to_vec()
+            };
+
+            // RNNoise + universal chain run in the transcriber thread (48 kHz → 16 kHz order).
+
+            // Store audio level in atomic for the emitter thread to pick up.
+            // Only compute every ~5 callbacks to avoid unnecessary work.
+            let cnt = level_counter_clone.fetch_add(1, Ordering::Relaxed);
+            if cnt % 5 == 0 && !data.is_empty() {
+                let rms = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+                let level = (rms / 0.015_f32).min(1.0_f32).sqrt();
+                audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
             }
-        })?;
+
+            let mono_len = mono_data.len();
+            if whisper_tx_clone.try_send(mono_data).is_err() {
+                let dropped_callbacks =
+                    transcriber_dropped_callbacks_writer.fetch_add(1, Ordering::Relaxed) + 1;
+                transcriber_dropped_samples_writer
+                    .fetch_add(mono_len as u64, Ordering::Relaxed);
+                if dropped_callbacks == 1 || dropped_callbacks % 100 == 0 {
+                    eprintln!(
+                        "[AUDIO_DROP] Transcriber queue dropped {} callback(s); latest={} samples",
+                        dropped_callbacks, mono_len
+                    );
+                }
+            }
+        },
+        move |err| {
+            eprintln!("[ERROR] Audio input stream error: {}", err);
+            let _ = app_for_error.emit(
+                "audio-disconnected",
+                serde_json::json!({
+                    "code": "audio_device_disconnected",
+                    "message": err.to_string(),
+                }),
+            );
+        },
+    )
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("permission") || msg.contains("denied") {
+            "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+        } else {
+            format!("Failed to open audio stream: {}", msg)
+        }
+    })?;
 
     stream.play().map_err(|e| {
         let msg = e.to_string();
@@ -948,14 +1017,22 @@ fn start_recording_blocking(
         level_stop,
         level_thread,
         is_dual_channel: false,
+        meeting_info: None,
         dual_channel_stop: None,
         dual_channel_thread: None,
     });
+    level_failure_guard.0 = None;
+    if let Some(message) = writer_failure.lock().unwrap().clone() {
+        if let Some(handle) = recording_handle_arc.lock().unwrap().take() {
+            let _ = teardown_recording(handle, 0);
+        }
+        return Err(message);
+    }
 
     Ok(format!("Recording started: {}", path.display()))
 }
 
-fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) {
+fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) -> Result<(), String> {
     use cpal::traits::StreamTrait;
 
     let RecordingHandle {
@@ -967,6 +1044,7 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) {
         level_stop,
         level_thread,
         is_dual_channel: _,
+        meeting_info: _,
         dual_channel_stop,
         dual_channel_thread,
     } = recording;
@@ -996,13 +1074,14 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) {
     }
 
     println!("[INFO] Waiting for worker threads to finish...");
-    if let Err(e) = writer_thread.join() {
-        eprintln!("[ERROR] Writer thread panicked: {:?}", e);
-    }
+    let writer_result = writer_thread
+        .join()
+        .map_err(|e| format!("Recording writer panicked: {e:?}"));
     if let Err(e) = transcriber_thread.join() {
         eprintln!("[ERROR] Transcriber thread panicked: {:?}", e);
     }
     println!("[INFO] Worker threads finished.");
+    writer_result?
 }
 
 #[tauri::command]
@@ -1041,6 +1120,7 @@ pub fn resume_recording(state: State<'_, AudioState>) -> Result<CommandResult<St
 
 #[tauri::command]
 pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandResult<()>, String> {
+    let _recording_transition = state.begin_recording_transition()?;
     let _model_operation = state.begin_model_operation()?;
     *state.denoiser.lock().unwrap() = None;
     state.recording_paused.store(false, Ordering::Relaxed);
@@ -1052,11 +1132,12 @@ pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandRes
     let session_transcript = state.session_transcript.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        teardown_recording(recording, 0);
+        let teardown_result = teardown_recording(recording, 0);
         session_transcript.lock().unwrap().clear();
         if let Some(path) = last_recording_path {
             let _ = std::fs::remove_file(path);
         }
+        teardown_result?;
         Ok::<CommandResult<()>, String>(CommandResult::ok(()))
     })
     .await;
@@ -1578,12 +1659,20 @@ fn meeting_turn_transcriber<'a>(
     match (active_engine, gguf) {
         (ASREngine::Whisper, _) | (_, None) => Some(Box::new(move |samples: &[f32], rate: u32| {
             let audio = to_16k(samples, rate)?;
-            let text = whisper_arc.lock().ok()?.transcribe_audio_data(&audio, None).ok()?;
+            let text = whisper_arc
+                .lock()
+                .ok()?
+                .transcribe_audio_data(&audio, None)
+                .ok()?;
             Some(clean_transcript(&text))
         })),
         (_, Some(gguf)) => Some(Box::new(move |samples: &[f32], rate: u32| {
             let audio = to_16k(samples, rate)?;
-            let text = gguf.lock().ok()?.transcribe_chunk(&audio, 16000, None).ok()?;
+            let text = gguf
+                .lock()
+                .ok()?
+                .transcribe_chunk(&audio, 16000, None)
+                .ok()?;
             Some(clean_transcript(&text))
         })),
     }
@@ -1613,7 +1702,10 @@ fn process_and_save_meeting_if_applicable(
     let src_path_str = last_recording_path.ok_or("Meeting recording path is missing")?;
     let src_path = std::path::Path::new(src_path_str);
     if !src_path.exists() {
-        return Err(format!("Meeting recording is missing: {}", src_path.display()));
+        return Err(format!(
+            "Meeting recording is missing: {}",
+            src_path.display()
+        ));
     }
 
     let meetings_dir = crate::commands::meetings::get_meetings_dir()?;
@@ -1626,18 +1718,31 @@ fn process_and_save_meeting_if_applicable(
     let call_key = crate::meeting_continuation::call_key(meeting_info.as_ref());
     let src_ms = wav_duration_ms(src_path);
     let mut continued = None;
-    if let Some(p) = call_key.as_deref().and_then(|k| crate::meeting_continuation::take_match(k, src_ms)) {
+    if let Some(p) = call_key
+        .as_deref()
+        .and_then(|k| crate::meeting_continuation::take_match(k, src_ms))
+    {
         match crate::meeting_continuation::join_wavs(&p.wav, src_path, &dest_path) {
             Ok(()) => {
-                println!("[MEETING] Continuing meeting #{} ({} ms + {} ms)", p.meeting_id, p.duration_ms, src_ms);
+                println!(
+                    "[MEETING] Continuing meeting #{} ({} ms + {} ms)",
+                    p.meeting_id, p.duration_ms, src_ms
+                );
                 continued = Some(p);
             }
-            Err(e) => eprintln!("[WARN] Could not continue meeting #{}: {e}; saving a new one", p.meeting_id),
+            Err(e) => eprintln!(
+                "[WARN] Could not continue meeting #{}: {e}; saving a new one",
+                p.meeting_id
+            ),
         }
     }
     if continued.is_none() {
         if let Err(e) = std::fs::copy(src_path, &dest_path) {
-            return Err(format!("Failed to preserve meeting audio to {}: {}", dest_path.display(), e));
+            return Err(format!(
+                "Failed to preserve meeting audio to {}: {}",
+                dest_path.display(),
+                e
+            ));
         }
     }
 
@@ -1649,11 +1754,18 @@ fn process_and_save_meeting_if_applicable(
         final_text,
         &snippets_dir,
         meeting_timestamp,
-        turn_transcriber.as_mut().map(|t| t.as_mut() as crate::diarization::TurnTranscriber<'_>),
+        turn_transcriber
+            .as_mut()
+            .map(|t| t.as_mut() as crate::diarization::TurnTranscriber<'_>),
     );
     // With per-turn transcription the turns are the complete record (the live
     // transcript can have gaps where its queue overflowed), so save their text.
-    let turns_text = turns.iter().map(|t| t.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
+    let turns_text = turns
+        .iter()
+        .map(|t| t.text.trim())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     let app_data = dirs::data_local_dir().ok_or("Local data directory is unavailable")?;
     let db_path = app_data.join("Taurscribe").join("transcript_history.db");
     let conn = rusqlite::Connection::open(&db_path)
@@ -1671,12 +1783,18 @@ fn process_and_save_meeting_if_applicable(
                 p.duration_ms,
             );
             let old_text: String = conn
-                .query_row("SELECT transcript_raw FROM meetings WHERE id = ?1", [p.meeting_id], |r| r.get(0))
+                .query_row(
+                    "SELECT transcript_raw FROM meetings WHERE id = ?1",
+                    [p.meeting_id],
+                    |r| r.get(0),
+                )
                 .unwrap_or_default();
             joined_text = if per_turn && !turns_text.is_empty() {
                 turns_text.clone()
             } else {
-                format!("{} {}", old_text.trim(), final_text.trim()).trim().to_string()
+                format!("{} {}", old_text.trim(), final_text.trim())
+                    .trim()
+                    .to_string()
             };
             &joined_text
         }
@@ -1692,12 +1810,7 @@ fn process_and_save_meeting_if_applicable(
     };
 
     let (title, platform, app_name, url) = if let Some(info) = meeting_info {
-        (
-            info.title,
-            info.platform,
-            info.app_name,
-            info.url,
-        )
+        (info.title, info.platform, info.app_name, info.url)
     } else {
         (
             format!("Meeting on {}", chrono::Local::now().format("%b %-d, %Y")),
@@ -1734,19 +1847,33 @@ fn process_and_save_meeting_if_applicable(
             // Keep the full stereo recording for a while so recording this call
             // again continues this meeting (before the WAV is swapped for playback).
             if let Some(key) = call_key.as_deref() {
-                crate::meeting_continuation::remember(id, key, &dest_path, duration_ms.max(0) as u64);
+                crate::meeting_continuation::remember(
+                    id,
+                    key,
+                    &dest_path,
+                    duration_ms.max(0) as u64,
+                );
             }
             // The meeting points at the WAV until the compressed copy is fully
             // written and the path update succeeds.
-            if let Err(e) = crate::commands::meetings::convert_meeting_audio(&conn, id, &dest_path) {
+            if let Err(e) = crate::commands::meetings::convert_meeting_audio(&conn, id, &dest_path)
+            {
                 eprintln!("[WARN] Keeping raw meeting WAV for playback: {}", e);
             }
-            println!("[MEETING] Successfully persisted meeting #{}: '{}' (duration: {}ms, {} turns)", id, title, duration_ms, turns.len());
+            println!(
+                "[MEETING] Successfully persisted meeting #{}: '{}' (duration: {}ms, {} turns)",
+                id,
+                title,
+                duration_ms,
+                turns.len()
+            );
             Ok(Some(id))
         }
-        Err(e) => {
-            Err(format!("Could not save meeting; recording retained at {}: {}", dest_path.display(), e))
-        }
+        Err(e) => Err(format!(
+            "Could not save meeting; recording retained at {}: {}",
+            dest_path.display(),
+            e
+        )),
     }
 }
 
@@ -1767,7 +1894,7 @@ fn stop_recording_blocking(
 ) -> Result<(String, Option<i64>), String> {
     // Brief tail capture for OS audio scheduling; silence padding in the
     // transcriber thread handles the actual word-boundary safety margin.
-    teardown_recording(recording, 80);
+    teardown_recording(recording, 80)?;
 
     // Ensure final inference pass runs on P-cores with elevated priority on Windows
     crate::platform_tuning::apply_thread_performance_affinity();
@@ -1777,11 +1904,15 @@ fn stop_recording_blocking(
     if active_engine == ASREngine::Granite {
         match (gguf.as_ref(), last_recording_path.as_ref()) {
             (Some(granite), Some(path)) => {
-                match load_recording_for_final_pass(path).and_then(|audio| transcribe_final_pass(granite, audio)) {
+                match load_recording_for_final_pass(path)
+                    .and_then(|audio| transcribe_final_pass(granite, audio))
+                {
                     Ok(raw_text) => {
                         let cleaned = clean_transcript(&raw_text);
-                        let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
-                        let final_text = crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
+                        let (custom_vocab, _) =
+                            crate::context::load_custom_vocabulary_from_settings();
+                        let final_text =
+                            crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
                         println!("[FINAL_TRANSCRIPT] (Granite final)\n{}", final_text);
                         let meeting_id = process_and_save_meeting_if_applicable(
                             is_meeting,
@@ -1795,7 +1926,10 @@ fn stop_recording_blocking(
                         let _ = std::fs::remove_file(path);
                         return Ok((final_text, meeting_id));
                     }
-                    Err(e) => eprintln!("[ERROR] Granite final pass failed; using the live transcript: {}", e),
+                    Err(e) => eprintln!(
+                        "[ERROR] Granite final pass failed; using the live transcript: {}",
+                        e
+                    ),
                 }
             }
             _ => eprintln!("[ERROR] Granite final pass skipped: no saved recording"),
@@ -1927,11 +2061,14 @@ fn stop_recording_blocking(
                 eprintln!("[ERROR] Final transcription failed: {}", e);
                 let live = session_transcript.lock().unwrap().clone();
                 if live.trim().is_empty() {
-                    return Err(format!("Final transcription failed: {e}; recording retained at {path}"));
+                    return Err(format!(
+                        "Final transcription failed: {e}; recording retained at {path}"
+                    ));
                 }
                 let fallback = clean_transcript(&live);
                 let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
-                let fallback = crate::context::apply_custom_vocabulary_casing(&fallback, &custom_vocab);
+                let fallback =
+                    crate::context::apply_custom_vocabulary_casing(&fallback, &custom_vocab);
                 let meeting_id = process_and_save_meeting_if_applicable(
                     is_meeting,
                     Some(&path),
@@ -1966,6 +2103,7 @@ pub async fn stop_recording(
     state: State<'_, AudioState>,
     app: AppHandle,
 ) -> Result<CommandResult<String>, String> {
+    let _recording_transition = state.begin_recording_transition()?;
     let model_operation = state.begin_model_operation()?;
     // --- Quick state access (non-blocking, just mutex snapshots) ---
     *state.denoiser.lock().unwrap() = None;
@@ -1983,8 +2121,8 @@ pub async fn stop_recording(
     let gguf = state.gguf_manager(active_engine);
     let vad_arc = state.vad.clone();
 
-    let is_dual_channel = state.last_recording_is_dual_channel.load(Ordering::SeqCst);
-    let active_meeting = state.meeting_detector.get_status().active_meetings.into_iter().next();
+    let is_dual_channel = recording.is_dual_channel;
+    let active_meeting = recording.meeting_info.clone();
     // A dual-channel recording is a meeting recording even when no meeting app was
     // detected: it is saved to the meetings area (as "Direct Audio") instead of
     // being treated as dictation.
@@ -1993,8 +2131,12 @@ pub async fn stop_recording(
     // Transcription + diarization can take a while; let the meetings view show it.
     if is_meeting {
         let payload = match active_meeting.as_ref() {
-            Some(m) => serde_json::json!({ "title": m.title, "platform": m.platform, "app_name": m.app_name }),
-            None => serde_json::json!({ "title": "Direct Audio recording", "platform": "Direct Audio", "app_name": "Taurscribe" }),
+            Some(m) => {
+                serde_json::json!({ "title": m.title, "platform": m.platform, "app_name": m.app_name })
+            }
+            None => {
+                serde_json::json!({ "title": "Direct Audio recording", "platform": "Direct Audio", "app_name": "Taurscribe" })
+            }
         };
         let _ = app.emit("meeting-processing-started", payload);
     }
@@ -2077,14 +2219,13 @@ mod tests {
         let (whisper_tx, whisper_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
         let written = Arc::new(std::sync::Mutex::new(Vec::<f32>::new()));
         let writer_output = written.clone();
-        let writer_thread = std::thread::spawn(move || {
+        let writer_thread = std::thread::spawn(move || -> Result<(), String> {
             while let Ok(frames) = file_rx.recv() {
                 writer_output.lock().unwrap().extend(frames);
             }
+            Ok(())
         });
-        let transcriber_thread = std::thread::spawn(move || {
-            while whisper_rx.recv().is_ok() {}
-        });
+        let transcriber_thread = std::thread::spawn(move || while whisper_rx.recv().is_ok() {});
         let stop = Arc::new(AtomicBool::new(false));
         let capture_stop = stop.clone();
         let capture_tx = file_tx.clone();
@@ -2096,19 +2237,75 @@ mod tests {
         });
         let level_stop = Arc::new(AtomicBool::new(false));
         let level_thread = std::thread::spawn(|| {});
-        teardown_recording(RecordingHandle {
+        teardown_recording(
+            RecordingHandle {
+                stream: None,
+                file_tx,
+                whisper_tx,
+                writer_thread,
+                transcriber_thread,
+                level_stop,
+                level_thread,
+                is_dual_channel: true,
+                meeting_info: None,
+                dual_channel_stop: Some(stop),
+                dual_channel_thread: Some(capture_thread),
+            },
+            0,
+        )
+        .unwrap();
+        assert_eq!(*written.lock().unwrap(), vec![0.25, -0.25]);
+    }
+
+    #[test]
+    fn recording_writer_failure_reaches_stop_result() {
+        let (file_tx, _file_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+        let (whisper_tx, whisper_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+        let writer_thread = std::thread::spawn(|| Err("disk full".to_string()));
+        let transcriber_thread = std::thread::spawn(move || while whisper_rx.recv().is_ok() {});
+        let handle = RecordingHandle {
             stream: None,
             file_tx,
             whisper_tx,
             writer_thread,
             transcriber_thread,
-            level_stop,
-            level_thread,
-            is_dual_channel: true,
-            dual_channel_stop: Some(stop),
-            dual_channel_thread: Some(capture_thread),
-        }, 0);
-        assert_eq!(*written.lock().unwrap(), vec![0.25, -0.25]);
+            level_stop: Arc::new(AtomicBool::new(false)),
+            level_thread: std::thread::spawn(|| {}),
+            is_dual_channel: false,
+            meeting_info: None,
+            dual_channel_stop: None,
+            dual_channel_thread: None,
+        };
+        assert_eq!(teardown_recording(handle, 0).unwrap_err(), "disk full");
+    }
+
+    #[test]
+    fn vm_writer_panic_reports_failure_after_other_workers_exit() {
+        let (file_tx, _file_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+        let (whisper_tx, whisper_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+        let finished = Arc::new(AtomicBool::new(false));
+        let worker_finished = finished.clone();
+        let handle = RecordingHandle {
+            stream: None,
+            file_tx,
+            whisper_tx,
+            writer_thread: std::thread::spawn(|| -> Result<(), String> {
+                panic!("simulated write failure")
+            }),
+            transcriber_thread: std::thread::spawn(move || {
+                while whisper_rx.recv().is_ok() {}
+                worker_finished.store(true, Ordering::SeqCst);
+            }),
+            level_stop: Arc::new(AtomicBool::new(false)),
+            level_thread: std::thread::spawn(|| {}),
+            is_dual_channel: false,
+            meeting_info: None,
+            dual_channel_stop: None,
+            dual_channel_thread: None,
+        };
+        let err = teardown_recording(handle, 0).unwrap_err();
+        assert!(err.contains("Recording writer panicked"), "{err}");
+        assert!(finished.load(Ordering::SeqCst));
     }
 
     #[test]

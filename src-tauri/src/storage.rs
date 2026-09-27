@@ -54,7 +54,9 @@ impl StorageConfig {
 
 /// `<data_local>/Taurscribe` — the app data folder.
 pub fn app_data_root() -> Result<PathBuf, String> {
-    Ok(dirs::data_local_dir().ok_or("Could not find AppData directory")?.join("Taurscribe"))
+    Ok(dirs::data_local_dir()
+        .ok_or("Could not find AppData directory")?
+        .join("Taurscribe"))
 }
 
 fn config_path() -> Result<PathBuf, String> {
@@ -82,7 +84,8 @@ fn load_config() -> StorageConfig {
 fn save_config(cfg: &StorageConfig) -> Result<(), String> {
     let path = config_path()?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("Could not save storage settings: {e}"))?;
@@ -117,7 +120,8 @@ pub fn resolve_dir(area: Area) -> Result<PathBuf, String> {
             dir.display()
         ));
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
     Ok(dir)
 }
 
@@ -135,11 +139,16 @@ fn drive_present(path: &Path) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        path.components().next().map(|c| PathBuf::from(c.as_os_str()).join("\\").exists()).unwrap_or(false)
+        path.components()
+            .next()
+            .map(|c| PathBuf::from(c.as_os_str()).join("\\").exists())
+            .unwrap_or(false)
     }
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     {
-        nearest_existing(path).map(|p| p != Path::new("/")).unwrap_or(false)
+        nearest_existing(path)
+            .map(|p| p != Path::new("/"))
+            .unwrap_or(false)
     }
 }
 
@@ -157,12 +166,16 @@ fn nearest_existing(path: &Path) -> Option<PathBuf> {
 
 /// True when `path` is on a different drive than the system/home drive.
 pub fn is_other_drive(path: &Path) -> bool {
-    let Some(existing) = nearest_existing(path) else { return false };
+    let Some(existing) = nearest_existing(path) else {
+        return false;
+    };
     let existing = existing.canonicalize().unwrap_or(existing);
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let Some(home) = dirs::home_dir() else { return false };
+        let Some(home) = dirs::home_dir() else {
+            return false;
+        };
         match (std::fs::metadata(&existing), std::fs::metadata(&home)) {
             (Ok(a), Ok(b)) => a.dev() != b.dev(),
             _ => false,
@@ -170,14 +183,21 @@ pub fn is_other_drive(path: &Path) -> bool {
     }
     #[cfg(windows)]
     {
-        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into()).to_ascii_uppercase();
-        let s = existing.to_string_lossy().trim_start_matches(r"\\?\").to_ascii_uppercase();
+        let system = std::env::var("SystemDrive")
+            .unwrap_or_else(|_| "C:".into())
+            .to_ascii_uppercase();
+        let s = existing
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .to_ascii_uppercase();
         !s.starts_with(&system)
     }
 }
 
 fn disk_info(path: &Path) -> (Option<u64>, Option<String>, bool) {
-    let Some(existing) = nearest_existing(path) else { return (None, None, false) };
+    let Some(existing) = nearest_existing(path) else {
+        return (None, None, false);
+    };
     let existing = existing.canonicalize().unwrap_or(existing);
     let disks = sysinfo::Disks::new_with_refreshed_list();
     let best = disks
@@ -195,7 +215,9 @@ fn disk_info(path: &Path) -> (Option<u64>, Option<String>, bool) {
 }
 
 fn dir_size(path: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
     entries
         .filter_map(|e| e.ok())
         .map(|e| match e.file_type() {
@@ -227,7 +249,11 @@ fn area_info(area: Area) -> Result<StorageAreaInfo, String> {
     let default_path = default_dir(area)?;
     let is_custom = load_config().get(area).is_some();
     let available = !is_custom || path.exists() || drive_present(&path);
-    let (free_bytes, drive_name, is_removable) = if available { disk_info(&path) } else { (None, None, false) };
+    let (free_bytes, drive_name, is_removable) = if available {
+        disk_info(&path)
+    } else {
+        (None, None, false)
+    };
     Ok(StorageAreaInfo {
         area,
         path: path.to_string_lossy().into_owned(),
@@ -244,9 +270,11 @@ fn area_info(area: Area) -> Result<StorageAreaInfo, String> {
 
 #[tauri::command]
 pub async fn get_storage_locations() -> Result<Vec<StorageAreaInfo>, String> {
-    tauri::async_runtime::spawn_blocking(|| Ok(vec![area_info(Area::Models)?, area_info(Area::Recordings)?]))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(|| {
+        Ok(vec![area_info(Area::Models)?, area_info(Area::Recordings)?])
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Meeting audio is played through the asset protocol, whose static scope only
@@ -258,7 +286,10 @@ pub fn allow_recordings_in_asset_scope(app: &AppHandle) {
     }
     if let Ok(dir) = current_dir(Area::Recordings) {
         if let Err(e) = app.asset_protocol_scope().allow_directory(&dir, true) {
-            eprintln!("[STORAGE] Could not allow {} for playback: {e}", dir.display());
+            eprintln!(
+                "[STORAGE] Could not allow {} for playback: {e}",
+                dir.display()
+            );
         }
     }
 }
@@ -289,63 +320,160 @@ impl Mover<'_> {
     }
 
     fn copy_file(&mut self, src: &Path, dst: &Path) -> Result<(), String> {
-        let tmp = dst.with_extension("taurscribe-moving");
-        let mut input = std::fs::File::open(src).map_err(|e| format!("Could not read {}: {e}", src.display()))?;
-        let mut output = std::fs::File::create(&tmp).map_err(|e| format!("Could not write {}: {e}", tmp.display()))?;
-        let mut buf = vec![0u8; 4 << 20];
-        loop {
-            let n = input.read(&mut buf).map_err(|e| format!("Read failed for {}: {e}", src.display()))?;
-            if n == 0 {
-                break;
+        let tmp = dst.with_extension(format!("taurscribe-moving-{:016x}", rand::random::<u64>()));
+        let mut input = std::fs::File::open(src)
+            .map_err(|e| format!("Could not read {}: {e}", src.display()))?;
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|e| format!("Could not write {}: {e}", tmp.display()))?;
+        let result = (|| -> Result<(), String> {
+            let mut buf = vec![0u8; 4 << 20];
+            loop {
+                let n = input
+                    .read(&mut buf)
+                    .map_err(|e| format!("Read failed for {}: {e}", src.display()))?;
+                if n == 0 {
+                    break;
+                }
+                output
+                    .write_all(&buf[..n])
+                    .map_err(|e| format!("Write failed for {}: {e}", dst.display()))?;
+                self.advance(n as u64);
             }
-            output.write_all(&buf[..n]).map_err(|e| {
-                let _ = std::fs::remove_file(&tmp);
-                format!("Write failed for {}: {e}", dst.display())
-            })?;
-            self.advance(n as u64);
+            output
+                .sync_all()
+                .map_err(|e| format!("Could not flush {}: {e}", dst.display()))?;
+            drop(output);
+            if !files_equal(src, &tmp)? {
+                return Err(format!(
+                    "Copy of {} did not match the original; the original was kept.",
+                    src.display()
+                ));
+            }
+            if dst.exists() {
+                return Err(format!(
+                    "{} appeared during the move; both files were kept.",
+                    dst.display()
+                ));
+            }
+            std::fs::rename(&tmp, dst)
+                .map_err(|e| format!("Could not finish {}: {e}", dst.display()))?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
-        output.sync_all().map_err(|e| format!("Could not flush {}: {e}", dst.display()))?;
-        drop(output);
-        std::fs::rename(&tmp, dst).map_err(|e| format!("Could not finish {}: {e}", dst.display()))?;
+        result
+    }
+
+    /// Check all destination names before writing anything.
+    fn check_conflicts(src: &Path, dst: &Path) -> Result<(), String> {
+        for entry in
+            std::fs::read_dir(src).map_err(|e| format!("Could not read {}: {e}", src.display()))?
+        {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            let kind = entry.file_type().map_err(|e| e.to_string())?;
+            if kind.is_dir() {
+                if to.exists() && !to.is_dir() {
+                    return Err(format!(
+                        "{} is a file where a folder is needed; no files were moved.",
+                        to.display()
+                    ));
+                }
+                Self::check_conflicts(&from, &to)?;
+            } else if kind.is_file() && to.exists() && !files_equal(&from, &to)? {
+                return Err(format!(
+                    "{} already contains a different file; no files were moved.",
+                    to.display()
+                ));
+            }
+        }
         Ok(())
     }
 
-    /// Moves every entry of `src` into `dst`. Files are copied and verified by size
-    /// before the original is removed, so an interrupted move never loses data.
-    fn move_contents(&mut self, src: &Path, dst: &Path) -> Result<(), String> {
-        std::fs::create_dir_all(dst).map_err(|e| format!("Could not create {}: {e}", dst.display()))?;
-        let entries = std::fs::read_dir(src).map_err(|e| format!("Could not read {}: {e}", src.display()))?;
-        for entry in entries.filter_map(|e| e.ok()) {
+    /// Copy and verify every file. Source files stay put until configuration and
+    /// database paths are committed, so a failed migration leaves them usable.
+    fn copy_contents(&mut self, src: &Path, dst: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(dst)
+            .map_err(|e| format!("Could not create {}: {e}", dst.display()))?;
+        let entries =
+            std::fs::read_dir(src).map_err(|e| format!("Could not read {}: {e}", src.display()))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|e| format!("Could not read an entry in {}: {e}", src.display()))?;
             let from = entry.path();
             let to = dst.join(entry.file_name());
             let ft = entry.file_type().map_err(|e| e.to_string())?;
             if ft.is_dir() {
-                self.move_contents(&from, &to)?;
-                let _ = std::fs::remove_dir(&from);
+                self.copy_contents(&from, &to)?;
                 continue;
             }
             if !ft.is_file() {
                 continue;
             }
             let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            // Same volume: a rename is instant.
-            if !to.exists() && std::fs::rename(&from, &to).is_ok() {
-                self.advance(len);
-                continue;
-            }
-            // Already there (e.g. the user picked a folder that has these models): keep theirs.
-            if to.exists() && std::fs::metadata(&to).map(|m| m.len()).unwrap_or(u64::MAX) == len {
-                std::fs::remove_file(&from).map_err(|e| format!("Could not remove {}: {e}", from.display()))?;
-                self.advance(len);
-                continue;
+            if to.exists() {
+                if files_equal(&from, &to)? {
+                    self.advance(len);
+                    continue;
+                }
+                return Err(format!(
+                    "{} already contains a different file; neither file was overwritten.",
+                    to.display()
+                ));
             }
             self.copy_file(&from, &to)?;
-            if std::fs::metadata(&to).map(|m| m.len()).unwrap_or(0) != len {
-                return Err(format!("Copy of {} came out the wrong size; the original was kept.", from.display()));
-            }
-            std::fs::remove_file(&from).map_err(|e| format!("Could not remove {}: {e}", from.display()))?;
         }
         Ok(())
+    }
+}
+
+fn remove_verified_sources(src: &Path, dst: &Path) -> Result<(), String> {
+    for entry in
+        std::fs::read_dir(src).map_err(|e| format!("Could not read {}: {e}", src.display()))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let kind = entry.file_type().map_err(|e| e.to_string())?;
+        if kind.is_dir() {
+            remove_verified_sources(&from, &to)?;
+            let _ = std::fs::remove_dir(&from);
+        } else if kind.is_file() && files_equal(&from, &to)? {
+            std::fs::remove_file(&from)
+                .map_err(|e| format!("Could not remove {}: {e}", from.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn files_equal(a: &Path, b: &Path) -> Result<bool, String> {
+    let mut left =
+        std::fs::File::open(a).map_err(|e| format!("Could not read {}: {e}", a.display()))?;
+    let mut right =
+        std::fs::File::open(b).map_err(|e| format!("Could not read {}: {e}", b.display()))?;
+    if left.metadata().map_err(|e| e.to_string())?.len()
+        != right.metadata().map_err(|e| e.to_string())?.len()
+    {
+        return Ok(false);
+    }
+    let mut a_buf = vec![0u8; 4 << 20];
+    let mut b_buf = vec![0u8; 4 << 20];
+    loop {
+        let n = left.read(&mut a_buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Ok(true);
+        }
+        right
+            .read_exact(&mut b_buf[..n])
+            .map_err(|e| e.to_string())?;
+        if a_buf[..n] != b_buf[..n] {
+            return Ok(false);
+        }
     }
 }
 
@@ -356,31 +484,112 @@ fn same_place(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Recordings keep absolute paths in the history database; point them at the new folder.
+fn relocated_path(value: &str, old: &Path, new: &Path) -> Option<String> {
+    Path::new(value)
+        .strip_prefix(old)
+        .ok()
+        .map(|relative| new.join(relative).to_string_lossy().into_owned())
+}
+
+/// Recordings keep absolute paths in the history database; point only paths
+/// inside the old directory at the new one. Update every column in one transaction.
+fn rewrite_recording_paths_in_db(
+    conn: &mut rusqlite::Connection,
+    old: &Path,
+    new: &Path,
+) -> Result<(), String> {
+    use rusqlite::OptionalExtension;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let columns = [
+        ("meetings", "audio_path", false),
+        ("meeting_turns", "snippet_path", false),
+        ("meeting_turns", "candidate_snippets", true),
+        ("speaker_vault", "snippet_path", false),
+        ("speaker_vault", "candidate_snippets", true),
+    ];
+    for (table, column, is_json) in columns {
+        let table_exists: Option<i64> = tx
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if table_exists.is_none() {
+            continue;
+        }
+        let has_column = {
+            let mut stmt = tx
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .map_err(|e| e.to_string())?;
+            let columns = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| e.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?;
+            columns.iter().any(|name| name == column)
+        };
+        if !has_column {
+            continue;
+        }
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = tx
+                .prepare(&format!(
+                    "SELECT rowid, {column} FROM {table} WHERE {column} IS NOT NULL"
+                ))
+                .map_err(|e| e.to_string())?;
+            let collected = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?;
+            collected
+        };
+        for (rowid, value) in rows {
+            let replacement = if is_json {
+                if value.trim().is_empty() {
+                    None
+                } else {
+                    let mut paths: Vec<String> = serde_json::from_str(&value).map_err(|e| {
+                        format!("Invalid {table}.{column} JSON at row {rowid}: {e}")
+                    })?;
+                    let mut changed = false;
+                    for path in &mut paths {
+                        if let Some(next) = relocated_path(path, old, new) {
+                            *path = next;
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        Some(serde_json::to_string(&paths).map_err(|e| e.to_string())?)
+                    } else {
+                        None
+                    }
+                }
+            } else {
+                relocated_path(&value, old, new)
+            };
+            if let Some(replacement) = replacement {
+                tx.execute(
+                    &format!("UPDATE {table} SET {column} = ?1 WHERE rowid = ?2"),
+                    rusqlite::params![replacement, rowid],
+                )
+                .map_err(|e| format!("Could not update {table}.{column}: {e}"))?;
+            }
+        }
+    }
+    tx.commit()
+        .map_err(|e| format!("Could not save recording paths: {e}"))
+}
+
 fn rewrite_recording_paths(old: &Path, new: &Path) -> Result<(), String> {
     let db = app_data_root()?.join("transcript_history.db");
     if !db.exists() {
         return Ok(());
     }
-    let conn = rusqlite::Connection::open(&db).map_err(|e| e.to_string())?;
-    let old_s = old.to_string_lossy().into_owned();
-    let new_s = new.to_string_lossy().into_owned();
-    // JSON columns store backslashes escaped (Windows paths).
-    let old_json = old_s.replace('\\', "\\\\");
-    let new_json = new_s.replace('\\', "\\\\");
-    let columns = [
-        ("meetings", "audio_path"),
-        ("meeting_turns", "snippet_path"),
-        ("meeting_turns", "candidate_snippets"),
-        ("speaker_vault", "snippet_path"),
-        ("speaker_vault", "candidate_snippets"),
-    ];
-    for (table, col) in columns {
-        let sql = format!("UPDATE {table} SET {col} = REPLACE(REPLACE({col}, ?1, ?2), ?3, ?4) WHERE {col} IS NOT NULL");
-        // Tables may not exist yet on a fresh install.
-        let _ = conn.execute(&sql, rusqlite::params![old_s, new_s, old_json, new_json]);
-    }
-    Ok(())
+    let mut conn = rusqlite::Connection::open(&db).map_err(|e| e.to_string())?;
+    rewrite_recording_paths_in_db(&mut conn, old, new)
 }
 
 /// Point `area` at `path` (None = back to the default folder). With
@@ -393,6 +602,7 @@ pub async fn set_storage_location(
     path: Option<String>,
     move_files: bool,
 ) -> Result<StorageAreaInfo, String> {
+    let _recording_transition = state.begin_recording_transition()?;
     if state.recording_handle.lock().unwrap().is_some() {
         return Err("Stop the current recording before changing where files are stored.".into());
     }
@@ -423,11 +633,18 @@ pub async fn set_storage_location(
         std::fs::create_dir_all(&new).map_err(|e| format!("Can't use {}: {e}", new.display()))?;
         // Writable?
         let probe = new.join(".taurscribe-write-test");
-        std::fs::write(&probe, b"ok").map_err(|e| format!("Taurscribe can't write to {}: {e}", new.display()))?;
+        std::fs::write(&probe, b"ok")
+            .map_err(|e| format!("Taurscribe can't write to {}: {e}", new.display()))?;
         let _ = std::fs::remove_file(&probe);
 
-        if move_files && old.exists() && !same_place(&old, &new) {
-            if new.canonicalize().ok().zip(old.canonicalize().ok()).is_some_and(|(n, o)| n.starts_with(&o)) {
+        let copying = move_files && old.exists() && !same_place(&old, &new);
+        if copying {
+            if new
+                .canonicalize()
+                .ok()
+                .zip(old.canonicalize().ok())
+                .is_some_and(|(n, o)| n.starts_with(&o))
+            {
                 return Err("The new folder can't be inside the current one.".into());
             }
             let total = dir_size(&old);
@@ -441,10 +658,23 @@ pub async fn set_storage_location(
                 }
             }
             let emit = |done_bytes, total_bytes| {
-                let _ = app.emit("storage-move-progress", MoveProgress { area, done_bytes, total_bytes });
+                let _ = app.emit(
+                    "storage-move-progress",
+                    MoveProgress {
+                        area,
+                        done_bytes,
+                        total_bytes,
+                    },
+                );
             };
-            let mut mover = Mover { on_progress: &emit, total, done: 0, last_emit: Instant::now() };
-            mover.move_contents(&old, &new)?;
+            let mut mover = Mover {
+                on_progress: &emit,
+                total,
+                done: 0,
+                last_emit: Instant::now(),
+            };
+            Mover::check_conflicts(&old, &new)?;
+            mover.copy_contents(&old, &new)?;
             if area == Area::Recordings {
                 rewrite_recording_paths(&old, &new)?;
             }
@@ -452,8 +682,15 @@ pub async fn set_storage_location(
 
         let mut cfg = load_config();
         let is_default = same_place(&new, &default_dir(area)?);
-        cfg.set(area, if is_default { None } else { Some(new) });
+        cfg.set(area, if is_default { None } else { Some(new.clone()) });
         save_config(&cfg)?;
+        if copying {
+            if let Err(e) = remove_verified_sources(&old, &new) {
+                eprintln!(
+                    "[STORAGE] Files were switched but old copies could not all be removed: {e}"
+                );
+            }
+        }
         if area == Area::Recordings {
             allow_recordings_in_asset_scope(&app);
         }
@@ -493,7 +730,10 @@ fn open_uncached(path: &Path) -> std::io::Result<std::fs::File> {
     {
         use std::os::windows::fs::OpenOptionsExt;
         const FILE_FLAG_NO_BUFFERING: u32 = 0x2000_0000;
-        std::fs::OpenOptions::new().read(true).custom_flags(FILE_FLAG_NO_BUFFERING).open(path)
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_NO_BUFFERING)
+            .open(path)
     }
     #[cfg(target_os = "macos")]
     {
@@ -527,9 +767,11 @@ fn measure(dir: &Path) -> Result<SpeedResult, String> {
         }
         let start = Instant::now();
         {
-            let mut f = std::fs::File::create(&file).map_err(|e| format!("Can't write to {}: {e}", dir.display()))?;
+            let mut f = std::fs::File::create(&file)
+                .map_err(|e| format!("Can't write to {}: {e}", dir.display()))?;
             for _ in 0..TEST_BYTES / CHUNK {
-                f.write_all(&buf[off..off + CHUNK]).map_err(|e| e.to_string())?;
+                f.write_all(&buf[off..off + CHUNK])
+                    .map_err(|e| e.to_string())?;
             }
             f.sync_all().map_err(|e| e.to_string())?;
         }
@@ -539,7 +781,9 @@ fn measure(dir: &Path) -> Result<SpeedResult, String> {
         let mut f = open_uncached(&file).map_err(|e| e.to_string())?;
         let mut read = 0usize;
         loop {
-            let n = f.read(&mut buf[off..off + CHUNK]).map_err(|e| e.to_string())?;
+            let n = f
+                .read(&mut buf[off..off + CHUNK])
+                .map_err(|e| e.to_string())?;
             if n == 0 {
                 break;
             }
@@ -560,7 +804,10 @@ fn measure(dir: &Path) -> Result<SpeedResult, String> {
 /// Measures how fast Taurscribe can write and read a folder (256 MB test file,
 /// bypassing the OS cache). Pass no path to test the folder `area` uses now.
 #[tauri::command]
-pub async fn measure_storage_speed(area: Area, path: Option<String>) -> Result<SpeedResult, String> {
+pub async fn measure_storage_speed(
+    area: Area,
+    path: Option<String>,
+) -> Result<SpeedResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = match path {
             Some(p) => PathBuf::from(p),
@@ -605,10 +852,213 @@ mod tests {
         std::fs::write(src.join("one.bin"), b"hello").unwrap();
         std::fs::write(src.join("sub").join("two.bin"), b"world!").unwrap();
         std::fs::write(dst.join("one.bin"), b"hello").unwrap(); // already present
-        let mut m = Mover { on_progress: &|_, _| {}, total: 11, done: 0, last_emit: Instant::now() };
-        m.move_contents(&src, &dst).unwrap();
-        assert_eq!(std::fs::read(dst.join("sub").join("two.bin")).unwrap(), b"world!");
+        let mut m = Mover {
+            on_progress: &|_, _| {},
+            total: 11,
+            done: 0,
+            last_emit: Instant::now(),
+        };
+        m.copy_contents(&src, &dst).unwrap();
+        assert_eq!(
+            std::fs::read(dst.join("sub").join("two.bin")).unwrap(),
+            b"world!"
+        );
+        assert!(src.join("one.bin").exists());
+        remove_verified_sources(&src, &dst).unwrap();
         assert!(!src.join("one.bin").exists() && !src.join("sub").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn move_refuses_same_size_different_content() {
+        let root = std::env::temp_dir().join(format!("ts-move-conflict-{}", rand::random::<u64>()));
+        let (src, dst) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("recording.wav"), b"one!").unwrap();
+        std::fs::write(dst.join("recording.wav"), b"two!").unwrap();
+        let mut mover = Mover {
+            on_progress: &|_, _| {},
+            total: 4,
+            done: 0,
+            last_emit: Instant::now(),
+        };
+        assert!(Mover::check_conflicts(&src, &dst).is_err());
+        assert!(mover.copy_contents(&src, &dst).is_err());
+        assert_eq!(std::fs::read(src.join("recording.wav")).unwrap(), b"one!");
+        assert_eq!(std::fs::read(dst.join("recording.wav")).unwrap(), b"two!");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn path_migration_updates_only_old_folder_once_and_preserves_json() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meetings (audio_path TEXT);
+             CREATE TABLE meeting_turns (snippet_path TEXT, candidate_snippets TEXT);
+             CREATE TABLE speaker_vault (snippet_path TEXT, candidate_snippets TEXT);
+             INSERT INTO meetings VALUES ('/tmp/meetings/audio/one.wav');
+             INSERT INTO meetings VALUES ('/tmp/meetings-old/audio/two.wav');
+             INSERT INTO meeting_turns VALUES ('/tmp/meetings/snippets/a.wav', '[\"/tmp/meetings/snippets/a.wav\",\"/tmp/meetings-old/snippets/b.wav\"]');"
+        ).unwrap();
+        rewrite_recording_paths_in_db(
+            &mut conn,
+            Path::new("/tmp/meetings"),
+            Path::new("/tmp/meetings2"),
+        )
+        .unwrap();
+        let paths: Vec<String> = conn
+            .prepare("SELECT audio_path FROM meetings ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "/tmp/meetings2/audio/one.wav",
+                "/tmp/meetings-old/audio/two.wav"
+            ]
+        );
+        let (snippet, candidates): (String, String) = conn
+            .query_row(
+                "SELECT snippet_path, candidate_snippets FROM meeting_turns",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(snippet, "/tmp/meetings2/snippets/a.wav");
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&candidates).unwrap(),
+            [
+                "/tmp/meetings2/snippets/a.wav",
+                "/tmp/meetings-old/snippets/b.wav"
+            ]
+        );
+    }
+
+    #[test]
+    fn path_migration_rolls_back_if_any_column_update_fails() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meetings (audio_path TEXT);
+             CREATE TABLE speaker_vault (snippet_path TEXT, candidate_snippets TEXT);
+             INSERT INTO meetings VALUES ('/tmp/meetings/audio/a.wav');
+             INSERT INTO speaker_vault VALUES ('/tmp/meetings/snippets/a.wav', NULL);
+             CREATE TRIGGER reject_snippet_update BEFORE UPDATE OF snippet_path ON speaker_vault
+             BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+        assert!(rewrite_recording_paths_in_db(
+            &mut conn,
+            Path::new("/tmp/meetings"),
+            Path::new("/tmp/meetings2")
+        )
+        .is_err());
+        let meeting_path: String = conn
+            .query_row("SELECT audio_path FROM meetings", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(meeting_path, "/tmp/meetings/audio/a.wav");
+    }
+
+    #[test]
+    fn vm_nested_conflict_is_found_before_any_file_is_copied() {
+        let root = std::env::temp_dir().join(format!("ts-vm-conflict-{}", rand::random::<u64>()));
+        let (src, dst) = (root.join("source"), root.join("destination"));
+        std::fs::create_dir_all(src.join("nested")).unwrap();
+        std::fs::create_dir_all(dst.join("nested")).unwrap();
+        std::fs::write(src.join("first.wav"), b"safe to copy").unwrap();
+        std::fs::write(src.join("nested").join("last.wav"), b"original").unwrap();
+        std::fs::write(dst.join("nested").join("last.wav"), b"conflict").unwrap();
+
+        assert!(Mover::check_conflicts(&src, &dst).is_err());
+        assert!(!dst.join("first.wav").exists());
+        assert_eq!(
+            std::fs::read(src.join("nested").join("last.wav")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            std::fs::read(dst.join("nested").join("last.wav")).unwrap(),
+            b"conflict"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn vm_failed_copy_keeps_both_files_and_removes_staging_file() {
+        let root = std::env::temp_dir().join(format!("ts-vm-stage-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("source.wav");
+        let dst = root.join("destination.wav");
+        std::fs::write(&src, b"original audio").unwrap();
+        std::fs::write(&dst, b"other audio").unwrap();
+        let mut mover = Mover {
+            on_progress: &|_, _| {},
+            total: 14,
+            done: 0,
+            last_emit: Instant::now(),
+        };
+        assert!(mover.copy_file(&src, &dst).is_err());
+        assert_eq!(std::fs::read(&src).unwrap(), b"original audio");
+        assert_eq!(std::fs::read(&dst).unwrap(), b"other audio");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn vm_recording_path_migration_uses_native_paths_and_is_repeatable() {
+        let root = std::env::temp_dir().join(format!("ts-vm-paths-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&root).unwrap();
+        let old = root.join("recordings");
+        let new = root.join("moved recordings");
+        let old_audio = old.join("audio").join("meeting.wav");
+        let new_audio = new.join("audio").join("meeting.wav");
+        let outside = root.join("recordings-old").join("outside.wav");
+        let db = root.join("history.db");
+        let mut conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE meetings (audio_path TEXT); CREATE TABLE meeting_turns (candidate_snippets TEXT);").unwrap();
+        conn.execute(
+            "INSERT INTO meetings VALUES (?1)",
+            [old_audio.to_str().unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO meetings VALUES (?1)",
+            [outside.to_str().unwrap()],
+        )
+        .unwrap();
+        let candidates =
+            serde_json::to_string(&[old_audio.to_str().unwrap(), outside.to_str().unwrap()])
+                .unwrap();
+        conn.execute("INSERT INTO meeting_turns VALUES (?1)", [candidates])
+            .unwrap();
+
+        for _ in 0..2 {
+            rewrite_recording_paths_in_db(&mut conn, &old, &new).unwrap();
+        }
+        let paths: Vec<String> = conn
+            .prepare("SELECT audio_path FROM meetings ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            paths,
+            [new_audio.to_string_lossy(), outside.to_string_lossy()]
+        );
+        let json: String = conn
+            .query_row("SELECT candidate_snippets FROM meeting_turns", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let actual: Vec<String> = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            actual,
+            [new_audio.to_string_lossy(), outside.to_string_lossy()]
+        );
+        drop(conn);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

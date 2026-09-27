@@ -13,13 +13,15 @@ unsafe impl Sync for SendStream {} // Can be accessed from multiple threads
 /// Keeps track of the tools needed while recording involves.
 pub struct RecordingHandle {
     pub stream: Option<SendStream>, // The actual connection to the microphone hardware (None in dual-channel mode)
-    pub file_tx: Sender<Vec<f32>>, // Pipe to send audio to the "File Writer" thread
+    pub file_tx: Sender<Vec<f32>>,  // Pipe to send audio to the "File Writer" thread
     pub whisper_tx: Sender<Vec<f32>>, // Pipe to send audio to the "Whisper AI" thread
-    pub writer_thread: std::thread::JoinHandle<()>,
+    pub writer_thread: std::thread::JoinHandle<Result<(), String>>,
     pub transcriber_thread: std::thread::JoinHandle<()>,
     pub level_stop: Arc<AtomicBool>, // Signal the level-emitter thread to exit
     pub level_thread: std::thread::JoinHandle<()>,
     pub is_dual_channel: bool,
+    /// Identity of the call when capture began, retained after the call ends.
+    pub meeting_info: Option<crate::meeting_detector::MeetingInfo>,
     pub dual_channel_stop: Option<Arc<AtomicBool>>,
     pub dual_channel_thread: Option<std::thread::JoinHandle<()>>,
 }

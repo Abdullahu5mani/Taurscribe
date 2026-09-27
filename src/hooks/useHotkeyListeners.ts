@@ -82,6 +82,7 @@ export function useHotkeyListeners({
         let unlistenAccessibility: (() => void) | undefined;
         let unlistenAudioFallback: (() => void) | undefined;
         let unlistenAudioDisconnect: (() => void) | undefined;
+        let unlistenWriteError: (() => void) | undefined;
         let unlistenOverlayAction: (() => void) | undefined;
         let unlistenModelUnloaded: (() => void) | undefined;
         let unlistenAudioLevel: (() => void) | undefined;
@@ -237,6 +238,18 @@ export function useHotkeyListeners({
                 }
             });
 
+            const unsubWriteError = await listen<string>("recording-write-error", (event) => {
+                setHeaderStatusRef.current?.(event.payload, 10000);
+                if (isRecordingRef.current && !stopInProgressRef.current) {
+                    stopInProgressRef.current = true;
+                    const stop = handleStopRecordingRef.current;
+                    if (stop) void stop().finally(() => {
+                        stopInProgressRef.current = false;
+                    });
+                    else stopInProgressRef.current = false;
+                }
+            });
+
             const unsub7 = await listen<string>("overlay-action", async (event) => {
                 const action = String(event.payload);
                 if (action === "pause") {
@@ -294,12 +307,13 @@ export function useHotkeyListeners({
                 unlistenAccessibility = unsub4;
                 unlistenAudioFallback = unsub5;
                 unlistenAudioDisconnect = unsub6;
+                unlistenWriteError = unsubWriteError;
                 unlistenOverlayAction = unsub7;
                 unlistenModelUnloaded = unsub8;
                 unlistenAudioLevel = unsub9;
             } else {
                 unsub1(); unsub2(); unsubToggle(); unsub3(); unsub4();
-                unsub5(); unsub6(); unsub7(); unsub8(); unsub9();
+                unsub5(); unsub6(); unsubWriteError(); unsub7(); unsub8(); unsub9();
             }
         };
 
@@ -314,6 +328,7 @@ export function useHotkeyListeners({
             unlistenAccessibility?.();
             unlistenAudioFallback?.();
             unlistenAudioDisconnect?.();
+            unlistenWriteError?.();
             unlistenOverlayAction?.();
             unlistenModelUnloaded?.();
             unlistenAudioLevel?.();
