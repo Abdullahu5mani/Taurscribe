@@ -31,8 +31,7 @@ export function beautifyModelName(rawName: string): string {
     .replace("ctc-", "CTC ")
     .replace("tdt-", "TDT ")
     .replace("streaming", "Streaming")
-    .replace("-", " ")
-    .replace("_", " ")
+    .replace(/[-_]/g, " ")
     .trim();
   return name
     .replace(/Nemotron Streaming\s+Streaming/gi, "Nemotron Streaming")
