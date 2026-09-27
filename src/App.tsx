@@ -1339,6 +1339,7 @@ function App() {
             <div className="nav-view-enter" style={navMode === "files" ? undefined : { display: 'none' }}>
               <FileTranscriptionPanel
                 activeEngine={activeEngine}
+                asrBackend={asrBackend}
                 currentModel={currentModel}
                 currentGraniteModel={currentGraniteModel}
                 currentQwen3Model={currentQwen3Model}

@@ -34,7 +34,9 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
     const onStartDualRecordingRef = useRef(onStartDualRecording);
     onStartDualRecordingRef.current = onStartDualRecording;
 
+    const autoRecordGenerationRef = useRef(0);
     const cancelAutoRecord = () => {
+        autoRecordGenerationRef.current += 1;
         if (countdownTimerRef.current) {
             clearInterval(countdownTimerRef.current);
             countdownTimerRef.current = null;
@@ -63,13 +65,15 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
             return;
         }
 
+        const generation = autoRecordGenerationRef.current;
+        let active = true;
         Promise.all([
             invoke<boolean>("get_auto_record_meetings"),
             Store.load("settings.json").then((s) => s.get<number>(MEETING_KEYS.autoRecordDelay)).catch(() => undefined),
         ])
             .then(([autoRecord, savedDelay]) => {
+                if (!active || generation !== autoRecordGenerationRef.current) return;
                 if (autoRecord && !isRecordingRef.current) {
-                    cancelAutoRecord();
                     let timeLeft = savedDelay ?? DEFAULT_AUTORECORD_DELAY;
                     if (timeLeft <= 0) {
                         onStartDualRecordingRef.current();
@@ -77,6 +81,7 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
                     }
                     setAutoRecordCountdown(timeLeft);
                     countdownTimerRef.current = setInterval(() => {
+                        if (!active || generation !== autoRecordGenerationRef.current) return;
                         timeLeft -= 1;
                         if (timeLeft <= 0) {
                             cancelAutoRecord();
@@ -92,6 +97,7 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
             .catch(() => {});
 
         return () => {
+            active = false;
             cancelAutoRecord();
         };
     }, [meetingKey, isDismissed]);

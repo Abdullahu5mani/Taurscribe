@@ -1,5 +1,6 @@
 // Module declarations
 mod audio;
+mod audio_input;
 pub mod audio_decode;
 pub mod audio_dual_channel;
 pub mod audio_preprocess;

@@ -91,6 +91,7 @@ pub async fn transcribe_file(
     expected_model_id: Option<String>,
     job_id: Option<String>,
     defer_auto_unload: Option<bool>,
+    use_gpu: Option<bool>,
 ) -> Result<FileTranscriptionResult, String> {
     let model_operation = state.begin_model_operation()?;
     if state.engine_loading.load(Ordering::Acquire) {
@@ -117,23 +118,12 @@ pub async fn transcribe_file(
         unregister_cancel_flag(&path);
         return Err("The active engine changed after this file was queued. Re-run it with the desired model.".into());
     }
-    let loaded_model = match active_engine {
-        ASREngine::Whisper => state.whisper.lock().unwrap().get_current_model().cloned(),
-        ASREngine::Granite => state.granite.lock().unwrap().get_status().model_id,
-        ASREngine::Qwen3 => state.qwen3.lock().unwrap().get_status().model_id,
-    };
-    if expected_model_id
-        .as_deref()
-        .is_some_and(|expected| Some(expected) != loaded_model.as_deref())
-    {
-        unregister_cancel_flag(&path);
-        return Err("The loaded model changed after this file was queued. Re-run it with the desired model.".into());
-    }
     let path_for_task = path.clone();
     let app_for_task = app.clone();
+    let state_for_task = (*state).clone();
 
     let res = tauri::async_runtime::spawn_blocking(move || {
-        transcribe_file_blocking(
+        let result = transcribe_file_blocking(
             &app_for_task,
             &path_for_task,
             active_engine,
@@ -141,7 +131,11 @@ pub async fn transcribe_file(
             granite,
             qwen3,
             cancel,
-        )
+            expected_model_id.as_deref(),
+            !use_gpu.unwrap_or(true),
+        );
+        crate::tray::reconcile_model_loaded_tray(&app_for_task, &state_for_task);
+        result
     })
     .await
     .map_err(|e| format!("transcribe_file task failed: {}", e))
@@ -228,6 +222,15 @@ fn ensure_not_cancelled(
     }
 }
 
+fn file_model_needs_load(expected: Option<&str>, loaded: Option<&str>) -> Result<bool, String> {
+    if let (Some(expected), Some(loaded)) = (expected, loaded) {
+        if expected != loaded {
+            return Err("The loaded model changed after this file was queued. Re-run it with the desired model.".into());
+        }
+    }
+    Ok(loaded.is_none())
+}
+
 fn transcribe_file_blocking(
     app: &AppHandle,
     path: &str,
@@ -236,6 +239,8 @@ fn transcribe_file_blocking(
     granite: Arc<Mutex<crate::gguf_asr::GgufAsrManager>>,
     qwen3: Arc<Mutex<crate::gguf_asr::GgufAsrManager>>,
     cancel: Arc<AtomicBool>,
+    expected_model_id: Option<&str>,
+    force_cpu: bool,
 ) -> Result<FileTranscriptionResult, String> {
     let transcribe_start = std::time::Instant::now();
     // Validate extension
@@ -252,6 +257,28 @@ fn transcribe_file_blocking(
         ));
     }
 
+    ensure_not_cancelled(app, path, &cancel)?;
+
+    // Validate and reload under the same model lock, on the blocking worker.
+    // An unloaded selected model is normal after auto-unload; a different
+    // resident model still means the queued selection is stale.
+    match active_engine {
+        ASREngine::Whisper => {
+            let mut model = whisper.lock().map_err(|e| e.to_string())?;
+            if file_model_needs_load(expected_model_id, model.get_current_model().map(String::as_str))? {
+                emit_progress(app, path, 0, "loading model", None);
+                model.initialize(expected_model_id, force_cpu)?;
+            }
+        }
+        ASREngine::Granite | ASREngine::Qwen3 => {
+            let manager = if active_engine == ASREngine::Granite { &granite } else { &qwen3 };
+            let mut model = manager.lock().map_err(|e| e.to_string())?;
+            if file_model_needs_load(expected_model_id, model.get_status().model_id.as_deref())? {
+                emit_progress(app, path, 0, "loading model", None);
+                model.initialize(expected_model_id, force_cpu)?;
+            }
+        }
+    }
     ensure_not_cancelled(app, path, &cancel)?;
 
     emit_progress(app, path, 5, "decoding", None);
@@ -355,6 +382,14 @@ where
 #[cfg(test)]
 mod vm_feature_tests {
     use super::*;
+
+    #[test]
+    fn file_import_reloads_an_unloaded_selection_but_rejects_a_different_model() {
+        assert!(file_model_needs_load(Some("chosen"), None).unwrap());
+        assert!(!file_model_needs_load(Some("chosen"), Some("chosen")).unwrap());
+        assert!(file_model_needs_load(Some("chosen"), Some("other")).is_err());
+        assert!(file_model_needs_load(None, None).unwrap());
+    }
 
     fn stereo_wav() -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -532,10 +567,6 @@ fn transcribe_file_window(
                 let mut w = whisper.try_lock().map_err(|_| {
                     "Whisper engine is busy loading or processing another request".to_string()
                 })?;
-                if !w.is_loaded() {
-                    emit_progress(app, path, 45, "loading model", None);
-                    w.initialize(None, false)?;
-                }
                 emit_progress(app, path, 53, "transcribing", None);
                 let t = w.transcribe_audio_data(raw_chunk, dynamic_prompt.as_deref())?;
                 if !t.trim().is_empty() {
@@ -586,20 +617,12 @@ fn transcribe_file_window(
                             "Granite engine is busy loading or processing another request"
                                 .to_string()
                         })?;
-                        if !g.get_status().loaded {
-                            emit_progress(app, path, 45, "loading model", None);
-                            g.initialize(None, false)?;
-                        }
                         g.transcribe_chunk_cancellable(raw_chunk, 16000, &cancel)
                     }
                     ASREngine::Qwen3 => {
                         let mut q = qwen3.try_lock().map_err(|_| {
                             "Qwen3 engine is busy loading or processing another request".to_string()
                         })?;
-                        if !q.get_status().loaded {
-                            emit_progress(app, path, 45, "loading model", None);
-                            q.initialize(None, false)?;
-                        }
                         q.transcribe_chunk_cancellable(raw_chunk, 16000, &cancel)
                     }
                     _ => unreachable!(),

@@ -187,12 +187,6 @@ pub async fn start_recording(
         return Ok(CommandResult::err("already_recording", "Already recording"));
     }
 
-    if let Some(key) = crate::meeting_continuation::call_key(
-        state.meeting_detector.get_status().active_meetings.first(),
-    ) {
-        crate::meeting_continuation::claim_for_recording(&key);
-    }
-
     // Clone the whole state — every field is Arc<…> so this is just ref-count bumps.
     let state = (*state).clone();
     let app_for_event = app_handle.clone();
@@ -254,6 +248,15 @@ fn start_recording_blocking(
     state
         .last_recording_is_dual_channel
         .store(is_dual_channel, Ordering::SeqCst);
+
+    let meeting_info = if is_dual_channel {
+        state.meeting_detector.get_status().active_meetings.into_iter().next()
+    } else {
+        None
+    };
+    if let Some(key) = crate::meeting_continuation::call_key(meeting_info.as_ref()) {
+        crate::meeting_continuation::claim_for_recording(&key);
+    }
 
     // 1. Setup Audio Config & Device
     let (config_channels, config_sample_rate, cpal_device, cpal_config) = if is_dual_channel {
@@ -335,7 +338,7 @@ fn start_recording_blocking(
             let _ = app_handle.emit("audio-fallback", device_name);
         }
 
-        let cfg: cpal::StreamConfig = device
+        let cfg = device
             .default_input_config()
             .or_else(|e| {
                 println!("[WARNING] default_input_config failed: {}, falling back to iterating supported configs", e);
@@ -354,10 +357,9 @@ fn start_recording_blocking(
                 } else {
                     format!("Failed to get audio config: {}", msg)
                 }
-            })?
-            .into();
+            })?;
 
-        (cfg.channels, cfg.sample_rate.0, Some(device), Some(cfg))
+        (cfg.channels(), cfg.sample_rate().0, Some(device), Some(cfg))
     };
 
     // 2. Prepare Output File
@@ -871,13 +873,10 @@ fn start_recording_blocking(
         // music, anything else playing) stays out of the callers channel. Without a
         // detected meeting (or for the simulator's synthetic pid) fall back to the
         // whole system mix.
-        let meeting_pid = state
-            .meeting_detector
-            .get_status()
-            .active_meetings
-            .first()
+        let meeting_pid = meeting_info.as_ref()
             .map(|m| m.pid)
             .filter(|pid| *pid > 0 && *pid != 99999);
+        let preferred_microphone = state.selected_input_device.lock().unwrap().clone();
         let target = meeting_pid
             .map(DualChannelTarget::Process)
             .unwrap_or(DualChannelTarget::System);
@@ -885,6 +884,7 @@ fn start_recording_blocking(
 
         let dc_handle = match crate::audio_dual_channel::start_dual_channel_capture(
             target,
+            preferred_microphone.clone(),
             48000,
             file_tx_clone.clone(),
             whisper_tx_clone.clone(),
@@ -899,6 +899,7 @@ fn start_recording_blocking(
                 );
                 crate::audio_dual_channel::start_dual_channel_capture(
                     DualChannelTarget::System,
+                    preferred_microphone,
                     48000,
                     file_tx_clone,
                     whisper_tx_clone,
@@ -918,6 +919,7 @@ fn start_recording_blocking(
             level_stop,
             level_thread,
             is_dual_channel: true,
+            meeting_info,
             dual_channel_stop: Some(dc_handle.stop_signal),
             dual_channel_thread: Some(dc_handle.capture_thread),
         });
@@ -937,66 +939,65 @@ fn start_recording_blocking(
     let config = cpal_config.ok_or("No input audio configuration available")?;
 
     let app_for_error = app_handle.clone();
-    let stream = device
-        .build_input_stream(
-            &config,
-            move |data: &[f32], _: &_| {
-                // File writer always gets raw (unprocessed) audio
-                file_tx_clone.try_send(data.to_vec()).ok();
+    let stream = crate::audio_input::build_input_stream(
+        &device,
+        &config,
+        move |data: &[f32], _: &_| {
+            // File writer always gets raw (unprocessed) audio
+            file_tx_clone.try_send(data.to_vec()).ok();
 
-                let mono_data: Vec<f32> = if channels > 1 {
-                    data.chunks(channels)
-                        .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
-                        .collect()
-                } else {
-                    data.to_vec()
-                };
-
-                // RNNoise + universal chain run in the transcriber thread (48 kHz → 16 kHz order).
-
-                // Store audio level in atomic for the emitter thread to pick up.
-                // Only compute every ~5 callbacks to avoid unnecessary work.
-                let cnt = level_counter_clone.fetch_add(1, Ordering::Relaxed);
-                if cnt % 5 == 0 && !data.is_empty() {
-                    let rms = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
-                    let level = (rms / 0.015_f32).min(1.0_f32).sqrt();
-                    audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
-                }
-
-                let mono_len = mono_data.len();
-                if whisper_tx_clone.try_send(mono_data).is_err() {
-                    let dropped_callbacks =
-                        transcriber_dropped_callbacks_writer.fetch_add(1, Ordering::Relaxed) + 1;
-                    transcriber_dropped_samples_writer
-                        .fetch_add(mono_len as u64, Ordering::Relaxed);
-                    if dropped_callbacks == 1 || dropped_callbacks % 100 == 0 {
-                        eprintln!(
-                            "[AUDIO_DROP] Transcriber queue dropped {} callback(s); latest={} samples",
-                            dropped_callbacks, mono_len
-                        );
-                    }
-                }
-            },
-            move |err| {
-                eprintln!("[ERROR] Audio input stream error: {}", err);
-                let _ = app_for_error.emit(
-                    "audio-disconnected",
-                    serde_json::json!({
-                        "code": "audio_device_disconnected",
-                        "message": err.to_string(),
-                    }),
-                );
-            },
-            None,
-        )
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("permission") || msg.contains("denied") {
-                "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+            let mono_data: Vec<f32> = if channels > 1 {
+                data.chunks(channels)
+                    .map(|chunk| chunk.iter().sum::<f32>() / channels as f32)
+                    .collect()
             } else {
-                format!("Failed to open audio stream: {}", msg)
+                data.to_vec()
+            };
+
+            // RNNoise + universal chain run in the transcriber thread (48 kHz → 16 kHz order).
+
+            // Store audio level in atomic for the emitter thread to pick up.
+            // Only compute every ~5 callbacks to avoid unnecessary work.
+            let cnt = level_counter_clone.fetch_add(1, Ordering::Relaxed);
+            if cnt % 5 == 0 && !data.is_empty() {
+                let rms = (data.iter().map(|&s| s * s).sum::<f32>() / data.len() as f32).sqrt();
+                let level = (rms / 0.015_f32).min(1.0_f32).sqrt();
+                audio_level_writer.store(level.to_bits(), Ordering::Relaxed);
             }
-        })?;
+
+            let mono_len = mono_data.len();
+            if whisper_tx_clone.try_send(mono_data).is_err() {
+                let dropped_callbacks =
+                    transcriber_dropped_callbacks_writer.fetch_add(1, Ordering::Relaxed) + 1;
+                transcriber_dropped_samples_writer
+                    .fetch_add(mono_len as u64, Ordering::Relaxed);
+                if dropped_callbacks == 1 || dropped_callbacks % 100 == 0 {
+                    eprintln!(
+                        "[AUDIO_DROP] Transcriber queue dropped {} callback(s); latest={} samples",
+                        dropped_callbacks, mono_len
+                    );
+                }
+            }
+        },
+        move |err| {
+            eprintln!("[ERROR] Audio input stream error: {}", err);
+            let _ = app_for_error.emit(
+                "audio-disconnected",
+                serde_json::json!({
+                    "code": "audio_device_disconnected",
+                    "message": err.to_string(),
+                }),
+            );
+        },
+    )
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("permission") || msg.contains("denied") {
+            "Microphone permission denied. Grant access in System Settings → Privacy & Security → Microphone.".to_string()
+        } else {
+            format!("Failed to open audio stream: {}", msg)
+        }
+    })?;
 
     stream.play().map_err(|e| {
         let msg = e.to_string();
@@ -1016,6 +1017,7 @@ fn start_recording_blocking(
         level_stop,
         level_thread,
         is_dual_channel: false,
+        meeting_info: None,
         dual_channel_stop: None,
         dual_channel_thread: None,
     });
@@ -1042,6 +1044,7 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) -> Resul
         level_stop,
         level_thread,
         is_dual_channel: _,
+        meeting_info: _,
         dual_channel_stop,
         dual_channel_thread,
     } = recording;
@@ -2118,13 +2121,8 @@ pub async fn stop_recording(
     let gguf = state.gguf_manager(active_engine);
     let vad_arc = state.vad.clone();
 
-    let is_dual_channel = state.last_recording_is_dual_channel.load(Ordering::SeqCst);
-    let active_meeting = state
-        .meeting_detector
-        .get_status()
-        .active_meetings
-        .into_iter()
-        .next();
+    let is_dual_channel = recording.is_dual_channel;
+    let active_meeting = recording.meeting_info.clone();
     // A dual-channel recording is a meeting recording even when no meeting app was
     // detected: it is saved to the meetings area (as "Direct Audio") instead of
     // being treated as dictation.
@@ -2249,6 +2247,7 @@ mod tests {
                 level_stop,
                 level_thread,
                 is_dual_channel: true,
+                meeting_info: None,
                 dual_channel_stop: Some(stop),
                 dual_channel_thread: Some(capture_thread),
             },
@@ -2273,6 +2272,7 @@ mod tests {
             level_stop: Arc::new(AtomicBool::new(false)),
             level_thread: std::thread::spawn(|| {}),
             is_dual_channel: false,
+            meeting_info: None,
             dual_channel_stop: None,
             dual_channel_thread: None,
         };
@@ -2299,6 +2299,7 @@ mod tests {
             level_stop: Arc::new(AtomicBool::new(false)),
             level_thread: std::thread::spawn(|| {}),
             is_dual_channel: false,
+            meeting_info: None,
             dual_channel_stop: None,
             dual_channel_thread: None,
         };

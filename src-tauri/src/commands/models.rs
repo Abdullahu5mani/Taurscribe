@@ -160,7 +160,7 @@ pub fn list_granite_models() -> Result<Vec<GgufModelInfo>, String> {
 
 #[tauri::command]
 pub fn get_granite_status(state: State<AudioState>) -> Result<GgufStatus, String> {
-    Ok(state.granite.lock().map_err(|e| e.to_string())?.get_status())
+    Ok(state.granite.try_lock().map_err(|e| e.to_string())?.get_status())
 }
 
 #[tauri::command]
@@ -180,7 +180,7 @@ pub fn list_qwen3_models() -> Result<Vec<GgufModelInfo>, String> {
 
 #[tauri::command]
 pub fn get_qwen3_status(state: State<AudioState>) -> Result<GgufStatus, String> {
-    Ok(state.qwen3.lock().map_err(|e| e.to_string())?.get_status())
+    Ok(state.qwen3.try_lock().map_err(|e| e.to_string())?.get_status())
 }
 
 #[tauri::command]

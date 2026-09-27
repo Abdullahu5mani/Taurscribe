@@ -20,6 +20,8 @@ pub struct RecordingHandle {
     pub level_stop: Arc<AtomicBool>, // Signal the level-emitter thread to exit
     pub level_thread: std::thread::JoinHandle<()>,
     pub is_dual_channel: bool,
+    /// Identity of the call when capture began, retained after the call ends.
+    pub meeting_info: Option<crate::meeting_detector::MeetingInfo>,
     pub dual_channel_stop: Option<Arc<AtomicBool>>,
     pub dual_channel_thread: Option<std::thread::JoinHandle<()>>,
 }

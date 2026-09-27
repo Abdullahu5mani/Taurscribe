@@ -50,6 +50,7 @@ interface ProgressPayload {
 
 interface FileTranscriptionPanelProps {
     activeEngine: string;
+    asrBackend?: "gpu" | "cpu";
     currentModel?: string | null;
     currentGraniteModel?: string | null;
     currentQwen3Model?: string | null;
@@ -57,13 +58,15 @@ interface FileTranscriptionPanelProps {
     onFileProcessingChange?: (processing: boolean) => void;
 }
 
-function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGraniteModel, currentQwen3Model, isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
+function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGraniteModel, currentQwen3Model, asrBackend = "gpu", isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
     const isModelLoadingRef = useRef(isModelLoading);
     useEffect(() => { isModelLoadingRef.current = isModelLoading; }, [isModelLoading]);
 
     // Keep a ref to the active model ID so addPaths (a stable callback) can read it.
     const activeModelIdRef = useRef<string | null>(null);
     const activeEngineRef = useRef(activeEngine);
+    const asrBackendRef = useRef(asrBackend);
+    asrBackendRef.current = asrBackend;
     const currentActiveModelId =
         activeEngine === "whisper" ? (currentModel ?? null) :
         activeEngine === "granite" ? (currentGraniteModel ?? null) :
@@ -229,6 +232,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                 expectedModelId: queued.modelId ?? null,
                 jobId: queued.id,
                 deferAutoUnload: true,
+                useGpu: asrBackendRef.current === "gpu",
             });
             pendingProgressRef.current.delete(queued.id);
             const completed = {
