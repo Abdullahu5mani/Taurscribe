@@ -38,7 +38,8 @@ ARCHITECTURE.pdf
 COHERE_SPEECH.md
 ENGINES.md
 TAURSCRIBE_AUDIT_REPORT.md
-docs/AUDIT_REPORT.md
+# Documentation is kept locally, not on GitHub.
+docs/
 Taurscribe Pure.html
 
 # Test audio fixtures (large binary, not for the repo)
