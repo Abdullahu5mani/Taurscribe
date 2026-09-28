@@ -1,5 +1,7 @@
 param(
-    [Parameter(Mandatory = $true)][string]$TargetTriple
+    [Parameter(Mandatory = $true)][string]$TargetTriple,
+    # GPU flavor of this build: cpu (standard), nvidia, vulkan or adreno.
+    [string]$Flavor = 'cpu'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,6 +24,9 @@ if (-not (Test-Path -LiteralPath $portable)) {
 }
 
 $required = @('taurscribe.exe', 'llama.dll', 'ggml.dll', 'ggml-base.dll', 'ggml-cpu.dll')
+if ($Flavor -eq 'nvidia') { $required += @('ggml-cuda.dll') }
+if ($Flavor -eq 'vulkan') { $required += @('ggml-vulkan.dll') }
+if ($Flavor -eq 'adreno') { $required += @('ggml-opencl.dll') }
 foreach ($artifact in @($installers[0].FullName, $portable)) {
     $listing = & $sevenZipPath l -slt $artifact
     if ($LASTEXITCODE -ne 0) {
@@ -38,7 +43,21 @@ foreach ($artifact in @($installers[0].FullName, $portable)) {
     Write-Host "Verified $artifact contains $($required -join ', ')"
 }
 
-if ($TargetTriple -eq 'x86_64-pc-windows-msvc') {
+# The NVIDIA build must carry the CUDA runtime it imports at startup.
+if ($Flavor -eq 'nvidia') {
+    foreach ($artifact in @($installers[0].FullName, $portable)) {
+        $listing = & $sevenZipPath l -slt $artifact
+        foreach ($pattern in @('^cudart64_\d+\.dll$', '^cublas64_\d+\.dll$', '^cublasLt64_\d+\.dll$')) {
+            $hit = $listing | Where-Object { $_ -match '^Path = (.+)$' -and [IO.Path]::GetFileName($Matches[1]) -match $pattern }
+            if (-not $hit) { throw "$artifact is missing a DLL matching $pattern (the CUDA runtime)." }
+        }
+    }
+    Write-Host 'Verified the NVIDIA build bundles the CUDA runtime.'
+}
+
+# Only the standard (CPU + DirectML) build must start on any PC; GPU flavors
+# deliberately import their vendor runtime.
+if ($TargetTriple -eq 'x86_64-pc-windows-msvc' -and $Flavor -eq 'cpu') {
     $readObj = Get-Command llvm-readobj.exe -ErrorAction SilentlyContinue
     $readObjPath = if ($readObj) { $readObj.Source } else { Join-Path $env:ProgramFiles 'LLVM\bin\llvm-readobj.exe' }
     if (-not (Test-Path -LiteralPath $readObjPath)) {

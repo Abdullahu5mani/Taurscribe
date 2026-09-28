@@ -112,6 +112,24 @@ else
   echo "Parakeet transcription will fail to load on the target system."
 fi
 
+# ---- GPU flavor runtime -----------------------------------------------------
+# GPU_FLAVOR=nvidia: ship the CUDA runtime and cuBLAS (redistributable per the
+# CUDA EULA) so users only need the NVIDIA driver, not the CUDA Toolkit.
+# GPU_FLAVOR=amd uses the system ROCm install (declared as package dependencies);
+# GPU_FLAVOR=vulkan uses the system Vulkan loader (libvulkan1).
+if [ "${GPU_FLAVOR:-}" = "nvidia" ]; then
+  CUDA_LIB="${CUDA_PATH:-/usr/local/cuda}/lib64"
+  for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do
+    real=$(readlink -f "$CUDA_LIB/$lib" 2>/dev/null || true)
+    if [ -z "$real" ] || [ ! -f "$real" ]; then
+      echo "bundle-linux-solibs: ERROR - $lib not found in $CUDA_LIB (GPU_FLAVOR=nvidia)"
+      exit 1
+    fi
+    cp "$real" "$LIBS_DIR/"
+    echo "bundle-linux-solibs: + $(basename "$real") (CUDA runtime)"
+  done
+fi
+
 # ---- Recreate versioned symlinks --------------------------------------------
 # After copying only real files above, restore the standard .so and .so.MAJOR
 # symlinks so the runtime linker can find libraries by soname.
@@ -142,6 +160,12 @@ ls -lh "$LIBS_DIR"/*.so "$LIBS_DIR"/*.so.* 2>/dev/null || true
 # $ORIGIN is the directory containing the taurscribe binary at runtime.
 echo "bundle-linux-solibs: Patching RPATH on $BINARY ..."
 patchelf --set-rpath '$ORIGIN/../share/taurscribe:$ORIGIN' "$BINARY"
+
+# RUNPATH is not inherited, so libggml-cuda.so etc. need their own to find
+# the runtime libs bundled next to them.
+for lib in "$LIBS_DIR"/*.so.*.* "$LIBS_DIR"/*.so; do
+  [ -f "$lib" ] && [ ! -L "$lib" ] && patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
+done
 
 PATCHED_RPATH=$(patchelf --print-rpath "$BINARY")
 echo "bundle-linux-solibs: Verified RPATH: $PATCHED_RPATH"

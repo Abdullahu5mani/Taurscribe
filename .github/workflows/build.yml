@@ -64,10 +64,11 @@ jobs:
           - platform: 'ubuntu-24.04'
             name: 'Linux (x86_64)'
             target: 'x86_64-unknown-linux-gnu'
-            cuda: true
+            # CPU build: GPU flavors (gpu-nvidia / gpu-amd / gpu-vulkan) are built by release.yml.
+            cuda: false
             os_name: 'Linux'
             arch: 'x86_64'
-            acceleration: 'CUDA'
+            acceleration: 'CPU'
           
           # Note: Linux ARM builds (e.g., Raspberry Pi) are commented out.
           # They require complex cross-compilation setup (linker issues with GTK/Webkit).

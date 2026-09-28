@@ -100,7 +100,30 @@ const dllPatterns = [
   /^ggml.*\.dll$/,
   /^DirectML\.dll$/,
   /^onnxruntime.*\.dll$/,
+  // NVIDIA flavor: the CUDA runtime and cuBLAS (redistributable per the CUDA EULA).
+  // nvcuda.dll itself comes with the NVIDIA driver.
+  /^cudart64_.*\.dll$/,
+  /^cublas64_.*\.dll$/,
+  /^cublasLt64_.*\.dll$/,
 ];
+
+/** The NVIDIA flavor links CUDA's runtime DLLs at startup; ship them next to the exe. */
+function stageGpuRuntimeDlls() {
+  const nvidia = !!features && /\b(gpu-nvidia|windows-nvidia)\b/.test(features);
+  if (!nvidia) return;
+  const cudaPath = process.env.CUDA_PATH;
+  if (!cudaPath) failAndExit("❌ gpu-nvidia build: CUDA_PATH is not set, so the CUDA runtime DLLs can't be bundled");
+  const binDir = join(cudaPath, "bin");
+  const wanted = [/^cudart64_\d+\.dll$/i, /^cublas64_\d+\.dll$/i, /^cublasLt64_\d+\.dll$/i];
+  const found = readdirSync(binDir).filter((f) => wanted.some((w) => w.test(f)));
+  for (const w of wanted) {
+    if (!found.some((f) => w.test(f))) failAndExit(`❌ gpu-nvidia build: no ${w} in ${binDir}`);
+  }
+  for (const dll of found) {
+    copyFileSync(join(binDir, dll), join(releaseDir, dll));
+    console.log(`   ✓ ${dll} (CUDA runtime)`);
+  }
+}
 
 // Track copied DLLs for cleanup
 const copiedDlls: string[] = [];
@@ -166,6 +189,8 @@ if (!existsSync(releaseDir)) {
   failAndExit(`❌ Release directory not found: ${releaseDir}`);
 }
 stageLlamaDlls();
+
+stageGpuRuntimeDlls();
 
 const allFiles = readdirSync(releaseDir);
 const foundDlls = allFiles.filter((file: string) =>

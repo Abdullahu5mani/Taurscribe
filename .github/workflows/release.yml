@@ -4,6 +4,9 @@ name: Release
 on:
   push:
     tags: ['v*']
+    # Build + smoke-test every GPU flavor without publishing anything.
+    branches: ['gpu-smoke/**']
+  workflow_dispatch:
 
 # Cancel in-progress runs for the same tag
 concurrency:
@@ -16,39 +19,86 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # flavor = the GPU build (see src-tauri/src/gpu.rs); features = its Cargo feature.
+        # Each GPU vendor gets its own installer built on that vendor's native stack.
         include:
           - platform: 'macos-latest'
             name: 'macOS (Apple Silicon)'
             target: 'aarch64-apple-darwin'
-            cuda: false
+            flavor: 'apple'
+            features: ''
             os_name: 'macOS'
             arch: 'ARM64'
 
           - platform: 'macos-latest'
             name: 'macOS (Intel x86_64)'
             target: 'x86_64-apple-darwin'
-            cuda: false
+            flavor: 'apple'
+            features: ''
             os_name: 'macOS'
             arch: 'x86_64'
 
           - platform: 'windows-2022'
             name: 'Windows (x86_64)'
             target: 'x86_64-pc-windows-msvc'
-            cuda: false
+            flavor: 'cpu'
+            features: ''
+            os_name: 'Windows'
+            arch: 'x86_64'
+
+          - platform: 'windows-2022'
+            name: 'Windows (x86_64, NVIDIA CUDA)'
+            target: 'x86_64-pc-windows-msvc'
+            flavor: 'nvidia'
+            features: 'gpu-nvidia'
+            os_name: 'Windows'
+            arch: 'x86_64'
+
+          - platform: 'windows-2022'
+            name: 'Windows (x86_64, Vulkan: AMD / Intel)'
+            target: 'x86_64-pc-windows-msvc'
+            flavor: 'vulkan'
+            features: 'gpu-vulkan'
             os_name: 'Windows'
             arch: 'x86_64'
 
           - platform: 'windows-latest'
             name: 'Windows (ARM64)'
             target: 'aarch64-pc-windows-msvc'
-            cuda: false
+            flavor: 'cpu'
+            features: ''
+            os_name: 'Windows'
+            arch: 'ARM64'
+
+          - platform: 'windows-latest'
+            name: 'Windows (ARM64, Snapdragon Adreno)'
+            target: 'aarch64-pc-windows-msvc'
+            flavor: 'adreno'
+            features: 'gpu-adreno'
             os_name: 'Windows'
             arch: 'ARM64'
 
           - platform: 'ubuntu-24.04'
-            name: 'Linux (x86_64)'
+            name: 'Linux (x86_64, NVIDIA CUDA)'
             target: 'x86_64-unknown-linux-gnu'
-            cuda: true
+            flavor: 'nvidia'
+            features: 'gpu-nvidia'
+            os_name: 'Linux'
+            arch: 'x86_64'
+
+          - platform: 'ubuntu-24.04'
+            name: 'Linux (x86_64, AMD ROCm)'
+            target: 'x86_64-unknown-linux-gnu'
+            flavor: 'amd'
+            features: 'gpu-amd'
+            os_name: 'Linux'
+            arch: 'x86_64'
+
+          - platform: 'ubuntu-24.04'
+            name: 'Linux (x86_64, Vulkan: Intel / other)'
+            target: 'x86_64-unknown-linux-gnu'
+            flavor: 'vulkan'
+            features: 'gpu-vulkan'
             os_name: 'Linux'
             arch: 'x86_64'
 
@@ -64,17 +114,17 @@ jobs:
 
       # ── CUDA Setup ──
       - name: Install CUDA Toolkit & Configure Stubs (Linux)
-        if: contains(matrix.platform, 'ubuntu') && matrix.cuda == true
+        if: contains(matrix.platform, 'ubuntu') && matrix.flavor == 'nvidia'
         run: |
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
-          sudo env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install cuda-toolkit-12-6
+          sudo env DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install cuda-toolkit-12-9
 
           # Dynamically discover installed CUDA directory
           CUDA_DIR=$(find /usr/local -maxdepth 1 -type d -name "cuda*" | sort -V | tail -n 1)
           if [ -z "$CUDA_DIR" ] || [ ! -d "$CUDA_DIR" ]; then
-            CUDA_DIR="/usr/local/cuda-12.6"
+            CUDA_DIR="/usr/local/cuda-12.9"
           fi
           echo "Discovered CUDA at: $CUDA_DIR"
 
@@ -94,7 +144,7 @@ jobs:
           echo "PATH=$CUDA_DIR/bin:$PATH" >> $GITHUB_ENV
 
       - name: Install CUDA Toolkit (Windows)
-        if: contains(matrix.platform, 'windows') && matrix.cuda == true
+        if: contains(matrix.platform, 'windows') && matrix.flavor == 'nvidia'
         uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
@@ -104,10 +154,49 @@ jobs:
           use-local-cache: false
 
       - name: Show CUDA Info
-        if: matrix.cuda == true
+        if: matrix.flavor == 'nvidia'
         run: |
           nvcc --version
           echo "CUDA_PATH=${{ steps.cuda-toolkit.outputs.CUDA_PATH }}"
+
+      # ── AMD ROCm (Linux AMD flavor) ──
+      # HIP compiler + hipBLAS/rocBLAS dev packages only (the full SDK won't fit on
+      # a hosted runner). Users need ROCm 6.x installed; the .deb depends on it.
+      - name: Install ROCm (Linux)
+        if: contains(matrix.platform, 'ubuntu') && matrix.flavor == 'amd'
+        run: |
+          sudo mkdir -p --mode=0755 /etc/apt/keyrings
+          wget -qO- https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/rocm.gpg > /dev/null
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.4 noble main" | sudo tee /etc/apt/sources.list.d/rocm.list
+          printf 'Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600\n' | sudo tee /etc/apt/preferences.d/rocm-pin-600
+          sudo apt-get update
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            hipcc hip-dev rocm-llvm rocm-device-libs rocm-cmake hipblas-dev rocblas-dev
+          echo "ROCM_PATH=/opt/rocm" >> $GITHUB_ENV
+          echo "HIP_PATH=/opt/rocm" >> $GITHUB_ENV
+          echo "/opt/rocm/bin" >> $GITHUB_PATH
+          # RDNA2 / RDNA3 / RDNA4 consumer cards, plus CDNA2/3 workstation parts.
+          echo "AMDGPU_TARGETS=gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201;gfx90a;gfx942" >> $GITHUB_ENV
+          echo "GPU_TARGETS=gfx1030;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201;gfx90a;gfx942" >> $GITHUB_ENV
+
+      # ── OpenCL SDK (Windows ARM64 Snapdragon flavor) ──
+      # llama.cpp's Adreno backend needs OpenCL headers and an ICD loader import
+      # library at build time; OpenCL.dll itself comes with Qualcomm's driver.
+      - name: Build OpenCL headers and ICD loader (Windows ARM64)
+        if: matrix.flavor == 'adreno'
+        shell: bash
+        run: |
+          prefix="$(cygpath -m "$RUNNER_TEMP")/opencl"
+          git clone --depth 1 https://github.com/KhronosGroup/OpenCL-Headers.git "$RUNNER_TEMP/OpenCL-Headers"
+          cmake -S "$RUNNER_TEMP/OpenCL-Headers" -B "$RUNNER_TEMP/OpenCL-Headers/build" -A ARM64 -DBUILD_TESTING=OFF
+          cmake --install "$RUNNER_TEMP/OpenCL-Headers/build" --prefix "$prefix"
+          git clone --depth 1 https://github.com/KhronosGroup/OpenCL-ICD-Loader.git "$RUNNER_TEMP/OpenCL-ICD-Loader"
+          cmake -S "$RUNNER_TEMP/OpenCL-ICD-Loader" -B "$RUNNER_TEMP/OpenCL-ICD-Loader/build" -A ARM64 \
+            -DCMAKE_PREFIX_PATH="$prefix" -DBUILD_TESTING=OFF -DOPENCL_ICD_LOADER_BUILD_TESTING=OFF
+          cmake --build "$RUNNER_TEMP/OpenCL-ICD-Loader/build" --config Release
+          cmake --install "$RUNNER_TEMP/OpenCL-ICD-Loader/build" --prefix "$prefix" --config Release
+          echo "CMAKE_PREFIX_PATH=$prefix" >> "$GITHUB_ENV"
+          echo "OpenCL_ROOT=$prefix" >> "$GITHUB_ENV"
 
       # ── System Dependencies ──
       - name: Install Xcode Command Line Tools
@@ -173,7 +262,7 @@ jobs:
           echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
 
       - name: Install Vulkan SDK (Windows)
-        if: contains(matrix.platform, 'windows') && matrix.cuda == true
+        if: contains(matrix.platform, 'windows') && matrix.flavor == 'vulkan'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
@@ -182,7 +271,7 @@ jobs:
       # transcribe.cpp's Vulkan backend needs SPIRV-Headers (CMake package), which the
       # minimal Vulkan SDK install above doesn't include. Same version as the SDK.
       - name: Install SPIRV-Headers (Windows)
-        if: contains(matrix.platform, 'windows') && matrix.cuda == true
+        if: contains(matrix.platform, 'windows') && matrix.flavor == 'vulkan'
         shell: bash
         run: |
           src="$(cygpath -m "$RUNNER_TEMP")/SPIRV-Headers"
@@ -353,7 +442,7 @@ jobs:
         run: |
           if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then unset CCACHE_DISABLE; fi
           cd src-tauri
-          cargo build --release --target ${{ matrix.target }}
+          cargo build --release --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CCACHE_DISABLE: "1"
@@ -375,7 +464,7 @@ jobs:
           # llama.cpp 0.1.157 (iqp.cpp) uses FMA intrinsics; every AVX2 CPU has FMA and F16C.
           GGML_FMA: "ON"
           GGML_F16C: "ON"
-          CMAKE_CUDA_ARCHITECTURES: "75;86;89"
+          CMAKE_CUDA_ARCHITECTURES: "61;75;86;89;120"
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
           CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
@@ -517,14 +606,23 @@ jobs:
           if [ "${{ matrix.os_name }}" = "Windows" ]; then
             # Use build-windows.ts which handles DLL bundling
             bun scripts/build-windows.ts --target ${{ matrix.target }} --bundles nsis \
+              ${{ matrix.features && format('--features {0}', matrix.features) || '' }} \
               ${WINDOWS_SIGNING_CONFIG:+--config "$WINDOWS_SIGNING_CONFIG"}
           elif [ "${{ matrix.os_name }}" = "Linux" ]; then
-            bash scripts/bundle-linux-solibs.sh
+            GPU_FLAVOR=${{ matrix.flavor }} bash scripts/bundle-linux-solibs.sh
             # rpm and appimage are dropped: packaging a ~1 GB payload (531 MB binary +
             # 490 MB libggml-cuda.so) via rpmbuild/mksquashfs takes 4+ hours and risks
             # hitting the 6-hour GHA timeout. .deb + .tar.gz cover all practical Linux
             # install scenarios. Re-add rpm/appimage if the binary size is reduced.
-            bun run tauri build --target ${{ matrix.target }} --bundles deb
+            # Each flavor's .deb pulls in the runtime its GPU stack needs.
+            case "${{ matrix.flavor }}" in
+              amd)    DEPENDS='["rocm-hip-runtime", "hipblas", "rocblas"]' ;;
+              vulkan) DEPENDS='["libvulkan1"]' ;;
+              *)      DEPENDS='[]' ;;
+            esac
+            bun run tauri build --target ${{ matrix.target }} --bundles deb \
+              ${{ matrix.features && format('--features {0}', matrix.features) || '' }} \
+              --config "{\"bundle\":{\"linux\":{\"deb\":{\"depends\":$DEPENDS}}}}"
           else
             # bundle_dmg.sh drives hdiutil, which intermittently fails on hosted
             # runners even with CI=true. The .app is already built by this point,
@@ -535,6 +633,9 @@ jobs:
               bun run tauri build --target ${{ matrix.target }}
             }
           fi
+          # The smoke test's benchmark tool, built with the same flavor and env.
+          FEAT="${{ matrix.features }}"
+          (cd src-tauri && cargo build --release --target ${{ matrix.target }} --features "dev-tools${FEAT:+,$FEAT}" --bin engine_bench)
         shell: bash
         env:
           CI: "true"                    # Tauri expects CI=true (not CI=1) for non-interactive DMG on macOS
@@ -558,7 +659,7 @@ jobs:
           # llama.cpp 0.1.157 (iqp.cpp) uses FMA intrinsics; every AVX2 CPU has FMA and F16C.
           GGML_FMA: "ON"
           GGML_F16C: "ON"
-          CMAKE_CUDA_ARCHITECTURES: "75;86;89"
+          CMAKE_CUDA_ARCHITECTURES: "61;75;86;89;120"
           MACOSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
           CMAKE_OSX_DEPLOYMENT_TARGET: ${{ contains(matrix.platform, 'macos') && '14.0' || '' }}
           CUDA_PATH: ${{ contains(matrix.platform, 'ubuntu') && env.CUDA_PATH || steps.cuda-toolkit.outputs.CUDA_PATH }}
@@ -594,13 +695,18 @@ jobs:
       - name: Verify Windows installer and portable DLLs
         if: matrix.os_name == 'Windows'
         shell: pwsh
-        run: ./scripts/verify-windows-artifacts.ps1 -TargetTriple '${{ matrix.target }}'
+        run: ./scripts/verify-windows-artifacts.ps1 -TargetTriple '${{ matrix.target }}' -Flavor '${{ matrix.flavor }}'
 
       # ── Rename artifacts for clean release names ──
       - name: Prepare release artifacts
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
+          # GPU builds carry their flavor in the file name; standard builds don't.
+          case "${{ matrix.flavor }}" in
+            cpu|apple) SUFFIX="" ;;
+            *) SUFFIX="-${{ matrix.flavor }}" ;;
+          esac
           mkdir -p release-assets
 
           # Windows: NSIS installer + portable zip
@@ -610,7 +716,7 @@ jobs:
             for dir in "C:/bld" "src-tauri/target"; do
               for f in "$dir/${{ matrix.target }}/release/bundle/nsis/"*.exe; do
                 if [ -f "$f" ]; then
-                  cp "$f" "release-assets/taurscribe-${TAG}-windows-${ARCH}-setup.exe"
+                  cp "$f" "release-assets/taurscribe-${TAG}-windows-${ARCH}${SUFFIX}-setup.exe"
                   break 2
                 fi
               done
@@ -618,7 +724,7 @@ jobs:
             # Portable zip (exe + DLLs, no installer required)
             for f in dist-windows-portable/*.zip; do
               if [ -f "$f" ]; then
-                cp "$f" "release-assets/taurscribe-${TAG}-windows-${ARCH}-portable.zip"
+                cp "$f" "release-assets/taurscribe-${TAG}-windows-${ARCH}${SUFFIX}-portable.zip"
                 break
               fi
             done
@@ -644,28 +750,85 @@ jobs:
           if [ "${{ matrix.os_name }}" = "Linux" ]; then
             DEB=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb 2>/dev/null | head -1)
             if [ -n "$DEB" ] && [ -f "$DEB" ]; then
-              cp "$DEB" "release-assets/taurscribe-${TAG}-linux-amd64.deb"
+              cp "$DEB" "release-assets/taurscribe-${TAG}-linux-amd64${SUFFIX}.deb"
               rm -rf /tmp/taurscribe-deb-root
               mkdir -p /tmp/taurscribe-deb-root
               dpkg-deb -x "$DEB" /tmp/taurscribe-deb-root
-              tar -czf "release-assets/taurscribe-${TAG}-linux-x64.tar.gz" -C /tmp/taurscribe-deb-root .
+              tar -czf "release-assets/taurscribe-${TAG}-linux-x64${SUFFIX}.tar.gz" -C /tmp/taurscribe-deb-root .
             fi
           fi
 
           echo "=== Release assets ==="
           ls -la release-assets/
 
+      # ── Smoke test on a GPU-less runner ──
+      # Proves the packaged app starts, the CLI answers, the GPU detector runs,
+      # and speech transcribes (on the CPU fallback here). NVIDIA / AMD / Adreno
+      # builds may need their driver just to start, so for them a failure is a
+      # warning that tells us exactly that.
+      - name: Smoke test (no GPU)
+        continue-on-error: ${{ contains(fromJSON('["nvidia", "amd", "adreno"]'), matrix.flavor) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          T="${{ matrix.target }}"
+          TD="${CARGO_TARGET_DIR:-src-tauri/target}"
+          TD="${TD//\\//}"
+          case "${{ matrix.os_name }}" in
+            Windows)
+              rm -rf smoke && mkdir smoke
+              unzip -q dist-windows-portable/taurscribe-portable.zip -d smoke
+              APP=smoke/taurscribe.exe
+              BENCH="$TD/$T/release/engine_bench.exe" ;;
+            Linux)
+              APP=$(find /tmp/taurscribe-deb-root/usr/bin -type f | head -1)
+              LIBDIR=$(dirname "$(find /tmp/taurscribe-deb-root -name 'libllama.so*' | head -1)")
+              export LD_LIBRARY_PATH="$LIBDIR${ROCM_PATH:+:$ROCM_PATH/lib}"
+              BENCH="$TD/$T/release/engine_bench" ;;
+            macOS)
+              APP=$(find "$TD/$T/release/bundle/macos" -path '*Contents/MacOS/*' -type f -perm -u+x | head -1)
+              BENCH="$TD/$T/release/engine_bench" ;;
+          esac
+          echo "app: $APP"
+          "$APP" --version
+          "$APP" status --json
+          "$BENCH" gpu | tee gpu-report.json
+
+          MODELS=$("$BENCH" models-dir | tr -d '\r')
+          if command -v cygpath >/dev/null; then MODELS=$(cygpath -u "$MODELS"); fi
+          curl -sSfL -o "$MODELS/ggml-tiny-q5_1.bin" \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin
+          JFK=$(find "${CARGO_HOME:-$HOME/.cargo}/git/checkouts" -path '*whisper.cpp/samples/jfk.wav' | head -1)
+          "$BENCH" whisper tiny-q5_1 "$JFK" --runs 1 | tee whisper.txt
+          grep -qi "ask not what your country" whisper.txt
+
+          {
+            echo "### ${{ matrix.name }} · flavor \`${{ matrix.flavor }}\`"
+            echo '```'
+            "$APP" --version
+            grep '^\[bench\]' whisper.txt
+            echo '```'
+            echo '<details><summary>GPU report</summary>'
+            echo
+            echo '```json'
+            cat gpu-report.json
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # ── Upload artifacts (so the release job can download them) ──
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.os_name }}-${{ matrix.arch }}
+          name: release-${{ matrix.os_name }}-${{ matrix.arch }}-${{ matrix.flavor }}
           path: release-assets/*
           if-no-files-found: warn
 
   # ── Create GitHub Release ─────────────────────────────────────────────────
   release:
     needs: build
+    # Branch and manual runs are smoke tests; only version tags publish.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
