@@ -227,7 +227,7 @@ impl GgufAsrManager {
         })?;
 
         let started = std::time::Instant::now();
-        let backend = if force_cpu { transcribe_cpp::Backend::Cpu } else { transcribe_cpp::Backend::Auto };
+        let backend = if force_cpu || !crate::gpu::gpu_worth_using() { transcribe_cpp::Backend::Cpu } else { transcribe_cpp::Backend::Auto };
         let mut engine = GgufAsr::load_on(&path, backend)?;
         // Compile GPU kernels now rather than on the first dictation.
         let _ = engine.transcribe(&vec![0.0; 16_000]);

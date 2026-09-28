@@ -2,6 +2,33 @@ import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { Store } from '@tauri-apps/plugin-store';
+import { openUrl } from '@tauri-apps/plugin-opener';
+
+const RELEASES_URL = 'https://github.com/Abdullahu5mani/Taurscribe/releases/latest';
+
+/** What `get_gpu_report` returns: this build's GPU flavor and the best one for this machine. */
+interface GpuReport {
+    primary: { name: string; vendor: string } | null;
+    build_flavor: string;
+    build_label: string;
+    recommended_flavor: string;
+    recommended_label: string;
+    better_build_available: boolean;
+}
+
+/** Badge style from a framework description such as "llama.cpp · Metal GPU". */
+function badgeFor(framework: string): string {
+    const f = framework.toLowerCase();
+    if (f.includes('coreml') || f.includes('neural engine')) return 'about-badge--ane';
+    if (f.includes('cuda')) return 'about-badge--cuda';
+    if (f.includes('cpu')) return 'about-badge--cpu';
+    return 'about-badge--gpu';
+}
+
+/** The part after " · ", e.g. "Metal GPU". */
+function backendOf(framework: string): string {
+    return framework.split(' · ').slice(1).join(' · ') || framework;
+}
 
 export interface HardwareDiagnostics {
     platform: string;
@@ -38,6 +65,7 @@ export function AboutTab() {
     const [version, setVersion] = useState('');
     const [hw, setHw] = useState<HardwareDiagnostics | null>(null);
     const [hwLoading, setHwLoading] = useState(true);
+    const [gpu, setGpu] = useState<GpuReport | null>(null);
     const [confirmReset, setConfirmReset] = useState(false);
     const [resetting, setResetting] = useState(false);
     const [resetError, setResetError] = useState('');
@@ -45,6 +73,8 @@ export function AboutTab() {
     useEffect(() => {
         invoke<string>('get_platform').then(setPlatform).catch(() => setPlatform('unknown'));
         getVersion().then(setVersion).catch(() => setVersion('0.1.0'));
+
+        invoke<GpuReport>('get_gpu_report').then(setGpu).catch(() => setGpu(null));
 
         setHwLoading(true);
         invoke<HardwareDiagnostics>('get_hardware_diagnostics')
@@ -199,6 +229,28 @@ export function AboutTab() {
                                 </span>
                             </div>
 
+                            {gpu && (
+                                <div className="about-row">
+                                    <span className="about-row-label">GPU build</span>
+                                    <span className="about-row-value">{gpu.build_label}</span>
+                                </div>
+                            )}
+
+                            {gpu?.better_build_available && (
+                                <div className="about-row" role="note" data-testid="better-gpu-build">
+                                    <span className="about-row-label">Faster build</span>
+                                    <span className="about-row-value about-row-value--highlight">
+                                        {gpu.primary?.name ?? 'Your GPU'} runs faster with the {gpu.recommended_label} build.{' '}
+                                        <button
+                                            type="button"
+                                            className="about-open-btn"
+                                            data-testid="better-gpu-build-btn"
+                                            onClick={() => { openUrl(RELEASES_URL).catch(() => {}); }}
+                                        >Download ↗</button>
+                                    </span>
+                                </div>
+                            )}
+
                             <div className="about-row">
                                 <span className="about-row-label">Neural accelerator</span>
                                 <span className="about-row-value about-row-value--highlight">
@@ -223,14 +275,8 @@ export function AboutTab() {
                             <div className="about-engine-row">
                                 <div className="about-engine-header">
                                     <span className="about-engine-name">Whisper ASR</span>
-                                    <span className={`about-badge ${
-                                        hw.active_backend.toLowerCase().includes('coreml')
-                                            ? 'about-badge--ane'
-                                            : hw.active_backend.toLowerCase().includes('metal') || hw.active_backend.toLowerCase().includes('cuda') || hw.active_backend.toLowerCase().includes('vulkan') || hw.active_backend.toLowerCase().includes('directml')
-                                            ? 'about-badge--gpu'
-                                            : 'about-badge--cpu'
-                                    }`}>
-                                        {hw.active_engine === 'whisper' ? `Active: ${hw.active_backend}` : (hw.ane_available ? 'CoreML ANE Ready' : 'GPU Ready')}
+                                    <span className={`about-badge ${badgeFor(hw.active_engine === 'whisper' ? hw.active_backend : hw.whisper_framework)}`}>
+                                        {hw.active_engine === 'whisper' ? `Active: ${hw.active_backend}` : backendOf(hw.whisper_framework)}
                                     </span>
                                 </div>
                                 <div className="about-engine-desc">{hw.whisper_framework}</div>
@@ -244,10 +290,8 @@ export function AboutTab() {
                             <div className="about-engine-row">
                                 <div className="about-engine-header">
                                     <span className="about-engine-name">Granite Speech 5</span>
-                                    <span className={`about-badge ${
-                                        hw.is_apple_silicon ? 'about-badge--mlx' : hw.cuda_available ? 'about-badge--cuda' : 'about-badge--gpu'
-                                    }`}>
-                                        {hw.active_engine === 'granite' ? `Active: ${hw.active_backend}` : 'transcribe.cpp'}
+                                    <span className={`about-badge ${badgeFor(hw.granite_framework)}`}>
+                                        {hw.active_engine === 'granite' ? `Active: ${hw.active_backend}` : backendOf(hw.granite_framework)}
                                     </span>
                                 </div>
                                 <div className="about-engine-desc">{hw.granite_framework}</div>
@@ -256,10 +300,8 @@ export function AboutTab() {
                             <div className="about-engine-row">
                                 <div className="about-engine-header">
                                     <span className="about-engine-name">Grammar LLM (FlowScribe)</span>
-                                    <span className={`about-badge ${
-                                        hw.is_apple_silicon ? 'about-badge--ane' : hw.cuda_available ? 'about-badge--cuda' : 'about-badge--gpu'
-                                    }`}>
-                                        {hw.is_apple_silicon ? 'Metal' : hw.cuda_available ? 'CUDA' : 'CPU'}
+                                    <span className={`about-badge ${badgeFor(hw.grammar_framework)}`}>
+                                        {backendOf(hw.grammar_framework)}
                                     </span>
                                 </div>
                                 <div className="about-engine-desc">{hw.grammar_framework}</div>

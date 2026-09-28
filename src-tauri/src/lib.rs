@@ -25,6 +25,7 @@ pub mod meeting_summary;
 pub mod cli;
 pub mod cli_server;
 pub mod control_server;
+pub mod gpu;
 mod ort_session;
 mod overlay;
 pub mod platform_tuning;
@@ -409,6 +410,7 @@ pub fn run() {
             commands::set_meeting_continue_minutes,
             commands::get_mcp_setup,
             cli_server::cli_ui_ready,
+            gpu::get_gpu_report,
             cli_server::cli_install_status,
             cli_server::install_cli,
             cli_server::uninstall_cli,

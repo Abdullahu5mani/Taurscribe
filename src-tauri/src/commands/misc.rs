@@ -240,32 +240,19 @@ fn get_system_info_blocking() -> SystemInfo {
     let ram_total_gb = sys.total_memory() as f32 / 1_073_741_824.0; // bytes → GB
 
     let (gpu_name, cuda_available, vram_gb) = detect_gpu();
-    let cuda_backend_available = cuda_available
-        && (!cfg!(target_os = "windows") || cfg!(feature = "windows-nvidia"));
+    // CUDA is only usable in the NVIDIA flavor, whatever the hardware.
+    let cuda_backend_available = cuda_available && crate::gpu::build_flavor() == "nvidia";
 
-    let backend_hint = if cuda_backend_available {
-        "CUDA".to_string()
-    } else {
-        #[cfg(target_os = "macos")]
-        {
-            "Metal".to_string()
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            if gpu_name != "Unknown" {
-                #[cfg(target_os = "windows")]
-                {
-                    "DirectML / CPU".to_string()
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    "Vulkan".to_string()
-                }
-            } else {
-                "CPU".to_string()
-            }
-        }
-    };
+    // What this build will actually run speech on, from its GPU flavor.
+    let backend_hint = match crate::gpu::build_flavor() {
+        "apple" => "Metal",
+        "nvidia" if cuda_backend_available => "CUDA",
+        "amd" => "ROCm",
+        "vulkan" => "Vulkan",
+        _ if cfg!(target_os = "windows") && gpu_name != "Unknown" => "DirectML / CPU",
+        _ => "CPU",
+    }
+    .to_string();
 
     SystemInfo {
         cpu_name,
@@ -331,8 +318,8 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
     let ram_used_gb = (sys.total_memory().saturating_sub(sys.available_memory())) as f32 / 1_073_741_824.0;
 
     let (gpu_name, cuda_available, vram_gb) = detect_gpu();
-    let cuda_backend_available = cuda_available
-        && (!cfg!(target_os = "windows") || cfg!(feature = "windows-nvidia"));
+    // CUDA is only usable in the NVIDIA flavor, whatever the hardware.
+    let cuda_backend_available = cuda_available && crate::gpu::build_flavor() == "nvidia";
 
     let arch = std::env::consts::ARCH.to_string();
 
@@ -402,12 +389,7 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
     #[cfg(not(target_os = "windows"))]
     let directml_available = false;
 
-    #[cfg(target_os = "linux")]
-    let vulkan_available = true;
-    #[cfg(target_os = "windows")]
-    let vulkan_available = cfg!(feature = "windows-nvidia");
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-    let vulkan_available = false;
+    let vulkan_available = cfg!(feature = "gpu-vulkan");
 
     let (neural_accelerator, ane_available) = if is_apple_silicon {
         ("Apple Neural Engine (16-Core ANE Matrix Hardware)".to_string(), true)
@@ -471,44 +453,48 @@ fn get_hardware_diagnostics_blocking(state: &AudioState) -> HardwareDiagnostics 
         found
     };
 
-    let whisper_framework = if is_apple_silicon {
-        if !whisper_coreml_models.is_empty() {
-            "whisper.cpp · CoreML ANE Encoder (85x Real-Time) + Metal GPU Decoder".to_string()
-        } else {
-            "whisper.cpp · Apple Metal GPU (Parallel Compute Shaders)".to_string()
-        }
-    } else if cuda_backend_available {
-        "whisper.cpp · NVIDIA CUDA 12 (cuBLAS Accelerated)".to_string()
-    } else {
-        #[cfg(target_os = "windows")]
-        {
-            "whisper.cpp · CPU AVX2".to_string()
-        }
-        #[cfg(target_os = "linux")]
-        {
-            "whisper.cpp · Vulkan 1.3 / CPU SIMD".to_string()
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-        {
-            "whisper.cpp · CPU Multi-threaded".to_string()
-        }
-    };
-
-    let granite_framework = if is_apple_silicon {
-        "transcribe.cpp · Metal GPU".to_string()
-    } else if cuda_backend_available {
-        "transcribe.cpp · CUDA GPU".to_string()
-    } else {
-        "transcribe.cpp · CPU".to_string()
-    };
-
-    // The grammar model (FlowScribe GGUF) runs on llama.cpp.
-    let grammar_framework = if is_apple_silicon {
-        "llama.cpp · Metal GPU".to_string()
-    } else if cuda_backend_available && !cfg!(target_os = "windows") {
-        "llama.cpp · CUDA".to_string()
-    } else {
-        "llama.cpp · CPU".to_string()
+    // Each GPU flavor compiles all three native libraries for one vendor (see crate::gpu).
+    let intel_mac_cpu = cfg!(target_os = "macos") && !crate::gpu::gpu_worth_using();
+    let (whisper_framework, granite_framework, grammar_framework) = match crate::gpu::build_flavor() {
+        "apple" if intel_mac_cpu => (
+            "whisper.cpp · CPU (Accelerate)".to_string(),
+            "transcribe.cpp · CPU".to_string(),
+            "llama.cpp · CPU".to_string(),
+        ),
+        "apple" => (
+            if !whisper_coreml_models.is_empty() {
+                "whisper.cpp · CoreML Neural Engine encoder + Metal GPU decoder".to_string()
+            } else {
+                "whisper.cpp · Metal GPU".to_string()
+            },
+            "transcribe.cpp · Metal GPU".to_string(),
+            "llama.cpp · Metal GPU".to_string(),
+        ),
+        "nvidia" => (
+            "whisper.cpp · NVIDIA CUDA".to_string(),
+            "transcribe.cpp · NVIDIA CUDA".to_string(),
+            "llama.cpp · NVIDIA CUDA".to_string(),
+        ),
+        "amd" => (
+            "whisper.cpp · AMD ROCm (HIP)".to_string(),
+            "transcribe.cpp · AMD ROCm".to_string(),
+            "llama.cpp · AMD ROCm".to_string(),
+        ),
+        "vulkan" => (
+            "whisper.cpp · Vulkan GPU".to_string(),
+            "transcribe.cpp · Vulkan GPU".to_string(),
+            "llama.cpp · Vulkan GPU".to_string(),
+        ),
+        "adreno" => (
+            "whisper.cpp · CPU (NEON)".to_string(),
+            "transcribe.cpp · CPU (NEON)".to_string(),
+            "llama.cpp · Adreno GPU (OpenCL)".to_string(),
+        ),
+        _ => (
+            "whisper.cpp · CPU".to_string(),
+            "transcribe.cpp · CPU".to_string(),
+            "llama.cpp · CPU".to_string(),
+        ),
     };
 
     let active = *state.active_engine.lock().unwrap();
@@ -731,109 +717,12 @@ fn request_microphone_permission_blocking() -> String {
 
 // ── GPU detection ─────────────────────────────────────────────────────────────
 
+/// (name, is NVIDIA, VRAM) of the GPU inference would use; see `crate::gpu`.
 fn detect_gpu() -> (String, bool, Option<f32>) {
-    // nvidia-smi works cross-platform wherever NVIDIA drivers are installed
-    if let Some((name, vram)) = try_nvidia_smi() {
-        return (name, true, Some(vram));
+    match crate::gpu::primary() {
+        Some(d) => (d.name.clone(), d.vendor == crate::gpu::Vendor::Nvidia, d.vram_gb),
+        None => ("Unknown".to_string(), false, None),
     }
-
-    // Platform fallbacks for non-NVIDIA or when nvidia-smi isn't in PATH
-    #[cfg(target_os = "windows")]
-    if let Some(name) = try_wmic_gpu() {
-        let is_nvidia = name.to_lowercase().contains("nvidia");
-        return (name, is_nvidia, None);
-    }
-
-    #[cfg(target_os = "macos")]
-    if let Some(name) = try_macos_gpu() {
-        return (name, false, None); // macOS uses Metal, not CUDA
-    }
-
-    #[cfg(target_os = "linux")]
-    if let Some(name) = try_lspci_gpu() {
-        let is_nvidia = name.to_lowercase().contains("nvidia");
-        return (name, is_nvidia, None);
-    }
-
-    ("Unknown".to_string(), false, None)
-}
-
-fn try_nvidia_smi() -> Option<(String, f32)> {
-    let mut cmd = std::process::Command::new("nvidia-smi");
-    cmd.args([
-        "--query-gpu=name,memory.total",
-        "--format=csv,noheader,nounits",
-    ]);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    let out = cmd.output().ok()?;
-
-    if !out.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = text.lines().next()?;
-    let mut parts = line.splitn(2, ',');
-    let name = parts.next()?.trim().to_string();
-    let vram_mb: f32 = parts.next()?.trim().parse().ok()?;
-
-    Some((name, vram_mb / 1024.0))
-}
-
-#[cfg(target_os = "windows")]
-fn try_wmic_gpu() -> Option<String> {
-    use std::os::windows::process::CommandExt;
-    let out = std::process::Command::new("wmic")
-        .args(["path", "win32_VideoController", "get", "name"])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .output()
-        .ok()?;
-
-    if !out.status.success() {
-        return None;
-    }
-
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .skip(1) // skip "Name" header
-        .map(|l| l.trim().to_string())
-        .find(|l| !l.is_empty())
-}
-
-#[cfg(target_os = "macos")]
-fn try_macos_gpu() -> Option<String> {
-    let out = std::process::Command::new("system_profiler")
-        .args(["SPDisplaysDataType"])
-        .output()
-        .ok()?;
-
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find(|l| l.trim_start().starts_with("Chipset Model:"))
-        .and_then(|l| l.splitn(2, ':').nth(1))
-        .map(|s| s.trim().to_string())
-}
-
-#[cfg(target_os = "linux")]
-fn try_lspci_gpu() -> Option<String> {
-    let out = std::process::Command::new("lspci").output().ok()?;
-
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = text
-        .lines()
-        .find(|l| l.to_lowercase().contains("vga") || l.to_lowercase().contains("3d controller"))?;
-
-    // "01:00.0 VGA compatible controller: NVIDIA Corporation GeForce ..."
-    // We want everything after the second ':'
-    let after_addr = line.splitn(2, ' ').nth(1)?;
-    after_addr
-        .splitn(2, ':')
-        .nth(1)
-        .map(|s| s.trim().to_string())
 }
 
 // ── Accessibility / Input Monitoring permission ───────────────────────────────

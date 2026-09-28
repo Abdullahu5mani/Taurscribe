@@ -2,7 +2,7 @@
 //!
 //! FlowScribe v3 (Qwen3.5-0.8B, F16, models/flowscribe_v3) takes tags for the
 //! speech engine, clean-up level, target app and the user's dictionary.
-//! n_gpu_layers=0 forces CPU; change to -1 or layer count for GPU.
+//! GPU offload follows the ASR backend setting (all layers, or 0 for CPU).
 
 use anyhow::{Error, Result};
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -306,19 +306,11 @@ impl LLMEngine {
         });
         let backend = Arc::clone(backend);
 
-        // Load model: n_gpu_layers=99 for GPU, 0 for CPU
-        // On macOS, we force CPU only (0 layers) per user request, ignoring the use_gpu flag's "true" intent for layers.
-        let requested_layers = if use_gpu {
-            #[cfg(target_os = "macos")]
-            {
-                println!("[LLM] macOS detected: Forcing CPU only (0 layers) as requested.");
-                0
-            }
-            #[cfg(not(target_os = "macos"))]
-            99
-        } else {
-            0
-        };
+        // Load model: n_gpu_layers=99 for GPU, 0 for CPU.
+        // Everything goes to the GPU the flavor was built for (Metal on Apple
+        // Silicon measured ~28% faster than the CPU on an M4). Intel Macs with only
+        // integrated graphics stay on the CPU, which is faster there.
+        let requested_layers = if use_gpu && crate::gpu::gpu_worth_using() { 99 } else { 0 };
         println!(
             "[LLM] Wrapper backend config: use_gpu={}, layers={}",
             use_gpu, requested_layers

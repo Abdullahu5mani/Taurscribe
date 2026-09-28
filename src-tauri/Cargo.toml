@@ -12,7 +12,18 @@ default-run = "taurscribe"
 # They need `--features dev-tools`, so `cargo build --release` (and the app bundle) only produce the app itself.
 [features]
 dev-tools = []
-windows-nvidia = ["transcribe-cpp/cuda", "transcribe-cpp/vulkan", "whisper-rs/cuda", "ort/cuda", "ort/tensorrt"]
+# GPU flavors: one build per GPU vendor, each on that vendor's native stack
+# (see src/gpu.rs). Pick at most one; no flavor = CPU (macOS always uses Metal).
+#   gpu-nvidia  CUDA in whisper.cpp, transcribe.cpp and llama.cpp
+#   gpu-amd     ROCm/HIP in all three, Linux only (ROCm 6.x to build and run)
+#   gpu-vulkan  Vulkan in all three: AMD on Windows, AMD APUs, Intel, other GPUs
+#   gpu-adreno  OpenCL for llama.cpp on Snapdragon (ASR stays on the CPU there)
+gpu-nvidia = ["whisper-rs/cuda", "transcribe-cpp/cuda", "llama-cpp-2/cuda"]
+gpu-amd = ["whisper-rs/hipblas", "transcribe-cpp/rocm", "llama-cpp-2/rocm"]
+gpu-vulkan = ["whisper-rs/vulkan", "transcribe-cpp/vulkan", "llama-cpp-2/vulkan"]
+gpu-adreno = ["llama-cpp-2/opencl"]
+# Old name of gpu-nvidia, kept for existing build scripts.
+windows-nvidia = ["gpu-nvidia"]
 
 [[bin]]
 name = "audio_pipeline_bench"
@@ -32,6 +43,11 @@ required-features = ["dev-tools"]
 [[bin]]
 name = "flowscribe_compare"
 path = "tools/flowscribe_compare.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "engine_bench"
+path = "tools/engine_bench.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
@@ -143,7 +159,11 @@ tauri-plugin-autostart = "2"
 # Common macOS dependencies (ARM & Intel)
 # -------------------------------------------------------------------------
 [target.'cfg(target_os = "macos")'.dependencies]
+# Metal runs the whole model on the GPU; CoreML additionally moves the encoder to
+# the Neural Engine when its .mlmodelc companion is downloaded. whisper-rs turns
+# Metal OFF unless the feature is set.
 whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
+    "metal",
     "coreml",
 ] }
 # llama-cpp-2: Uses Metal automatically on macOS (no special feature needed)
@@ -192,6 +212,8 @@ ort = { version = "2.0.0-rc.12", features = [
 # 2c. Intel x86_64 Mac Specific (Core i5/i7/i9)
 # Uses dynamic loading with api-20 compatible with official macOS x86_64 ONNX Runtime builds.
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+# Metal is used only when the Mac has a discrete (AMD) GPU; see gpu::gpu_worth_using.
+transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false, features = ["metal"] }
 ort = { version = "2.0.0-rc.12", default-features = false, features = [
     "load-dynamic",
     "api-20",
@@ -207,9 +229,10 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
 ] }
 
-# 3. Windows (x86_64) -> DirectML + CPU by default.
-# Enable windows-nvidia only for a separate GPU build. CUDA and Vulkan link
-# loader DLLs at process startup, before the app can choose a CPU fallback.
+# 3. Windows (x86_64) -> DirectML + CPU by default; GPU via a flavor feature.
+# CUDA, HIP and Vulkan link their runtime DLLs at process startup, before the
+# app can choose a CPU fallback, so each GPU vendor gets its own build
+# (gpu-nvidia, gpu-amd, gpu-vulkan) instead of one build with every backend.
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false }
@@ -228,44 +251,31 @@ ort = { version = "2.0.0-rc.12", features = [
     "xnnpack",
     "half",
 ] }
-# llama-cpp-2 with dynamic-link (CPU-only LLM on Windows to avoid CUDA build issues)
+# llama-cpp-2 with dynamic-link (a flavor feature adds its GPU backend)
 llama-cpp-2 = { version = "=0.1.157", default-features = false, features = [
     "dynamic-link",
 ] }
 llama-cpp-sys-2 = "=0.1.157"
-# 3b. Linux (x86_64) — CPU / GPU build
+# 3b. Linux (x86_64) -> CPU by default; GPU via a flavor feature
 # -------------------------------------------------------------------------
-# DEFAULT: CPU-only. Works on any Linux machine (AMD, Intel, NVIDIA without CUDA).
-# FOR GPU BUILD: uncomment the cuda/vulkan/tensorrt features below.
-#
-# Prerequisites for GPU build:
-#   - CUDA Toolkit 12.x:  https://developer.nvidia.com/cuda-downloads
-#   - Vulkan SDK:         sudo apt install vulkan-tools libvulkan-dev
-#   Then: export CARGO_FEATURES="cuda" before running tauri build
+#   --features gpu-nvidia   CUDA Toolkit 12.x to build; NVIDIA driver to run
+#   --features gpu-amd      ROCm 6.x to build and run (discrete Radeon RX / Pro / Instinct)
+#   --features gpu-vulkan   Vulkan SDK to build; any Vulkan driver to run (Intel, AMD APUs, …)
+# ONNX Runtime (CAM++ voiceprints) runs its small model on the CPU here.
 # -------------------------------------------------------------------------
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
-transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false, features = ["cuda", "vulkan"] }
-
-whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git", features = [
-    "cuda",
-    "vulkan",
-] }
-
-
+transcribe-cpp = { git = "https://github.com/LegendarySpy/transcribe.cpp", rev = "b893ed29480ea6392fb9859e64aaefaaa475230b", default-features = false }
+whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 ort = { version = "2.0.0-rc.12", features = [
     "download-binaries",
-    "cuda",
-    "tensorrt",
     "xnnpack",
     "half",
 ] }
-
 llama-cpp-2 = { version = "=0.1.157", default-features = false, features = [
     "dynamic-link",
-    "cuda",
 ] }
-
 llama-cpp-sys-2 = "=0.1.157"
+
 # 4. Windows (ARM64) -> DirectML + XNNPACK# DirectML: Hardware-accelerated on Qualcomm Snapdragon X ARM processors
 # XNNPACK: Cross-platform CPU optimization
 # -------------------------------------------------------------------------

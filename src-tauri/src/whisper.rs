@@ -19,13 +19,17 @@ fn infer_whisper_backend_from_system_info(info: &str) -> Option<GpuBackend> {
     if info.contains("CUDA : ARCHS") || info.contains("CUDA: ARCHS") {
         return Some(GpuBackend::Cuda);
     }
+    // HIP builds reuse ggml's CUDA backend under the name "ROCm".
+    if info.contains("ROCm :") || info.contains("ROCM = 1") || info.contains("HIP = 1") {
+        return Some(GpuBackend::Rocm);
+    }
     if info.contains("COREML = 1") {
         return Some(GpuBackend::CoreML);
     }
-    if info.contains("METAL = 1") {
+    if info.contains("METAL = 1") || info.contains("MTL :") {
         return Some(GpuBackend::Metal);
     }
-    if info.contains("VULKAN = 1") {
+    if info.contains("VULKAN = 1") || info.contains("Vulkan :") {
         return Some(GpuBackend::Vulkan);
     }
     None
@@ -81,6 +85,7 @@ fn warn_whisper_backend_mismatch(info: &str, backend: &GpuBackend) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GpuBackend {
     Cuda,   // NVIDIA GPUs (Very Fast)
+    Rocm,   // AMD GPUs via HIP (gpu-amd builds)
     CoreML, // macOS Apple Silicon / Neural Engine
     Metal,  // macOS Apple Silicon / Metal GPU
     Vulkan, // AMD/Intel/Other GPUs (Fast)
@@ -92,6 +97,7 @@ impl std::fmt::Display for GpuBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GpuBackend::Cuda => write!(f, "CUDA"),
+            GpuBackend::Rocm => write!(f, "ROCm"),
             GpuBackend::CoreML => write!(f, "CoreML"),
             GpuBackend::Metal => write!(f, "Metal"),
             GpuBackend::Vulkan => write!(f, "Vulkan"),
@@ -426,10 +432,10 @@ impl WhisperManager {
         );
 
         // Try to load with GPU acceleration first (unless force_cpu). If that fails, fallback to CPU.
-        // The standard Windows build has no whisper GPU backend. Attempting a
-        // GPU context there can succeed on CPU and then be mislabeled as CUDA.
-        let windows_cpu_build = cfg!(target_os = "windows") && !cfg!(feature = "windows-nvidia");
-        let (ctx, backend) = if force_cpu || windows_cpu_build {
+        // A build without a whisper GPU backend (the CPU flavor) must not attempt
+        // a GPU context: it succeeds on the CPU and is then mislabeled.
+        let cpu_only = !crate::gpu::whisper_gpu_compiled() || !crate::gpu::gpu_worth_using();
+        let (ctx, backend) = if force_cpu || cpu_only {
             self.try_cpu(&absolute_path)?
         } else {
             self.try_gpu(&absolute_path)
@@ -516,15 +522,20 @@ impl WhisperManager {
 
     /// Fallback when `print_system_info()` lacks CUDA/METAL/VULKAN/COREML = 1 tokens.
     fn detect_gpu_backend(&self) -> GpuBackend {
-        if self.is_cuda_available() {
-            return GpuBackend::Cuda;
-        }
-
+        // The flavor fixes which GPU backend whisper.cpp was compiled with.
         if cfg!(target_os = "macos") {
-            return GpuBackend::Metal;
+            GpuBackend::Metal
+        } else if cfg!(any(feature = "gpu-nvidia", feature = "windows-nvidia")) {
+            GpuBackend::Cuda
+        } else if cfg!(feature = "gpu-amd") {
+            GpuBackend::Rocm
+        } else if cfg!(feature = "gpu-vulkan") {
+            GpuBackend::Vulkan
+        } else if self.is_cuda_available() {
+            GpuBackend::Cuda
+        } else {
+            GpuBackend::Cpu
         }
-
-        GpuBackend::Vulkan
     }
 
     /// Check for NVIDIA drivers
