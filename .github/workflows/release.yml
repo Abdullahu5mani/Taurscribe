@@ -701,7 +701,9 @@ jobs:
       - name: Prepare release artifacts
         shell: bash
         run: |
+          # Branch runs (gpu-smoke/foo) have a slash in the ref name.
           TAG="${{ github.ref_name }}"
+          TAG="${TAG//\//-}"
           # GPU builds carry their flavor in the file name; standard builds don't.
           case "${{ matrix.flavor }}" in
             cpu|apple) SUFFIX="" ;;
