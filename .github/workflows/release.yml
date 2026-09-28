@@ -778,6 +778,19 @@ jobs:
           echo "=== Release assets ==="
           ls -la release-assets/
 
+      # vulkan-1.dll comes with every AMD / Intel / NVIDIA driver, but the hosted
+      # runner has no GPU driver. Install just the loader (LunarG VulkanRT) so the
+      # smoke test starts the app like on a real PC; with no device it must fall
+      # back to the CPU.
+      - name: Install Vulkan runtime for the smoke test (Windows)
+        if: matrix.os_name == 'Windows' && matrix.flavor == 'vulkan'
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'VulkanRT.exe'
+          Invoke-WebRequest 'https://sdk.lunarg.com/sdk/download/1.4.309.0/windows/VulkanRT-1.4.309.0-Installer.exe?Human=true' -OutFile $out -UseBasicParsing
+          Start-Process $out -ArgumentList '/S' -Wait
+          if (-not (Test-Path "$env:SystemRoot\System32\vulkan-1.dll")) { throw 'vulkan-1.dll was not installed' }
+
       # ── Smoke test on a GPU-less runner ──
       # Proves the packaged app starts, the CLI answers, the GPU detector runs,
       # and speech transcribes (on the CPU fallback here). NVIDIA / AMD / Adreno
