@@ -237,9 +237,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: linux-ccache-v1-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: linux-ccache-v2-${{ matrix.flavor }}-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            linux-ccache-v1-
+            linux-ccache-v2-${{ matrix.flavor }}-
 
       - name: Install Vulkan SDK (Linux)
         if: contains(matrix.platform, 'ubuntu')
@@ -323,6 +323,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          # Bumped when native build flags change (whisper-rs doesn't rerun on them).
+          prefix-key: 'v1-portable-cpu'
+          key: ${{ matrix.flavor }}
 
       - uses: mozilla-actions/sccache-action@v0.0.9
         if: contains(matrix.platform, 'ubuntu')
@@ -474,7 +477,13 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           # transcribe.cpp's CUDA objects must be -fPIC to link into the app (mold rejects them otherwise).
-          TRANSCRIBE_CMAKE_ARGS: ${{ contains(matrix.platform, 'ubuntu') && '-DCMAKE_POSITION_INDEPENDENT_CODE=ON' || '' }}
+          TRANSCRIBE_CMAKE_ARGS: ${{ contains(matrix.platform, 'ubuntu') && '-DCMAKE_POSITION_INDEPENDENT_CODE=ON -DGGML_NATIVE=OFF' || contains(matrix.platform, 'windows') && '-DGGML_NATIVE=OFF' || '' }}
+          # whisper.cpp and transcribe.cpp default to -march=native, which bakes the
+          # build runner's CPU (often AVX-512) into the package and crashes users'
+          # CPUs with SIGILL. OFF gives ggml's portable AVX2/FMA/F16C baseline.
+          # whisper-rs only forwards WHISPER_*/CMAKE_* env vars; WHISPER_NATIVE maps
+          # to GGML_NATIVE. Macs keep native tuning (arm64 runners are baseline M1).
+          WHISPER_NATIVE: ${{ contains(matrix.platform, 'macos') && '' || 'OFF' }}
           # Match Bundle step env vars so cargo doesn't see a changed environment and recompile
           CI: "true"
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -669,7 +678,13 @@ jobs:
           LD_LIBRARY_PATH: ${{ env.LD_LIBRARY_PATH }}
           RUSTFLAGS: ${{ contains(matrix.platform, 'ubuntu') && format('-L {0}/lib -L {1}/lib64/stubs -C link-arg=-fuse-ld=mold -C link-arg=-Wl,--allow-multiple-definition', env.VULKAN_SDK, env.CUDA_PATH) || (contains(matrix.platform, 'windows') && '-C link-arg=/FORCE:MULTIPLE -C link-arg=/ignore:4006' || '') }}
           # transcribe.cpp's CUDA objects must be -fPIC to link into the app (mold rejects them otherwise).
-          TRANSCRIBE_CMAKE_ARGS: ${{ contains(matrix.platform, 'ubuntu') && '-DCMAKE_POSITION_INDEPENDENT_CODE=ON' || '' }}
+          TRANSCRIBE_CMAKE_ARGS: ${{ contains(matrix.platform, 'ubuntu') && '-DCMAKE_POSITION_INDEPENDENT_CODE=ON -DGGML_NATIVE=OFF' || contains(matrix.platform, 'windows') && '-DGGML_NATIVE=OFF' || '' }}
+          # whisper.cpp and transcribe.cpp default to -march=native, which bakes the
+          # build runner's CPU (often AVX-512) into the package and crashes users'
+          # CPUs with SIGILL. OFF gives ggml's portable AVX2/FMA/F16C baseline.
+          # whisper-rs only forwards WHISPER_*/CMAKE_* env vars; WHISPER_NATIVE maps
+          # to GGML_NATIVE. Macs keep native tuning (arm64 runners are baseline M1).
+          WHISPER_NATIVE: ${{ contains(matrix.platform, 'macos') && '' || 'OFF' }}
           APPIMAGE_EXTRACT_AND_RUN: "1"
 
       # Portable: zip the binary + DLLs from the already-built release directory.
