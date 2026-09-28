@@ -282,6 +282,8 @@ export function useHotkeyListeners({
                 unlistenWriteError = unsubWriteError;
                 unlistenModelUnloaded = unsub8;
                 unlistenAudioLevel = unsub9;
+                // Lets the `taurscribe` CLI know dictation events will now be heard.
+                invoke("cli_ui_ready").catch(() => {});
             } else {
                 unsub1(); unsub2(); unsubToggle(); unsub3(); unsub4();
                 unsub5(); unsub6(); unsubWriteError(); unsub8(); unsub9();

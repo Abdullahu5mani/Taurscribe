@@ -118,6 +118,20 @@ fn open_db() -> Result<Connection, String> {
         .map_err(|e| format!("could not open the Taurscribe database: {e}"))
 }
 
+/// Runs one tool for the `taurscribe` CLI. The CLI is the user's own terminal,
+/// so it isn't gated on the "Let LLM apps read my transcripts" setting.
+pub fn run_tool(name: &str, args: &Value) -> Result<String, String> {
+    call_tool(&open_db()?, name, args)
+}
+
+/// The newest dictation or file transcript as (id, text), for `taurscribe stop --print`.
+pub fn latest_transcript() -> Option<(i64, String)> {
+    open_db()
+        .ok()?
+        .query_row("SELECT id, transcript FROM transcriptions ORDER BY id DESC LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .ok()
+}
+
 // ── tools ───────────────────────────────────────────────────────────────────
 
 fn tool_list() -> Value {

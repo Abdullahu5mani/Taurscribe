@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
 import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import { LlmAccessSection } from './LlmAccessSection';
+import { CliSection } from './CliSection';
 
 interface AppTabProps {
     closeBehavior: 'tray' | 'quit';
@@ -246,6 +247,8 @@ export function AppTab({
             </div>
 
             <LlmAccessSection />
+
+            <CliSection />
 
         </div>
     );

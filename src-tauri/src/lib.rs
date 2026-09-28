@@ -22,6 +22,8 @@ pub mod memory;
 pub mod meeting_audio;
 pub mod meeting_detector;
 pub mod meeting_summary;
+pub mod cli;
+pub mod cli_server;
 pub mod control_server;
 mod ort_session;
 mod overlay;
@@ -230,6 +232,9 @@ pub fn run() {
             // Start In-Process Test Control Server (Localhost simulation & test harness)
             control_server::spawn_control_server(app.handle().clone());
 
+            // Local endpoint for the `taurscribe` command-line tool.
+            cli_server::spawn_cli_server(app.handle().clone());
+
             // Start Inactivity Auto-Unload Watchdog Background Thread
             let auto_unload_handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -403,6 +408,10 @@ pub fn run() {
             commands::get_meeting_continue_minutes,
             commands::set_meeting_continue_minutes,
             commands::get_mcp_setup,
+            cli_server::cli_ui_ready,
+            cli_server::cli_install_status,
+            cli_server::install_cli,
+            cli_server::uninstall_cli,
             commands::list_meetings,
             commands::get_meeting_platform_counts,
             commands::get_meeting_detail,
@@ -428,7 +437,10 @@ pub fn run() {
                     // show the main window.
                     focus_main_window(app_handle);
                 }
-                tauri::RunEvent::Exit => cleanup_before_exit(app_handle),
+                tauri::RunEvent::Exit => {
+                    cli_server::remove_endpoint();
+                    cleanup_before_exit(app_handle)
+                }
                 _ => {}
             }
         });

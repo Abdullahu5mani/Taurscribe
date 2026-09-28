@@ -40,7 +40,7 @@ pub fn control_port() -> u16 {
         .unwrap_or(8766)
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
     }

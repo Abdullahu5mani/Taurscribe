@@ -7,5 +7,10 @@ fn main() {
         taurscribe_lib::mcp_server::run();
         return;
     }
+    // `taurscribe <command>`: the command-line tool (start, stop, transcribe, history …).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| taurscribe_lib::cli::is_cli_command(a)) {
+        std::process::exit(taurscribe_lib::cli::run(args));
+    }
     taurscribe_lib::run()
 }

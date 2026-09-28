@@ -199,6 +199,7 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = [
 [target.'cfg(windows)'.dependencies]
 meeting-record = "0.1"
 windows = { version = "0.58", features = [
+    "Win32_System_Console",
     "Win32_Media_Audio",
     "Win32_Media_Audio_Endpoints",
     "Win32_System_Com",

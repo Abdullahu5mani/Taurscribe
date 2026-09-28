@@ -241,6 +241,8 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "get_speaker_match_threshold": return 0.6;
         case "get_meeting_continue_minutes": return 10;
         case "get_mcp_setup": return { command: "/Applications/Taurscribe.app/Contents/MacOS/taurscribe", args: ["mcp"] };
+        case "cli_install_status": return { installed: false, location: "/usr/local/bin/taurscribe", note: null };
+        case "cli_ui_ready": return null;
         case "get_storage_locations": return [
             { area: "models", path: "/Users/me/Library/Application Support/Taurscribe/models", default_path: "/Users/me/Library/Application Support/Taurscribe/models", is_custom: false, is_other_drive: false, is_removable: false, available: true, used_bytes: 4.2e9, free_bytes: 212e9, drive_name: "Macintosh HD" },
             { area: "recordings", path: "/Users/me/Library/Application Support/Taurscribe/meetings", default_path: "/Users/me/Library/Application Support/Taurscribe/meetings", is_custom: false, is_other_drive: false, is_removable: false, available: true, used_bytes: 184e6, free_bytes: 212e9, drive_name: "Macintosh HD" },

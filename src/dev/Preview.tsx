@@ -16,6 +16,7 @@ const FAKE: Record<string, unknown> = {
   get_speaker_match_threshold: 0.6,
   get_meeting_continue_minutes: 10,
   get_mcp_setup: { command: "/Applications/Taurscribe.app/Contents/MacOS/taurscribe", args: ["mcp"] },
+  cli_install_status: { installed: false, location: "/usr/local/bin/taurscribe", note: null },
   get_hotkey: { keys: ["ControlLeft", "AltLeft"], mode: "hold" },
   list_input_devices: ["MacBook Pro Microphone", "AirPods Pro"],
   get_platform: "macos",
