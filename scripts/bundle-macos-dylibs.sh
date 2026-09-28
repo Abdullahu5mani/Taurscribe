@@ -152,14 +152,18 @@ if ls "$DYLIB_DIR"/*.dylib 1>/dev/null 2>&1; then
   echo "bundle-macos-dylibs: Bundled dylibs:"
   ls -la "$DYLIB_DIR"/*.dylib
   FRAMEWORKS_JSON="["
-  # Ship only the major-version names (libggml-base.0.dylib …): the binary and the
-  # dylibs all load each other through @rpath/<name>.0.dylib. Listing the fully
-  # versioned file and the unversioned symlink too would copy each library 3x.
+  # Ship the real, fully versioned files (libggml-base.0.24.0.dylib) and their
+  # major-version names (libggml-base.0.dylib). Current dylibbundler rewrites
+  # references to the versioned file; older builds kept @rpath/<name>.0.dylib.
+  # Shipping both costs a few MB and loads with either (the unversioned
+  # symlink is never referenced, so it stays out).
   for f in "$DYLIB_DIR"/*.dylib; do
-    [ -f "$f" ] || continue
     bn=$(basename "$f")
-    [[ "$bn" =~ ^lib[A-Za-z0-9_-]+\.[0-9]+\.dylib$ ]] || continue
-    FRAMEWORKS_JSON="$FRAMEWORKS_JSON\"./macos-dylibs/$bn\","
+    if [ -f "$f" ] && [ ! -L "$f" ]; then
+      FRAMEWORKS_JSON="$FRAMEWORKS_JSON\"./macos-dylibs/$bn\","
+    elif [[ "$bn" =~ ^lib[A-Za-z0-9_-]+\.[0-9]+\.dylib$ ]]; then
+      FRAMEWORKS_JSON="$FRAMEWORKS_JSON\"./macos-dylibs/$bn\","
+    fi
   done
   FRAMEWORKS_JSON="${FRAMEWORKS_JSON%,}]"
   MACOS_CONF="$SRC_TAURI/tauri.macos.conf.json"
