@@ -123,17 +123,23 @@ where
 
     let mut actual_channels: u32 = hint_channels;
     let mut total_frames = 0u64;
+    // The decoder's rate, which wins over the container's (they can differ, e.g.
+    // for HE-AAC). It must not change partway through.
+    let mut decoded_rate: Option<u32> = None;
 
     loop {
         let packet = match format.next_packet() {
             Ok(p) => p,
             Err(SymphError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => {
+            // Reading the file itself failed: not the end of the audio.
+            Err(SymphError::IoError(e)) => {
                 return Err(format!(
                     "Audio read failed before the end of {}: {e}",
                     path.display()
                 ))
             }
+            // A reset or a malformed tail ends the stream with what decoded so far.
+            Err(_) => break,
         };
 
         if packet.track_id() != track_id {
@@ -143,7 +149,8 @@ where
         match decoder.decode(&packet) {
             Ok(decoded) => {
                 let spec = *decoded.spec();
-                if spec.rate != sample_rate {
+                let rate = *decoded_rate.get_or_insert(spec.rate);
+                if spec.rate != rate {
                     return Err(format!(
                         "Audio sample rate changed while decoding {}",
                         path.display()
@@ -161,12 +168,14 @@ where
                 on_packet(
                     buf.samples(),
                     channels,
-                    sample_rate,
+                    rate,
                     total_frames,
                     declared_frames,
                 )?;
             }
-            Err(e) => return Err(format!("Audio decoding failed in {}: {e}", path.display())),
+            // A damaged packet leaves a short gap instead of failing the whole file.
+            Err(SymphError::DecodeError(_) | SymphError::IoError(_)) => continue,
+            Err(_) => break,
         }
     }
 
@@ -179,17 +188,22 @@ where
         .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
         && declared_frames.is_some_and(|expected| total_frames < expected)
     {
-        return Err(format!(
-            "Audio file {} ended before all declared samples were decoded",
-            path.display()
-        ));
+        // A crashed recorder, or a WAV streamed through a pipe, declares more
+        // data than it holds. Keep what is there: a streaming caller has already
+        // transcribed it by now.
+        eprintln!(
+            "[AUDIO] {} ended before its declared length ({} of {} frames); using what was decoded",
+            path.display(),
+            total_frames,
+            declared_frames.unwrap_or(0)
+        );
     }
 
     if actual_channels == 0 {
         actual_channels = 1;
     }
 
-    Ok((total_frames, sample_rate, actual_channels))
+    Ok((total_frames, decoded_rate.unwrap_or(sample_rate), actual_channels))
 }
 
 #[cfg(test)]
@@ -227,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn truncated_wav_is_not_accepted_as_partial_audio() {
+    fn truncated_wav_decodes_the_audio_it_has() {
         let path = std::env::temp_dir().join(format!(
             "taurscribe-truncated-{}.wav",
             rand::random::<u64>()
@@ -246,7 +260,8 @@ mod tests {
         let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
         let original_len = file.metadata().unwrap().len();
         file.set_len(original_len - 8_000).unwrap();
-        assert!(decode_audio_mono_stream(&path, |_, _, _, _| Ok(())).is_err());
+        let (frames, _) = decode_audio_mono_stream(&path, |_, _, _, _| Ok(())).unwrap();
+        assert!(frames > 0 && frames < 16_000, "{frames}");
         let _ = std::fs::remove_file(path);
     }
 }

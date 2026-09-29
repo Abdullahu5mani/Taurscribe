@@ -308,6 +308,10 @@ struct Mover<'a> {
     total: u64,
     done: u64,
     last_emit: Instant,
+    /// Destinations proven identical to their source (linked, copied and
+    /// compared, or already there and equal): their sources can be removed
+    /// without reading both files again.
+    verified: std::collections::HashSet<PathBuf>,
 }
 
 impl Mover<'_> {
@@ -418,6 +422,7 @@ impl Mover<'_> {
             let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
             if to.exists() {
                 if files_equal(&from, &to)? {
+                    self.verified.insert(to);
                     self.advance(len);
                     continue;
                 }
@@ -426,13 +431,24 @@ impl Mover<'_> {
                     to.display()
                 ));
             }
-            self.copy_file(&from, &to)?;
+            // Same volume: a second name for the file is instant and needs no
+            // copy; the source name is removed once the switch is committed.
+            if std::fs::hard_link(&from, &to).is_err() {
+                self.copy_file(&from, &to)?;
+            } else {
+                self.advance(len);
+            }
+            self.verified.insert(to);
         }
         Ok(())
     }
 }
 
-fn remove_verified_sources(src: &Path, dst: &Path) -> Result<(), String> {
+fn remove_verified_sources(
+    src: &Path,
+    dst: &Path,
+    verified: &std::collections::HashSet<PathBuf>,
+) -> Result<(), String> {
     for entry in
         std::fs::read_dir(src).map_err(|e| format!("Could not read {}: {e}", src.display()))?
     {
@@ -441,9 +457,9 @@ fn remove_verified_sources(src: &Path, dst: &Path) -> Result<(), String> {
         let to = dst.join(entry.file_name());
         let kind = entry.file_type().map_err(|e| e.to_string())?;
         if kind.is_dir() {
-            remove_verified_sources(&from, &to)?;
+            remove_verified_sources(&from, &to, verified)?;
             let _ = std::fs::remove_dir(&from);
-        } else if kind.is_file() && files_equal(&from, &to)? {
+        } else if kind.is_file() && verified.contains(&to) {
             std::fs::remove_file(&from)
                 .map_err(|e| format!("Could not remove {}: {e}", from.display()))?;
         }
@@ -456,13 +472,14 @@ fn files_equal(a: &Path, b: &Path) -> Result<bool, String> {
         std::fs::File::open(a).map_err(|e| format!("Could not read {}: {e}", a.display()))?;
     let mut right =
         std::fs::File::open(b).map_err(|e| format!("Could not read {}: {e}", b.display()))?;
-    if left.metadata().map_err(|e| e.to_string())?.len()
-        != right.metadata().map_err(|e| e.to_string())?.len()
-    {
+    let len = left.metadata().map_err(|e| e.to_string())?.len();
+    if len != right.metadata().map_err(|e| e.to_string())?.len() {
         return Ok(false);
     }
-    let mut a_buf = vec![0u8; 4 << 20];
-    let mut b_buf = vec![0u8; 4 << 20];
+    // Small files (snippet WAVs) don't need 4 MiB buffers.
+    let cap = (len as usize).clamp(1, 4 << 20);
+    let mut a_buf = vec![0u8; cap];
+    let mut b_buf = vec![0u8; cap];
     loop {
         let n = left.read(&mut a_buf).map_err(|e| e.to_string())?;
         if n == 0 {
@@ -644,6 +661,7 @@ pub async fn set_storage_location(
         let _ = std::fs::remove_file(&probe);
 
         let copying = move_files && old.exists() && !same_place(&old, &new);
+        let mut verified = std::collections::HashSet::new();
         if copying {
             if new
                 .canonicalize()
@@ -678,9 +696,11 @@ pub async fn set_storage_location(
                 total,
                 done: 0,
                 last_emit: Instant::now(),
+                verified: Default::default(),
             };
             Mover::check_conflicts(&old, &new)?;
             mover.copy_contents(&old, &new)?;
+            verified = std::mem::take(&mut mover.verified);
             if area == Area::Recordings {
                 rewrite_recording_paths(&old, &new)?;
             }
@@ -691,7 +711,7 @@ pub async fn set_storage_location(
         cfg.set(area, if is_default { None } else { Some(new.clone()) });
         save_config(&cfg)?;
         if copying {
-            if let Err(e) = remove_verified_sources(&old, &new) {
+            if let Err(e) = remove_verified_sources(&old, &new, &verified) {
                 eprintln!(
                     "[STORAGE] Files were switched but old copies could not all be removed: {e}"
                 );
@@ -940,6 +960,7 @@ mod tests {
             total: 11,
             done: 0,
             last_emit: Instant::now(),
+            verified: Default::default(),
         };
         m.copy_contents(&src, &dst).unwrap();
         assert_eq!(
@@ -947,7 +968,7 @@ mod tests {
             b"world!"
         );
         assert!(src.join("one.bin").exists());
-        remove_verified_sources(&src, &dst).unwrap();
+        remove_verified_sources(&src, &dst, &m.verified).unwrap();
         assert!(!src.join("one.bin").exists() && !src.join("sub").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -965,6 +986,7 @@ mod tests {
             total: 4,
             done: 0,
             last_emit: Instant::now(),
+            verified: Default::default(),
         };
         assert!(Mover::check_conflicts(&src, &dst).is_err());
         assert!(mover.copy_contents(&src, &dst).is_err());
@@ -1081,6 +1103,7 @@ mod tests {
             total: 14,
             done: 0,
             last_emit: Instant::now(),
+            verified: Default::default(),
         };
         assert!(mover.copy_file(&src, &dst).is_err());
         assert_eq!(std::fs::read(&src).unwrap(), b"original audio");

@@ -612,8 +612,18 @@ fn windows_user_path() -> Option<String> {
 /// Writes the user PATH; .NET broadcasts WM_SETTINGCHANGE so new terminals see it.
 #[cfg(windows)]
 fn set_windows_user_path(value: &str) -> Result<(), String> {
-    let quoted = value.replace('\'', "''");
-    powershell(&format!("[Environment]::SetEnvironmentVariable('Path','{quoted}','User')")).map(|_| ())
+    use windows::core::w;
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_EXPAND_SZ};
+    use windows::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE};
+    let data: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        RegSetKeyValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), REG_EXPAND_SZ.0, Some(data.as_ptr().cast()), (data.len() * 2) as u32)
+            .ok()
+            .map_err(|e| format!("could not update your PATH: {e}"))?;
+        let _ = SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, WPARAM(0), LPARAM(w!("Environment").as_ptr() as isize), SMTO_ABORTIFHUNG, 5000, None);
+    }
+    Ok(())
 }
 
 /// Release builds on Windows are GUI-subsystem programs with no console, so

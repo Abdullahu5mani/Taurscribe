@@ -43,10 +43,13 @@ const SINC_PARAMS: SincInterpolationParameters = SincInterpolationParameters {
 
 const RESAMPLE_CHUNK: usize = 1024 * 10;
 
-/// Preserve the sinc filter's state while a file is decoded packet by packet.
-/// Only a partial input block is retained between calls.
-pub struct StreamingResampler16k {
+/// Preserve the sinc filter's state while audio arrives in pieces (a file
+/// decoded packet by packet, a live stream). Only a partial input block is
+/// retained between calls, so the output never drifts from the input's length.
+pub struct StreamingResampler {
     from_rate: u32,
+    to_rate: u32,
+    chunk: usize,
     resampler: Option<SincFixedIn<f32>>,
     pending: Vec<f32>,
     input: Vec<Vec<f32>>,
@@ -54,20 +57,27 @@ pub struct StreamingResampler16k {
     total_output: usize,
 }
 
-impl StreamingResampler16k {
+impl StreamingResampler {
+    /// To 16 kHz, for ASR.
     pub fn new(from_rate: u32) -> Result<Self, String> {
-        if from_rate == 0 {
+        Self::with_target(from_rate, 16_000, RESAMPLE_CHUNK)
+    }
+
+    /// To `to_rate`, processing `chunk` input frames at a time (smaller
+    /// chunks mean less latency for live audio).
+    pub fn with_target(from_rate: u32, to_rate: u32, chunk: usize) -> Result<Self, String> {
+        if from_rate == 0 || to_rate == 0 || chunk == 0 {
             return Err("File has invalid sample rate".into());
         }
-        let resampler = if from_rate == 16_000 {
+        let resampler = if from_rate == to_rate {
             None
         } else {
             Some(
                 SincFixedIn::<f32>::new(
-                    16_000.0 / from_rate as f64,
+                    to_rate as f64 / from_rate as f64,
                     2.0,
                     SINC_PARAMS,
-                    RESAMPLE_CHUNK,
+                    chunk,
                     1,
                 )
                 .map_err(|e| format!("Resampler init failed: {e:?}"))?,
@@ -75,9 +85,11 @@ impl StreamingResampler16k {
         };
         Ok(Self {
             from_rate,
+            to_rate,
+            chunk,
             resampler,
-            pending: Vec::with_capacity(RESAMPLE_CHUNK),
-            input: vec![Vec::with_capacity(RESAMPLE_CHUNK)],
+            pending: Vec::with_capacity(chunk),
+            input: vec![Vec::with_capacity(chunk)],
             total_input: 0,
             total_output: 0,
         })
@@ -91,9 +103,9 @@ impl StreamingResampler16k {
         }
         self.pending.extend_from_slice(samples);
         let mut out = Vec::new();
-        while self.pending.len() >= RESAMPLE_CHUNK {
+        while self.pending.len() >= self.chunk {
             self.input[0].clear();
-            self.input[0].extend(self.pending.drain(..RESAMPLE_CHUNK));
+            self.input[0].extend(self.pending.drain(..self.chunk));
             let block = self
                 .resampler
                 .as_mut()
@@ -110,7 +122,7 @@ impl StreamingResampler16k {
         if self.resampler.is_none() {
             return Ok(Vec::new());
         }
-        let target = ((self.total_input as u128 * 16_000 + self.from_rate as u128 / 2)
+        let target = ((self.total_input as u128 * self.to_rate as u128 + self.from_rate as u128 / 2)
             / self.from_rate as u128) as usize;
         if self.total_output >= target {
             self.pending.clear();
@@ -118,7 +130,7 @@ impl StreamingResampler16k {
         }
         self.input[0].clear();
         self.input[0].extend(self.pending.drain(..));
-        self.input[0].resize(RESAMPLE_CHUNK, 0.0);
+        self.input[0].resize(self.chunk, 0.0);
         let block = self
             .resampler
             .as_mut()
@@ -610,7 +622,7 @@ mod tests {
                     (2.0 * std::f32::consts::PI * 440.0 * i as f32 / source_rate as f32).sin() * 0.2
                 })
                 .collect();
-            let mut stream = StreamingResampler16k::new(source_rate).unwrap();
+            let mut stream = StreamingResampler::new(source_rate).unwrap();
             let mut output = Vec::new();
             for packet in source.chunks(1379) {
                 output.extend(stream.push(packet).unwrap());

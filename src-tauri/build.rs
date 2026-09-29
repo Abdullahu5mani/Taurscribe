@@ -29,9 +29,11 @@ fn main() {
         std::env::set_var("CMAKE_GENERATOR_TOOLSET", "ClangCL");
     }
 
-    // CUDA and Vulkan are only linked in the optional Windows NVIDIA build.
-    let windows_nvidia = std::env::var_os("CARGO_FEATURE_WINDOWS_NVIDIA").is_some();
-    if target_os == "windows" && windows_nvidia {
+    // CUDA is linked only in the NVIDIA flavor and Vulkan only in the Vulkan one
+    // (`windows-nvidia` is an alias that turns on `gpu-nvidia`).
+    let gpu_nvidia = std::env::var_os("CARGO_FEATURE_GPU_NVIDIA").is_some();
+    let gpu_vulkan = std::env::var_os("CARGO_FEATURE_GPU_VULKAN").is_some();
+    if target_os == "windows" && gpu_nvidia {
         let mut found = false;
 
         // 1. Try CUDA_PATH environment variable
@@ -77,7 +79,7 @@ fn main() {
     // The CUDA ggml linked into whisper.cpp and transcribe.cpp imports nvcuda.dll,
     // which only the NVIDIA driver installs. Delay-load it so the app starts on a
     // PC without the driver; with no CUDA device ggml never calls into it.
-    if target_os == "windows" && std::env::var_os("CARGO_FEATURE_GPU_NVIDIA").is_some() {
+    if target_os == "windows" && gpu_nvidia {
         println!("cargo:rustc-link-arg-bins=/DELAYLOAD:nvcuda.dll");
         println!("cargo:rustc-link-arg-bins=delayimp.lib");
     }
@@ -85,7 +87,7 @@ fn main() {
     // CUSTOM: transcribe.cpp's Vulkan backend links vulkan-1.lib (Windows x64 build),
     // which only the Vulkan SDK provides.
     println!("cargo:rerun-if-env-changed=VULKAN_SDK");
-    if target_os == "windows" && target_arch == "x86_64" && windows_nvidia {
+    if target_os == "windows" && target_arch == "x86_64" && gpu_vulkan {
         match std::env::var("VULKAN_SDK") {
             Ok(sdk) if std::path::Path::new(&sdk).join("Lib").exists() => {
                 println!("cargo:rustc-link-search=native={}", std::path::Path::new(&sdk).join("Lib").display());

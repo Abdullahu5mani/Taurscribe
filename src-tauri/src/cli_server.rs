@@ -217,13 +217,33 @@ fn status(app: &AppHandle) -> Value {
     })
 }
 
-/// The Settings → Models "GPU / CPU" choice, as the frontend passes it to file jobs.
-fn use_gpu_setting() -> bool {
+/// One value from the frontend's settings.json.
+fn setting(key: &str) -> Option<Value> {
     crate::mcp_server::settings_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .and_then(|v| v.get("asr_backend").and_then(Value::as_str).map(|s| s != "cpu"))
-        .unwrap_or(true)
+        .and_then(|mut v| v.get_mut(key).map(Value::take))
+}
+
+/// The Settings → Models "GPU / CPU" choice, as the frontend passes it to file jobs.
+fn use_gpu_setting() -> bool {
+    setting("asr_backend").and_then(|v| v.as_str().map(|s| s != "cpu")).unwrap_or(true)
+}
+
+/// The model a CLI file job should use: the one loaded now, else the one
+/// selected in Settings. Without one, a job after auto-unload would load a
+/// default model instead of the user's.
+fn cli_model(state: &AudioState, engine: ASREngine) -> Option<String> {
+    let loaded = match engine {
+        ASREngine::Whisper => state.whisper_snapshot().model,
+        other => state.gguf_snapshot(other).filter(|s| s.loaded).and_then(|s| s.model_id),
+    };
+    let key = match engine {
+        ASREngine::Whisper => "whisper_model",
+        ASREngine::Granite => "granite_model",
+        ASREngine::Qwen3 => "qwen3_model",
+    };
+    loaded.or_else(|| setting(key)?.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string))
 }
 
 async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, String> {
@@ -252,12 +272,14 @@ async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, Strin
                 return Err(format!("no such file: {path}"));
             }
             let state = app.state::<AudioState>();
+            let engine = state.active_engine.lock().map(|e| *e).unwrap_or(ASREngine::Whisper);
+            let model = cli_model(&state, engine);
             let res = crate::commands::transcribe_file(
                 app.clone(),
                 state,
                 path,
-                None,
-                None,
+                Some(engine_name(&engine).to_string()),
+                model,
                 None,
                 None,
                 Some(use_gpu_setting()),

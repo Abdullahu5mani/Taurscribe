@@ -40,6 +40,9 @@ pub struct FileTranscriptionResult {
 struct FileJobState {
     flag: Arc<AtomicBool>,
     job_id: Option<String>,
+    /// Highest percent sent so far: each window of a long file restarts its
+    /// own steps, and the bar must not move backwards.
+    last_percent: u8,
 }
 
 static FILE_TRANSCRIBE_CANCEL: OnceLock<Mutex<HashMap<String, FileJobState>>> = OnceLock::new();
@@ -59,6 +62,7 @@ fn register_cancel_flag(path: &str, job_id: Option<String>) -> Result<Arc<Atomic
         FileJobState {
             flag: Arc::clone(&flag),
             job_id,
+            last_percent: 0,
         },
     );
     Ok(flag)
@@ -186,11 +190,18 @@ pub async fn finish_file_transcription_batch(
 }
 
 fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: Option<String>) {
-    let job_id = cancel_flags()
-        .lock()
-        .unwrap()
-        .get(path)
-        .and_then(|job| job.job_id.clone());
+    let (job_id, percent) = match cancel_flags().lock().unwrap().get_mut(path) {
+        Some(job) => {
+            let percent = if matches!(status, "decoding" | "transcribing") {
+                percent.max(job.last_percent)
+            } else {
+                percent
+            };
+            job.last_percent = percent;
+            (job.job_id.clone(), percent)
+        }
+        None => (None, percent),
+    };
     let _ = app.emit(
         "file-transcription-progress",
         FileTranscriptionProgress {
@@ -333,8 +344,29 @@ fn transcribe_file_blocking(
     })
 }
 
+/// Where to end a window: the quietest 20 ms frame in its last eighth, so the
+/// cut falls in a pause rather than through a word.
+fn quiet_cut(window: &[f32]) -> usize {
+    const FRAME: usize = 320; // 20 ms at 16 kHz
+    let search = window.len() / 8;
+    if search < FRAME {
+        return window.len();
+    }
+    let mut best = (f32::INFINITY, window.len());
+    let mut at = window.len() - search;
+    while at + FRAME <= window.len() {
+        let energy: f32 = window[at..at + FRAME].iter().map(|s| s * s).sum();
+        if energy < best.0 {
+            best = (energy, at + FRAME / 2);
+        }
+        at += FRAME;
+    }
+    best.1
+}
+
 /// Keep only one resampled ASR window while decoding, including a final short
-/// window. The callback receives source-frame progress for the UI.
+/// window. Windows end at a quiet point (see `quiet_cut`), so they are up to
+/// `window_samples` long. The callback receives source-frame progress for the UI.
 fn stream_file_windows<F, C>(
     path: &Path,
     window_samples: usize,
@@ -349,19 +381,20 @@ where
         return Err("Audio window must not be empty".into());
     }
     let mut pending = Vec::<f32>::new();
-    let mut resampler: Option<audio_preprocess::StreamingResampler16k> = None;
+    let mut resampler: Option<audio_preprocess::StreamingResampler> = None;
     let (frames, rate) = crate::audio_decode::decode_audio_mono_stream(
         path,
         |samples, source_rate, decoded_so_far, expected_frames| {
             check_cancelled()?;
             if resampler.is_none() {
-                resampler = Some(audio_preprocess::StreamingResampler16k::new(source_rate)?);
+                resampler = Some(audio_preprocess::StreamingResampler::new(source_rate)?);
             }
             pending.extend_from_slice(&resampler.as_mut().unwrap().push(samples)?);
             while pending.len() >= window_samples {
                 check_cancelled()?;
+                let cut = quiet_cut(&pending[..window_samples]);
                 on_window(
-                    pending.drain(..window_samples).collect(),
+                    pending.drain(..cut).collect(),
                     decoded_so_far,
                     expected_frames,
                 )?;
@@ -430,10 +463,26 @@ mod vm_feature_tests {
         )
         .unwrap();
         assert_eq!((frames, rate), (156_000, 48_000));
-        assert_eq!(sizes, [16_000, 16_000, 16_000, 4_000]);
+        // Full windows end at a quiet point in their last eighth; the tail is the rest.
+        let (tail, full) = sizes.split_last().unwrap();
+        assert!(full.len() >= 3 && full.iter().all(|n| (14_000..=16_000).contains(n)), "{sizes:?}");
+        assert!(*tail > 0 && *tail <= 16_000, "{sizes:?}");
+        assert_eq!(sizes.iter().sum::<usize>(), 52_000);
         assert!(progress.windows(2).all(|pair| pair[0] <= pair[1]));
         assert_eq!(progress.last(), Some(&frames));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn windows_are_cut_in_a_pause_not_through_speech() {
+        let tone = |n: usize| (0..n).map(|i| (i as f32 * 0.3).sin() * 0.5).collect::<Vec<f32>>();
+        let mut window = tone(15_000);
+        window.extend(vec![0.0; 640]); // a 40 ms pause
+        window.extend(tone(360));
+        let cut = quiet_cut(&window);
+        assert!((15_000..15_640).contains(&cut), "cut at {cut}");
+        // Too short to search: the whole window.
+        assert_eq!(quiet_cut(&tone(1_000)), 1_000);
     }
 
     #[test]

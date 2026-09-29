@@ -158,6 +158,12 @@ pub fn recommended_flavor() -> &'static str {
 /// in the machine (a CUDA build on a PC without NVIDIA). ggml would fall back
 /// to the CPU anyway, but the app would report the GPU backend as active.
 pub fn gpu_worth_using() -> bool {
+    // Nothing to probe where the answer can't depend on the hardware (Apple
+    // Silicon always has its GPU; a CPU build has no GPU backend): detection
+    // shells out, and this runs while an engine lock is held.
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) || build_flavor() == "cpu" {
+        return true;
+    }
     worth_using(build_flavor(), devices())
 }
 
