@@ -147,18 +147,38 @@ pub fn recommended_flavor() -> &'static str {
         Vendor::Amd if !arm && gpu.discrete && cfg!(target_os = "linux") => "amd",
         Vendor::Amd if !arm => "vulkan",
         Vendor::Qualcomm => "adreno",
-        Vendor::Intel | Vendor::Other if !arm => "vulkan",
+        Vendor::Intel if !arm => "vulkan",
+        Vendor::Other if !arm && gpu.discrete => "vulkan",
         _ => "cpu",
     }
 }
 
-/// False when the GPU would be slower than the CPU, so engines should not try it.
-/// Today that is an Intel Mac with only Intel integrated graphics.
+/// False when engines should not try the GPU: the GPU would be slower than the
+/// CPU (an Intel Mac with only integrated graphics), or this build's GPU isn't
+/// in the machine (a CUDA build on a PC without NVIDIA). ggml would fall back
+/// to the CPU anyway, but the app would report the GPU backend as active.
 pub fn gpu_worth_using() -> bool {
+    worth_using(build_flavor(), devices())
+}
+
+fn worth_using(flavor: &str, devs: &[GpuDevice]) -> bool {
     if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
-        return devices().iter().any(|d| d.discrete);
+        return devs.iter().any(|d| d.discrete);
     }
-    true
+    // Detection found nothing at all: trust the build rather than a failed probe.
+    if devs.is_empty() {
+        return true;
+    }
+    let has = |v: Vendor| devs.iter().any(|d| d.vendor == v);
+    match flavor {
+        "nvidia" => has(Vendor::Nvidia),
+        "amd" => has(Vendor::Amd),
+        "adreno" => has(Vendor::Qualcomm),
+        // Any real GPU has a Vulkan driver; an unknown integrated adapter is
+        // usually a VM's display device.
+        "vulkan" => devs.iter().any(|d| d.vendor != Vendor::Other || d.discrete),
+        _ => true,
+    }
 }
 
 // ── detection ────────────────────────────────────────────────────────────────
@@ -366,6 +386,26 @@ pub async fn get_gpu_report() -> Result<GpuReport, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dev(vendor: Vendor, discrete: bool) -> GpuDevice {
+        GpuDevice { name: String::new(), vendor, discrete, vram_gb: None }
+    }
+
+    #[test]
+    #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+    fn gpu_only_used_when_the_builds_vendor_is_present() {
+        let vm = [dev(Vendor::Other, false)];
+        assert!(!worth_using("nvidia", &vm));
+        assert!(!worth_using("amd", &vm));
+        assert!(!worth_using("vulkan", &vm));
+        assert!(worth_using("cpu", &vm));
+        assert!(worth_using("nvidia", &[dev(Vendor::Intel, false), dev(Vendor::Nvidia, true)]));
+        assert!(!worth_using("nvidia", &[dev(Vendor::Amd, true)]));
+        assert!(worth_using("vulkan", &[dev(Vendor::Intel, false)]));
+        assert!(worth_using("adreno", &[dev(Vendor::Qualcomm, false)]));
+        // A failed probe must not switch the GPU off.
+        assert!(worth_using("nvidia", &[]));
+    }
 
     #[test]
     fn vendors_from_names() {
