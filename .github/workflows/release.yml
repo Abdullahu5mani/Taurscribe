@@ -796,7 +796,10 @@ jobs:
       # and speech transcribes (on the CPU fallback here). NVIDIA / AMD / Adreno
       # builds may need their driver just to start, so for them a failure is a
       # warning that tells us exactly that.
+      # Windows ARM64 is cross-compiled on an x64 runner, so its smoke test runs
+      # in the smoke-arm64 job below on a real ARM64 machine.
       - name: Smoke test (no GPU)
+        if: matrix.target != 'aarch64-pc-windows-msvc'
         continue-on-error: ${{ contains(fromJSON('["nvidia", "amd", "adreno"]'), matrix.flavor) }}
         shell: bash
         run: |
@@ -853,6 +856,70 @@ jobs:
           name: release-${{ matrix.os_name }}-${{ matrix.arch }}-${{ matrix.flavor }}
           path: release-assets/*
           if-no-files-found: warn
+
+      - name: Stage ARM64 build for its smoke test
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: bash
+        run: |
+          mkdir -p smoke-out
+          cp dist-windows-portable/taurscribe-portable.zip smoke-out/
+          cp "${CARGO_TARGET_DIR//\\//}/${{ matrix.target }}/release/engine_bench.exe" smoke-out/
+
+      - name: Upload ARM64 build for its smoke test
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-windows-arm64-${{ matrix.flavor }}
+          path: smoke-out/*
+          if-no-files-found: error
+          retention-days: 3
+
+  # ── Smoke test the Windows ARM64 builds on ARM64 hardware ─────────────────
+  smoke-arm64:
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: windows-11-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [cpu, adreno]
+    # The Adreno build needs the Qualcomm OpenCL driver, which this runner lacks.
+    continue-on-error: ${{ matrix.flavor == 'adreno' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-windows-arm64-${{ matrix.flavor }}
+          path: smoke-in
+
+      - name: Smoke test (no GPU)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir smoke
+          unzip -q "$(find smoke-in -name taurscribe-portable.zip)" -d smoke
+          cp "$(find smoke-in -name engine_bench.exe)" smoke/
+          APP=smoke/taurscribe.exe
+          BENCH=smoke/engine_bench.exe
+          "$APP" --version
+          "$APP" status --json
+          "$BENCH" gpu | tee gpu-report.json
+
+          MODELS=$("$BENCH" models-dir | tr -d '\r')
+          MODELS=$(cygpath -u "$MODELS")
+          mkdir -p "$MODELS"
+          curl -sSfL -o "$MODELS/ggml-tiny-q5_1.bin" \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin
+          curl -sSfL -o jfk.wav https://github.com/ggml-org/whisper.cpp/raw/master/samples/jfk.wav
+          "$BENCH" whisper tiny-q5_1 jfk.wav --runs 1 | tee whisper.txt
+          grep -qi "ask not what your country" whisper.txt
+
+          {
+            echo "### Windows (ARM64) · flavor \`${{ matrix.flavor }}\`"
+            echo '```'
+            "$APP" --version
+            grep '^\[bench\]' whisper.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ── Create GitHub Release ─────────────────────────────────────────────────
   release:
