@@ -324,7 +324,7 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
           # Bumped when native build flags change (whisper-rs doesn't rerun on them).
-          prefix-key: 'v1-portable-cpu'
+          prefix-key: 'v2-nvcuda-delayload'
           key: ${{ matrix.flavor }}
 
       - uses: mozilla-actions/sccache-action@v0.0.9

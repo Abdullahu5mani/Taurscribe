@@ -74,6 +74,14 @@ fn main() {
         }
     }
 
+    // The CUDA ggml linked into whisper.cpp and transcribe.cpp imports nvcuda.dll,
+    // which only the NVIDIA driver installs. Delay-load it so the app starts on a
+    // PC without the driver; with no CUDA device ggml never calls into it.
+    if target_os == "windows" && std::env::var_os("CARGO_FEATURE_GPU_NVIDIA").is_some() {
+        println!("cargo:rustc-link-arg-bins=/DELAYLOAD:nvcuda.dll");
+        println!("cargo:rustc-link-arg-bins=delayimp.lib");
+    }
+
     // CUSTOM: transcribe.cpp's Vulkan backend links vulkan-1.lib (Windows x64 build),
     // which only the Vulkan SDK provides.
     println!("cargo:rerun-if-env-changed=VULKAN_SDK");

@@ -73,3 +73,22 @@ if ($TargetTriple -eq 'x86_64-pc-windows-msvc' -and $Flavor -eq 'cpu') {
     }
     Write-Host 'Verified the standard x64 executable has no mandatory CUDA or Vulkan imports.'
 }
+
+# nvcuda.dll ships only with the NVIDIA driver. The NVIDIA build delay-loads it
+# so the app still starts on a PC without the driver (and falls back to the CPU).
+if ($Flavor -eq 'nvidia') {
+    $readObj = Get-Command llvm-readobj.exe -ErrorAction SilentlyContinue
+    $readObjPath = if ($readObj) { $readObj.Source } else { Join-Path $env:ProgramFiles 'LLVM\bin\llvm-readobj.exe' }
+    if (-not (Test-Path -LiteralPath $readObjPath)) {
+        throw 'llvm-readobj is required to check Windows startup DLL imports.'
+    }
+    foreach ($bin in @('taurscribe.exe', 'ggml-cuda.dll')) {
+        $path = Join-Path $targetDir "$TargetTriple/release/$bin"
+        $imports = (& $readObjPath --coff-imports $path) -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw "Could not inspect PE imports in $path." }
+        if ($imports -match '(?m)^\s*Import \{\s*\n\s*Name: nvcuda\.dll') {
+            throw "$bin imports nvcuda.dll at startup; it must be delay-loaded."
+        }
+    }
+    Write-Host 'Verified nvcuda.dll is delay-loaded, so the NVIDIA build starts without the driver.'
+}

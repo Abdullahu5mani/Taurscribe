@@ -164,6 +164,14 @@ bootstrapWindowsConf.bundle = bootstrapWindowsConf.bundle || {};
 bootstrapWindowsConf.bundle.resources = [];
 writeFileSync(windowsConfPath, JSON.stringify(bootstrapWindowsConf, null, 2) + "\n");
 
+// NVIDIA flavor: ggml-cuda links nvcuda.dll, which only the NVIDIA driver installs.
+// Delay-load it so the app still starts (and runs on the CPU) on a PC without the
+// driver. Set on process.env so `tauri build` sees the same env and doesn't
+// rebuild llama.cpp without it. build.rs does the same for the exe itself.
+if (features && /\b(gpu-nvidia|windows-nvidia)\b/.test(features)) {
+  process.env.CMAKE_SHARED_LINKER_FLAGS = "/DELAYLOAD:nvcuda.dll delayimp.lib";
+}
+
 // ── Step 1: Build Rust binary ────────────────────────────────
 console.log("\n🔨 Step 1: Building Rust binary...\n");
 const cargoArgs = ["build", "--release"];
