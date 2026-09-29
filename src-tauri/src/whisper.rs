@@ -36,13 +36,70 @@ fn infer_whisper_backend_from_system_info(info: &str) -> Option<GpuBackend> {
 }
 
 /// Language passed to the decoder. English-only models (`*.en`) are told the
-/// speech is English. Multilingual models detect the language themselves:
-/// forcing "en" on them made non-English speech come out as English.
+/// speech is English. Multilingual models get the system language: forcing
+/// "en" made non-English speech come out as English, while detecting it on
+/// every chunk costs an extra encoder pass and misfires on short clips (a
+/// quiet "yes" can come back in another language). They detect it themselves
+/// only when the system language is not one Whisper knows.
 fn decode_language(model_id: Option<&str>) -> Option<&'static str> {
     match model_id {
         Some(id) if id.contains(".en") => Some("en"),
-        _ => None,
+        _ => system_language(),
     }
+}
+
+/// The system language as a Whisper language code, looked up once.
+fn system_language() -> Option<&'static str> {
+    static LANGUAGE: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+    *LANGUAGE.get_or_init(|| {
+        let code = whisper_language_of_locale(&system_locale()?)?;
+        Some(Box::leak(code.into_boxed_str()))
+    })
+}
+
+/// "de-DE" / "pt_BR.UTF-8" / "zh-Hans-CN" → "de" / "pt" / "zh", if Whisper knows it.
+fn whisper_language_of_locale(locale: &str) -> Option<String> {
+    let code = locale.split(['-', '_', '.', '@']).next()?.trim().to_ascii_lowercase();
+    if code.is_empty() || !code.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    whisper_rs::get_lang_id(&code)?;
+    Some(code)
+}
+
+/// The user's preferred language/locale name from the OS.
+#[cfg(target_os = "macos")]
+fn system_locale() -> Option<String> {
+    use core_foundation::array::{CFArray, CFArrayRef};
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFLocaleCopyPreferredLanguages() -> CFArrayRef;
+    }
+    let languages = unsafe { CFLocaleCopyPreferredLanguages() };
+    if languages.is_null() {
+        return None;
+    }
+    let languages: CFArray<CFString> = unsafe { CFArray::wrap_under_create_rule(languages) };
+    let first = languages.get(0).map(|s| s.to_string());
+    first
+}
+
+#[cfg(windows)]
+fn system_locale() -> Option<String> {
+    use windows::Win32::Globalization::GetUserDefaultLocaleName;
+    let mut buf = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH
+    let len = unsafe { GetUserDefaultLocaleName(&mut buf) };
+    (len > 1).then(|| String::from_utf16_lossy(&buf[..len as usize - 1]))
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn system_locale() -> Option<String> {
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|v| !v.trim().is_empty())
 }
 
 fn log_whisper_system_report(context: &str, info: &str) {

@@ -295,6 +295,7 @@ fn cmd_dictate(cmd: &str, o: &Opts) -> Result<(), Fail> {
     let before = if o.print { crate::mcp_server::latest_transcript().map(|(id, _)| id) } else { None };
     let r = request("dictate", json!({ "action": cmd }), Some(Duration::from_secs(10)))?;
     let started = r["was_recording"].as_bool() != Some(true);
+    wait_for_recording(started)?;
     match cmd {
         "start" => eprintln!("Recording. Run `taurscribe stop` to finish."),
         "toggle" if started => eprintln!("Recording. Run `taurscribe toggle` again to finish."),
@@ -317,6 +318,30 @@ fn cmd_dictate(cmd: &str, o: &Opts) -> Result<(), Fail> {
     Ok(())
 }
 
+/// Waits until the app reports `recording == want`. The app can ignore a
+/// dictation event (the last transcript is still processing, no model is
+/// installed), so the emitted event alone doesn't mean it happened. A model
+/// load before the recording starts extends the wait.
+fn wait_for_recording(want: bool) -> Result<(), Fail> {
+    let give_up = Instant::now() + Duration::from_secs(180);
+    let mut last_busy = Instant::now();
+    while Instant::now() < give_up && last_busy.elapsed() < Duration::from_secs(10) {
+        let st = try_status()?.ok_or(Fail::NotRunning)?;
+        if st["recording"].as_bool() == Some(want) {
+            return Ok(());
+        }
+        if st["engine_loading"].as_bool() == Some(true) {
+            last_busy = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Err(Fail::Other(if want {
+        "Taurscribe did not start recording (check the app: a model may be missing, or the last dictation is still being transcribed)".into()
+    } else {
+        "Taurscribe did not stop recording".into()
+    }))
+}
+
 fn cmd_transcribe(o: &Opts) -> Result<(), Fail> {
     o.check()?;
     if o.pos.is_empty() {
@@ -333,7 +358,17 @@ fn cmd_transcribe(o: &Opts) -> Result<(), Fail> {
     for f in &files {
         let shown = f.display().to_string();
         eprintln!("Transcribing {shown}…");
-        match request("transcribe", json!({ "path": shown }), None) {
+        // An app started just now may still be loading its model.
+        let load_deadline = Instant::now() + Duration::from_secs(180);
+        let reply = loop {
+            match request("transcribe", json!({ "path": shown }), None) {
+                Err(Fail::Other(e)) if e.starts_with("ASR model is still loading") && Instant::now() < load_deadline => {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                other => break other,
+            }
+        };
+        match reply {
             Ok(r) => {
                 if o.json {
                     let mut r = r;
