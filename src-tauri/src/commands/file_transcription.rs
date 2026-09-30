@@ -115,6 +115,9 @@ pub async fn transcribe_file(
     // fails mid-way. The UI blocks recording during its own file jobs, but CLI
     // jobs bypass the UI. Holding the recording transition while registering
     // keeps a start from slipping in; start_recording checks file_job_active().
+    if crate::storage::move_in_progress() {
+        return Err("A storage folder is being moved (Settings → Storage); try again when the move finishes".into());
+    }
     let transition = state.begin_recording_transition()?;
     if state.recording_handle.lock().unwrap().is_some() {
         return Err("Stop the recording before transcribing a file".into());
@@ -229,6 +232,26 @@ fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: 
     );
 }
 
+static FILE_JOB_TURN: Mutex<()> = Mutex::new(());
+
+/// Waits until no other file job is transcribing, checking for cancellation.
+fn wait_for_file_turn(
+    app: &AppHandle,
+    path: &str,
+    cancel: &Arc<AtomicBool>,
+) -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    loop {
+        match FILE_JOB_TURN.try_lock() {
+            Ok(turn) => return Ok(turn),
+            Err(std::sync::TryLockError::Poisoned(e)) => return Ok(e.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                ensure_not_cancelled(app, path, cancel)?;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+}
+
 fn ensure_not_cancelled(
     app: &AppHandle,
     path: &str,
@@ -284,6 +307,12 @@ fn transcribe_file_blocking(
     }
 
     ensure_not_cancelled(app, path, &cancel)?;
+
+    // One file job uses the engines at a time: the windows below take the
+    // engine with try_lock, so a second job running alongside (the CLI next to
+    // the Files panel, or several CLI calls) would fail with "busy". Held for
+    // the whole job; waiting jobs can still be cancelled.
+    let _turn = wait_for_file_turn(app, path, &cancel)?;
 
     // Validate and reload under the same model lock, on the blocking worker.
     // An unloaded selected model is normal after auto-unload; a different

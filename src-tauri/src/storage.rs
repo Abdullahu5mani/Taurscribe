@@ -641,6 +641,23 @@ fn rewrite_recording_paths(old: &Path, new: &Path) -> Result<(), String> {
     rewrite_recording_paths_in_db(&mut conn, old, new)
 }
 
+/// Set while `set_storage_location` runs, so work it blocks (file jobs, which
+/// wait on the recording transition it holds) can say why.
+static MOVE_IN_PROGRESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True while a storage folder is being switched or moved.
+pub fn move_in_progress() -> bool {
+    MOVE_IN_PROGRESS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+struct MoveInProgress;
+
+impl Drop for MoveInProgress {
+    fn drop(&mut self) {
+        MOVE_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Point `area` at `path` (None = back to the default folder). With
 /// `move_files`, existing files are moved across first.
 #[tauri::command]
@@ -652,6 +669,8 @@ pub async fn set_storage_location(
     move_files: bool,
 ) -> Result<StorageAreaInfo, String> {
     let _recording_transition = state.begin_recording_transition()?;
+    MOVE_IN_PROGRESS.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _move_in_progress = MoveInProgress;
     if state.recording_handle.lock().unwrap().is_some() {
         return Err("Stop the current recording before changing where files are stored.".into());
     }

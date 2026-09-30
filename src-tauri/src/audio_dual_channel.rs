@@ -622,8 +622,14 @@ impl MonoTo48k {
         if rate < 1000 {
             return mono;
         }
-        // Created from the first chunk's rate (and again if the device changes it).
+        let mut out = Vec::new();
+        // Created from the first chunk's rate, and again if the device changes it.
         if self.resampler.is_none() || self.rate != rate {
+            // Flush what the old resampler still holds: the tracks are paired by
+            // sample count, so dropping it would shift this track for good.
+            if let Some(mut old) = self.resampler.take() {
+                out = old.finish().unwrap_or_default();
+            }
             // 1024-frame blocks keep the added latency around 20 ms.
             match crate::audio_preprocess::StreamingResampler::with_target(rate, 48_000, 1024) {
                 Ok(r) => {
@@ -632,14 +638,16 @@ impl MonoTo48k {
                 }
                 Err(e) => {
                     eprintln!("[ERROR] Meeting audio resampler: {}", e);
-                    return mono;
+                    out.extend(mono);
+                    return out;
                 }
             }
         }
-        self.resampler.as_mut().unwrap().push(&mono).unwrap_or_else(|e| {
-            eprintln!("[ERROR] Meeting audio resample failed: {}", e);
-            Vec::new()
-        })
+        match self.resampler.as_mut().unwrap().push(&mono) {
+            Ok(resampled) => out.extend(resampled),
+            Err(e) => eprintln!("[ERROR] Meeting audio resample failed: {}", e),
+        }
+        out
     }
 }
 
@@ -737,5 +745,11 @@ mod tests {
         let out: usize = (0..8000).map(|_| t.push(&chunk, 1, 44100.0).len()).sum();
         let exact = 8000.0 * 512.0 * 48000.0 / 44100.0;
         assert!(out as f64 <= exact + 1.0 && out as f64 >= exact - 1115.0, "{out} vs {exact}");
+
+        // A rate change flushes what the old resampler held instead of dropping it.
+        let mut t = super::MonoTo48k::new();
+        assert!(t.push(&vec![0.5f32; 700], 1, 44100.0).is_empty(), "less than one block is buffered");
+        let after_switch = t.push(&vec![0.5f32; 480], 1, 48000.0);
+        assert_eq!(after_switch.len(), 762 + 480, "700 frames at 44.1 kHz = 762 at 48 kHz, then 480 as-is");
     }
 }

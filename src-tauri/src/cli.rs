@@ -513,7 +513,7 @@ pub fn install_status() -> InstallStatus {
     #[cfg(windows)]
     {
         let dir = app_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)).unwrap_or_default();
-        let installed = windows_user_path().is_ok_and(|p| p.split(';').any(|d| same_dir(d, &dir)));
+        let installed = windows_user_path().is_some_and(|p| p.split(';').any(|d| same_dir(d, &dir)));
         InstallStatus {
             installed,
             location: dir.display().to_string(),
@@ -573,9 +573,7 @@ pub fn install() -> Result<String, String> {
     #[cfg(windows)]
     {
         let dir = exe.parent().ok_or("no install folder")?.to_path_buf();
-        // An unreadable PATH must stop the install: treating it as empty would
-        // write back a PATH holding only our folder.
-        let current = windows_user_path()?;
+        let current = windows_user_path().unwrap_or_default();
         if current.split(';').any(|d| same_dir(d, &dir)) {
             return Ok("Already on your PATH. Open a new terminal and run `taurscribe help`.".into());
         }
@@ -626,7 +624,7 @@ pub fn uninstall() -> Result<String, String> {
     #[cfg(windows)]
     {
         let dir = app_exe()?.parent().ok_or("no install folder")?.to_path_buf();
-        let current = windows_user_path()?;
+        let current = windows_user_path().unwrap_or_default();
         let kept: Vec<&str> = current.split(';').filter(|d| !d.is_empty() && !same_dir(d, &dir)).collect();
         if kept.len() == current.split(';').filter(|d| !d.is_empty()).count() {
             return Ok("Nothing to remove.".into());
@@ -655,31 +653,20 @@ fn same_dir(entry: &str, dir: &Path) -> bool {
 
 /// The user's own PATH (not the merged system + user value), read from
 /// HKCU\Environment as UTF-16 and unexpanded, so non-ASCII folders and
-/// entries like %USERPROFILE%\bin survive being written back. Empty when the
-/// user has no PATH of their own; an error for anything else, so a failed read
-/// is never mistaken for an empty PATH.
+/// entries like %USERPROFILE%\bin survive being written back.
 #[cfg(windows)]
-fn windows_user_path() -> Result<String, String> {
+fn windows_user_path() -> Option<String> {
     use windows::core::w;
-    use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
     use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ};
     let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
-    let fail = |e: windows::Win32::Foundation::WIN32_ERROR| format!("could not read your PATH ({})", windows::core::Error::from(e));
     unsafe {
         let mut bytes = 0u32;
-        match RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, None, Some(&mut bytes)) {
-            e if e == ERROR_FILE_NOT_FOUND => return Ok(String::new()),
-            e if e.is_err() => return Err(fail(e)),
-            _ => {}
-        }
+        RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, None, Some(&mut bytes)).ok().ok()?;
         let mut buf = vec![0u16; (bytes as usize).div_ceil(2)];
         let mut bytes = (buf.len() * 2) as u32;
-        let e = RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, Some(buf.as_mut_ptr().cast()), Some(&mut bytes));
-        if e.is_err() {
-            return Err(fail(e));
-        }
+        RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, Some(buf.as_mut_ptr().cast()), Some(&mut bytes)).ok().ok()?;
         let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        Ok(String::from_utf16_lossy(&buf[..len]))
+        Some(String::from_utf16_lossy(&buf[..len]))
     }
 }
 
