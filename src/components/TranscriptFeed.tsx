@@ -185,12 +185,13 @@ function TranscriptFeedComponent({
 
     const loadHistory = useCallback(async () => {
         try {
-            const all = await invoke<TranscriptRecord[]>("list_transcript_history", {
+            // Only mic recordings here; file transcriptions have their own panel.
+            // Filtered in the query so newer file rows can't push dictations out of the 50.
+            const rows = await invoke<TranscriptRecord[]>("list_transcript_history", {
                 limit: 50,
                 offset: 0,
+                kind: "dictation",
             });
-            // Only show mic recordings here; file transcriptions have their own panel.
-            const rows = all.filter(r => (r.kind ?? (!r.audio_source || r.audio_source === "microphone" ? "dictation" : "file")) === "dictation");
             // Detect a newly added top item and trigger its enter animation.
             const isNewItem = rows.length > 0 && rows[0].id !== prevTopIdRef.current;
             if (isNewItem) {

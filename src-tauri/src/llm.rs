@@ -273,10 +273,13 @@ const GRAMMAR_CONTEXT_TOKENS: u32 = 2048;
 /// Global backend instance (initialized once)
 static BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 
-// Internal structure that holds model and context together
+// Internal structure that holds model and context together. The context
+// borrows the model, so field order matters: fields drop top to bottom, and
+// llama.cpp's context destructor still reads the model. The model is boxed so
+// moving this struct doesn't move what the context's `&LlamaModel` points at.
 struct ModelContext {
-    model: LlamaModel,
     context: llama_cpp_2::context::LlamaContext<'static>,
+    model: Box<LlamaModel>,
 }
 
 unsafe impl Send for ModelContext {}
@@ -373,13 +376,15 @@ impl LLMEngine {
         // the model's full train context.
         let context_params = llama_cpp_2::context::params::LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(GRAMMAR_CONTEXT_TOKENS));
+        let model = Box::new(model);
         let context = model
             .new_context(&backend, context_params)
             .map_err(|e| Error::msg(format!("Failed to create context: {}", e)))?;
 
-        // Transmute lifetime to 'static - safe because model lives as long as the struct
+        // Transmute lifetime to 'static: the boxed model stays at the same address
+        // and is dropped after the context (see ModelContext).
         let context = unsafe { std::mem::transmute(context) };
-        let model_context = ModelContext { model, context };
+        let model_context = ModelContext { context, model };
 
         Ok(Self {
             backend,

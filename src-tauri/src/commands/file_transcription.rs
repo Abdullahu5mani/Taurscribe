@@ -175,7 +175,7 @@ pub async fn transcribe_file(
     res
 }
 
-fn maybe_unload_after_file_batch(app: &AppHandle, state: &AudioState) {
+pub(crate) fn maybe_unload_after_file_batch(app: &AppHandle, state: &AudioState) {
     if state.auto_unload_seconds.load(Ordering::Relaxed) != 1 {
         return;
     }

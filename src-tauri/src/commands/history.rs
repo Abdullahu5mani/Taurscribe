@@ -185,6 +185,7 @@ fn insert_history_row(
 pub async fn list_transcript_history(
     limit: Option<u32>,
     offset: Option<u32>,
+    kind: Option<String>,
 ) -> Result<Vec<TranscriptRecord>, String> {
     tauri::async_runtime::spawn_blocking(move || list_transcript_history_blocking(limit, offset))
         .await
@@ -216,6 +217,7 @@ fn query_history(conn: &Connection, limit: i64, offset: i64) -> Result<Vec<Trans
         .prepare(
             "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind
              FROM transcriptions
+             WHERE ?3 IS NULL OR COALESCE(kind, {KIND_FROM_SOURCE_SQL}) = ?3
              ORDER BY datetime(created_at) DESC, id DESC
              LIMIT ?1 OFFSET ?2",
         )

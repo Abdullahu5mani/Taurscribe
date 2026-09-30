@@ -12,6 +12,11 @@ pub fn check_grammar_llm_available() -> bool {
 pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<String, String> {
     println!("[COMMAND] init_llm requested. use_gpu: {}", use_gpu);
 
+    // One load at a time: a second request waits for the first, then finds it
+    // loaded, instead of loading another ~1.5 GB copy and dropping one.
+    static LOADING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _loading = LOADING.lock().await;
+
     // Check if already loaded
     {
         let llm_guard = state.llm.lock().unwrap();

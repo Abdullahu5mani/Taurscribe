@@ -171,11 +171,24 @@ pub fn spawn_cli_server(app: AppHandle) {
             tauri::async_runtime::spawn(async move {
                 let (rd, mut wr) = sock.into_split();
                 let mut line = String::new();
-                let reply = match BufReader::new(tokio::io::AsyncReadExt::take(rd, MAX_REQUEST_BYTES)).read_line(&mut line).await {
+                let mut reader = BufReader::new(tokio::io::AsyncReadExt::take(rd, MAX_REQUEST_BYTES));
+                let reply = match reader.read_line(&mut line).await {
                     Ok(0) | Err(_) => return,
                     Ok(_) => match serde_json::from_str::<CliRequest>(&line) {
                         Ok(req) if crate::control_server::constant_time_eq(req.token.as_bytes(), token.as_bytes()) => {
-                            handle(&app, &req.cmd, &req.args).await
+                            let work = handle(&app, &req.cmd, &req.args);
+                            tokio::pin!(work);
+                            let mut rd = reader.into_inner().into_inner();
+                            // Polling the job first registers its cancel flag before a
+                            // closed connection is noticed.
+                            tokio::select! {
+                                biased;
+                                reply = &mut work => reply,
+                                () = client_gone(&mut rd) => {
+                                    abandon(&app, &req, work).await;
+                                    return;
+                                }
+                            }
                         }
                         Ok(_) => Err("invalid token".to_string()),
                         Err(e) => Err(format!("bad request: {e}")),
@@ -192,6 +205,31 @@ pub fn spawn_cli_server(app: AppHandle) {
             });
         }
     });
+}
+
+/// Resolves when the CLI closes its end (it exited, e.g. on Ctrl-C).
+async fn client_gone(rd: &mut tokio::net::tcp::OwnedReadHalf) {
+    let mut buf = [0u8; 64];
+    while let Ok(n) = tokio::io::AsyncReadExt::read(rd, &mut buf).await {
+        if n == 0 {
+            return;
+        }
+    }
+}
+
+/// The CLI went away mid-request: cancel its file job instead of transcribing
+/// for nobody (and holding up the next job and dictation), then finish the
+/// batch it was part of so "unload after each use" still unloads.
+async fn abandon(app: &AppHandle, req: &CliRequest, work: std::pin::Pin<&mut impl std::future::Future<Output = Result<Value, String>>>) {
+    if req.cmd != "transcribe" {
+        let _ = work.await;
+        return;
+    }
+    if let Some(path) = req.args.get("path").and_then(Value::as_str) {
+        let _ = crate::commands::cancel_file_transcription(path.to_string()).await;
+    }
+    let _ = work.await;
+    crate::commands::maybe_unload_after_file_batch(app, &app.state::<AudioState>());
 }
 
 fn engine_name(e: &ASREngine) -> &'static str {
@@ -274,6 +312,11 @@ async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, Strin
             }
             let action = args.get("action").and_then(Value::as_str).unwrap_or("toggle");
             let recording = is_recording(&app.state::<AudioState>());
+            // start_recording refuses during a file job; say so now rather than
+            // leaving the CLI to wait for a recording that never starts.
+            if !recording && action != "stop" && crate::commands::file_job_active() {
+                return Err("Taurscribe is transcribing a file; try again when it finishes".into());
+            }
             let event = match action {
                 "start" if recording => return Err("already recording".into()),
                 "stop" if !recording => return Err("not recording".into()),

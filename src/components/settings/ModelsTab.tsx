@@ -442,6 +442,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                             id="whisper-spoken-language-select"
                             data-testid="whisper-spoken-language-select"
                             aria-label="Language you speak, for multilingual Whisper models"
+                            className="select-input"
                             value={spokenLanguage}
                             onChange={(e) => handleSpokenLanguage(e.target.value)}
                         >

@@ -8,8 +8,10 @@ fn main() {
         return;
     }
     // `taurscribe <command>`: the command-line tool (start, stop, transcribe, history …).
+    // The app itself only gets flags (`--autostart`), so any other word is a
+    // mistyped command: report it instead of opening the app.
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|a| taurscribe_lib::cli::is_cli_command(a)) {
+    if args.first().is_some_and(|a| taurscribe_lib::cli::is_cli_command(a) || !a.starts_with('-')) {
         std::process::exit(taurscribe_lib::cli::run(args));
     }
     taurscribe_lib::run()
