@@ -1771,6 +1771,24 @@ fn engine_id(engine: ASREngine) -> &'static str {
     }
 }
 
+fn save_recording_warnings(path: &str, warnings: &[String]) -> Result<(), String> {
+    use std::io::Write;
+    let target = Path::new(path).with_extension("warnings.json");
+    let temporary = target.with_extension(format!("tmp-{}", rand::random::<u64>()));
+    let result = (|| {
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "recording_path": path, "warnings": warnings,
+        })).map_err(|e| e.to_string())?;
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+            .open(&temporary).map_err(|e| e.to_string())?;
+        file.write_all(&bytes).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        std::fs::rename(&temporary, &target).map_err(|e| e.to_string())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result
+}
+
 /// What a stop needs to store its result.
 struct Finishing<'a> {
     warnings: Vec<String>,
@@ -1796,7 +1814,7 @@ impl Finishing<'_> {
 
     /// `conclude`, with the history store passed in (tests use a fake one).
     fn conclude_with(
-        self,
+        mut self,
         transcript: String,
         keep_recording: bool,
         save_dictation: impl FnOnce(
@@ -1807,6 +1825,13 @@ impl Finishing<'_> {
             Option<&str>,
         ) -> Result<i64, String>,
     ) -> Result<RecordingOutcome, String> {
+        if !self.warnings.is_empty() {
+            if let Some(path) = self.path {
+                if let Err(error) = save_recording_warnings(path, &self.warnings) {
+                    self.warnings.push(format!("Could not store recording diagnostics: {error}"));
+                }
+            }
+        }
         let too_short = self.kind == RecordingKind::Dictation
             && self.duration_ms.is_some_and(|d| d < MIN_DICTATION_MS);
         let (meeting_id, history) = match self.kind {
@@ -2278,6 +2303,20 @@ fn stop_recording_blocking(
     }
 }
 
+fn meeting_finished_payload(outcome: &Result<RecordingOutcome, String>) -> serde_json::Value {
+    match outcome {
+        Ok(outcome) => {
+            let warning = if outcome.warnings.is_empty() { None } else {
+                let recovery = outcome.recording_path.as_ref()
+                    .map(|path| format!(" Recording retained at {path}." )).unwrap_or_default();
+                Some(format!("Meeting saved with incomplete audio: {}{recovery}", outcome.warnings.join(" ")))
+            };
+            serde_json::json!({ "meeting_id": outcome.meeting_id, "error": warning })
+        }
+        Err(message) => serde_json::json!({ "meeting_id": null, "error": message }),
+    }
+}
+
 /// COMMAND: STOP RECORDING
 ///
 /// On macOS this must be async because Tauri 2 runs synchronous commands on the
@@ -2359,9 +2398,20 @@ pub async fn stop_recording(
             active_meeting,
             model_id,
             started,
-            app_for_final,
+            app_for_final.clone(),
         );
         crate::meeting_continuation::release_recording_claim();
+        // Publish from the worker even when its command future was cancelled.
+        if is_meeting {
+            let _ = app_for_final.emit("meeting-processing-finished", meeting_finished_payload(&result));
+            if let Ok(outcome) = &result {
+                if let Some(meeting_id) = outcome.meeting_id {
+                    let _ = app_for_final.emit("meeting-processing-complete", serde_json::json!({
+                        "meeting_id": meeting_id, "transcript": outcome.transcript,
+                    }));
+                }
+            }
+        }
         result
     })
     .await;
@@ -2390,29 +2440,8 @@ pub async fn stop_recording(
         }
     }
 
-    if is_meeting {
-        // Always paired with meeting-processing-started, including when nothing was
-        // saved (empty transcript) or processing failed, so the indicator clears.
-        let payload = match &outcome {
-            Ok(o) => serde_json::json!({ "meeting_id": o.meeting_id, "error": null }),
-            Err(message) => serde_json::json!({ "meeting_id": null, "error": message }),
-        };
-        let _ = app.emit("meeting-processing-finished", payload);
-    }
-
     match outcome {
-        Ok(outcome) => {
-            if let Some(meeting_id) = outcome.meeting_id {
-                let _ = app.emit(
-                    "meeting-processing-complete",
-                    serde_json::json!({
-                        "meeting_id": meeting_id,
-                        "transcript": outcome.transcript
-                    }),
-                );
-            }
-            Ok(CommandResult::ok(outcome))
-        }
+        Ok(outcome) => Ok(CommandResult::ok(outcome)),
         Err(message) => Ok(CommandResult::err("recording_stop_failed", message)),
     }
 }
@@ -2420,6 +2449,24 @@ pub async fn stop_recording(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_meeting_event_includes_warning_and_recovery_path() {
+        let outcome = RecordingOutcome {
+            transcript: "partial speech".into(), kind: RecordingKind::Meeting,
+            meeting_id: Some(12), duration_ms: Some(1000), too_short: false,
+            history: HistoryOutcome::Skipped,
+            warnings: vec!["960 frames were lost".into()],
+            recording_path: Some("/tmp/retained-stereo.wav".into()),
+        };
+        let payload = meeting_finished_payload(&Ok(outcome));
+        assert_eq!(payload["meeting_id"], 12);
+        assert!(payload["error"].as_str().unwrap().contains("960 frames"));
+        assert!(payload["error"].as_str().unwrap().contains("retained-stereo.wav"));
+        let failed = meeting_finished_payload(&Err("Speaker at 3000–4000 ms failed".into()));
+        assert!(failed["meeting_id"].is_null());
+        assert!(failed["error"].as_str().unwrap().contains("3000"));
+    }
 
     #[test]
     fn worker_panics_are_reported_or_recovered_after_drain() {
@@ -2645,6 +2692,11 @@ mod tests {
         assert_eq!(outcome.recording_path.as_deref(), path.to_str());
         assert_eq!(outcome.warnings.len(), 1);
         assert!(path.exists());
+        let diagnostics = path.with_extension("warnings.json");
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&diagnostics).unwrap()).unwrap();
+        assert_eq!(saved["warnings"][0], "960 frames could not be written");
+        assert_eq!(saved["recording_path"], path.to_str().unwrap());
+        std::fs::remove_file(diagnostics).unwrap();
         std::fs::remove_file(path).unwrap();
     }
 

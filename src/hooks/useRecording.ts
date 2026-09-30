@@ -629,7 +629,7 @@ export function useRecording({
                 }
             }
             const unsavedNotice: SessionNotice | null = historyError
-                ? { level: "warning", code: "history_not_saved", title: "Transcript not saved to history", message: [historyError, captureNotice?.message].filter(Boolean).join(" "), sticky: true }
+                ? { level: "warning", code: "history_not_saved", title: outcome.history.status === "saved" ? "Final edits not saved to history" : "Transcript not saved to history", message: [historyError, captureNotice?.message].filter(Boolean).join(" "), sticky: true }
                 : captureNotice;
 
             if (pasteError) {

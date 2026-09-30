@@ -3358,3 +3358,19 @@ button.top-settings-btn:focus-visible {
   outline: 2px solid var(--brand, #f2a65a);
   outline-offset: 1px;
 }
+
+/* Persistent file transcript history */
+.file-history { margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px; }
+.file-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.file-history-heading h2 { margin: 0; font-size: 0.95rem; color: var(--text-primary); }
+.file-history-note { font-size: 0.75rem; color: var(--text-secondary); margin: 8px 0 12px; }
+.file-history-entry { padding: 12px 0; border-bottom: 1px solid var(--border-color); }
+.file-history-entry summary { cursor: pointer; color: var(--text-primary); font-size: 0.8rem; }
+.file-history-name { overflow-wrap: anywhere; margin-right: 12px; }
+.file-history-entry time { display: inline-block; color: var(--text-secondary); font-size: 0.72rem; }
+.file-history-metadata { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 12px; font-size: 0.75rem; margin: 12px 0; }
+.file-history-metadata dt { color: var(--text-secondary); }
+.file-history-metadata dd { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; user-select: text; }
+.file-history-metadata code { font-size: 0.7rem; }
+.file-history-transcript { margin-top: 10px; white-space: pre-wrap; user-select: text; overflow-wrap: anywhere; }
+.file-history-load-more { margin-top: 12px; }

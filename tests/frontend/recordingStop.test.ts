@@ -143,4 +143,5 @@ test("an incomplete meeting is not reported as a successfully completed recordin
     expect(phases.at(-1)).toBe("warning");
     expect(notices.at(-1)?.code).toBe("history_not_saved");
     expect(notices.at(-1)?.message).toContain("recognized text is saved");
+    expect(notices.at(-1)?.title).toBe("Final edits not saved to history");
 });
