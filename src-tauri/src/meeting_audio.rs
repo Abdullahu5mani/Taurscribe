@@ -424,6 +424,62 @@ fn webm(packets: &[Vec<u8>], pre_skip: u16, duration_ms: f64) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    fn scratch(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ts_audio_{label}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn non_finite_audio_keeps_raw_and_existing_playback_without_temp_files() {
+        let dir = scratch("nonfinite");
+        for (i, invalid) in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY].into_iter().enumerate() {
+            let wav = dir.join(format!("invalid-{i}.wav"));
+            let mut w = hound::WavWriter::create(&wav, hound::WavSpec { channels: 2, sample_rate: 48000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float }).unwrap();
+            w.write_sample(0.1f32).unwrap(); w.write_sample(invalid).unwrap(); w.finalize().unwrap();
+            let original = std::fs::read(&wav).unwrap();
+            std::fs::write(wav.with_extension("webm"), b"previous playback").unwrap();
+            assert!(compress_for_playback(&wav).unwrap_err().contains("Non-finite"));
+            assert_eq!(keep_playback_copy(&wav), wav);
+            assert_eq!(std::fs::read(&wav).unwrap(), original);
+            assert_eq!(std::fs::read(wav.with_extension("webm")).unwrap(), b"previous playback");
+            assert!(!wav.with_extension("webm.tmp").exists());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_playback_commit_removes_temp_and_keeps_raw_pcm() {
+        let dir = scratch("commit_failure");
+        let wav = dir.join("recording.wav");
+        let mut w = hound::WavWriter::create(&wav, hound::WavSpec { channels: 1, sample_rate: 48000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int }).unwrap();
+        for _ in 0..960 { w.write_sample(100i16).unwrap(); } w.finalize().unwrap();
+        let original = std::fs::read(&wav).unwrap();
+        // A directory at the output path forces rename to fail on every platform.
+        std::fs::create_dir(wav.with_extension("webm")).unwrap();
+        assert_eq!(keep_playback_copy(&wav), wav);
+        assert_eq!(std::fs::read(&wav).unwrap(), original);
+        assert!(!wav.with_extension("webm.tmp").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn integer_wav_normalization_preserves_channel_order_across_bit_depths() {
+        let dir = scratch("integer_frames");
+        for bits in [8, 16, 24, 32] {
+            let wav = dir.join(format!("{bits}.wav"));
+            let spec = hound::WavSpec { channels: 2, sample_rate: 16000, bits_per_sample: bits, sample_format: hound::SampleFormat::Int };
+            let quarter = (1i64 << (bits - 3)) as i32;
+            let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+            for sample in [quarter, -quarter, 0, quarter * 2] { w.write_sample(sample).unwrap(); } w.finalize().unwrap();
+            let mut actual = Vec::new();
+            let (found, frames) = for_each_wav_frame(&wav, |f| { actual.push(f.to_vec()); Ok(()) }).unwrap();
+            assert_eq!(found, spec); assert_eq!(frames, 2);
+            assert_eq!(actual, vec![vec![0.25, -0.25], vec![0.0, 0.5]]);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn test_vint_sizes() {
         assert_eq!(vint_size(0), vec![0x80]);

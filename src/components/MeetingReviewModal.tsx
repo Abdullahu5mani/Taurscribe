@@ -30,8 +30,15 @@ export const MeetingReviewModal: React.FC<MeetingReviewModalProps> = ({
     const [playingSnippetSpeakerId, setPlayingSnippetSpeakerId] = useState<string | null>(null);
 
     const audioRef = useRef<HTMLAudioElement | null>(null);
+    const savingRef = useRef(false);
+    const saveGenerationRef = useRef(0);
+    const activeMeetingIdRef = useRef(meetingId);
+    activeMeetingIdRef.current = meetingId;
 
     useEffect(() => {
+        saveGenerationRef.current += 1;
+        savingRef.current = false;
+        setIsSaving(false);
         setSaveError(null);
         setMeeting(null);
         if (!meetingId) {
@@ -66,6 +73,7 @@ export const MeetingReviewModal: React.FC<MeetingReviewModalProps> = ({
 
         return () => {
             active = false;
+            saveGenerationRef.current += 1;
             stopAudio();
         };
     }, [meetingId]);
@@ -93,18 +101,21 @@ export const MeetingReviewModal: React.FC<MeetingReviewModalProps> = ({
             setPlayingSnippetSpeakerId(speakerId);
 
             audio.onended = () => {
+                if (audioRef.current !== audio) return;
                 setPlayingSnippetSpeakerId(null);
                 audioRef.current = null;
             };
 
             audio.onerror = () => {
+                if (audioRef.current !== audio) return;
                 setPlayingSnippetSpeakerId(null);
                 audioRef.current = null;
             };
 
             audio.play().catch((e) => {
+                if (audioRef.current !== audio) return;
                 console.error("Failed to play snippet audio:", e);
-                setPlayingSnippetSpeakerId(null);
+                stopAudio();
             });
         } catch (e) {
             console.error("Failed to load snippet audio:", e);
@@ -126,12 +137,14 @@ export const MeetingReviewModal: React.FC<MeetingReviewModalProps> = ({
     };
 
     const dismiss = () => {
-        if (!isSaving) onClose();
+        if (!savingRef.current) onClose();
     };
 
     const handleSaveAndConfirm = async () => {
-        if (!meeting || meeting.id !== meetingId || isSaving) return;
+        if (!meeting || meeting.id !== activeMeetingIdRef.current || savingRef.current) return;
 
+        savingRef.current = true;
+        const generation = saveGenerationRef.current;
         setIsSaving(true);
         setSaveError(null);
         try {
@@ -154,15 +167,20 @@ export const MeetingReviewModal: React.FC<MeetingReviewModalProps> = ({
                 speakerRenames,
             });
 
+            if (generation !== saveGenerationRef.current || meeting.id !== activeMeetingIdRef.current) return;
             onClose();
             if (onViewInCatalog) {
                 onViewInCatalog(meeting.id);
             }
         } catch (err) {
+            if (generation !== saveGenerationRef.current || meeting.id !== activeMeetingIdRef.current) return;
             console.error("Failed to save reviewed meeting:", err);
             setSaveError(`Could not save the meeting. Your edits are still here. ${String(err)}`);
         } finally {
-            setIsSaving(false);
+            if (generation === saveGenerationRef.current) {
+                savingRef.current = false;
+                setIsSaving(false);
+            }
         }
     };
 

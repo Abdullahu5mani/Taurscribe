@@ -374,7 +374,64 @@ mod tests {
         join_wavs(&d.join("a.wav"), &d.join("b.wav"), &d.join("ab.wav")).unwrap();
         let r = hound::WavReader::open(d.join("ab.wav")).unwrap();
         assert_eq!(r.duration(), 300 + 1000 + 200);
+        let samples = r.into_samples::<f32>().collect::<Result<Vec<_>, _>>().unwrap();
+        assert!(samples[..600].iter().all(|&s| s == 0.5));
+        assert!(samples[600..2600].iter().all(|&s| s == 0.0));
+        assert!(samples[2600..].iter().all(|&s| s == -0.5));
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn continuation_preserves_integer_pcm_channels_and_source_files_exactly() {
+        let d = std::env::temp_dir().join(format!("ts_join_pcm_{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        for bits in [16, 24, 32] {
+            let spec = hound::WavSpec { channels: 2, sample_rate: 8000, bits_per_sample: bits, sample_format: hound::SampleFormat::Int };
+            let a = d.join(format!("a-{bits}.wav"));
+            let b = d.join(format!("b-{bits}.wav"));
+            let out = d.join(format!("out-{bits}.wav"));
+            let first = [1i32, -2, 300, -400, 32767, -32768];
+            let second = [-900i32, 1000, -1500, 2000];
+            for (path, values) in [(&a, first.as_slice()), (&b, second.as_slice())] {
+                let mut w = hound::WavWriter::create(path, spec).unwrap();
+                for &sample in values { w.write_sample(sample).unwrap(); }
+                w.finalize().unwrap();
+            }
+            let original_a = std::fs::read(&a).unwrap();
+            let original_b = std::fs::read(&b).unwrap();
+            join_wavs(&a, &b, &out).unwrap();
+            let mut reader = hound::WavReader::open(out).unwrap();
+            assert_eq!(reader.spec(), spec);
+            let samples = reader.samples::<i32>().collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(&samples[..first.len()], &first);
+            let gap = (8000.0 * GAP_SECONDS) as usize * 2;
+            assert!(samples[first.len()..first.len() + gap].iter().all(|&s| s == 0));
+            assert_eq!(&samples[first.len() + gap..], &second);
+            assert_eq!(std::fs::read(a).unwrap(), original_a);
+            assert_eq!(std::fs::read(b).unwrap(), original_b);
+        }
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn mismatched_continuations_preserve_existing_output_and_both_inputs() {
+        let d = std::env::temp_dir().join(format!("ts_join_mismatch_{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let a = d.join("a.wav"); let b = d.join("b.wav"); let out = d.join("out.wav");
+        let spec = hound::WavSpec { channels: 2, sample_rate: 8000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        for mismatch in [hound::WavSpec { channels: 1, ..spec }, hound::WavSpec { sample_rate: 16000, ..spec }, hound::WavSpec { bits_per_sample: 24, ..spec }] {
+            for (path, format) in [(&a, spec), (&b, mismatch)] {
+                let mut w = hound::WavWriter::create(path, format).unwrap();
+                for _ in 0..format.channels { w.write_sample(100i32).unwrap(); }
+                w.finalize().unwrap();
+            }
+            std::fs::write(&out, b"existing playback").unwrap();
+            let original_a = std::fs::read(&a).unwrap(); let original_b = std::fs::read(&b).unwrap();
+            assert!(join_wavs(&a, &b, &out).unwrap_err().contains("recordings differ"));
+            assert_eq!(std::fs::read(&out).unwrap(), b"existing playback");
+            assert_eq!(std::fs::read(&a).unwrap(), original_a); assert_eq!(std::fs::read(&b).unwrap(), original_b);
+        }
+        std::fs::remove_dir_all(d).unwrap();
     }
 
     #[test]
