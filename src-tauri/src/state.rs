@@ -354,6 +354,32 @@ mod model_activity_tests {
     use super::*;
 
     #[test]
+    fn detached_blocking_worker_keeps_models_excluded_until_it_finishes() {
+        let state = AudioState::new(
+            WhisperManager::new(),
+            GgufAsrManager::granite(),
+            VADManager::new().unwrap(),
+            GgufAsrManager::qwen3(),
+        );
+        let operation = state.begin_model_operation().unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let (done, finished) = std::sync::mpsc::channel();
+        let task = tauri::async_runtime::spawn_blocking(move || {
+            let operation = operation;
+            wait.recv().unwrap();
+            drop(operation);
+            done.send(()).unwrap();
+        });
+        drop(task); // cancelling the command future does not cancel native work
+        assert!(state.begin_exclusive_model_operation().is_err());
+        release.send(()).unwrap();
+        finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(state.begin_exclusive_model_operation().is_ok());
+    }
+
+    #[test]
     fn unload_waits_until_active_transcription_finishes() {
         let state = AudioState::new(
             WhisperManager::new(),

@@ -131,8 +131,16 @@ fn transcribe_final_pass(
         .lock()
         .map_err(|_| "ASR lock poisoned".to_string())?;
 
-    let chunk_samples = if engine == ASREngine::Qwen3 { 16_000 * 30 } else { FINAL_PASS_CHUNK_SAMPLES };
-    let full_max = if engine == ASREngine::Qwen3 { chunk_samples } else { FINAL_PASS_FULL_MAX_SAMPLES };
+    let chunk_samples = if engine == ASREngine::Qwen3 {
+        16_000 * 30
+    } else {
+        FINAL_PASS_CHUNK_SAMPLES
+    };
+    let full_max = if engine == ASREngine::Qwen3 {
+        chunk_samples
+    } else {
+        FINAL_PASS_FULL_MAX_SAMPLES
+    };
     if audio.len() <= full_max {
         return manager.transcribe_chunk(&audio, 16000, None);
     }
@@ -183,8 +191,8 @@ pub async fn start_recording(
     denoise: Option<bool>,
     audio_source: Option<String>,
 ) -> Result<CommandResult<String>, String> {
-    let _recording_transition = state.begin_recording_transition()?;
-    let _model_operation = state.begin_model_operation()?;
+    let _recording_transition = Arc::new(state.begin_recording_transition()?);
+    let _model_operation = Arc::new(state.begin_model_operation()?);
     // Guard: reject if already recording (e.g. spam hotkey)
     if state.recording_handle.lock().unwrap().is_some() {
         return Ok(CommandResult::err("already_recording", "Already recording"));
@@ -218,8 +226,19 @@ pub async fn start_recording(
     let state = (*state).clone();
     let app_for_event = app_handle.clone();
     let state_for_event = state.clone();
+    let worker_operation = _model_operation.clone();
+    let worker_transition = _recording_transition.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        start_recording_blocking(app_handle, state, denoise, audio_source)
+        let _operation = worker_operation;
+        let _transition = worker_transition;
+        let worker_state = state.clone();
+        let result = start_recording_blocking(app_handle.clone(), state, denoise, audio_source);
+        if result.is_err() {
+            crate::meeting_continuation::release_recording_claim();
+            *worker_state.recording_meeting.lock().unwrap() = None;
+        }
+        emit_recording_state(&app_handle, &worker_state);
+        result
     })
     .await;
     if !matches!(&result, Ok(Ok(_))) {
@@ -1054,7 +1073,7 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) -> Resul
     use cpal::traits::StreamTrait;
 
     let RecordingHandle {
-        capture_loss: _,
+        capture_loss,
         stream,
         file_tx,
         whisper_tx,
@@ -1078,9 +1097,10 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) -> Resul
     if let Some(dc_stop) = dual_channel_stop {
         dc_stop.store(true, Ordering::Relaxed);
     }
+    let mut capture_error = None;
     if let Some(thread) = dual_channel_thread {
         if let Err(e) = thread.join() {
-            eprintln!("[ERROR] Dual-channel capture thread panicked: {:?}", e);
+            capture_error = Some(format!("Dual-channel capture thread panicked: {e:?}"));
         }
     }
     drop(file_tx);
@@ -1096,10 +1116,13 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) -> Resul
         .join()
         .map_err(|e| format!("Recording writer panicked: {e:?}"));
     if let Err(e) = transcriber_thread.join() {
+        capture_loss.preview_failed.store(true, Ordering::Relaxed);
         eprintln!("[ERROR] Transcriber thread panicked: {:?}", e);
     }
     println!("[INFO] Worker threads finished.");
-    writer_result?
+    writer_result??;
+    if let Some(error) = capture_error { return Err(error); }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1138,8 +1161,8 @@ pub fn resume_recording(state: State<'_, AudioState>) -> Result<CommandResult<St
 
 #[tauri::command]
 pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandResult<()>, String> {
-    let _recording_transition = state.begin_recording_transition()?;
-    let _model_operation = state.begin_model_operation()?;
+    let _recording_transition = Arc::new(state.begin_recording_transition()?);
+    let _model_operation = Arc::new(state.begin_model_operation()?);
     state.recording_paused.store(false, Ordering::Relaxed);
 
     let Some(recording) = state.recording_handle.lock().unwrap().take() else {
@@ -1149,8 +1172,13 @@ pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandRes
     let session_transcript = state.session_transcript.clone();
     *state.recording_meeting.lock().unwrap() = None;
 
+    let worker_operation = _model_operation.clone();
+    let worker_transition = _recording_transition.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let _operation = worker_operation;
+        let _transition = worker_transition;
         let teardown_result = teardown_recording(recording, 0);
+        crate::meeting_continuation::release_recording_claim();
         session_transcript.lock().unwrap().clear();
         if let Some(path) = last_recording_path {
             let _ = std::fs::remove_file(path);
@@ -1771,7 +1799,13 @@ impl Finishing<'_> {
         self,
         transcript: String,
         keep_recording: bool,
-        save_dictation: impl FnOnce(&str, &str, Option<i64>, Option<i64>, Option<&str>) -> Result<i64, String>,
+        save_dictation: impl FnOnce(
+            &str,
+            &str,
+            Option<i64>,
+            Option<i64>,
+            Option<&str>,
+        ) -> Result<i64, String>,
     ) -> Result<RecordingOutcome, String> {
         let too_short = self.kind == RecordingKind::Dictation
             && self.duration_ms.is_some_and(|d| d < MIN_DICTATION_MS);
@@ -1803,19 +1837,39 @@ impl Finishing<'_> {
                     Err(error) => {
                         eprintln!("[HISTORY] Could not save the dictation; keeping its recording: {error}");
                         let recording_path = self.path.map(str::to_string);
-                        (None, HistoryOutcome::NotSaved { error, recording_path })
+                        (
+                            None,
+                            HistoryOutcome::NotSaved {
+                                error,
+                                recording_path,
+                            },
+                        )
                     }
                 }
             }
         };
-        let keep = !self.warnings.is_empty() || matches!(history, HistoryOutcome::NotSaved { .. })
+        let keep = !self.warnings.is_empty()
+            || matches!(history, HistoryOutcome::NotSaved { .. })
             || (keep_recording && self.kind == RecordingKind::Dictation);
         if !keep {
             if let Some(path) = self.path {
                 let _ = std::fs::remove_file(path);
             }
         }
-        Ok(RecordingOutcome { warnings: self.warnings, recording_path: if keep { self.path.map(str::to_string) } else { None }, transcript, kind: self.kind, meeting_id, duration_ms: self.duration_ms, too_short, history })
+        Ok(RecordingOutcome {
+            warnings: self.warnings,
+            recording_path: if keep {
+                self.path.map(str::to_string)
+            } else {
+                None
+            },
+            transcript,
+            kind: self.kind,
+            meeting_id,
+            duration_ms: self.duration_ms,
+            too_short,
+            history,
+        })
     }
 }
 
@@ -2033,7 +2087,8 @@ fn stop_recording_blocking(
     // transcriber thread handles the actual word-boundary safety margin.
     let capture_loss = recording.capture_loss.clone();
     let teardown = teardown_recording(recording, 80);
-    let preview_incomplete = capture_loss.preview_frames.load(Ordering::Relaxed) > 0;
+    let preview_incomplete = capture_loss.preview_frames.load(Ordering::Relaxed) > 0
+        || capture_loss.preview_failed.load(Ordering::Relaxed);
     let mut finishing = Finishing {
         warnings: capture_loss.warnings(),
         kind,
@@ -2238,8 +2293,8 @@ pub async fn stop_recording(
     app: AppHandle,
 ) -> Result<CommandResult<RecordingOutcome>, String> {
     let started = std::time::Instant::now();
-    let _recording_transition = state.begin_recording_transition()?;
-    let model_operation = state.begin_model_operation()?;
+    let _recording_transition = Arc::new(state.begin_recording_transition()?);
+    let model_operation = Arc::new(state.begin_model_operation()?);
     // --- Quick state access (non-blocking, just mutex snapshots) ---
     state.recording_paused.store(false, Ordering::Relaxed);
 
@@ -2287,8 +2342,12 @@ pub async fn stop_recording(
     // --- Heavy work: dispatched off the main thread via spawn_blocking so the
     //     macOS AppKit event loop stays responsive (thread joins, VAD, Whisper). ---
     let app_for_final = app.clone();
+    let worker_operation = model_operation.clone();
+    let worker_transition = _recording_transition.clone();
     let task = tauri::async_runtime::spawn_blocking(move || {
-        stop_recording_blocking(
+        let _operation = worker_operation;
+        let _transition = worker_transition;
+        let result = stop_recording_blocking(
             recording,
             active_engine,
             session_transcript,
@@ -2301,7 +2360,9 @@ pub async fn stop_recording(
             model_id,
             started,
             app_for_final,
-        )
+        );
+        crate::meeting_continuation::release_recording_claim();
+        result
     })
     .await;
     crate::meeting_continuation::release_recording_claim();
@@ -2361,6 +2422,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn worker_panics_are_reported_or_recovered_after_drain() {
+        for capture_panics in [false, true] {
+            let (file_tx, file_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+            let (whisper_tx, whisper_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+            let loss = Arc::new(CaptureLoss::default());
+            let drained = Arc::new(AtomicBool::new(false));
+            let writer_done = drained.clone();
+            let handle = RecordingHandle {
+                capture_loss: loss.clone(),
+                stream: None,
+                file_tx,
+                whisper_tx,
+                writer_thread: std::thread::spawn(move || {
+                    while file_rx.recv().is_ok() {}
+                    writer_done.store(true, Ordering::Relaxed);
+                    Ok(())
+                }),
+                transcriber_thread: std::thread::spawn(move || {
+                    while whisper_rx.recv().is_ok() {}
+                    if !capture_panics {
+                        panic!("simulated preview failure");
+                    }
+                }),
+                level_stop: Arc::new(AtomicBool::new(false)),
+                level_thread: std::thread::spawn(|| {}),
+                is_dual_channel: capture_panics,
+                dual_channel_stop: None,
+                dual_channel_thread: if capture_panics {
+                    Some(std::thread::spawn(|| panic!("simulated capture failure")))
+                } else {
+                    None
+                },
+            };
+            let result = teardown_recording(handle, 0);
+            assert!(drained.load(Ordering::Relaxed));
+            if capture_panics {
+                assert!(result.unwrap_err().contains("capture thread panicked"));
+            } else {
+                result.unwrap(); // saved audio permits a final transcription
+                assert!(loss.preview_failed.load(Ordering::Relaxed));
+            }
+        }
+    }
+
+    #[test]
     fn dual_channel_tail_is_drained_before_writer_exits() {
         let (file_tx, file_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
         let (whisper_tx, whisper_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
@@ -2386,7 +2492,8 @@ mod tests {
         let level_thread = std::thread::spawn(|| {});
         teardown_recording(
             RecordingHandle {
-                capture_loss: Arc::new(CaptureLoss::default()),                stream: None,
+                capture_loss: Arc::new(CaptureLoss::default()),
+                stream: None,
                 file_tx,
                 whisper_tx,
                 writer_thread,
@@ -2410,7 +2517,8 @@ mod tests {
         let writer_thread = std::thread::spawn(|| Err("disk full".to_string()));
         let transcriber_thread = std::thread::spawn(move || while whisper_rx.recv().is_ok() {});
         let handle = RecordingHandle {
-            capture_loss: Arc::new(CaptureLoss::default()),            stream: None,
+            capture_loss: Arc::new(CaptureLoss::default()),
+            stream: None,
             file_tx,
             whisper_tx,
             writer_thread,
@@ -2431,7 +2539,8 @@ mod tests {
         let finished = Arc::new(AtomicBool::new(false));
         let worker_finished = finished.clone();
         let handle = RecordingHandle {
-            capture_loss: Arc::new(CaptureLoss::default()),            stream: None,
+            capture_loss: Arc::new(CaptureLoss::default()),
+            stream: None,
             file_tx,
             whisper_tx,
             writer_thread: std::thread::spawn(|| -> Result<(), String> {
@@ -2494,9 +2603,19 @@ mod tests {
         keep_recording: bool,
         save: impl FnOnce(&str, &str, Option<i64>, Option<i64>, Option<&str>) -> Result<i64, String>,
     ) -> RecordingOutcome {
+        finish_dictation_with_warnings(path, transcript, keep_recording, Vec::new(), save)
+    }
+
+    fn finish_dictation_with_warnings(
+        path: &std::path::Path,
+        transcript: &str,
+        keep_recording: bool,
+        warnings: Vec<String>,
+        save: impl FnOnce(&str, &str, Option<i64>, Option<i64>, Option<&str>) -> Result<i64, String>,
+    ) -> RecordingOutcome {
         let whisper = Arc::new(std::sync::Mutex::new(crate::whisper::WhisperManager::new()));
         let finishing = Finishing {
-            warnings: Vec::new(),
+            warnings,
             kind: RecordingKind::Dictation,
             meeting_info: None,
             path: path.to_str(),
@@ -2507,7 +2626,26 @@ mod tests {
             duration_ms: wav_duration(path),
             started: std::time::Instant::now(),
         };
-        finishing.conclude_with(transcript.into(), keep_recording, save).unwrap()
+        finishing
+            .conclude_with(transcript.into(), keep_recording, save)
+            .unwrap()
+    }
+
+    #[test]
+    fn capture_loss_retains_audio_even_after_history_is_saved() {
+        let path = temp_wav("capture-loss", 1500);
+        let outcome = finish_dictation_with_warnings(
+            &path,
+            "partial text",
+            false,
+            vec!["960 frames could not be written".into()],
+            |_, _, _, _, _| Ok(9),
+        );
+        assert_eq!(outcome.history, HistoryOutcome::Saved { id: 9 });
+        assert_eq!(outcome.recording_path.as_deref(), path.to_str());
+        assert_eq!(outcome.warnings.len(), 1);
+        assert!(path.exists());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

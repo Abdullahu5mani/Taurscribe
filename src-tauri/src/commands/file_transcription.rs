@@ -102,7 +102,7 @@ pub async fn transcribe_file(
     defer_auto_unload: Option<bool>,
     use_gpu: Option<bool>,
 ) -> Result<FileTranscriptionResult, String> {
-    let model_operation = state.begin_model_operation()?;
+    let model_operation = Arc::new(state.begin_model_operation()?);
     if state.engine_loading.load(Ordering::Acquire) {
         return Err(
             "ASR model is still loading; wait until the engine is ready before transcribing a file"
@@ -144,7 +144,12 @@ pub async fn transcribe_file(
     let app_for_task = app.clone();
     let state_for_task = (*state).clone();
 
+    // A detached blocking job still owns its model gate and registration.
+    let registration = FileJobRegistration(path.clone());
+    let worker_operation = model_operation.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
+        let _registration = registration;
+        let _operation = worker_operation;
         let result = transcribe_file_blocking(
             &app_for_task,
             &path_for_task,
@@ -162,8 +167,6 @@ pub async fn transcribe_file(
     .await
     .map_err(|e| format!("transcribe_file task failed: {}", e))
     .and_then(|r| r);
-
-    unregister_cancel_flag(&path);
 
     state.touch_activity();
     drop(model_operation);
@@ -556,6 +559,14 @@ mod vm_feature_tests {
     }
 }
 
+struct FileJobRegistration(String);
+
+impl Drop for FileJobRegistration {
+    fn drop(&mut self) {
+        unregister_cancel_flag(&self.0);
+    }
+}
+
 fn prepare_file_window_edges(mono: &mut Vec<f32>) {
     // DC bias raises the adaptive RMS floor; correct it before either gate.
     audio_preprocess::remove_dc(mono);
@@ -755,9 +766,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn detached_file_worker_releases_its_registration() {
+        let path = format!("/tmp/file-registration-{}", rand::random::<u64>());
+        register_cancel_flag(&path, None).unwrap();
+        let registration = FileJobRegistration(path.clone());
+        let (release, wait) = std::sync::mpsc::channel();
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = tauri::async_runtime::spawn_blocking(move || {
+            let registration = registration;
+            wait.recv().unwrap();
+            drop(registration);
+            done.send(()).unwrap();
+        });
+        drop(worker);
+        assert!(register_cancel_flag(&path, None).is_err());
+        release.send(()).unwrap();
+        finished
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(register_cancel_flag(&path, None).is_ok());
+        unregister_cancel_flag(&path);
+    }
+
+    #[test]
     fn dc_biased_speech_survives_file_edge_and_energy_gates() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/jfk.wav");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jfk.wav");
         let (audio, rate) = crate::audio_decode::decode_audio_mono_f32(&path).unwrap();
         let speech = audio_preprocess::resample_mono_to_16k(&audio, rate).unwrap();
         let mut clean = vec![0.0; 16_000];
@@ -768,9 +801,19 @@ mod tests {
         prepare_file_window_edges(&mut biased);
         let clean = crate::vad::assemble_speech_audio(&clean, None).unwrap();
         let biased = crate::vad::assemble_speech_audio(&biased, None).unwrap();
-        assert!(clean.len() > 80_000, "fixture must retain several seconds of speech");
-        assert_eq!(clean.len(), biased.len(), "DC bias must not truncate speech");
-        assert!(clean.iter().zip(&biased).all(|(a,b)| (a-b).abs() < 0.0001));
+        assert!(
+            clean.len() > 80_000,
+            "fixture must retain several seconds of speech"
+        );
+        assert_eq!(
+            clean.len(),
+            biased.len(),
+            "DC bias must not truncate speech"
+        );
+        assert!(clean
+            .iter()
+            .zip(&biased)
+            .all(|(a, b)| (a - b).abs() < 0.0001));
     }
 
     #[test]

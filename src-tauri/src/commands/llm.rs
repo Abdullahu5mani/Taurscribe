@@ -22,7 +22,9 @@ pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<Str
     // FlowScribe isn't under the ASR model gate; don't open its weights in a
     // models folder that is being moved.
     if crate::commands::models_moving() {
-        return Err("The models folder is being moved; FlowScribe loads once the move finishes".into());
+        return Err(
+            "The models folder is being moved; FlowScribe loads once the move finishes".into(),
+        );
     }
 
     let llm_handle = state.llm.clone();
@@ -35,15 +37,13 @@ pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<Str
         if llm.is_some() {
             return Ok("LLM already initialized".to_string());
         }
-        let engine = LLMEngine::new(use_gpu)
-            .map_err(|e| format!("Failed to load LLM: {e}"))?;
+        let engine = LLMEngine::new(use_gpu).map_err(|e| format!("Failed to load LLM: {e}"))?;
         *llm = Some(engine);
         println!("[SUCCESS] Grammar LLM initialized!");
         Ok("Grammar LLM initialized successfully".to_string())
     })
     .await
     .map_err(|e| format!("JoinError: {e}"))?
-
 }
 
 
@@ -75,9 +75,10 @@ pub async fn correct_text(
     };
     // The Accessibility lookup waits for the main thread (see
     // context::on_main_thread), so do it on the blocking pool, not a Tokio worker.
-    let app_category = tauri::async_runtime::spawn_blocking(move || crate::context::active_app_category(&app))
-        .await
-        .unwrap_or("generic");
+    let app_category =
+        tauri::async_runtime::spawn_blocking(move || crate::context::active_app_category(&app))
+            .await
+            .unwrap_or("generic");
     let request = crate::llm::FlowRequest {
         engine: engine_tag.to_string(),
         level: crate::llm::level_for_style(style.as_deref()).to_string(),
@@ -92,11 +93,17 @@ pub async fn correct_text(
         if let Some(engine) = llm_guard.as_mut() {
             println!(
                 "[LLM] Cleaning transcript (engine={}, level={}, app={}, vocab={})",
-                request.engine, request.level, request.app, request.vocab.len()
+                request.engine,
+                request.level,
+                request.app,
+                request.vocab.len()
             );
             match engine.clean_transcript(&text, &request) {
                 Ok(formatted) => {
-                    println!("[LLM] Correction finished. Output length: {}", formatted.len());
+                    println!(
+                        "[LLM] Correction finished. Output length: {}",
+                        formatted.len()
+                    );
                     Ok(formatted)
                 }
                 Err(e) => {
@@ -124,6 +131,13 @@ pub async fn unload_llm(state: State<'_, AudioState>) -> Result<String, String> 
         let loaded = engine.is_some();
         drop(engine);
         crate::memory::trim_process_memory();
-        Ok(if loaded { "LLM unloaded successfully" } else { "LLM was not loaded" }.to_string())
-    }).await.map_err(|e| format!("LLM unload task failed: {e}"))?
+        Ok(if loaded {
+            "LLM unloaded successfully"
+        } else {
+            "LLM was not loaded"
+        }
+        .to_string())
+    })
+    .await
+    .map_err(|e| format!("LLM unload task failed: {e}"))?
 }

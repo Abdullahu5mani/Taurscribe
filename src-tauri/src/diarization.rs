@@ -966,15 +966,8 @@ pub fn diarize_meeting_recording(
     diarize_meeting_recording_with(wav_path, raw_transcript, snippets_dir, meeting_id, None)
 }
 
-/// Like [`diarize_meeting_recording`], but transcribes each detected turn from its
-/// own channel with `transcriber` instead of distributing `raw_transcript`.
-pub fn diarize_meeting_recording_with(
-    wav_path: &Path,
-    raw_transcript: &str,
-    snippets_dir: &Path,
-    meeting_id: i64,
-    transcriber: Option<TurnTranscriber<'_>>,
-) -> Result<Vec<DiarizedTurn>, String> {
+/// Decode directly into microphone/call channels without a third full buffer.
+fn read_meeting_channels(wav_path: &Path) -> Result<(Vec<f32>, Vec<f32>, u32), String> {
     let mut reader = hound::WavReader::open(wav_path)
         .map_err(|e| format!("Could not open meeting audio {}: {e}", wav_path.display()))?;
     let spec = reader.spec();
@@ -987,17 +980,18 @@ pub fn diarize_meeting_recording_with(
     // and never silently skip corrupt samples and shift the channels' alignment.
     let mut mic_samples = Vec::new();
     let mut sys_samples = Vec::new();
-    let mut push = |idx: usize, sample: f32| {
-        match idx % channels as usize {
-            0 => mic_samples.push(sample),
-            1 => sys_samples.push(sample),
-            _ => {},
-        }
+    let mut push = |idx: usize, sample: f32| match idx % channels as usize {
+        0 => mic_samples.push(sample),
+        1 => sys_samples.push(sample),
+        _ => {}
     };
     match spec.sample_format {
         hound::SampleFormat::Float => {
             for (idx, sample) in reader.samples::<f32>().enumerate() {
-                push(idx, sample.map_err(|e| format!("Could not read meeting audio: {e}"))?);
+                push(
+                    idx,
+                    sample.map_err(|e| format!("Could not read meeting audio: {e}"))?,
+                );
             }
         }
         hound::SampleFormat::Int => {
@@ -1008,6 +1002,20 @@ pub fn diarize_meeting_recording_with(
             }
         }
     }
+
+    Ok((mic_samples, sys_samples, sample_rate))
+}
+
+/// Like [`diarize_meeting_recording`], but transcribes each detected turn from its
+/// own channel with `transcriber` instead of distributing `raw_transcript`.
+pub fn diarize_meeting_recording_with(
+    wav_path: &Path,
+    raw_transcript: &str,
+    snippets_dir: &Path,
+    meeting_id: i64,
+    transcriber: Option<TurnTranscriber<'_>>,
+) -> Result<Vec<DiarizedTurn>, String> {
+    let (mic_samples, sys_samples, sample_rate) = read_meeting_channels(wav_path)?;
 
     let mic_turns = detect_channel_speech_segments(&mic_samples, sample_rate, 0, 0.015);
     let (remote_turns, mut remote_profiles) = split_remote_speakers(&sys_samples, sample_rate);
@@ -1119,21 +1127,102 @@ mod tests {
     use super::*;
 
     #[test]
+    fn direct_channel_reader_preserves_samples_and_reports_corruption() {
+        for channels in [1u16, 2, 6] {
+            for format in [hound::SampleFormat::Float, hound::SampleFormat::Int] {
+                let path = std::env::temp_dir()
+                    .join(format!("meeting-read-{}.wav", rand::random::<u64>()));
+                let bits = if format == hound::SampleFormat::Float {
+                    32
+                } else {
+                    16
+                };
+                let mut writer = hound::WavWriter::create(
+                    &path,
+                    hound::WavSpec {
+                        channels,
+                        sample_rate: 48000,
+                        bits_per_sample: bits,
+                        sample_format: format,
+                    },
+                )
+                .unwrap();
+                for n in 0..101 {
+                    for c in 0..channels {
+                        let value = n as i16 * 10 + c as i16;
+                        if format == hound::SampleFormat::Float {
+                            writer.write_sample(value as f32 / 32768.0).unwrap();
+                        } else {
+                            writer.write_sample(value).unwrap();
+                        }
+                    }
+                }
+                writer.finalize().unwrap();
+                let (mic, remote, rate) = read_meeting_channels(&path).unwrap();
+                assert_eq!(rate, 48000);
+                assert_eq!(
+                    mic,
+                    (0..101)
+                        .map(|n| n as f32 * 10.0 / 32768.0)
+                        .collect::<Vec<_>>()
+                );
+                if channels == 1 {
+                    assert!(remote.is_empty());
+                } else {
+                    assert_eq!(
+                        remote,
+                        (0..101)
+                            .map(|n| (n * 10 + 1) as f32 / 32768.0)
+                            .collect::<Vec<_>>()
+                    );
+                }
+                let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+                let len = file.metadata().unwrap().len();
+                file.set_len(len - 1).unwrap();
+                assert!(
+                    read_meeting_channels(&path).is_err(),
+                    "corrupt sample cannot shift channel alignment"
+                );
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    #[test]
     fn failed_middle_turn_cannot_become_a_completed_partial_meeting() {
-        let segments: Vec<_> = (0..3).map(|n| AudioTurnSegment {
-            channel: 0, start_sample: n * 48000, end_sample: n*48000+16000,
-            start_ms: n as u64 * 3000, end_ms: n as u64 * 3000+1000,
-            features: AcousticFeatures::default(), cluster_id: 0,
-        }).collect();
+        let segments: Vec<_> = (0..3)
+            .map(|n| AudioTurnSegment {
+                channel: 0,
+                start_sample: n * 48000,
+                end_sample: n * 48000 + 16000,
+                start_ms: n as u64 * 3000,
+                end_ms: n as u64 * 3000 + 1000,
+                features: AcousticFeatures::default(),
+                cluster_id: 0,
+            })
+            .collect();
         let mut calls = 0;
         let mut transcribe = |_: &[f32], _: u32| {
             calls += 1;
-            if calls == 2 { Err("native inference failed".into()) }
-            else { Ok("recognized turn".into()) }
+            if calls == 2 {
+                Err("native inference failed".into())
+            } else {
+                Ok("recognized turn".into())
+            }
         };
         let dir = std::env::temp_dir().join(format!("turn-failure-{}", rand::random::<u64>()));
-        let result = align_transcript_to_turns(&segments, &[], &[], "preview", &dir,
-            1, &vec![0.1; 112000], &[], 16000, Some(&mut transcribe));
+        let result = align_transcript_to_turns(
+            &segments,
+            &[],
+            &[],
+            "preview",
+            &dir,
+            1,
+            &vec![0.1; 112000],
+            &[],
+            16000,
+            Some(&mut transcribe),
+        );
         let error = result.unwrap_err();
         assert!(error.contains("native inference failed"));
         assert!(error.contains("3000") && error.contains("4000"));
@@ -1143,12 +1232,30 @@ mod tests {
 
     #[test]
     fn valid_empty_turn_is_not_an_inference_failure() {
-        let seg = AudioTurnSegment { channel: 0, start_sample: 0, end_sample: 16000,
-            start_ms: 0, end_ms: 1000, features: AcousticFeatures::default(), cluster_id: 0 };
+        let seg = AudioTurnSegment {
+            channel: 0,
+            start_sample: 0,
+            end_sample: 16000,
+            start_ms: 0,
+            end_ms: 1000,
+            features: AcousticFeatures::default(),
+            cluster_id: 0,
+        };
         let mut transcribe = |_: &[f32], _: u32| Ok(String::new());
         let dir = std::env::temp_dir().join(format!("empty-turn-{}", rand::random::<u64>()));
-        assert!(align_transcript_to_turns(&[seg], &[], &[], "", &dir, 1,
-            &vec![0.0; 16000], &[], 16000, Some(&mut transcribe)).is_ok());
+        assert!(align_transcript_to_turns(
+            &[seg],
+            &[],
+            &[],
+            "",
+            &dir,
+            1,
+            &vec![0.0; 16000],
+            &[],
+            16000,
+            Some(&mut transcribe)
+        )
+        .is_ok());
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -772,14 +772,7 @@ pub async fn set_storage_location(
     } else {
         None
     };
-    if let (Some(gate), true) = (&models_gate, move_files) {
-        // Loaded weights keep their files open (and locked on Windows).
-        let unloaded = state.unload_all_loaded_asr_exclusive(gate)?;
-        if !unloaded.is_empty() {
-            crate::tray::reconcile_model_loaded_tray(&app, &state);
-            let _ = app.emit("model-unloaded", ());
-        }
-    }
+    let models_state = (*state).clone();
     let llm = state.llm.clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Keep exclusion inside the worker too: if the command future is
@@ -788,103 +781,117 @@ pub async fn set_storage_location(
         let _models_move = _models_move;
         let _recording_transition = _recording_transition;
         let _move_in_progress = _move_in_progress;
+        if let (Some(gate), true) = (&_models_gate, move_files) {
+            // Loaded weights keep their files open (and locked on Windows).
+            let unloaded = models_state.unload_all_loaded_asr_exclusive(gate)?;
+            if !unloaded.is_empty() {
+                crate::tray::reconcile_model_loaded_tray(&app, &models_state);
+                let _ = app.emit("model-unloaded", ());
+            }
+        }
         let llm_unloaded = if area == Area::Models && move_files {
             let engine = llm.lock().map_err(|e| e.to_string())?.take();
             let unloaded = engine.is_some();
             drop(engine); // release FlowScribe's mapped weights before moving files
             unloaded
-        } else { false };
-        let result = (|| {
-        let old = current_dir(area)?;
-        let new = match &path {
-            Some(p) => PathBuf::from(p),
-            None => default_dir(area)?,
-        };
-        if new.as_os_str().is_empty() || !new.is_absolute() {
-            return Err("Pick a full folder path.".into());
-        }
-        std::fs::create_dir_all(&new).map_err(|e| format!("Can't use {}: {e}", new.display()))?;
-        // Writable?
-        let probe = new.join(".taurscribe-write-test");
-        std::fs::write(&probe, b"ok")
-            .map_err(|e| format!("Taurscribe can't write to {}: {e}", new.display()))?;
-        let _ = std::fs::remove_file(&probe);
-
-        let copying = move_files && old.exists() && !same_place(&old, &new);
-        let mut verified = std::collections::HashSet::new();
-        if copying {
-            if new
-                .canonicalize()
-                .ok()
-                .zip(old.canonicalize().ok())
-                .is_some_and(|(n, o)| n.starts_with(&o))
-            {
-                return Err("The new folder can't be inside the current one.".into());
-            }
-            let total = dir_size(&old);
-            // On the same volume files are hard-linked and need no space.
-            if let (false, (Some(free), _, _)) = (same_device(&old, &new), disk_info(&new)) {
-                if free < total {
-                    return Err(format!(
-                        "Not enough space: {:.1} GB needed, {:.1} GB free.",
-                        total as f64 / 1e9,
-                        free as f64 / 1e9
-                    ));
-                }
-            }
-            let emit = |done_bytes, total_bytes| {
-                let _ = app.emit(
-                    "storage-move-progress",
-                    MoveProgress {
-                        area,
-                        done_bytes,
-                        total_bytes,
-                    },
-                );
-            };
-            let mut mover = Mover {
-                on_progress: &emit,
-                total,
-                done: 0,
-                last_emit: Instant::now(),
-                verified: Default::default(),
-            };
-            Mover::check_conflicts(&old, &new)?;
-            mover.copy_contents(&old, &new)?;
-            verified = std::mem::take(&mut mover.verified);
-        }
-
-        let mut cfg = load_config();
-        let is_default = same_place(&new, &default_dir(area)?);
-        cfg.set(area, if is_default { None } else { Some(new.clone()) });
-        if copying && area == Area::Recordings {
-            let entry = MoveJournal { old: old.clone(), new: new.clone() };
-            publish_recordings_move(
-                &journal_path()?,
-                &entry,
-                &mut |from, to| rewrite_recording_paths(from, to),
-                || save_config(&cfg),
-            )?;
         } else {
-            save_config(&cfg)?;
-        }
-        if copying {
-            if let Err(e) = remove_verified_sources(&old, &new, &verified) {
-                eprintln!(
+            false
+        };
+        let result = (|| {
+            let old = current_dir(area)?;
+            let new = match &path {
+                Some(p) => PathBuf::from(p),
+                None => default_dir(area)?,
+            };
+            if new.as_os_str().is_empty() || !new.is_absolute() {
+                return Err("Pick a full folder path.".into());
+            }
+            std::fs::create_dir_all(&new)
+                .map_err(|e| format!("Can't use {}: {e}", new.display()))?;
+            // Writable?
+            let probe = new.join(".taurscribe-write-test");
+            std::fs::write(&probe, b"ok")
+                .map_err(|e| format!("Taurscribe can't write to {}: {e}", new.display()))?;
+            let _ = std::fs::remove_file(&probe);
+
+            let copying = move_files && old.exists() && !same_place(&old, &new);
+            let mut verified = std::collections::HashSet::new();
+            if copying {
+                if new
+                    .canonicalize()
+                    .ok()
+                    .zip(old.canonicalize().ok())
+                    .is_some_and(|(n, o)| n.starts_with(&o))
+                {
+                    return Err("The new folder can't be inside the current one.".into());
+                }
+                let total = dir_size(&old);
+                // On the same volume files are hard-linked and need no space.
+                if let (false, (Some(free), _, _)) = (same_device(&old, &new), disk_info(&new)) {
+                    if free < total {
+                        return Err(format!(
+                            "Not enough space: {:.1} GB needed, {:.1} GB free.",
+                            total as f64 / 1e9,
+                            free as f64 / 1e9
+                        ));
+                    }
+                }
+                let emit = |done_bytes, total_bytes| {
+                    let _ = app.emit(
+                        "storage-move-progress",
+                        MoveProgress {
+                            area,
+                            done_bytes,
+                            total_bytes,
+                        },
+                    );
+                };
+                let mut mover = Mover {
+                    on_progress: &emit,
+                    total,
+                    done: 0,
+                    last_emit: Instant::now(),
+                    verified: Default::default(),
+                };
+                Mover::check_conflicts(&old, &new)?;
+                mover.copy_contents(&old, &new)?;
+                verified = std::mem::take(&mut mover.verified);
+            }
+
+            let mut cfg = load_config();
+            let is_default = same_place(&new, &default_dir(area)?);
+            cfg.set(area, if is_default { None } else { Some(new.clone()) });
+            if copying && area == Area::Recordings {
+                let entry = MoveJournal {
+                    old: old.clone(),
+                    new: new.clone(),
+                };
+                publish_recordings_move(
+                    &journal_path()?,
+                    &entry,
+                    &mut |from, to| rewrite_recording_paths(from, to),
+                    || save_config(&cfg),
+                )?;
+            } else {
+                save_config(&cfg)?;
+            }
+            if copying {
+                if let Err(e) = remove_verified_sources(&old, &new, &verified) {
+                    eprintln!(
                     "[STORAGE] Files were switched but old copies could not all be removed: {e}"
                 );
+                }
             }
-        }
-        if area == Area::Recordings {
-            allow_recordings_in_asset_scope(&app);
-        }
-        if area == Area::Models {
-            if let Err(e) = crate::watcher::start_models_watcher(app.clone()) {
-                eprintln!("[STORAGE] Could not watch the new models folder: {e}");
+            if area == Area::Recordings {
+                allow_recordings_in_asset_scope(&app);
             }
-            let _ = app.emit("models-changed", ());
-        }
-        area_info(area)
+            if area == Area::Models {
+                if let Err(e) = crate::watcher::start_models_watcher(app.clone()) {
+                    eprintln!("[STORAGE] Could not watch the new models folder: {e}");
+                }
+                let _ = app.emit("models-changed", ());
+            }
+            area_info(area)
         })();
         // Native unload happened even if copying failed. Publish it after all
         // exclusion is released so the UI can reload from the effective folder.

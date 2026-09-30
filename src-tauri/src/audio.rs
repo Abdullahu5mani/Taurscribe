@@ -33,6 +33,7 @@ pub struct CaptureLoss {
     pub input_frames: AtomicU64,
     pub gap_frames: AtomicU64,
     pub preview_frames: AtomicU64,
+    pub preview_failed: AtomicBool,
 }
 
 impl CaptureLoss {

@@ -226,16 +226,26 @@ where
     let source = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
     hint.with_extension("ogg");
-    let options = FormatOptions { enable_gapless: true, ..Default::default() };
+    let options = FormatOptions {
+        enable_gapless: true,
+        ..Default::default()
+    };
     let mut format = symphonia::default::get_probe()
         .format(&hint, source, &options, &MetadataOptions::default())
-        .map_err(|e| format!("Cannot probe Opus audio: {e}"))?.format;
-    let track = format.tracks().iter()
+        .map_err(|e| format!("Cannot probe Opus audio: {e}"))?
+        .format;
+    let track = format
+        .tracks()
+        .iter()
         .find(|t| t.codec_params.codec == symphonia::core::codecs::CODEC_TYPE_OPUS)
         .ok_or("No Opus track found")?;
     let track_id = track.id;
     let granule_frames = track.codec_params.n_frames;
-    let header = track.codec_params.extra_data.as_deref().ok_or("Missing Opus header")?;
+    let header = track
+        .codec_params
+        .extra_data
+        .as_deref()
+        .ok_or("Missing Opus header")?;
     if header.len() < 19 || &header[..8] != b"OpusHead" || header[8] > 15 {
         return Err("Invalid Opus identification header".into());
     }
@@ -251,19 +261,34 @@ where
             // Opus family 1 uses Vorbis speaker order. Present the same
             // channel-mask order as other Symphonia decoders.
             let order: &[usize] = match channels {
-                1 => &[0], 2 => &[0, 1], 3 => &[0, 2, 1], 4 => &[0, 1, 2, 3],
-                5 => &[0, 2, 1, 3, 4], 6 => &[0, 2, 1, 5, 3, 4],
-                7 => &[0, 2, 1, 6, 5, 3, 4], 8 => &[0, 2, 1, 7, 5, 6, 3, 4],
+                1 => &[0],
+                2 => &[0, 1],
+                3 => &[0, 2, 1],
+                4 => &[0, 1, 2, 3],
+                5 => &[0, 2, 1, 3, 4],
+                6 => &[0, 2, 1, 5, 3, 4],
+                7 => &[0, 2, 1, 6, 5, 3, 4],
+                8 => &[0, 2, 1, 7, 5, 6, 3, 4],
                 _ => unreachable!(),
             };
-            (header[19], header[20], order.iter().map(|&i| header[21 + i]).collect())
+            (
+                header[19],
+                header[20],
+                order.iter().map(|&i| header[21 + i]).collect(),
+            )
         }
-        _ => return Err(format!("Unsupported Opus channel mapping for {channels} channels")),
+        _ => {
+            return Err(format!(
+                "Unsupported Opus channel mapping for {channels} channels"
+            ))
+        }
     };
     let gain = i16::from_le_bytes([header[16], header[17]]) as i32;
     let mut decoder = opus::MSDecoder::new(48_000, streams, coupled, &mapping)
         .map_err(|e| format!("Cannot create Opus decoder: {e}"))?;
-    decoder.set_gain(gain).map_err(|e| format!("Cannot apply Opus output gain: {e}"))?;
+    decoder
+        .set_gain(gain)
+        .map_err(|e| format!("Cannot apply Opus output gain: {e}"))?;
     // An Opus packet can contain at most 120 ms, regardless of encoder rate.
     let mut samples = vec![0.0f32; 5_760 * channels];
     let mut total = 0u64;
@@ -274,23 +299,41 @@ where
             Err(SymphError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(format!("Opus audio read failed: {e}")),
         };
-        if packet.track_id() != track_id { continue; }
+        if packet.track_id() != track_id {
+            continue;
+        }
         // An empty packet would ask libopus to synthesize packet-loss audio.
         // A file import must not silently manufacture that data.
-        if packet.data.is_empty() { return Err("Empty Opus audio packet".into()); }
-        let frames = decoder.decode_float(&packet.data, &mut samples, false)
+        if packet.data.is_empty() {
+            return Err("Empty Opus audio packet".into());
+        }
+        let frames = decoder
+            .decode_float(&packet.data, &mut samples, false)
             .map_err(|e| format!("Opus audio packet could not be decoded: {e}"))?;
         let start = pre_skip.saturating_sub(decoded_position).min(frames as u64) as usize;
         let end = (pre_skip + expected_frames)
-            .saturating_sub(decoded_position).min(frames as u64) as usize;
+            .saturating_sub(decoded_position)
+            .min(frames as u64) as usize;
         decoded_position += frames as u64;
-        if end <= start { continue; }
+        if end <= start {
+            continue;
+        }
         total += (end - start) as u64;
-        on_packet(&samples[start * channels..end * channels], channels, 48_000, total, Some(expected_frames))?;
+        on_packet(
+            &samples[start * channels..end * channels],
+            channels,
+            48_000,
+            total,
+            Some(expected_frames),
+        )?;
     }
-    if total == 0 { return Err("Opus audio file contains no decoded samples".into()); }
+    if total == 0 {
+        return Err("Opus audio file contains no decoded samples".into());
+    }
     if total != expected_frames {
-        return Err(format!("Opus audio ended early: decoded {total} of {expected_frames} frames"));
+        return Err(format!(
+            "Opus audio ended early: decoded {total} of {expected_frames} frames"
+        ));
     }
     Ok((total, 48_000, channels as u32))
 }
@@ -301,19 +344,30 @@ mod tests {
 
     #[test]
     fn ogg_opus_preserves_gapless_bounds_and_channel_order() {
-        for channels in [1usize, 2, 6, 8] {
+        for (name, channels, expected_frames) in [
+            ("opus-1ch.ogg", 1usize, 10003),
+            ("opus-2ch.ogg", 2, 10003),
+            ("opus-6ch.ogg", 6, 10003),
+            ("opus-8ch.ogg", 8, 10003),
+            ("opus-long.ogg", 2, 100003),
+        ] {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("tests/fixtures/opus-{channels}ch.ogg"));
+                .join("tests/fixtures")
+                .join(name);
             let mut interleaved = Vec::new();
-            let (frames, rate, decoded_channels) = decode_audio_packets(&path,
-                |samples, count, sr, _, _| {
+            let (frames, rate, decoded_channels) =
+                decode_audio_packets(&path, |samples, count, sr, _, _| {
                     assert_eq!(count, channels);
                     assert_eq!(sr, 48000);
                     interleaved.extend_from_slice(samples);
                     Ok(())
-                }).unwrap();
-            assert_eq!((frames, rate, decoded_channels), (10003, 48000, channels as u32));
-            assert_eq!(interleaved.len(), 10003 * channels);
+                })
+                .unwrap();
+            assert_eq!(
+                (frames, rate, decoded_channels),
+                (expected_frames as u64, 48000, channels as u32)
+            );
+            assert_eq!(interleaved.len(), expected_frames * channels);
             assert!(interleaved.iter().all(|v| v.is_finite()));
             // Each channel has its own frequency in standard speaker order.
             // A mapping error changes which frequency dominates that channel.
@@ -322,24 +376,32 @@ mod tests {
                     let (mut re, mut im) = (0.0, 0.0);
                     for n in 1000..9000 {
                         let phase = 2.0 * std::f64::consts::PI * freq * n as f64 / 48000.0;
-                        let v = interleaved[n*channels+c] as f64;
-                        re += v * phase.cos(); im += v * phase.sin();
+                        let v = interleaved[n * channels + c] as f64;
+                        re += v * phase.cos();
+                        im += v * phase.sin();
                     }
-                    re*re + im*im
+                    re * re + im * im
                 };
-                let wanted = energy((200+100*c) as f64);
+                let wanted = energy((200 + 100 * c) as f64);
                 assert!(wanted > 1000.0);
                 for other in 0..channels {
-                    if other != c { assert!(wanted > 20.0 * energy((200+100*other) as f64), "channel {c} mapped to {other}"); }
+                    if other != c {
+                        assert!(
+                            wanted > 20.0 * energy((200 + 100 * other) as f64),
+                            "channel {c} mapped to {other}"
+                        );
+                    }
                 }
             }
             let (batch, _) = decode_audio_mono_f32(&path).unwrap();
             let mut stream = Vec::new();
             decode_audio_mono_stream(&path, |samples, _, _, _| {
-                stream.extend_from_slice(samples); Ok(())
-            }).unwrap();
+                stream.extend_from_slice(samples);
+                Ok(())
+            })
+            .unwrap();
             assert_eq!(batch, stream);
-            assert_eq!(batch.len(), 10003);
+            assert_eq!(batch.len(), expected_frames);
             let cancelled = decode_audio_mono_stream(&path, |_, _, _, _| Err("cancelled".into()));
             assert_eq!(cancelled.unwrap_err(), "cancelled");
         }
@@ -351,8 +413,11 @@ mod tests {
         let (base, _) = decode_audio_mono_f32(&fixtures.join("opus-1ch.ogg")).unwrap();
         let (gain, _) = decode_audio_mono_f32(&fixtures.join("opus-gain.ogg")).unwrap();
         assert_eq!(base.len(), gain.len());
-        let factor = 10.0_f32.powf(6.0/20.0);
-        assert!(base.iter().zip(&gain).all(|(a,b)| (a*factor-b).abs() < 0.00001));
+        let factor = 10.0_f32.powf(6.0 / 20.0);
+        assert!(base
+            .iter()
+            .zip(&gain)
+            .all(|(a, b)| (a * factor - b).abs() < 0.00001));
     }
 
     #[test]

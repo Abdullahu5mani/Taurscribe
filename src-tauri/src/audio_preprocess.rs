@@ -281,7 +281,9 @@ pub fn remove_dc(samples: &mut [f32]) {
     if samples.is_empty() {
         return;
     }
-    let mean = samples.iter().copied().sum::<f32>() / samples.len() as f32;
+    // A 120-second file window has almost two million samples. Accumulating
+    // its bias in f32 leaves enough rounding drift to distort the quiet floor.
+    let mean = (samples.iter().map(|&s| s as f64).sum::<f64>() / samples.len() as f64) as f32;
     for s in samples.iter_mut() {
         *s -= mean;
     }
@@ -490,6 +492,20 @@ mod tests {
         (0..(rate as f32 * secs) as usize)
             .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / rate as f32).sin() * 0.5)
             .collect()
+    }
+
+    #[test]
+    fn dc_removal_stays_accurate_for_a_full_file_window() {
+        let mut samples: Vec<f32> = (0..1_920_000)
+            .map(|n| 0.05 + if n % 2 == 0 { 0.001 } else { -0.001 })
+            .collect();
+        remove_dc(&mut samples);
+        let mean = samples.iter().map(|&s| s as f64).sum::<f64>() / samples.len() as f64;
+        assert!(
+            mean.abs() < 0.000001,
+            "residual bias distorts quiet speech: {mean}"
+        );
+        assert!(samples[0] > 0.00099 && samples[1] < -0.00099);
     }
 
     #[test]

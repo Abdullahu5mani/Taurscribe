@@ -209,6 +209,8 @@ fn summarize_report(report: &MemoryRegressionReport) {
     eprintln!("[memory-test]  force_cpu: {}", report.force_cpu);
     eprintln!("[memory-test] ═══════════════════════════════════════════════════════");
 
+    #[cfg(target_os = "macos")]
+    eprintln!("[memory-test]  WS column = Darwin physical footprint, not RSS or mapped GPU VRAM");
     let mut all_pass = true;
 
     for scenario in &report.scenarios {
@@ -318,41 +320,41 @@ fn summarize_report(report: &MemoryRegressionReport) {
         }
 
         // Leak check
-        // Threshold: allow up to 200 MB above baseline for CUDA/ORT page residuals
-        const LEAK_THRESHOLD_BYTES: i64 = 200 * 1024 * 1024;
+        // Keep the existing 200 MiB retention bound; exceeding it needs investigation.
+        const RETENTION_LIMIT_BYTES: i64 = 200 * 1024 * 1024;
         if let Some(unload_ws) = after_unload_ws {
             let retained = unload_ws - baseline_ws;
-            let pass = retained <= LEAK_THRESHOLD_BYTES;
+            let pass = retained <= RETENTION_LIMIT_BYTES;
             if !pass {
                 all_pass = false;
             }
             eprintln!(
-                "  LEAK WS   baseline={:.1} MB  after-unload={:.1} MB  retained={}  {}",
+                "  RETAIN WS   baseline={:.1} MiB  after-unload={:.1} MiB  retained={}  {}",
                 bytes_to_mb(baseline_ws as u64),
                 bytes_to_mb(unload_ws as u64),
                 signed_mb(retained),
                 if pass {
-                    "✓ CLEAN"
+                    "✓ within bound"
                 } else {
-                    "✗ POSSIBLE LEAK"
+                    "✗ above bound"
                 },
             );
-            // Private bytes: expect them to stay elevated after CUDA init (ORT holds pages)
+            // The private/internal counter has platform-specific meaning.
             if let (Some(unload_priv), Some(base_priv)) = (after_unload_private, baseline_private) {
                 let priv_retained = unload_priv - base_priv;
-                // Private bytes leak threshold is 1 GB (ORT/CUDA virtual commit is expected)
+                // Preserve the existing private/internal retention bound.
                 let priv_pass = priv_retained <= 1024 * 1024 * 1024;
                 if !priv_pass {
                     all_pass = false;
                 }
                 eprintln!(
-                    "  LEAK PRIV baseline={:.1} MB  after-unload={:.1} MB  retained={}  {} \
-                    (ORT keeps virtual commit after first CUDA init)",
+                    "  RETAIN PRIV baseline={:.1} MiB  after-unload={:.1} MiB  retained={}  {} \
+                    (platform memory ownership requires separate investigation)",
                     bytes_to_mb(base_priv as u64),
                     bytes_to_mb(unload_priv as u64),
                     signed_mb(priv_retained),
                     if priv_pass {
-                        "✓ expected"
+                        "✓ within bound"
                     } else {
                         "✗ EXCESSIVE"
                     },
@@ -651,9 +653,9 @@ fn memory_engine_regression() {
     summarize_report(&report);
     maybe_write_report(&report);
 
-    // Hard leak assertion: after-unload working set must be within 200 MB of baseline
+    // After-unload memory must be within the unchanged 200 MiB retention bound.
     // for every scenario that completed (non-skipped, has an unload snapshot).
-    const LEAK_THRESHOLD_BYTES: u64 = 200 * 1024 * 1024;
+    const RETENTION_LIMIT_BYTES: u64 = 200 * 1024 * 1024;
     for scenario in &report.scenarios {
         if scenario.duration_ms == 0 {
             continue; // skipped
@@ -671,15 +673,15 @@ fn memory_engine_regression() {
             let after_unload_ws = unload_snap.working_set_bytes;
             let retained = after_unload_ws.saturating_sub(baseline_ws);
             assert!(
-                retained <= LEAK_THRESHOLD_BYTES,
+                retained <= RETENTION_LIMIT_BYTES,
                 "[memory-test] MEMORY RETENTION ABOVE BOUND in scenario '{}': \
-                after-unload WS={:.1} MB, baseline={:.1} MB, retained={:.1} MB (threshold={:.0} MB). \
+                after-unload WS={:.1} MiB, baseline={:.1} MiB, retained={:.1} MiB (threshold={:.0} MiB). \
                 Check engine unload paths.",
                 scenario.name,
                 bytes_to_mb(after_unload_ws),
                 bytes_to_mb(baseline_ws),
                 bytes_to_mb(retained),
-                bytes_to_mb(LEAK_THRESHOLD_BYTES),
+                bytes_to_mb(RETENTION_LIMIT_BYTES),
             );
         }
     }
