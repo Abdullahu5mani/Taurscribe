@@ -1012,9 +1012,6 @@ pub async fn factory_reset_app_data(
     if let Ok(mut llm) = state.llm.lock() {
         *llm = None;
     }
-    if let Ok(mut denoiser) = state.denoiser.lock() {
-        *denoiser = None;
-    }
     if let Ok(mut transcript) = state.session_transcript.lock() {
         transcript.clear();
     }

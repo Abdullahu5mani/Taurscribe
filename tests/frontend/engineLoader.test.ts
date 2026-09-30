@@ -4,7 +4,11 @@ type Call = { cmd: string; args?: Record<string, unknown> };
 let calls: Call[] = [];
 let responses: Record<string, unknown> = {};
 
+// Keep the real module's other exports: mock.module is process-wide, and later
+// test files import modules (plugin-store) that need e.g. transformCallback.
+const realCore = { ...(await import("@tauri-apps/api/core")) };
 mock.module("@tauri-apps/api/core", () => ({
+  ...realCore,
   invoke: async (cmd: string, args?: Record<string, unknown>) => {
     calls.push({ cmd, args });
     const r = responses[cmd];

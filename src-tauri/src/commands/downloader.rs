@@ -41,6 +41,11 @@ pub fn begin_models_move() -> Result<ModelsMoveGuard, String> {
 
 pub struct ModelsMoveGuard;
 
+/// True while the models folder is being switched or moved.
+pub fn models_moving() -> bool {
+    MODELS_MOVING.load(Ordering::SeqCst)
+}
+
 impl Drop for ModelsMoveGuard {
     fn drop(&mut self) {
         MODELS_MOVING.store(false, Ordering::SeqCst);
@@ -1011,6 +1016,11 @@ async fn download_model_inner(
             if count == 0 {
                 break;
             }
+            // Hashing a multi-GB model takes a while; stop as soon as it's cancelled.
+            if cancel_flag.load(Ordering::Relaxed) {
+                delete_model_files(&config, &base_dir);
+                return Err("Download cancelled by user".to_string());
+            }
             hasher.update(&buffer[..count]);
             verified_bytes += count as u64;
 
@@ -1124,6 +1134,12 @@ pub async fn delete_model(
     app: AppHandle,
     model_id: String,
 ) -> Result<CommandResult<String>, String> {
+    if models_moving() {
+        return Ok(CommandResult::err(
+            "models_moving",
+            "The models folder is being moved; delete once the move finishes.",
+        ));
+    }
     let config = match get_model_config(&model_id) {
         Some(config) => config,
         None => {

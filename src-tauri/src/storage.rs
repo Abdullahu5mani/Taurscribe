@@ -88,9 +88,89 @@ fn save_config(cfg: &StorageConfig) -> Result<(), String> {
             .map_err(|e| format!("Could not create {}: {e}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| format!("Could not save storage settings: {e}"))?;
+    write_atomic(&path, json.as_bytes()).map_err(|e| format!("Could not save storage settings: {e}"))?;
     *config().write().unwrap() = Some(cfg.clone());
     Ok(())
+}
+
+/// Replaces `path` whole or not at all: an interrupted write leaves the old file.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Written before a recordings move rewrites the paths in the database, and
+/// removed once the new folder is saved in storage.json. If the app stops in
+/// between, the next start puts the database paths back: the files are still
+/// in the old folder, which is only emptied after the switch is saved.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct MoveJournal {
+    old: PathBuf,
+    new: PathBuf,
+}
+
+fn journal_path() -> Result<PathBuf, String> {
+    Ok(app_data_root()?.join("storage-move.json"))
+}
+
+/// Rewrites the database paths from `entry.old` to `entry.new`, then saves the
+/// folder switch. If saving fails the paths are put back, so the database
+/// always matches the folder in use.
+fn publish_recordings_move(
+    journal: &Path,
+    entry: &MoveJournal,
+    rewrite: &mut dyn FnMut(&Path, &Path) -> Result<(), String>,
+    save: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let json = serde_json::to_vec(entry).map_err(|e| e.to_string())?;
+    write_atomic(journal, &json).map_err(|e| format!("Could not start the move: {e}"))?;
+    // The rewrite is one transaction: on failure nothing changed.
+    if let Err(e) = rewrite(&entry.old, &entry.new) {
+        let _ = std::fs::remove_file(journal);
+        return Err(e);
+    }
+    if let Err(e) = save() {
+        match rewrite(&entry.new, &entry.old) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(journal);
+            }
+            Err(undo) => eprintln!("[STORAGE] Could not put recording paths back ({undo}); retrying at next start"),
+        }
+        return Err(e);
+    }
+    let _ = std::fs::remove_file(journal);
+    Ok(())
+}
+
+/// Finishes a recordings move the app was stopped in the middle of (see
+/// MoveJournal). `in_use` is the recordings folder storage.json names now.
+fn recover_recordings_move(
+    journal: &Path,
+    in_use: &Path,
+    rewrite: &mut dyn FnMut(&Path, &Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let Ok(text) = std::fs::read_to_string(journal) else { return Ok(()) };
+    let entry: MoveJournal = serde_json::from_str(&text).map_err(|e| format!("Unreadable {}: {e}", journal.display()))?;
+    // Saved already: the move had finished. Otherwise undo the path rewrite.
+    if !same_place(in_use, &entry.new) {
+        rewrite(&entry.new, &entry.old)?;
+        println!("[STORAGE] Undid an interrupted move of recordings to {}", entry.new.display());
+    }
+    std::fs::remove_file(journal).map_err(|e| e.to_string())
+}
+
+/// Called at startup, before recordings are used.
+pub fn recover_interrupted_move() {
+    let result = journal_path().and_then(|journal| {
+        let in_use = current_dir(Area::Recordings)?;
+        recover_recordings_move(&journal, &in_use, &mut |from, to| rewrite_recording_paths(from, to))
+    });
+    if let Err(e) = result {
+        eprintln!("[STORAGE] Could not finish an interrupted recordings move: {e}");
+    }
 }
 
 pub fn default_dir(area: Area) -> Result<PathBuf, String> {
@@ -681,11 +761,18 @@ pub async fn set_storage_location(
     } else {
         None
     };
-    if area == Area::Models && move_files {
-        use std::sync::atomic::Ordering;
-        if state.engine_loading.load(Ordering::Relaxed) {
-            return Err("A model is loading. Try again in a moment.".into());
-        }
+    // Also held until the switch is done: a model loaded (or unloaded) meanwhile
+    // would open files in a folder that is being copied or removed.
+    let models_gate = if area == Area::Models {
+        Some(
+            state
+                .begin_exclusive_model_operation()
+                .map_err(|_| "A model is loading or in use. Try again in a moment.".to_string())?,
+        )
+    } else {
+        None
+    };
+    if let (Some(gate), true) = (&models_gate, move_files) {
         // Loaded weights keep their files open (and locked on Windows).
         let unloaded = state.unload_all_loaded_asr()?;
         if !unloaded.is_empty() {
@@ -751,15 +838,22 @@ pub async fn set_storage_location(
             Mover::check_conflicts(&old, &new)?;
             mover.copy_contents(&old, &new)?;
             verified = std::mem::take(&mut mover.verified);
-            if area == Area::Recordings {
-                rewrite_recording_paths(&old, &new)?;
-            }
         }
 
         let mut cfg = load_config();
         let is_default = same_place(&new, &default_dir(area)?);
         cfg.set(area, if is_default { None } else { Some(new.clone()) });
-        save_config(&cfg)?;
+        if copying && area == Area::Recordings {
+            let entry = MoveJournal { old: old.clone(), new: new.clone() };
+            publish_recordings_move(
+                &journal_path()?,
+                &entry,
+                &mut |from, to| rewrite_recording_paths(from, to),
+                || save_config(&cfg),
+            )?;
+        } else {
+            save_config(&cfg)?;
+        }
         if copying {
             if let Err(e) = remove_verified_sources(&old, &new, &verified) {
                 eprintln!(
@@ -936,6 +1030,67 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    fn journal_in(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ts-journal-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("storage-move.json")
+    }
+
+    #[test]
+    fn a_failed_settings_save_puts_the_recording_paths_back() {
+        let mut conn = db_with_paths(&["/data/meetings/a.webm"], "[]");
+        let journal = journal_in("save-fails");
+        let entry = MoveJournal { old: "/data/meetings".into(), new: "/ext/rec".into() };
+        let err = publish_recordings_move(
+            &journal,
+            &entry,
+            &mut |from, to| rewrite_recording_paths_in_db(&mut conn, from, to),
+            || Err("disk full".into()),
+        )
+        .unwrap_err();
+        assert_eq!(err, "disk full");
+        assert_eq!(audio_paths(&conn), ["/data/meetings/a.webm"]);
+        assert!(!journal.exists());
+    }
+
+    #[test]
+    fn a_published_move_leaves_no_journal() {
+        let mut conn = db_with_paths(&["/data/meetings/a.webm"], "[]");
+        let journal = journal_in("saved");
+        let entry = MoveJournal { old: "/data/meetings".into(), new: "/ext/rec".into() };
+        publish_recordings_move(&journal, &entry, &mut |from, to| rewrite_recording_paths_in_db(&mut conn, from, to), || Ok(()))
+            .unwrap();
+        assert_eq!(audio_paths(&conn), ["/ext/rec/a.webm"]);
+        assert!(!journal.exists());
+    }
+
+    #[test]
+    fn a_move_interrupted_before_the_switch_was_saved_is_undone_at_start() {
+        // The app stopped after the paths were rewritten, before storage.json
+        // (still naming the old folder) was saved.
+        let mut conn = db_with_paths(&["/ext/rec/a.webm"], "[]");
+        let journal = journal_in("interrupted");
+        std::fs::write(&journal, serde_json::to_vec(&MoveJournal { old: "/data/meetings".into(), new: "/ext/rec".into() }).unwrap()).unwrap();
+
+        recover_recordings_move(&journal, Path::new("/data/meetings"), &mut |from, to| rewrite_recording_paths_in_db(&mut conn, from, to))
+            .unwrap();
+        assert_eq!(audio_paths(&conn), ["/data/meetings/a.webm"]);
+        assert!(!journal.exists());
+    }
+
+    #[test]
+    fn a_move_that_finished_is_left_alone_at_start() {
+        let mut conn = db_with_paths(&["/ext/rec/a.webm"], "[]");
+        let journal = journal_in("finished");
+        std::fs::write(&journal, serde_json::to_vec(&MoveJournal { old: "/data/meetings".into(), new: "/ext/rec".into() }).unwrap()).unwrap();
+        recover_recordings_move(&journal, Path::new("/ext/rec"), &mut |from, to| rewrite_recording_paths_in_db(&mut conn, from, to))
+            .unwrap();
+        assert_eq!(audio_paths(&conn), ["/ext/rec/a.webm"]);
+        assert!(!journal.exists());
+        // No journal: nothing to do.
+        recover_recordings_move(&journal, Path::new("/ext/rec"), &mut |_, _| panic!("rewrote without a journal")).unwrap();
     }
 
     fn audio_paths(conn: &rusqlite::Connection) -> Vec<String> {

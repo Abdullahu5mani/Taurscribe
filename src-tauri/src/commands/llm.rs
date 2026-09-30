@@ -16,6 +16,11 @@ pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<Str
     // loaded, instead of loading another ~1.5 GB copy and dropping one.
     static LOADING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _loading = LOADING.lock().await;
+    // FlowScribe isn't under the ASR model gate; don't open its weights in a
+    // models folder that is being moved.
+    if crate::commands::models_moving() {
+        return Err("The models folder is being moved; FlowScribe loads once the move finishes".into());
+    }
 
     // Check if already loaded
     {
