@@ -8,6 +8,7 @@ directly. The test removes its file cards and restores the selected engine/model
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -15,6 +16,7 @@ import sys
 from pathlib import Path
 
 from recording_check import coverage
+from asr_quality import word_error_rate
 from test_ui_full import (
     APP_SUPPORT,
     FILE_FIXTURES,
@@ -42,23 +44,27 @@ def history_ids() -> set[int]:
 def new_history_rows(before: set[int]) -> list[tuple]:
     with sqlite3.connect(HISTORY_DB) as db:
         return db.execute(
-            "SELECT id, transcript, engine, model_id, audio_source FROM transcriptions ORDER BY id DESC"
+            "SELECT id, transcript, engine, model_id, audio_source, source_path, import_method, created_at FROM transcriptions ORDER BY id DESC"
         ).fetchall() if not before else db.execute(
-            "SELECT id, transcript, engine, model_id, audio_source FROM transcriptions "
+            "SELECT id, transcript, engine, model_id, audio_source, source_path, import_method, created_at FROM transcriptions "
             "WHERE id > ? ORDER BY id DESC", (max(before),)
         ).fetchall()
 
 
 def selected_model_label(app: App, engine: str) -> str | None:
     installed_models(app, engine)
-    selected = next(
-        (e["text"] for e in app.elements()
-         if e["role"] == "AXRadioButton" and e["text"].startswith("Select model ") and e["checked"]),
-        None,
-    )
-    if app.has("Engine picker"):
-        app.press("Switch engine or model")
-    return selected
+    def selected() -> str | None:
+        labels = [e["text"] for e in app.elements()
+                  if e["role"] == "AXRadioButton" and e["text"].startswith("Select model ") and e["checked"]]
+        return labels[0] if len(labels) == 1 else None
+
+    try:
+        # WebKit can publish the radio row before its selected AXValue. Require
+        # an unambiguous selected row, with a bounded wait for that update.
+        return app.wait(selected, 5)
+    finally:
+        if app.has("Engine picker"):
+            app.press("Switch engine or model")
 
 
 def main() -> int:
@@ -78,6 +84,7 @@ def main() -> int:
     FILE_FIXTURES.mkdir(parents=True, exist_ok=True)
     fixture = FILE_FIXTURES / "qa_all_models_reader_1089.wav"
     shutil.copyfile(source, fixture)
+    original_audio_hash = hashlib.sha256(fixture.read_bytes()).hexdigest()
 
     try:
         for engine in args.engines:
@@ -108,7 +115,9 @@ def main() -> int:
                 report.check(bool(done), "File transcription finishes")
                 if done:
                     app.press(f"Show transcript for {fixture.name}")
+                    report.check(app.has(f"Hide transcript for {fixture.name}"), "Transcript expands in the Files UI")
                     rows = [r for r in new_history_rows(before) if r[4] == fixture.name]
+                    report.check(len(rows) == 1, "Exactly one history row is created for the file", f"rows={len(rows)}")
                     row = rows[0] if rows else None
                     report.check(row is not None, "File result saved to history")
                     if row:
@@ -117,9 +126,16 @@ def main() -> int:
                                      "History uses selected engine", f"engine={row[2]}, model={row[3]}")
                         report.check(bool(expected_id) and row[3] == expected_id,
                                      "History uses selected model", f"expected={expected_id}, saved={row[3]}")
+                        report.check(bool(row[5]) and Path(row[5]).resolve() == fixture.resolve() and row[6] == "picker",
+                                     "History preserves original path and picker provenance", f"path={row[5]}, method={row[6]}")
+                        report.check(bool(row[7]), "History records transcription completion time", str(row[7]))
                         score = coverage(words, row[1])
                         report.check(score >= 0.60, "Transcript covers source speech",
                                      f"{score:.0%}: {row[1][:100]}")
+                        wer = word_error_rate(words, row[1])
+                        report.check(wer <= 0.25, "File transcript word error rate is within 25%", f"WER={wer:.3f}")
+                    report.check(fixture.exists() and hashlib.sha256(fixture.read_bytes()).hexdigest() == original_audio_hash,
+                                 "Imported source audio remains byte-identical")
                 app.screenshot(f"file_{engine}_{model_name.replace(' ', '_')}")
                 if app.find(f"Remove {fixture.name}"):
                     app.press(f"Remove {fixture.name}")

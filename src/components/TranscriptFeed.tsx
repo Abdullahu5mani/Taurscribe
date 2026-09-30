@@ -2,6 +2,7 @@ import { layout, prepare } from "@chenglou/pretext";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconCheck, IconCopy } from "./Icons";
+import { HOTKEY_CHANGED_EVENT, KEY_LABELS, loadHotkeyBinding, type HotkeyBinding } from "../utils/hotkey";
 
 type TranscriptRecord = {
     id: number;
@@ -14,6 +15,56 @@ type TranscriptRecord = {
     audio_source: string | null;
     kind?: "dictation" | "file";
 };
+
+/** Bars in the idle waveform; their heights follow a bell curve across the row. */
+const READY_WAVE_BARS = 61;
+const READY_WAVE = Array.from({ length: READY_WAVE_BARS }, (_, i) => {
+    const x = (i - (READY_WAVE_BARS - 1) / 2) / ((READY_WAVE_BARS - 1) / 2); // -1 … 1
+    return Math.exp(-2.4 * x * x);
+});
+
+/** Shown before the first dictation: a calm idle waveform and how to start. */
+function ReadyState() {
+    const [binding, setBinding] = useState<HotkeyBinding | null>(null);
+    useEffect(() => {
+        let alive = true;
+        const load = () => { loadHotkeyBinding().then((b) => { if (alive) setBinding(b); }); };
+        load();
+        window.addEventListener(HOTKEY_CHANGED_EVENT, load);
+        return () => { alive = false; window.removeEventListener(HOTKEY_CHANGED_EVENT, load); };
+    }, []);
+
+    return (
+        <div className="feed-empty" id="feed-empty-state" data-testid="feed-empty-state" role="status">
+            <div className="feed-empty-wave" aria-hidden="true">
+                {READY_WAVE.map((env, i) => (
+                    <span
+                        key={i}
+                        className="feed-empty-bar"
+                        style={{ '--env': env.toFixed(3), '--i': i } as React.CSSProperties}
+                    />
+                ))}
+            </div>
+            <p className="feed-empty-title">Ready when you are</p>
+            <p className="feed-empty-hint">
+                {binding ? (
+                    <>
+                        {binding.mode === "toggle" ? "Press" : "Hold"}{" "}
+                        {binding.keys.map((k, i) => (
+                            <span key={k}>
+                                {i > 0 && <span className="feed-empty-plus">+</span>}
+                                <kbd className="feed-empty-key">{KEY_LABELS[k] ?? k}</kbd>
+                            </span>
+                        ))}{" "}
+                        to dictate, or press REC
+                    </>
+                ) : (
+                    "Press REC to start dictating"
+                )}
+            </p>
+        </div>
+    );
+}
 
 const TRANSCRIPT_PREVIEW_CHARS = 1_200;
 const TRANSCRIPT_FONT_FAMILY = '"IBM Plex Sans", sans-serif';
@@ -272,27 +323,7 @@ function TranscriptFeedComponent({
                 </div>
             )}
 
-            {items.length === 0 && !showLive && (
-                <div
-                    className="feed-empty"
-                    id="feed-empty-state"
-                    data-testid="feed-empty-state"
-                    role="status"
-                >
-                    <div className="feed-empty-waveform" aria-hidden="true">
-                        {[4, 8, 14, 18, 14, 8, 4].map((h, i) => (
-                            <span
-                                key={i}
-                                className="feed-empty-bar"
-                                style={{ '--bar-h': `${h}px`, '--bar-i': i } as React.CSSProperties}
-                            />
-                        ))}
-                    </div>
-                    <span className="feed-empty-text">
-                        READY<span className="feed-empty-cursor" aria-hidden="true">_</span>
-                    </span>
-                </div>
-            )}
+            {items.length === 0 && !showLive && <ReadyState />}
 
             {items.map((item, index) => {
                 const isNew = animatingId === item.id;

@@ -75,6 +75,13 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
     const queueRef = useRef<FileItem[]>([]);
     const pendingProgressRef = useRef<Map<string, ProgressPayload>>(new Map());
     const progressRafRef = useRef<number | null>(null);
+    const mountedRef = useRef(true);
+    const historyWritesRef = useRef(new Set<string>());
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; queueRef.current = []; };
+    }, []);
 
     const AUDIO_EXTS = ["wav", "mp3", "m4a", "aac", "flac", "ogg", "mp4", "mov"];
 
@@ -129,14 +136,9 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                 const payload = updatesById.get(file.id);
                 if (!payload || file.status !== "processing") return file;
 
-                // Never regress a completed, cancelled, or errored file back to processing
-                const nextStatus: FileItem["status"] = payload.status === "done"
-                    ? "done"
-                    : payload.status === "error"
-                      ? "error"
-                      : payload.status === "cancelled"
-                        ? "cancelled"
-                        : "processing";
+                // The command result owns terminal state and transcript data.
+                // A progress event can arrive before that result is delivered.
+                const nextStatus: FileItem["status"] = "processing";
 
                 const nextProgress = payload.status === "cancelled" ? 0 : Math.max(file.progress, payload.percent);
                 const nextError = payload.status === "cancelled"
@@ -167,8 +169,10 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
     // Tauri OS-level file drop
     useEffect(() => {
         let unlisten: (() => void) | undefined;
+        let active = true;
         getCurrentWebview()
             .onDragDropEvent(event => {
+                if (!active) return;
                 const blocked = isModelLoadingRef.current;
                 if (event.payload.type === "over") {
                     if (!blocked) setIsDragOver(true);
@@ -179,21 +183,25 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                     setIsDragOver(false);
                 }
             })
-            .then(fn => { unlisten = fn; });
-        return () => { unlisten?.(); };
+            .then(fn => { if (active) unlisten = fn; else fn(); });
+        return () => { active = false; unlisten?.(); };
     }, [addPaths]);
 
     // Listen for progress events from Rust
     useEffect(() => {
         let unlisten: (() => void) | undefined;
+        let subscribed = true;
         listen<ProgressPayload>("file-transcription-progress", event => {
+            if (!subscribed) return;
             const active = activeFileRef.current;
             if (!active || active.path !== event.payload.path || active.id !== event.payload.job_id) return;
-            pendingProgressRef.current.set(active.id, event.payload);
+            const previous = pendingProgressRef.current.get(active.id);
+            pendingProgressRef.current.set(active.id, { ...event.payload, percent: Math.max(previous?.percent ?? 0, event.payload.percent) });
             if (progressRafRef.current !== null) return;
             progressRafRef.current = requestAnimationFrame(flushProgressUpdates);
-        }).then(fn => { unlisten = fn; });
+        }).then(fn => { if (subscribed) unlisten = fn; else fn(); });
         return () => {
+            subscribed = false;
             unlisten?.();
             if (progressRafRef.current !== null) {
                 cancelAnimationFrame(progressRafRef.current);
@@ -210,7 +218,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
     }, [files]);
 
     const processNext = useCallback(async () => {
-        if (processingRef.current) return;
+        if (!mountedRef.current || processingRef.current) return;
         const queued = queueRef.current.find(f => f.status === "queued");
         if (!queued) return;
 
@@ -282,7 +290,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
             pendingProgressRef.current.delete(queued.id);
             processingRef.current = false;
             setTimeout(() => {
-                const next = queueRef.current.find(f => f.status === "queued");
+                const next = mountedRef.current && queueRef.current.find(f => f.status === "queued");
                 if (next) processNext();
                 else void invoke("finish_file_transcription_batch").catch(console.error);
             }, 0);
@@ -349,6 +357,18 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
 
     const removeFile = (id: string) => {
         setFiles(prev => prev.filter(f => f.id !== id));
+    };
+
+    const retryHistorySave = (item: FileItem) => {
+        if (historyWritesRef.current.has(item.id)) return;
+        historyWritesRef.current.add(item.id);
+        setFiles(prev => prev.map(f => f.id === item.id ? { ...f, historySaving: true } : f));
+        void saveFileHistory(item).then(() => {
+            setHistoryRefreshKey(key => key + 1);
+            setFiles(prev => prev.map(f => f.id === item.id ? { ...f, historySaving: false, historyError: undefined } : f));
+        }).catch(error => {
+            setFiles(prev => prev.map(f => f.id === item.id ? { ...f, historySaving: false, historyError: String(error) } : f));
+        }).finally(() => { historyWritesRef.current.delete(item.id); });
     };
 
     const copyText = (text: string) => {
@@ -523,15 +543,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                                     data-testid={`file-retry-history-save-${item.id}`}
                                                     type="button"
                                                     className="file-card-btn file-card-btn--error"
-                                                    onClick={() => {
-                                                        setFiles(prev => prev.map(f => f.id === item.id ? { ...f, historySaving: true } : f));
-                                                        void saveFileHistory(item).then(() => {
-                                                            setHistoryRefreshKey(key => key + 1);
-                                                            setFiles(prev => prev.map(f => f.id === item.id ? { ...f, historySaving: false, historyError: undefined } : f));
-                                                        }).catch(error => {
-                                                            setFiles(prev => prev.map(f => f.id === item.id ? { ...f, historySaving: false, historyError: String(error) } : f));
-                                                        });
-                                                    }}
+                                                    onClick={() => retryHistorySave(item)}
                                                     disabled={item.historySaving}
                                                     title="Retry saving transcript to history"
                                                 >

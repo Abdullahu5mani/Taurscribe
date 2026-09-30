@@ -103,6 +103,7 @@
   flex-direction: column;
   gap: 2px;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .settings-nav-btn {
@@ -222,6 +223,7 @@
   flex: 1;
   padding: 14px 28px 40px !important;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: none !important;
   animation: none !important;
   scrollbar-gutter: stable;

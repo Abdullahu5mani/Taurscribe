@@ -194,6 +194,7 @@
 .ep-models {
   max-height: 264px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0 6px 6px;
 }
 

@@ -1,31 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
-
-type RecordingMode = 'hold' | 'toggle';
-interface HotkeyBinding { keys: string[]; mode: RecordingMode; }
-
-const isMac = navigator.platform.toLowerCase().includes('mac');
-const isLinux = navigator.platform.toLowerCase().includes('linux');
-
-const KEY_LABELS: Record<string, string> = {
-    ControlLeft: 'Ctrl', ControlRight: 'Ctrl R',
-    MetaLeft: isMac ? 'Cmd' : isLinux ? 'Super' : 'Win',
-    MetaRight: isMac ? 'Cmd R' : isLinux ? 'Super R' : 'Win R',
-    ShiftLeft: 'Shift', ShiftRight: 'Shift R',
-    AltLeft: isMac ? 'Option' : 'Alt', AltRight: isMac ? 'Option R' : 'Alt R',
-    CapsLock: 'Caps Lock', Escape: 'Esc', Tab: 'Tab',
-    F1: 'F1', F2: 'F2', F3: 'F3', F4: 'F4',
-    F5: 'F5', F6: 'F6', F7: 'F7', F8: 'F8',
-    F9: 'F9', F10: 'F10', F11: 'F11', F12: 'F12',
-};
+import {
+    DEFAULT_BINDING, HOTKEY_CHANGED_EVENT, KEY_LABELS, isLinux, isMac,
+    type HotkeyBinding, type RecordingMode,
+} from '../../utils/hotkey';
 
 const ALLOWED_KEYS = new Set(Object.keys(KEY_LABELS));
-
-const DEFAULT_BINDING: HotkeyBinding = {
-    keys: isMac ? ['ControlLeft', 'AltLeft'] : ['ControlLeft', 'MetaLeft'],
-    mode: 'hold',
-};
 
 interface RecordingTabProps {
     enableOverlay: boolean;
@@ -123,6 +104,7 @@ export function RecordingTab({
             await store.set('hotkey_binding', binding);
             await store.save();
             setCurrentBinding(binding);
+            window.dispatchEvent(new Event(HOTKEY_CHANGED_EVENT));
             setHotkeySaved(true); setRecording(false);
             setPendingKeys([]); heldRef.current = []; pendingRef.current = [];
             setTimeout(() => setHotkeySaved(false), 2000);
@@ -138,6 +120,7 @@ export function RecordingTab({
             await store.set('hotkey_binding', binding);
             await store.save();
             setCurrentBinding(binding);
+            window.dispatchEvent(new Event(HOTKEY_CHANGED_EVENT));
             setHotkeySaved(true);
             setTimeout(() => setHotkeySaved(false), 2000);
         } catch (err) { console.error('Failed to save mode:', err); }

@@ -94,6 +94,7 @@
   flex: 1;
   padding: 32px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(var(--accent-primary-rgb), 0.03) 0%, transparent 50%);
   animation: settingsTabIn 0.2s cubic-bezier(0.23, 1, 0.32, 1) both;
   contain: paint;
@@ -1482,6 +1483,7 @@
   gap: 6px;
   max-height: 180px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px;
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid rgba(255, 255, 255, 0.06);

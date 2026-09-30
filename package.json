@@ -13,6 +13,7 @@
     "test:asr": "cargo test --manifest-path src-tauri/Cargo.toml --test jfk_asr_smoke -- --ignored --nocapture",
     "test:playback": "cargo test --manifest-path src-tauri/Cargo.toml --test meeting_playback_stress -- --ignored --nocapture",
     "test:memory": "cargo test --manifest-path src-tauri/Cargo.toml --test memory_engine_regression -- --ignored --nocapture",
+    "test:speakers": "cargo test --manifest-path src-tauri/Cargo.toml --test speaker_recognition_acceptance -- --ignored --nocapture",
     "tauri": "tauri",
     "build:macos": "bun scripts/build-macos.ts",
     "build:windows": "bun scripts/build-windows.ts --bundles nsis",

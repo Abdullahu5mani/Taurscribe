@@ -102,6 +102,7 @@
 .review-body {
     flex: 1;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 20px 24px;
     display: flex;
     flex-direction: column;

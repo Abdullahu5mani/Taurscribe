@@ -67,17 +67,19 @@ pub fn campplus_frame_count(n_frames: usize) -> usize {
 pub fn embedding_from_wav(path: &str) -> Option<Vec<f32>> {
     let mut r = hound::WavReader::open(path).ok()?;
     let spec = r.spec();
+    if spec.channels == 0 || spec.sample_rate == 0 { return None; }
     let samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => r.samples::<f32>().filter_map(Result::ok).collect(),
+        hound::SampleFormat::Float => r.samples::<f32>().collect::<Result<Vec<_>, _>>().ok()?,
         hound::SampleFormat::Int => {
             let max_val = (1i64 << (spec.bits_per_sample.max(1) - 1)) as f32;
             r.samples::<i32>()
-                .filter_map(Result::ok)
+                .collect::<Result<Vec<_>, _>>().ok()?.into_iter()
                 .map(|s| (s as f32 / max_val).clamp(-1.0, 1.0))
                 .collect()
         }
     };
     let channels = spec.channels.max(1) as usize;
+    if samples.len() % channels != 0 || samples.iter().any(|s| !s.is_finite()) { return None; }
     let mono: Vec<f32> = if channels == 1 {
         samples
     } else {
@@ -422,9 +424,10 @@ impl SpeakerEmbeddingEngine {
         // If an external ONNX model is available and exists on disk, run ONNX session
         if let Some(path) = self.model_path.clone() {
             if path.exists() {
-                if let Ok(vec) = self.run_onnx_inference(audio, sample_rate, &path) {
-                    return Ok(vec);
-                }
+                // Installed neural models must succeed or report failure. An
+                // acoustic fallback here would still be labeled neural by the
+                // caller and could merge unrelated people in the voice vault.
+                return self.run_onnx_inference(audio, sample_rate, &path);
             } else {
                 self.session = None;
                 self.session_stamp = None;
@@ -528,6 +531,85 @@ pub fn get_speaker_engine() -> &'static Mutex<SpeakerEmbeddingEngine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn person(id: &str, embedding: Vec<f32>) -> VaultSpeakerEmbedding {
+        VaultSpeakerEmbedding { speaker_id: id.into(), display_name: id.into(), embedding, snippet_path: None }
+    }
+
+    #[test]
+    fn speaker_matching_rejects_empty_zero_mismatched_and_nonfinite_embeddings() {
+        let vault = [person("valid", vec![1.0, 0.0])];
+        for query in [vec![], vec![0.0, 0.0], vec![1.0], vec![f32::NAN, 0.0], vec![f32::INFINITY, 0.0]] {
+            assert!(match_speaker_against_vault(&query, &vault, 0.6).is_none());
+        }
+        for invalid in [vec![], vec![0.0, 0.0], vec![1.0], vec![f32::NAN, 0.0], vec![f32::INFINITY, 0.0]] {
+            assert!(match_speaker_against_vault(&[1.0, 0.0], &[person("invalid", invalid)], 0.6).is_none());
+        }
+    }
+
+    #[test]
+    fn speaker_match_is_scale_invariant_and_never_accepts_opposite_direction() {
+        let vault = [person("caller", vec![3.0, 4.0])];
+        for scale in [0.001, 1.0, 100.0] {
+            let found = match_speaker_against_vault(&[3.0 * scale, 4.0 * scale], &vault, 0.6).unwrap();
+            assert_eq!(found.0, "caller"); assert!((found.2 - 1.0).abs() < 0.00001);
+        }
+        assert!(match_speaker_against_vault(&[-3.0, -4.0], &vault, 0.6).is_none());
+    }
+
+    #[test]
+    fn speaker_matching_selects_best_voice_independent_of_vault_order() {
+        let query = [1.0, 0.0];
+        let first = person("weaker", vec![0.8, 0.6]); let second = person("stronger", vec![1.0, 0.0]);
+        for vault in [vec![first.clone(), second.clone()], vec![second.clone(), first.clone()]] {
+            assert_eq!(match_speaker_against_vault(&query, &vault, 0.6).unwrap().0, "stronger");
+        }
+        assert!(match_speaker_against_vault(&query, &[], 0.6).is_none());
+    }
+
+    #[test]
+    fn deleted_speaker_model_clears_neural_status_and_uses_unmatched_fallback() {
+        let path = std::env::temp_dir().join(format!("missing-speaker-model-{}.onnx", rand::random::<u64>()));
+        let mut engine = SpeakerEmbeddingEngine::new(); engine.set_model_path(path);
+        assert!(!engine.uses_neural_model());
+        let fallback = engine.compute_embedding(&vec![0.1; 16000], 16000).unwrap();
+        assert_eq!(fallback.len(), SPEAKER_EMBEDDING_DIM);
+        assert!(fallback.iter().all(|x| x.is_finite()));
+        assert!(match_speaker_against_vault(&fallback, &[person("neural", vec![0.1; 512])], 0.6).is_none());
+    }
+
+    #[test]
+    fn broken_installed_speaker_model_cannot_silently_become_a_trusted_voiceprint() {
+        let path = std::env::temp_dir().join(format!("broken-speaker-model-{}.onnx", rand::random::<u64>()));
+        std::fs::write(&path, b"invalid ONNX model").unwrap();
+        let mut engine = SpeakerEmbeddingEngine::new(); engine.set_model_path(path.clone());
+        assert!(engine.uses_neural_model());
+        let result = engine.compute_embedding(&vec![0.1; 16000], 16000);
+        std::fs::remove_file(path).unwrap();
+        assert!(result.is_err(), "an installed but failed neural model must not return acoustic fallback as a neural voiceprint");
+    }
+
+    #[test]
+    fn truncated_voice_sample_is_rejected_instead_of_enrolling_partial_audio() {
+        let path = std::env::temp_dir().join(format!("truncated-voice-{}.wav", rand::random::<u64>()));
+        let mut w = hound::WavWriter::create(&path, hound::WavSpec { channels: 1, sample_rate: 16000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float }).unwrap();
+        for i in 0..96000 { w.write_sample((i as f32 * 0.05).sin() * 0.2).unwrap(); } w.finalize().unwrap();
+        let len = std::fs::metadata(&path).unwrap().len();
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(len - 4).unwrap();
+        let result = embedding_from_wav(&path.to_string_lossy());
+        std::fs::remove_file(path).unwrap();
+        assert!(result.is_none(), "corrupt samples must not be silently skipped before enrollment");
+    }
+
+    #[test]
+    fn nonfinite_voice_sample_is_rejected_before_model_inference() {
+        let path = std::env::temp_dir().join(format!("nonfinite-voice-{}.wav", rand::random::<u64>()));
+        let mut w = hound::WavWriter::create(&path, hound::WavSpec { channels: 1, sample_rate: 16000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float }).unwrap();
+        for _ in 0..96000 { w.write_sample(f32::NAN).unwrap(); } w.finalize().unwrap();
+        let result = embedding_from_wav(&path.to_string_lossy());
+        std::fs::remove_file(path).unwrap();
+        assert!(result.is_none(), "nonfinite input must never enter voiceprint enrollment");
+    }
 
     #[test]
     fn test_campplus_frame_count_trims_to_whole_blocks() {

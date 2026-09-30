@@ -388,6 +388,7 @@
   height: 100%;
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-right: 4px;
 }
 
@@ -498,6 +499,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .meeting-detail-card::-webkit-scrollbar {

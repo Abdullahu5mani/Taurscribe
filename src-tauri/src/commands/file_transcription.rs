@@ -463,6 +463,76 @@ where
 mod vm_feature_tests {
     use super::*;
 
+    fn mono_fixture() -> (std::path::PathBuf, Vec<f32>) {
+        let path = std::env::temp_dir().join(format!("file-window-contract-{}.wav", rand::random::<u64>()));
+        let samples: Vec<f32> = (0..32013).map(|i| if (8000..12000).contains(&i) { 0.0 } else { (i as f32 * 0.037).sin() * 0.25 }).collect();
+        let mut w = hound::WavWriter::create(&path, hound::WavSpec { channels: 1, sample_rate: 16000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float }).unwrap();
+        for &s in &samples { w.write_sample(s).unwrap(); } w.finalize().unwrap();
+        (path, samples)
+    }
+
+    #[test]
+    fn all_window_sizes_preserve_every_sample_including_silence_and_partial_tail() {
+        let (path, original) = mono_fixture();
+        for limit in [319, 320, 1000, 16000, 64000] {
+            let mut assembled = Vec::new(); let mut progress = Vec::new();
+            let (frames, rate) = stream_file_windows(&path, limit, || Ok(()), |part, decoded, total| {
+                assert!(!part.is_empty() && part.len() <= limit);
+                assert_eq!(total, Some(original.len() as u64));
+                assembled.extend(part); progress.push(decoded); Ok(())
+            }).unwrap();
+            assert_eq!((frames, rate), (original.len() as u64, 16000));
+            assert_eq!(assembled, original, "a boundary dropped, duplicated or changed PCM at limit {limit}");
+            assert!(progress.windows(2).all(|p| p[0] <= p[1]));
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn failed_window_aborts_the_file_instead_of_returning_partial_success() {
+        let (path, _) = mono_fixture(); let original = std::fs::read(&path).unwrap(); let mut calls = 0;
+        let result = stream_file_windows(&path, 8000, || Ok(()), |_, _, _| {
+            calls += 1; if calls == 2 { Err("native engine failed in second window".into()) } else { Ok(()) }
+        });
+        assert_eq!(result.unwrap_err(), "native engine failed in second window"); assert_eq!(calls, 2);
+        assert_eq!(std::fs::read(&path).unwrap(), original); std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn cancellation_before_decode_never_sends_audio_to_inference() {
+        let (path, _) = mono_fixture(); let original = std::fs::read(&path).unwrap(); let mut calls = 0;
+        let result = stream_file_windows(&path, 8000, || Err("Transcription cancelled".into()), |_, _, _| { calls += 1; Ok(()) });
+        assert_eq!(result.unwrap_err(), "Transcription cancelled"); assert_eq!(calls, 0);
+        assert_eq!(std::fs::read(&path).unwrap(), original); std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn cancellation_after_last_full_window_prevents_tail_inference() {
+        let (path, _) = mono_fixture(); let cancelled = AtomicBool::new(false); let mut calls = 0;
+        let result = stream_file_windows(&path, 32000, || if cancelled.load(Ordering::Relaxed) { Err("Transcription cancelled".into()) } else { Ok(()) }, |_, _, _| {
+            calls += 1; cancelled.store(true, Ordering::Relaxed); Ok(())
+        });
+        assert_eq!(result.unwrap_err(), "Transcription cancelled"); assert_eq!(calls, 1);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn truncated_wav_recovers_available_audio_and_keeps_the_original_file() {
+        let (path, samples) = mono_fixture(); let length = std::fs::metadata(&path).unwrap().len();
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(length - 4).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let mut recovered = Vec::new();
+        let (frames, rate) = stream_file_windows(&path, 8000, || Ok(()), |part, _, _| { recovered.extend(part); Ok(()) }).unwrap();
+        assert_eq!(rate, 16000); assert_eq!(frames as usize, samples.len() - 1);
+        assert_eq!(recovered, samples[..samples.len() - 1], "only the physically absent final sample may be lost");
+        assert_eq!(std::fs::read(&path).unwrap(), original); std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn zero_window_is_rejected_before_opening_a_file() {
+        assert_eq!(stream_file_windows(Path::new("/nonexistent/test.wav"), 0, || Ok(()), |_, _, _| panic!("must not infer")).unwrap_err(), "Audio window must not be empty");
+    }
+
     #[test]
     fn file_import_reloads_an_unloaded_selection_but_rejects_a_different_model() {
         assert!(file_model_needs_load(Some("chosen"), None).unwrap());
