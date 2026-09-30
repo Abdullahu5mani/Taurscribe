@@ -436,10 +436,11 @@ function App() {
   }, [downloadProgress]);
 
   // The `taurscribe` CLI waits for this before sending a dictation start, which
-  // the hotkey handler ignores while a model is loading (including at startup).
+  // the hotkey handler ignores while a model is loading (including at startup)
+  // or the last dictation is still being transcribed, cleaned up and pasted.
   useEffect(() => {
-    invoke("cli_ui_loading", { loading: isLoading || isInitialLoading }).catch(() => {});
-  }, [isLoading, isInitialLoading]);
+    invoke("cli_ui_busy", { busy: isLoading || isInitialLoading || isProcessingTranscript }).catch(() => {});
+  }, [isLoading, isInitialLoading, isProcessingTranscript]);
 
   // File transcription shows in the tray too (recording is blocked meanwhile).
   const fileTrayActiveRef = useRef(false);

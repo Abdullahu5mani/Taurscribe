@@ -54,9 +54,10 @@ const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 /// Set once the frontend has registered its hotkey listeners; before that a
 /// dictation event from the CLI would be emitted to nobody.
 static UI_LISTENING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// The frontend's own "loading a model" state, during which it ignores a
-/// dictation start. True until the frontend first reports it.
-static UI_LOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// The frontend is loading a model or finishing the last dictation (transcript,
+/// clean-up, paste), when it ignores a dictation start. True until the
+/// frontend first reports it.
+static UI_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 #[tauri::command]
 pub fn cli_ui_ready() {
@@ -64,14 +65,16 @@ pub fn cli_ui_ready() {
 }
 
 #[tauri::command]
-pub fn cli_ui_loading(loading: bool) {
-    UI_LOADING.store(loading, std::sync::atomic::Ordering::Relaxed);
+pub fn cli_ui_busy(busy: bool) {
+    UI_BUSY.store(busy, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// The UI can take a dictation event right now.
-fn ui_ready() -> bool {
+/// The UI can take a dictation event right now. A recording starting or
+/// stopping counts as busy too: it covers the moment between a stop and the
+/// frontend reporting that it is processing the transcript.
+fn ui_ready(state: &AudioState) -> bool {
     use std::sync::atomic::Ordering::Relaxed;
-    UI_LISTENING.load(Relaxed) && !UI_LOADING.load(Relaxed)
+    UI_LISTENING.load(Relaxed) && !UI_BUSY.load(Relaxed) && !state.recording_transition_active()
 }
 
 #[tauri::command]
@@ -222,12 +225,14 @@ fn status(app: &AppHandle) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "pid": std::process::id(),
         "recording": is_recording(&state),
+        // A two-channel meeting recording (saved to Meetings, not dictation history).
+        "meeting": is_recording(&state) && state.last_recording_is_dual_channel.load(Ordering::SeqCst),
         "paused": state.recording_paused.load(Ordering::Relaxed),
         "engine": engine_name(&engine),
         "model": model,
         "backend": if backend.is_empty() { Value::Null } else { Value::String(backend) },
         "engine_loading": state.engine_loading.load(Ordering::Relaxed),
-        "ui_ready": ui_ready(),
+        "ui_ready": ui_ready(&state),
     })
 }
 
@@ -264,8 +269,8 @@ async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, Strin
     match cmd {
         "status" => Ok(status(app)),
         "dictate" => {
-            if !ui_ready() {
-                return Err("Taurscribe is still starting or loading a model; try again in a moment".into());
+            if !ui_ready(&app.state::<AudioState>()) {
+                return Err("Taurscribe is busy (starting, loading a model, or finishing the last dictation); try again in a moment".into());
             }
             let action = args.get("action").and_then(Value::as_str).unwrap_or("toggle");
             let recording = is_recording(&app.state::<AudioState>());

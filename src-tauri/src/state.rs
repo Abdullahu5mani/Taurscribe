@@ -156,6 +156,11 @@ impl AudioState {
         Ok(RecordingTransitionGuard(self.recording_transition.clone()))
     }
 
+    /// True while a recording is starting or stopping (including its final pass).
+    pub fn recording_transition_active(&self) -> bool {
+        self.recording_transition.load(Ordering::Acquire)
+    }
+
     pub fn begin_model_operation(&self) -> Result<ModelOperationGuard, String> {
         let mut activity = self.model_activity.lock().map_err(|e| e.to_string())?;
         if activity.exclusive {

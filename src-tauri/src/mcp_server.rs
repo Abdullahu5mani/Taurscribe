@@ -124,11 +124,16 @@ pub fn run_tool(name: &str, args: &Value) -> Result<String, String> {
     call_tool(&open_db()?, name, args)
 }
 
-/// The newest dictation or file transcript as (id, text), for `taurscribe stop --print`.
+/// The newest dictation as (id, text), for `taurscribe stop --print`. File
+/// transcripts are left out: one finishing meanwhile isn't the dictation.
 pub fn latest_transcript() -> Option<(i64, String)> {
     open_db()
         .ok()?
-        .query_row("SELECT id, transcript FROM transcriptions ORDER BY id DESC LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row(
+            &format!("SELECT id, transcript FROM transcriptions WHERE {KIND_SQL} = 'dictation' ORDER BY id DESC LIMIT 1"),
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .ok()
 }
 

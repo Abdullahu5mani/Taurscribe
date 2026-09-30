@@ -410,7 +410,7 @@ pub fn run() {
             commands::set_meeting_continue_minutes,
             commands::get_mcp_setup,
             cli_server::cli_ui_ready,
-            cli_server::cli_ui_loading,
+            cli_server::cli_ui_busy,
             gpu::get_gpu_report,
             cli_server::cli_install_status,
             cli_server::install_cli,
