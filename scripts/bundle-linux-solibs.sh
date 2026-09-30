@@ -158,13 +158,21 @@ ls -lh "$LIBS_DIR"/*.so "$LIBS_DIR"/*.so.* 2>/dev/null || true
 #   $ORIGIN/../share/taurscribe   → /usr/share/taurscribe/     (.deb / .rpm)
 #                                 → AppDir/usr/share/taurscribe/ (AppImage)
 # $ORIGIN is the directory containing the taurscribe binary at runtime.
+# GPU_FLAVOR=amd links ROCm (libamdhip64, hipBLAS, rocBLAS) from the system
+# install, which lives in /opt/rocm/lib and is not always on the linker path.
+# Replacing RUNPATH below would otherwise drop it.
+ROCM_RPATH=""
+if [ "${GPU_FLAVOR:-}" = "amd" ]; then
+  ROCM_RPATH=":/opt/rocm/lib"
+fi
+
 echo "bundle-linux-solibs: Patching RPATH on $BINARY ..."
-patchelf --set-rpath '$ORIGIN/../share/taurscribe:$ORIGIN' "$BINARY"
+patchelf --set-rpath "\$ORIGIN/../share/taurscribe:\$ORIGIN${ROCM_RPATH}" "$BINARY"
 
 # RUNPATH is not inherited, so libggml-cuda.so etc. need their own to find
 # the runtime libs bundled next to them.
 for lib in "$LIBS_DIR"/*.so.*.* "$LIBS_DIR"/*.so; do
-  [ -f "$lib" ] && [ ! -L "$lib" ] && patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
+  [ -f "$lib" ] && [ ! -L "$lib" ] && patchelf --set-rpath "\$ORIGIN${ROCM_RPATH}" "$lib" 2>/dev/null || true
 done
 
 PATCHED_RPATH=$(patchelf --print-rpath "$BINARY")

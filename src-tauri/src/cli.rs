@@ -622,29 +622,27 @@ fn same_dir(entry: &str, dir: &Path) -> bool {
     entry.trim().trim_end_matches('\\').eq_ignore_ascii_case(dir.to_string_lossy().trim_end_matches('\\'))
 }
 
-/// Runs PowerShell without flashing a console window from the GUI.
-#[cfg(windows)]
-fn powershell(script: &str) -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("could not run PowerShell: {e}"))?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim_end_matches(['\r', '\n']).to_string())
-}
-
-/// The user's own PATH (not the merged system + user value).
+/// The user's own PATH (not the merged system + user value), read from
+/// HKCU\Environment as UTF-16 and unexpanded, so non-ASCII folders and
+/// entries like %USERPROFILE%\bin survive being written back.
 #[cfg(windows)]
 fn windows_user_path() -> Option<String> {
-    powershell("[Environment]::GetEnvironmentVariable('Path','User')").ok()
+    use windows::core::w;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ};
+    let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
+    unsafe {
+        let mut bytes = 0u32;
+        RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, None, Some(&mut bytes)).ok().ok()?;
+        let mut buf = vec![0u16; (bytes as usize).div_ceil(2)];
+        let mut bytes = (buf.len() * 2) as u32;
+        RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, Some(buf.as_mut_ptr().cast()), Some(&mut bytes)).ok().ok()?;
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        Some(String::from_utf16_lossy(&buf[..len]))
+    }
 }
 
-/// Writes the user PATH; .NET broadcasts WM_SETTINGCHANGE so new terminals see it.
+/// Writes the user PATH (as REG_EXPAND_SZ, like Windows' own editor) and
+/// broadcasts WM_SETTINGCHANGE so new terminals see it.
 #[cfg(windows)]
 fn set_windows_user_path(value: &str) -> Result<(), String> {
     use windows::core::w;

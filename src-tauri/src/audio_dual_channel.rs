@@ -555,14 +555,26 @@ fn spawn_named_mic_capture(
             let supported = device.default_input_config().map_err(|e| e.to_string())?;
             let format = supported.sample_format();
             let config: cpal::StreamConfig = supported.into();
-            let (channels, rate) = (config.channels as u32, config.sample_rate.0 as f64);
+            let (channels, rate) = (config.channels as u32, config.sample_rate.0);
+            // One resampler for the whole stream: resampling each callback on its
+            // own rounds every chunk's length, and the mic track drifts against the
+            // 48 kHz callers track over a long meeting. 1024-frame blocks keep the
+            // added latency around 20 ms.
+            let mut resampler = crate::audio_preprocess::StreamingResampler::with_target(rate, 48_000, 1024)?;
             let stream = crate::audio::build_input_stream_f32(
                 &device,
                 &config,
                 format,
                 move |data: &[f32]| {
-                    // Never block the audio callback; a full queue drops the chunk.
-                    let _ = tx.try_send(process_chunk_to_mono_48k(data.to_vec(), channels, rate));
+                    let mono = crate::audio_preprocess::downmix_interleaved_to_mono(data, channels as usize);
+                    match resampler.push(&mono) {
+                        // Never block the audio callback; a full queue drops the chunk.
+                        Ok(out) if !out.is_empty() => {
+                            let _ = tx.try_send(out);
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[ERROR] Meeting microphone resample failed: {}", e),
+                    }
                 },
                 |e| eprintln!("[ERROR] Meeting microphone stream error: {}", e),
             )

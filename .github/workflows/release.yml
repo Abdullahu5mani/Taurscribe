@@ -816,7 +816,9 @@ jobs:
             Linux)
               APP=$(find /tmp/taurscribe-deb-root/usr/bin -type f | head -1)
               LIBDIR=$(dirname "$(find /tmp/taurscribe-deb-root -name 'libllama.so*' | head -1)")
-              export LD_LIBRARY_PATH="$LIBDIR${ROCM_PATH:+:$ROCM_PATH/lib}"
+              # Not $ROCM_PATH/lib: the AMD build must find ROCm through its own
+              # RPATH (/opt/rocm/lib), as it does on a user's machine.
+              export LD_LIBRARY_PATH="$LIBDIR"
               BENCH="$TD/$T/release/engine_bench" ;;
             macOS)
               APP=$(find "$TD/$T/release/bundle/macos" -path '*Contents/MacOS/*' -type f -perm -u+x | head -1)
