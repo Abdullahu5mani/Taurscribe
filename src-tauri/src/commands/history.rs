@@ -1,7 +1,7 @@
 use chrono::Utc;
 use dirs::data_local_dir;
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 fn get_history_db_path() -> Result<PathBuf, String> {
@@ -34,6 +34,11 @@ fn ensure_history_db() -> Result<Connection, String> {
 }
 
 fn init_history_schema(conn: &Connection) -> Result<(), String> {
+    // The dictation feed and Files panel can initialize separate connections
+    // together. Serialize schema inspection/migration and publish it atomically.
+    let transaction = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| format!("Failed to begin history migration: {e}"))?;
+    let conn = &transaction;
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS transcriptions (
@@ -46,7 +51,9 @@ fn init_history_schema(conn: &Connection) -> Result<(), String> {
             processing_time_ms  INTEGER,
             model_id            TEXT,
             audio_source        TEXT,
-            kind                TEXT
+            kind                TEXT,
+            source_path         TEXT,
+            import_method       TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at
             ON transcriptions(created_at DESC);
@@ -70,12 +77,24 @@ fn init_history_schema(conn: &Connection) -> Result<(), String> {
     // `kind` = "dictation" (microphone) or "file" (dropped audio file). Rows from
     // before the column existed are backfilled from audio_source.
     let _ = conn.execute("ALTER TABLE transcriptions ADD COLUMN kind TEXT", []);
+    // Check first so repeat initialization is harmless, while real migration
+    // failures are reported instead of silently disabling file history.
+    for column in ["source_path", "import_method"] {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('transcriptions') WHERE name = ?1)",
+            [column], |row| row.get(0),
+        ).map_err(|e| format!("Failed to inspect history schema: {e}"))?;
+        if !exists {
+            conn.execute(&format!("ALTER TABLE transcriptions ADD COLUMN {column} TEXT"), [])
+                .map_err(|e| format!("Failed to migrate history {column}: {e}"))?;
+        }
+    }
     let _ = conn.execute(
         &format!("UPDATE transcriptions SET kind = {KIND_FROM_SOURCE_SQL} WHERE kind IS NULL"),
         [],
     );
 
-    Ok(())
+    transaction.commit().map_err(|e| format!("Failed to commit history migration: {e}"))
 }
 
 #[derive(Serialize)]
@@ -90,6 +109,21 @@ pub struct TranscriptRecord {
     pub model_id: Option<String>,
     pub audio_source: Option<String>,
     pub kind: String,
+    pub source_path: Option<String>,
+    pub import_method: Option<String>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileImportMethod {
+    Drop,
+    Picker,
+}
+
+impl FileImportMethod {
+    fn as_str(self) -> &'static str {
+        match self { Self::Drop => "drop", Self::Picker => "picker" }
+    }
 }
 
 /// Save a single transcription entry to the history database.
@@ -107,6 +141,9 @@ pub async fn save_transcript_history(
     processing_time_ms: Option<i64>,
     model_id: Option<String>,
     audio_source: Option<String>,
+    source_path: Option<String>,
+    import_method: Option<FileImportMethod>,
+    completed_at: Option<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         save_transcript_history_blocking(
@@ -117,6 +154,9 @@ pub async fn save_transcript_history(
             processing_time_ms,
             model_id,
             audio_source,
+            source_path,
+            import_method,
+            completed_at,
         )
     })
     .await
@@ -131,14 +171,23 @@ fn save_transcript_history_blocking(
     processing_time_ms: Option<i64>,
     model_id: Option<String>,
     audio_source: Option<String>,
+    source_path: Option<String>,
+    import_method: Option<FileImportMethod>,
+    completed_at: Option<String>,
 ) -> Result<(), String> {
     // Don't persist empty transcripts.
     if transcript.trim().is_empty() {
         return Ok(());
     }
 
+    let created_at = match completed_at {
+        Some(value) => chrono::DateTime::parse_from_rfc3339(&value)
+            .map_err(|e| format!("Invalid transcription completion time: {e}"))?
+            .with_timezone(&Utc).to_rfc3339(),
+        None => Utc::now().to_rfc3339(),
+    };
     let conn = ensure_history_db()?;
-    insert_history_row(&conn, &Utc::now().to_rfc3339(), &transcript, &engine, duration_ms, grammar_llm_used, processing_time_ms, model_id.as_deref(), audio_source.as_deref())
+    insert_history_row_with_source(&conn, &created_at, &transcript, &engine, duration_ms, grammar_llm_used, processing_time_ms, model_id.as_deref(), audio_source.as_deref(), source_path.as_deref(), import_method.map(FileImportMethod::as_str))
         .map(|_| ())
 }
 
@@ -204,6 +253,23 @@ fn insert_history_row(
     model_id: Option<&str>,
     audio_source: Option<&str>,
 ) -> Result<i64, String> {
+    insert_history_row_with_source(conn, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, None, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_history_row_with_source(
+    conn: &Connection,
+    created_at: &str,
+    transcript: &str,
+    engine: &str,
+    duration_ms: Option<i64>,
+    grammar_llm_used: bool,
+    processing_time_ms: Option<i64>,
+    model_id: Option<&str>,
+    audio_source: Option<&str>,
+    source_path: Option<&str>,
+    import_method: Option<&str>,
+) -> Result<i64, String> {
     let grammar_flag: i64 = if grammar_llm_used { 1 } else { 0 };
 
     println!(
@@ -217,9 +283,9 @@ fn insert_history_row(
     );
 
     conn.execute(
-        "INSERT INTO transcriptions (created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![created_at, transcript, engine, duration_ms, grammar_flag, processing_time_ms, model_id, audio_source, kind_for_source(audio_source)],
+        "INSERT INTO transcriptions (created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind, source_path, import_method)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![created_at, transcript, engine, duration_ms, grammar_flag, processing_time_ms, model_id, audio_source, if source_path.is_some() { "file" } else { kind_for_source(audio_source) }, source_path, import_method],
     )
     .map_err(|e| {
         eprintln!("[HISTORY] Failed to insert history row: {}", e);
@@ -269,7 +335,7 @@ fn query_history(conn: &Connection, limit: i64, offset: i64, kind: Option<&str>)
 
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind
+            "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind, source_path, import_method
              FROM transcriptions
              WHERE ?3 IS NULL OR COALESCE(kind, {KIND_FROM_SOURCE_SQL}) = ?3
              ORDER BY datetime(created_at) DESC, id DESC
@@ -294,6 +360,8 @@ fn query_history(conn: &Connection, limit: i64, offset: i64, kind: Option<&str>)
                 model_id: row.get(7)?,
                 audio_source: row.get(8)?,
                 kind: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "dictation".into()),
+                source_path: row.get(10)?,
+                import_method: row.get(11)?,
             })
         })
         .map_err(|e| {
@@ -408,6 +476,99 @@ mod tests {
         init_history_schema(&conn).unwrap(); // idempotent
         let r = &query_history(&conn, 5, 0, None).unwrap()[0];
         assert_eq!((r.transcript.as_str(), r.kind.as_str(), r.model_id.as_deref()), ("old", "dictation", None));
+        assert!(r.source_path.is_none());
+        assert!(r.import_method.is_none());
+    }
+
+    #[test]
+    fn file_history_survives_reopening_and_removing_original_audio() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("taurscribe-history-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let db = directory.join("history.db");
+        let audio = directory.join("Example speech 音声.wav");
+        std::fs::write(&audio, b"original audio stays here").unwrap();
+        {
+            let conn = Connection::open(&db).unwrap();
+            init_history_schema(&conn).unwrap();
+            for method in ["drop", "picker"] {
+                insert_history_row_with_source(&conn, "2026-09-30T14:01:02+00:00", "Saved words.\nSecond line.", "qwen3", Some(5200), false, Some(310), Some("qwen3-asr-0.6b"), Some("Example speech 音声.wav"), audio.to_str(), Some(method)).unwrap();
+            }
+        }
+        assert_eq!(std::fs::read(&audio).unwrap(), b"original audio stays here");
+        // History is useful after the user's original file has gone away.
+        std::fs::remove_file(&audio).unwrap();
+        {
+            let conn = Connection::open(&db).unwrap();
+            init_history_schema(&conn).unwrap();
+            let rows = query_history(&conn, 25, 0, Some("file")).unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows[0].import_method.as_deref(), Some("picker"));
+            assert_eq!(rows[1].import_method.as_deref(), Some("drop"));
+            for row in rows {
+                assert_eq!(row.source_path.as_deref(), audio.to_str());
+                assert_eq!(row.transcript, "Saved words.\nSecond line.");
+                assert_eq!(row.created_at, "2026-09-30T14:01:02+00:00");
+                assert_eq!(row.model_id.as_deref(), Some("qwen3-asr-0.6b"));
+                assert_eq!(row.audio_source.as_deref(), Some("Example speech 音声.wav"));
+                assert_eq!((row.duration_ms, row.processing_time_ms), (Some(5200), Some(310)));
+            }
+        }
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1, "Only the transcript database is retained");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn upgrading_existing_file_history_preserves_unknown_source_details() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE transcriptions (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, transcript TEXT NOT NULL, engine TEXT NOT NULL, duration_ms INTEGER, grammar_llm_used INTEGER NOT NULL, processing_time_ms INTEGER, model_id TEXT, audio_source TEXT, kind TEXT);
+            INSERT INTO transcriptions VALUES (1, '2026-09-29T10:00:00+00:00', 'Existing file transcript', 'whisper', 1200, 0, 300, 'base.en', 'old.mp3', 'file');").unwrap();
+        init_history_schema(&conn).unwrap();
+        init_history_schema(&conn).unwrap();
+        let row = &query_history(&conn, 25, 0, Some("file")).unwrap()[0];
+        assert_eq!(row.id, 1);
+        assert_eq!(row.transcript, "Existing file transcript");
+        assert_eq!(row.audio_source.as_deref(), Some("old.mp3"));
+        assert_eq!(row.model_id.as_deref(), Some("base.en"));
+        assert!(row.source_path.is_none());
+        assert!(row.import_method.is_none());
+    }
+
+    #[test]
+    fn import_method_accepts_only_known_values() {
+        assert!(matches!(serde_json::from_str::<FileImportMethod>("\"drop\"").unwrap(), FileImportMethod::Drop));
+        assert!(matches!(serde_json::from_str::<FileImportMethod>("\"picker\"").unwrap(), FileImportMethod::Picker));
+        assert!(serde_json::from_str::<FileImportMethod>("\"made_up\"").is_err());
+    }
+
+    #[test]
+    fn concurrent_history_initialization_migrates_once_without_losing_rows() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("taurscribe-history-race-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("history.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE transcriptions (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, transcript TEXT NOT NULL, engine TEXT NOT NULL, duration_ms INTEGER, grammar_llm_used INTEGER NOT NULL);
+                INSERT INTO transcriptions VALUES (1, '2026-09-29T10:00:00+00:00', 'Keep existing words', 'whisper', NULL, 0);").unwrap();
+        }
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let workers: Vec<_> = (0..4).map(|_| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let conn = Connection::open(path).unwrap();
+                barrier.wait();
+                init_history_schema(&conn).unwrap();
+                let rows = query_history(&conn, 25, 0, None).unwrap();
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].transcript, "Keep existing words");
+                assert!(rows[0].source_path.is_none());
+                assert!(rows[0].import_method.is_none());
+            })
+        }).collect();
+        for worker in workers { worker.join().unwrap(); }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

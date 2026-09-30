@@ -52,7 +52,7 @@ struct Element: Codable {
 let reportRoles: Set<String> = [
     "AXButton", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton",
     "AXTextField", "AXTextArea", "AXLink", "AXStaticText", "AXHeading", "AXTab",
-    "AXSwitch", "AXMenuItem", "AXProgressIndicator",
+    "AXSwitch", "AXMenuItem", "AXProgressIndicator", "AXDisclosureTriangle",
 ]
 let textRoles: Set<String> = ["AXStaticText", "AXHeading"]
 

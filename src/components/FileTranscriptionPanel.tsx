@@ -240,6 +240,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                 status: "done" as const,
                 progress: 100,
                 transcript: result.transcript,
+                completedAt: new Date().toISOString(),
                 audioDurationMs: result.audio_duration_ms,
                 processingTimeMs: result.processing_time_ms,
                 historyError: undefined,

@@ -2,7 +2,7 @@
 """Unit tests for MeetingDecider and Jev Ultrafast DOM action selection."""
 
 import unittest
-from decider import MeetingDecider, DeciderAction
+from decider import MeetingDecider, DeciderAction, PlanStep
 
 
 class TestMeetingDecider(unittest.TestCase):
@@ -36,9 +36,24 @@ class TestMeetingDecider(unittest.TestCase):
                 {"index": 4, "tag": "button", "role": "button", "text": "Ask to join", "disabled": False, "checked": False},
             ]
         }
-        action = self.decider.decide(snapshot, guest_name="Dr. Sarah Chen")
+        action = self.decider.decide(snapshot, goal="Join meeting as guest and mute microphone", guest_name="Dr. Sarah Chen")
         self.assertEqual(action.operation, "CLICK")
         self.assertEqual(action.target, 1)
+
+    def test_native_history_disclosure_can_be_opened(self):
+        snapshot = {"elements": [
+            {"index": 4, "role": "AXStaticText", "text": "notes.wav", "disabled": False},
+            {"index": 7, "role": "AXDisclosureTriangle", "text": "notes.wav 12:30 PM", "disabled": False},
+        ]}
+        action = self.decider.decide_plan(snapshot, [PlanStep("Open history", r"^notes\.wav", plain_only=False)])
+        self.assertEqual((action.operation, action.target), ("CLICK", 7))
+
+    def test_disabled_history_disclosure_is_not_clicked(self):
+        snapshot = {"elements": [
+            {"index": 7, "role": "AXDisclosureTriangle", "text": "notes.wav", "disabled": True},
+        ]}
+        action = self.decider.decide_plan(snapshot, [PlanStep("Open history", r"^notes\.wav", plain_only=False)])
+        self.assertEqual(action.operation, "WAIT")
 
     def test_fill_empty_name(self):
         snapshot = {

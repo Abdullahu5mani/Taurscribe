@@ -354,7 +354,7 @@ class MeetingDecider:
                 role = el.get("role", "").lower()
                 if step.plain_only and not self._is_plain_button(el):
                     continue
-                if any(k in role for k in ("button", "link", "checkbox", "menuitem", "switch")):
+                if any(k in role for k in ("button", "link", "checkbox", "menuitem", "switch", "disclosuretriangle")):
                     if step.pattern.search(el.get("text", "")):
                         return DeciderAction("CLICK", target=el["index"], reason=f"{step.name}: '{el['text']}'")
         return DeciderAction("WAIT", reason="No plan step visible yet")
