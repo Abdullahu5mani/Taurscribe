@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Store } from "@tauri-apps/plugin-store";
@@ -42,8 +42,9 @@ export function usePostProcessing(
     const enableOverlayRef = useSyncedRef(enableOverlay);
     const muteBackgroundAudioRef = useSyncedRef(muteBackgroundAudio);
     const transcriptionStyleRef = useSyncedRef(transcriptionStyle);
-    const llmBackendRef = useSyncedRef(llmBackend);
-    const llmStatusRef = useSyncedRef(llmStatus);
+    // The backend the loaded FlowScribe engine was started with (null: none).
+    // Compared with the setting to decide when a reload is due.
+    const appliedLlmBackendRef = useRef<"gpu" | "cpu" | null>(null);
 
     // ── Load persisted settings on mount ──────────────────────────────────
     // Uses the shared storeRef if provided; falls back to a local load so the
@@ -160,6 +161,7 @@ export function usePostProcessing(
                 }
                 setHeaderStatus("Auto-loading FlowScribe LLM...", 60_000);
                 setLlmStatus("Loading...");
+                appliedLlmBackendRef.current = llmBackend;
                 invoke("init_llm", { useGpu: llmBackend === "gpu" }).then((res) => {
                     setLlmStatus("Loaded");
                     setHeaderStatus(res as string);
@@ -186,13 +188,13 @@ export function usePostProcessing(
         }
     }, [enableGrammarLM, llmStatus, llmBackend, settingsLoaded, setEnableGrammarLM]);
 
-    // ── Hot-reload LLM when backend (GPU ↔ CPU) changes while loaded ──────
+    // ── Hot-reload LLM when backend (GPU ↔ CPU) differs from the loaded one ──
+    // Also runs when a load finishes, so a switch made while it was loading
+    // still takes effect.
     useEffect(() => {
-        // Skip on first render — llmBackendRef starts as the initial value
-        if (llmBackendRef.current === llmBackend) return;
-
-        // Only hot-reload if the LLM is currently active
-        if (llmStatusRef.current !== "Loaded") return;
+        if (llmStatus !== "Loaded") return;
+        if (appliedLlmBackendRef.current === null || appliedLlmBackendRef.current === llmBackend) return;
+        appliedLlmBackendRef.current = llmBackend;
 
         const label = llmBackend === "gpu" ? "GPU" : "CPU";
         setHeaderStatus(`Switching LLM to ${label}…`, 60_000);
@@ -208,7 +210,7 @@ export function usePostProcessing(
                 setLlmStatus("Error");
                 setHeaderStatus(`LLM backend switch failed: ${err}`, 5000);
             });
-    }, [llmBackend, setHeaderStatus]);
+    }, [llmBackend, llmStatus, setHeaderStatus]);
 
     // ── Re-check LLM availability when models change (e.g. after download) ──
     useEffect(() => {

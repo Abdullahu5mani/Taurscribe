@@ -195,7 +195,17 @@ pub async fn start_recording(
         ));
     }
 
-    let meeting_at_start = state.meeting_detector.get_status().active_meetings.into_iter().next();
+    // Only a two-channel session is a meeting recording (the UI starts meetings
+    // that way); a dictation during a call stays a dictation.
+    let is_dual_channel = audio_source
+        .as_deref()
+        .map(|s| s == "dual_channel")
+        .unwrap_or_else(|| *state.audio_source_mode.lock().unwrap() == "dual_channel");
+    let meeting_at_start = if is_dual_channel {
+        state.meeting_detector.get_status().active_meetings.into_iter().next()
+    } else {
+        None
+    };
     if let Some(key) = crate::meeting_continuation::call_key(meeting_at_start.as_ref()) {
         crate::meeting_continuation::claim_for_recording(&key);
     }
@@ -837,7 +847,6 @@ fn prepare_session(
     is_dual_channel: bool,
     channels: u16,
     sample_rate: u32,
-    denoise_enabled: bool,
 ) -> Result<(std::path::PathBuf, hound::WavWriter<std::io::BufWriter<std::fs::File>>), String> {
     let recordings_dir = get_recordings_dir()?;
     let prefix = if is_dual_channel { "meeting" } else { "recording" };
@@ -860,14 +869,6 @@ fn prepare_session(
     state.vad.lock().unwrap().reset_state();
 
     state.session_transcript.lock().unwrap().clear();
-
-    // Create a fresh denoiser for this session (RNNoise GRU state must not leak across sessions)
-    if denoise_enabled {
-        *state.denoiser.lock().unwrap() = Some(Denoiser::new());
-        println!("[INFO] RNNoise denoiser enabled for this session");
-    } else {
-        *state.denoiser.lock().unwrap() = None;
-    }
 
     let spec = hound::WavSpec {
         channels,
@@ -921,7 +922,7 @@ fn start_recording_blocking(
     };
 
     // 2. Session WAV and per-session state.
-    let (path, writer) = prepare_session(&state, is_dual_channel, channels, sample_rate, denoise_enabled)?;
+    let (path, writer) = prepare_session(&state, is_dual_channel, channels, sample_rate)?;
 
     // 3. Channels. Bounded so a slow writer or transcriber cannot grow memory
     // without limit; the capture side uses try_send and never blocks.
@@ -957,7 +958,12 @@ fn start_recording_blocking(
         vad: state.vad.clone(),
         session_transcript: state.session_transcript.clone(),
         denoise: denoise_enabled,
-        denoiser: state.denoiser.clone(),
+        // Owned by this session's transcriber, so it still denoises the audio it
+        // drains after Stop, and RNNoise state never leaks into the next session.
+        denoiser: Arc::new(Mutex::new(denoise_enabled.then(|| {
+            println!("[INFO] RNNoise denoiser enabled for this session");
+            Denoiser::new()
+        }))),
         dropped_callbacks: dropped_callbacks.clone(),
         dropped_samples: dropped_samples.clone(),
     }
@@ -1016,8 +1022,10 @@ fn start_recording_blocking(
 /// The meeting a stopped recording belongs to: the one detected when it started,
 /// even if the call has since ended or another call is now detected. A meeting
 /// recording started before any call was detected takes the call detected now.
+/// Only two-channel recordings are meetings; a microphone dictation made during
+/// a call is not (the UI pastes it and keeps it in dictation history).
 fn meeting_for_saving<M>(at_start: Option<M>, at_stop: Option<M>, is_dual_channel: bool) -> Option<M> {
-    at_start.or(if is_dual_channel { at_stop } else { None })
+    if is_dual_channel { at_start.or(at_stop) } else { None }
 }
 
 fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) -> Result<(), String> {
@@ -1077,13 +1085,15 @@ pub fn pause_recording(state: State<'_, AudioState>) -> Result<CommandResult<Str
     let Some(handle) = guard.as_ref() else {
         return Ok(CommandResult::err("not_recording", "Not recording"));
     };
-
-    if let Some(ref stream) = handle.stream {
-        stream
-            .0
-            .pause()
-            .map_err(|e| format!("Failed to pause recording: {}", e))?;
-    }
+    // A meeting recording has no single stream to pause (its capture thread
+    // keeps both tracks running), so say so instead of pretending.
+    let Some(ref stream) = handle.stream else {
+        return Ok(CommandResult::err("pause_unsupported", "Meeting recordings can't be paused"));
+    };
+    stream
+        .0
+        .pause()
+        .map_err(|e| format!("Failed to pause recording: {}", e))?;
     state.recording_paused.store(true, Ordering::Relaxed);
     Ok(CommandResult::ok("Recording paused".to_string()))
 }
@@ -1109,7 +1119,6 @@ pub fn resume_recording(state: State<'_, AudioState>) -> Result<CommandResult<St
 pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandResult<()>, String> {
     let _recording_transition = state.begin_recording_transition()?;
     let _model_operation = state.begin_model_operation()?;
-    *state.denoiser.lock().unwrap() = None;
     state.recording_paused.store(false, Ordering::Relaxed);
 
     let Some(recording) = state.recording_handle.lock().unwrap().take() else {
@@ -1666,11 +1675,139 @@ fn meeting_turn_transcriber<'a>(
     }
 }
 
+/// Length of a WAV in milliseconds (None when unreadable).
+fn wav_duration(path: &std::path::Path) -> Option<u64> {
+    hound::WavReader::open(path)
+        .ok()
+        .map(|r| r.duration() as u64 * 1000 / r.spec().sample_rate.max(1) as u64)
+}
+
 /// Length of a WAV in milliseconds (0 when unreadable).
 fn wav_duration_ms(path: &std::path::Path) -> u64 {
-    hound::WavReader::open(path)
-        .map(|r| r.duration() as u64 * 1000 / r.spec().sample_rate.max(1) as u64)
-        .unwrap_or(0)
+    wav_duration(path).unwrap_or(0)
+}
+
+/// Shortest dictation that is kept: anything shorter is usually an accidental
+/// tap of the hotkey.
+pub(crate) const MIN_DICTATION_MS: u64 = 300;
+
+/// Whether a recording is a dictation or a meeting. Decided when it starts (a
+/// two-channel recording is a meeting), never guessed afterwards.
+#[derive(serde::Serialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingKind {
+    Dictation,
+    Meeting,
+}
+
+/// Where a dictation's transcript was stored.
+#[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum HistoryOutcome {
+    /// History row `id`; the UI updates it with its final text.
+    Saved { id: i64 },
+    /// Saving failed; the recording is kept at `recording_path`.
+    NotSaved { error: String, recording_path: Option<String> },
+    /// Nothing to save here: a meeting (saved in Meetings), a recording that
+    /// was too short, or one with no speech.
+    Skipped,
+}
+
+/// Everything the UI needs from a stopped recording.
+#[derive(serde::Serialize, Debug)]
+pub struct RecordingOutcome {
+    pub transcript: String,
+    pub kind: RecordingKind,
+    pub meeting_id: Option<i64>,
+    /// Length of the audio captured, from the samples written: it excludes the
+    /// processing after Stop and includes the short tail captured after it.
+    pub duration_ms: Option<u64>,
+    /// A dictation shorter than MIN_DICTATION_MS: not saved, and not pasted.
+    pub too_short: bool,
+    pub history: HistoryOutcome,
+}
+
+fn engine_id(engine: ASREngine) -> &'static str {
+    match engine {
+        ASREngine::Whisper => "whisper",
+        ASREngine::Granite => "granite",
+        ASREngine::Qwen3 => "qwen3",
+    }
+}
+
+/// What a stop needs to store its result.
+struct Finishing<'a> {
+    kind: RecordingKind,
+    meeting_info: Option<crate::meeting_detector::MeetingInfo>,
+    path: Option<&'a str>,
+    active_engine: ASREngine,
+    whisper_arc: &'a Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
+    gguf: Option<&'a Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,
+    model_id: Option<String>,
+    duration_ms: Option<u64>,
+    started: std::time::Instant,
+}
+
+impl Finishing<'_> {
+    /// Stores the result (a meeting in Meetings, a dictation in history) and
+    /// only then deletes the temporary recording. A dictation that could not
+    /// be stored keeps its recording, as does one whose final pass failed
+    /// (`keep_recording`).
+    fn conclude(self, transcript: String, keep_recording: bool) -> Result<RecordingOutcome, String> {
+        self.conclude_with(transcript, keep_recording, super::history::record_dictation)
+    }
+
+    /// `conclude`, with the history store passed in (tests use a fake one).
+    fn conclude_with(
+        self,
+        transcript: String,
+        keep_recording: bool,
+        save_dictation: impl FnOnce(&str, &str, Option<i64>, Option<i64>, Option<&str>) -> Result<i64, String>,
+    ) -> Result<RecordingOutcome, String> {
+        let too_short = self.kind == RecordingKind::Dictation
+            && self.duration_ms.is_some_and(|d| d < MIN_DICTATION_MS);
+        let (meeting_id, history) = match self.kind {
+            RecordingKind::Meeting => {
+                let id = process_and_save_meeting_if_applicable(
+                    true,
+                    self.path,
+                    &transcript,
+                    self.meeting_info,
+                    self.active_engine,
+                    self.whisper_arc,
+                    self.gguf,
+                )?;
+                (id, HistoryOutcome::Skipped)
+            }
+            RecordingKind::Dictation if too_short || transcript.trim().is_empty() => {
+                (None, HistoryOutcome::Skipped)
+            }
+            RecordingKind::Dictation => {
+                match save_dictation(
+                    &transcript,
+                    engine_id(self.active_engine),
+                    self.duration_ms.map(|d| d as i64),
+                    Some(self.started.elapsed().as_millis() as i64),
+                    self.model_id.as_deref(),
+                ) {
+                    Ok(id) => (None, HistoryOutcome::Saved { id }),
+                    Err(error) => {
+                        eprintln!("[HISTORY] Could not save the dictation; keeping its recording: {error}");
+                        let recording_path = self.path.map(str::to_string);
+                        (None, HistoryOutcome::NotSaved { error, recording_path })
+                    }
+                }
+            }
+        };
+        let keep = matches!(history, HistoryOutcome::NotSaved { .. })
+            || (keep_recording && self.kind == RecordingKind::Dictation);
+        if !keep {
+            if let Some(path) = self.path {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        Ok(RecordingOutcome { transcript, kind: self.kind, meeting_id, duration_ms: self.duration_ms, too_short, history })
+    }
 }
 
 fn process_and_save_meeting_if_applicable(
@@ -1877,13 +2014,27 @@ fn stop_recording_blocking(
     whisper_arc: Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
     gguf: Option<Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,
     vad_arc: Arc<std::sync::Mutex<crate::vad::VADManager>>,
-    is_meeting: bool,
+    kind: RecordingKind,
     meeting_info: Option<crate::meeting_detector::MeetingInfo>,
+    model_id: Option<String>,
+    started: std::time::Instant,
     app: AppHandle,
-) -> Result<(String, Option<i64>), String> {
+) -> Result<RecordingOutcome, String> {
     // Brief tail capture for OS audio scheduling; silence padding in the
     // transcriber thread handles the actual word-boundary safety margin.
-    if let Err(write_error) = teardown_recording(recording, 80) {
+    let teardown = teardown_recording(recording, 80);
+    let finishing = Finishing {
+        kind,
+        meeting_info,
+        path: last_recording_path.as_deref(),
+        active_engine,
+        whisper_arc: &whisper_arc,
+        gguf: gguf.as_ref(),
+        model_id,
+        duration_ms: last_recording_path.as_deref().and_then(|p| wav_duration(std::path::Path::new(p))),
+        started,
+    };
+    if let Err(write_error) = teardown {
         // The WAV is incomplete (e.g. a full disk), but the live transcriber
         // already has the text: keep it rather than losing the dictation.
         let live = session_transcript.lock().unwrap().clone();
@@ -1895,21 +2046,10 @@ fn stop_recording_blocking(
         let text = crate::context::apply_custom_vocabulary_casing(&clean_transcript(&live), &custom_vocab);
         // A meeting is saved from the partial WAV where possible. Its text lives
         // only in the meeting, so a failed save is an error (the WAV is kept),
-        // never reported as saved. A dictation no longer needs the WAV.
-        let meeting_id = process_and_save_meeting_if_applicable(
-            is_meeting,
-            last_recording_path.as_deref(),
-            &text,
-            meeting_info,
-            active_engine,
-            &whisper_arc,
-            gguf.as_ref(),
-        )
-        .map_err(|e| format!("{write_error}; the meeting could not be saved: {e}"))?;
-        if let Some(path) = last_recording_path.as_ref() {
-            let _ = std::fs::remove_file(path);
-        }
-        return Ok((text, meeting_id));
+        // never reported as saved.
+        return finishing
+            .conclude(text, false)
+            .map_err(|e| format!("{write_error}; the meeting could not be saved: {e}"));
     }
 
     // Ensure final inference pass runs on P-cores with elevated priority on Windows
@@ -1930,17 +2070,7 @@ fn stop_recording_blocking(
                         let final_text =
                             crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
                         println!("[FINAL_TRANSCRIPT] (Granite final)\n{}", final_text);
-                        let meeting_id = process_and_save_meeting_if_applicable(
-                            is_meeting,
-                            Some(path),
-                            &final_text,
-                            meeting_info,
-                            active_engine,
-                            &whisper_arc,
-                            gguf.as_ref(),
-                        )?;
-                        let _ = std::fs::remove_file(path);
-                        return Ok((final_text, meeting_id));
+                        return finishing.conclude(final_text, false);
                     }
                     Err(e) => eprintln!(
                         "[ERROR] Granite final pass failed; using the live transcript: {}",
@@ -1970,22 +2100,10 @@ fn stop_recording_blocking(
             crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab)
         };
         println!("[FINAL_TRANSCRIPT] (Raw)\n{}", final_text);
-        let meeting_id = process_and_save_meeting_if_applicable(
-            is_meeting,
-            last_recording_path.as_deref(),
-            &final_text,
-            meeting_info,
-            active_engine,
-            &whisper_arc,
-            gguf.as_ref(),
-        )?;
-        if let Some(path) = last_recording_path.as_ref() {
-            let _ = std::fs::remove_file(path);
-        }
-        return Ok((final_text, meeting_id));
+        return finishing.conclude(final_text, false);
     }
 
-    if let Some(path) = last_recording_path {
+    if let Some(path) = last_recording_path.as_deref() {
         println!(
             "[PROCESSING] Running final high-quality transcription with VAD on: {}",
             path
@@ -2007,7 +2125,7 @@ fn stop_recording_blocking(
         }
 
         let whisper = whisper_arc.lock().unwrap();
-        let mut audio_data = whisper.load_audio(&path)?;
+        let mut audio_data = whisper.load_audio(path)?;
 
         // Pad 400ms of silence so trailing words aren't clipped by VAD or Whisper
         audio_data.extend(std::iter::repeat(0.0_f32).take(16000 * 400 / 1000));
@@ -2064,17 +2182,7 @@ fn stop_recording_blocking(
                 let cleaned = clean_transcript(&raw_text);
                 let final_text =
                     crate::context::apply_custom_vocabulary_casing(&cleaned, &custom_vocab);
-                let meeting_id = process_and_save_meeting_if_applicable(
-                    is_meeting,
-                    Some(&path),
-                    &final_text,
-                    meeting_info,
-                    active_engine,
-                    &whisper_arc,
-                    gguf.as_ref(),
-                )?;
-                let _ = std::fs::remove_file(&path);
-                Ok((final_text, meeting_id))
+                finishing.conclude(final_text, false)
             }
             Err(e) => {
                 eprintln!("[ERROR] Final transcription failed: {}", e);
@@ -2088,23 +2196,12 @@ fn stop_recording_blocking(
                 let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
                 let fallback =
                     crate::context::apply_custom_vocabulary_casing(&fallback, &custom_vocab);
-                let meeting_id = process_and_save_meeting_if_applicable(
-                    is_meeting,
-                    Some(&path),
-                    &fallback,
-                    meeting_info,
-                    active_engine,
-                    &whisper_arc,
-                    gguf.as_ref(),
-                )?;
-                if is_meeting && meeting_id.is_some() {
-                    let _ = std::fs::remove_file(&path);
-                }
-                Ok((fallback, meeting_id))
+                // The final pass failed: a dictation keeps its audio.
+                finishing.conclude(fallback, true)
             }
         }
     } else {
-        Ok(("Recording saved.".to_string(), None))
+        Err("The recording file is missing".to_string())
     }
 }
 
@@ -2121,11 +2218,11 @@ fn stop_recording_blocking(
 pub async fn stop_recording(
     state: State<'_, AudioState>,
     app: AppHandle,
-) -> Result<CommandResult<String>, String> {
+) -> Result<CommandResult<RecordingOutcome>, String> {
+    let started = std::time::Instant::now();
     let _recording_transition = state.begin_recording_transition()?;
     let model_operation = state.begin_model_operation()?;
     // --- Quick state access (non-blocking, just mutex snapshots) ---
-    *state.denoiser.lock().unwrap() = None;
     state.recording_paused.store(false, Ordering::Relaxed);
 
     let Some(recording) = state.recording_handle.lock().unwrap().take() else {
@@ -2149,7 +2246,12 @@ pub async fn stop_recording(
     // A dual-channel recording is a meeting recording even when no meeting app was
     // detected: it is saved to the meetings area (as "Direct Audio") instead of
     // being treated as dictation.
-    let is_meeting = active_meeting.is_some() || is_dual_channel;
+    let kind = if is_dual_channel { RecordingKind::Meeting } else { RecordingKind::Dictation };
+    let is_meeting = kind == RecordingKind::Meeting;
+    let model_id = match active_engine {
+        ASREngine::Whisper => state.whisper_snapshot().model,
+        other => state.gguf_snapshot(other).and_then(|s| s.model_id),
+    };
 
     // Transcription + diarization can take a while; let the meetings view show it.
     if is_meeting {
@@ -2176,8 +2278,10 @@ pub async fn stop_recording(
             whisper_arc,
             gguf,
             vad_arc,
-            is_meeting,
+            kind,
             active_meeting,
+            model_id,
+            started,
             app_for_final,
         )
     })
@@ -2211,24 +2315,24 @@ pub async fn stop_recording(
         // Always paired with meeting-processing-started, including when nothing was
         // saved (empty transcript) or processing failed, so the indicator clears.
         let payload = match &outcome {
-            Ok((_, id)) => serde_json::json!({ "meeting_id": id, "error": null }),
+            Ok(o) => serde_json::json!({ "meeting_id": o.meeting_id, "error": null }),
             Err(message) => serde_json::json!({ "meeting_id": null, "error": message }),
         };
         let _ = app.emit("meeting-processing-finished", payload);
     }
 
     match outcome {
-        Ok((transcript, maybe_meeting_id)) => {
-            if let Some(meeting_id) = maybe_meeting_id {
+        Ok(outcome) => {
+            if let Some(meeting_id) = outcome.meeting_id {
                 let _ = app.emit(
                     "meeting-processing-complete",
                     serde_json::json!({
                         "meeting_id": meeting_id,
-                        "transcript": transcript
+                        "transcript": outcome.transcript
                     }),
                 );
             }
-            Ok(CommandResult::ok(transcript))
+            Ok(CommandResult::ok(outcome))
         }
         Err(message) => Ok(CommandResult::err("recording_stop_failed", message)),
     }
@@ -2354,6 +2458,90 @@ mod tests {
         assert_eq!(transcript, "first sentence second sentence");
     }
 
+    /// A 16 kHz mono WAV of `ms` milliseconds in the temp dir.
+    fn temp_wav(name: &str, ms: u32) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("taurscribe-outcome-{name}-{}.wav", std::process::id()));
+        let spec = hound::WavSpec { channels: 1, sample_rate: 16_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for _ in 0..(16 * ms) {
+            w.write_sample(0i16).unwrap();
+        }
+        w.finalize().unwrap();
+        path
+    }
+
+    fn finish_dictation(
+        path: &std::path::Path,
+        transcript: &str,
+        keep_recording: bool,
+        save: impl FnOnce(&str, &str, Option<i64>, Option<i64>, Option<&str>) -> Result<i64, String>,
+    ) -> RecordingOutcome {
+        let whisper = Arc::new(std::sync::Mutex::new(crate::whisper::WhisperManager::new()));
+        let finishing = Finishing {
+            kind: RecordingKind::Dictation,
+            meeting_info: None,
+            path: path.to_str(),
+            active_engine: ASREngine::Granite,
+            whisper_arc: &whisper,
+            gguf: None,
+            model_id: Some("granite-speech-5-nc".into()),
+            duration_ms: wav_duration(path),
+            started: std::time::Instant::now(),
+        };
+        finishing.conclude_with(transcript.into(), keep_recording, save).unwrap()
+    }
+
+    #[test]
+    fn a_dictation_is_saved_before_its_recording_is_deleted() {
+        let path = temp_wav("saved", 1_500);
+        let mut seen = None;
+        let o = finish_dictation(&path, "hello there", false, |text, engine, duration, _, model| {
+            // The recording still exists while the transcript is being saved.
+            assert!(path.exists());
+            seen = Some((text.to_string(), engine.to_string(), duration, model.map(str::to_string)));
+            Ok(42)
+        });
+        assert_eq!(o.history, HistoryOutcome::Saved { id: 42 });
+        assert_eq!((o.kind, o.duration_ms, o.too_short), (RecordingKind::Dictation, Some(1_500), false));
+        assert_eq!(seen, Some(("hello there".into(), "granite".into(), Some(1_500), Some("granite-speech-5-nc".into()))));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_dictation_that_cannot_be_saved_keeps_its_recording() {
+        let path = temp_wav("unsaved", 1_000);
+        let o = finish_dictation(&path, "hello there", false, |_, _, _, _, _| Err("database or disk is full".into()));
+        assert_eq!(
+            o.history,
+            HistoryOutcome::NotSaved { error: "database or disk is full".into(), recording_path: path.to_str().map(String::from) }
+        );
+        assert_eq!(o.transcript, "hello there");
+        assert!(path.exists());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn too_short_and_silent_dictations_are_not_saved() {
+        // Duration comes from the audio captured, not from how long Stop took.
+        let short = temp_wav("short", MIN_DICTATION_MS as u32 - 50);
+        let o = finish_dictation(&short, "hi", false, |_, _, _, _, _| panic!("a too-short dictation was saved"));
+        assert_eq!((o.too_short, o.history), (true, HistoryOutcome::Skipped));
+        assert!(!short.exists());
+
+        let silent = temp_wav("silent", 2_000);
+        let o = finish_dictation(&silent, "  ", false, |_, _, _, _, _| panic!("an empty dictation was saved"));
+        assert_eq!((o.too_short, o.history), (false, HistoryOutcome::Skipped));
+    }
+
+    #[test]
+    fn a_dictation_whose_final_pass_failed_keeps_its_recording() {
+        let path = temp_wav("fallback", 1_000);
+        let o = finish_dictation(&path, "live words", true, |_, _, _, _, _| Ok(7));
+        assert_eq!(o.history, HistoryOutcome::Saved { id: 7 });
+        assert!(path.exists());
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn stopped_recording_keeps_the_meeting_it_started_in() {
         // Left the call before pressing Stop: still that call, not "Direct Audio".
@@ -2362,9 +2550,11 @@ mod tests {
         assert_eq!(meeting_for_saving(Some("standup"), Some("1:1"), true), Some("standup"));
         // Meeting recording started before the call was detected.
         assert_eq!(meeting_for_saving(None, Some("1:1"), true), Some("1:1"));
-        // A dictation is not turned into a meeting by a call that starts later.
+        // A dictation is not turned into a meeting by a call, whether it was
+        // already running when the dictation started or started later.
         assert_eq!(meeting_for_saving(None, Some("1:1"), false), None);
-        assert_eq!(meeting_for_saving(Some("standup"), None, false), Some("standup"));
+        assert_eq!(meeting_for_saving(Some("standup"), None, false), None);
+        assert_eq!(meeting_for_saving(Some("standup"), Some("1:1"), false), None);
     }
 
     #[test]

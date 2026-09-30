@@ -139,6 +139,57 @@ fn save_transcript_history_blocking(
 
     let conn = ensure_history_db()?;
     insert_history_row(&conn, &Utc::now().to_rfc3339(), &transcript, &engine, duration_ms, grammar_llm_used, processing_time_ms, model_id.as_deref(), audio_source.as_deref())
+        .map(|_| ())
+}
+
+/// Saves a finished dictation's transcript (as recognized, before the UI's
+/// corrections) and returns its row id. `stop_recording` calls this before
+/// deleting the recording, so the text is stored whatever happens next.
+pub(crate) fn record_dictation(
+    transcript: &str,
+    engine: &str,
+    duration_ms: Option<i64>,
+    processing_time_ms: Option<i64>,
+    model_id: Option<&str>,
+) -> Result<i64, String> {
+    let conn = ensure_history_db()?;
+    insert_history_row(&conn, &Utc::now().to_rfc3339(), transcript, engine, duration_ms, false, processing_time_ms, model_id, Some("microphone"))
+}
+
+/// Replaces a dictation's text with what the UI finally produced (dictionary,
+/// grammar correction, snippets) and records the total processing time.
+#[tauri::command]
+pub async fn update_transcript_history(
+    id: i64,
+    transcript: String,
+    grammar_llm_used: bool,
+    processing_time_ms: Option<i64>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = ensure_history_db()?;
+        update_history_row(&conn, id, &transcript, grammar_llm_used, processing_time_ms)
+    })
+    .await
+    .map_err(|e| format!("update_transcript_history task failed: {}", e))?
+}
+
+fn update_history_row(
+    conn: &Connection,
+    id: i64,
+    transcript: &str,
+    grammar_llm_used: bool,
+    processing_time_ms: Option<i64>,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE transcriptions SET transcript = ?2, grammar_llm_used = ?3, processing_time_ms = COALESCE(?4, processing_time_ms) WHERE id = ?1",
+            params![id, transcript, grammar_llm_used as i64, processing_time_ms],
+        )
+        .map_err(|e| format!("Failed to update history row: {}", e))?;
+    if changed == 0 {
+        return Err(format!("No transcript #{id} to update"));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -152,7 +203,7 @@ fn insert_history_row(
     processing_time_ms: Option<i64>,
     model_id: Option<&str>,
     audio_source: Option<&str>,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     let grammar_flag: i64 = if grammar_llm_used { 1 } else { 0 };
 
     println!(
@@ -175,7 +226,7 @@ fn insert_history_row(
         format!("Failed to insert history row: {}", e)
     })?;
 
-    Ok(())
+    Ok(conn.last_insert_rowid())
 }
 
 /// List recent transcription history, newest first.
@@ -319,6 +370,19 @@ mod tests {
         assert_eq!(dictations, ["dictated", "legacy"]);
         assert_eq!(query_history(&conn, 10, 0, Some("file")).unwrap().len(), 5);
         assert_eq!(query_history(&conn, 10, 0, None).unwrap().len(), 7);
+    }
+
+    #[test]
+    fn a_saved_dictation_is_updated_with_the_final_text() {
+        let conn = mem_db();
+        let id = insert_history_row(&conn, "2026-09-27T10:00:00+00:00", "raw words", "granite", Some(2000), false, Some(150), None, Some("microphone")).unwrap();
+        update_history_row(&conn, id, "Raw words.", true, Some(900)).unwrap();
+        let r = &query_history(&conn, 1, 0, None).unwrap()[0];
+        assert_eq!((r.id, r.transcript.as_str(), r.grammar_llm_used, r.processing_time_ms), (id, "Raw words.", true, Some(900)));
+        // Without a new time the backend's measurement stays.
+        update_history_row(&conn, id, "Raw words!", false, None).unwrap();
+        assert_eq!(query_history(&conn, 1, 0, None).unwrap()[0].processing_time_ms, Some(900));
+        assert!(update_history_row(&conn, id + 1, "x", false, None).is_err());
     }
 
     #[test]

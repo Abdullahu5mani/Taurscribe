@@ -885,7 +885,10 @@ impl WhisperManager {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_token_timestamps(false);
-        params.set_no_timestamps(true); // timestamps never displayed; skip their generation
+        // Timestamps are never shown, but whisper.cpp needs them to move through
+        // audio longer than one 30 s window: without them it can stop a window
+        // early after a pause and jump to the next, dropping the speech between.
+        params.set_no_timestamps(false);
         params.set_max_tokens(256); // reasonable cap for a full recording pass
         params.set_suppress_nst(true);
 

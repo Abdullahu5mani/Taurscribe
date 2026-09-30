@@ -194,20 +194,15 @@ pub fn assemble_speech_audio(
     let p50 = sorted[(n * 50 / 100).min(n.saturating_sub(1))];
     let p75 = sorted[(n * 75 / 100).min(n.saturating_sub(1))];
 
-    let noise_floor = p10.max(p25 * 0.85);
-    // TEMP-VADEVAL: env overrides for the evaluation run; removed before finishing.
-    let ev = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
     let p95 = sorted[(n * 95 / 100).min(n.saturating_sub(1))];
-    let energy_threshold = if std::env::var("VADEVAL_MODE").as_deref() == Ok("b") {
-        (p10 * ev("VADEVAL_K", 4.0))
-            .min(p95 * ev("VADEVAL_KS", 0.1))
-            .max(p10 * ev("VADEVAL_MINR", 2.0))
-            .max(ev("VADEVAL_ABS", 0.001))
-    } else { (noise_floor * ev("VADEVAL_K", 20.0))
-        .max(p50 * ev("VADEVAL_P50", 0.55))
-        .max(p25 * ev("VADEVAL_P25", 2.0))
-        .max(ev("VADEVAL_FLOOR", 0.005))
-        .min(ev("VADEVAL_CAP", 0.08)) };
+
+    // Speech is what stands clearly above the background (p10), but the bar
+    // never rises past 20 dB under the loudest speech (p95), so quiet and noisy
+    // recordings keep their words. Stationary noise with no speech (p95 barely
+    // above p10) stays under the ×2 minimum. Every term scales with the audio,
+    // so a file's gain doesn't change what is kept; the absolute floor (−70 dBFS)
+    // only drops digital silence.
+    let energy_threshold = (p10 * 4.0).min(p95 * 0.1).max(p10 * 2.0).max(0.0003);
 
     println!(
         "[FILE_TRANSCRIBE] Energy VAD: frames={}, p10={:.5} p25={:.5} p50={:.5} p75={:.5} threshold={:.5}",
@@ -382,8 +377,67 @@ mod tests {
     fn assembled_audio_of_silence_is_empty() {
         assert!(assemble_speech_audio(&silence(3.0), None).unwrap().is_empty());
         assert!(assemble_speech_audio(&[], None).unwrap().is_empty());
-        // Quiet hiss below the absolute floor is not speech either.
+        // Steady hiss is not speech either.
         assert!(assemble_speech_audio(&vec![0.001; 48_000], None).unwrap().is_empty());
+    }
+
+    /// Deterministic white noise with peak `amp` (no RNG dependency).
+    fn noise(secs: f32, amp: f32, seed: u32) -> Vec<f32> {
+        let mut x = seed;
+        (0..(16_000.0 * secs) as usize)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((x >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0) * amp
+            })
+            .collect()
+    }
+
+    fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
+        a.iter().zip(b).map(|(x, y)| x + y).collect()
+    }
+
+    #[test]
+    fn quiet_speech_between_loud_speech_is_kept() {
+        // A speaker 20 dB quieter than the others, with short pauses around them.
+        let mut speech = tone(2.0, 0.3);
+        speech.extend(silence(0.5));
+        speech.extend(tone(1.5, 0.03));
+        speech.extend(silence(0.5));
+        speech.extend(tone(2.0, 0.3));
+        let audio = mix(&speech, &noise(6.5, 0.001, 1));
+        assert_eq!(assemble_speech_audio(&audio, None).unwrap().len(), audio.len());
+    }
+
+    #[test]
+    fn what_is_kept_does_not_depend_on_the_recording_level() {
+        let mut speech = tone(1.5, 0.2);
+        speech.extend(silence(2.0));
+        speech.extend(tone(1.5, 0.05));
+        speech.extend(silence(2.0));
+        speech.extend(tone(1.0, 0.02));
+        let audio = mix(&speech, &noise(8.0, 0.002, 2));
+        let kept = |gain: f32| {
+            let scaled: Vec<f32> = audio.iter().map(|s| s * gain).collect();
+            assemble_speech_audio(&scaled, None).unwrap().len()
+        };
+        let full = kept(1.0);
+        assert!(full < audio.len(), "the long pauses should go");
+        for gain in [0.5, 0.1, 0.03] {
+            assert_eq!(kept(gain), full, "gain {gain}");
+        }
+    }
+
+    #[test]
+    fn speech_in_steady_noise_is_kept_and_noise_alone_is_not() {
+        // About 10 dB SNR: the noise never stops, the speech comes in two bursts.
+        let background = noise(6.0, 0.05, 3);
+        let mut speech = silence(1.0);
+        speech.extend(tone(1.5, 0.12));
+        speech.extend(silence(2.0));
+        speech.extend(tone(1.5, 0.12));
+        let kept = assemble_speech_audio(&mix(&speech, &background), None).unwrap().len();
+        assert!((48_000..=48_000 + 4 * 1_600).contains(&kept), "{kept}");
+        assert!(assemble_speech_audio(&background, None).unwrap().is_empty());
     }
 
     #[test]
