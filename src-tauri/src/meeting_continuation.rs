@@ -52,11 +52,30 @@ pub struct Pending {
 /// when there is no link. None for recordings without a detected call.
 pub fn call_key(info: Option<&MeetingInfo>) -> Option<String> {
     let m = info?;
-    let place = if m.url.trim().is_empty() { m.title.trim() } else { m.url.trim() };
-    if place.is_empty() {
+    let platform = m.platform.to_lowercase();
+    let app = m.app_name.to_lowercase();
+    let url = m.url.trim();
+    if !url.is_empty() {
+        // URL paths and opaque room identifiers can be case-sensitive. Normalize
+        // only the scheme and authority; different rooms must never be appended.
+        let place = if let Some((scheme, rest)) = url.split_once("://") {
+            let split = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            format!("{}://{}{}", scheme.to_lowercase(), rest[..split].to_lowercase(), &rest[split..])
+        } else {
+            url.to_string()
+        };
+        // Teams' /v2/ entry point identifies the application, not a call.
+        if platform == "teams" && !url.contains("/meetup-join/") && !url.contains("/meet/") {
+            return None;
+        }
+        return Some(format!("{platform}|{app}|{place}"));
+    }
+    let title = m.title.trim();
+    // Generic window titles cannot distinguish consecutive calls in one process.
+    if title.is_empty() || matches!(title.to_lowercase().as_str(), "meeting" | "call" | "zoom" | "zoom meeting" | "microsoft teams" | "teams" | "google meet" | "meet") {
         return None;
     }
-    Some(format!("{}|{}|{}", m.platform.to_lowercase(), m.app_name.to_lowercase(), place.to_lowercase()))
+    Some(format!("{platform}|{app}|{}|{title}", m.pid))
 }
 
 fn dir() -> Option<PathBuf> {
@@ -312,6 +331,32 @@ mod tests {
         assert_ne!(a, call_key(Some(&info("https://meet.google.com/xyz", "Standup"))).unwrap());
         assert!(call_key(Some(&info("", ""))).is_none());
         assert!(call_key(None).is_none());
+    }
+
+    #[test]
+    fn opaque_room_ids_keep_their_case() {
+        let mut first = info("https://teams.microsoft.com/l/meetup-join/19%3Ameeting_AbCd", "Meeting");
+        first.platform = "teams".into();
+        let mut second = first.clone();
+        second.url = first.url.replace("AbCd", "aBcD");
+        assert_ne!(call_key(Some(&first)), call_key(Some(&second)));
+        second.url = first.url.replace("https://teams.microsoft.com", "HTTPS://TEAMS.MICROSOFT.COM");
+        assert_eq!(call_key(Some(&first)), call_key(Some(&second)));
+    }
+
+    #[test]
+    fn generic_titles_and_app_entry_urls_do_not_identify_a_call() {
+        for title in ["Zoom Meeting", "Meeting", "Call", "Microsoft Teams"] {
+            assert_eq!(call_key(Some(&info("", title))), None);
+        }
+        let mut teams = info("https://teams.microsoft.com/v2/", "Team chat");
+        teams.platform = "teams".into();
+        assert_eq!(call_key(Some(&teams)), None);
+        let first = info("", "Design review");
+        let mut second = first.clone();
+        second.pid += 1;
+        assert_ne!(call_key(Some(&first)), call_key(Some(&second)));
+        assert_eq!(call_key(Some(&first)), call_key(Some(&first)));
     }
 
     #[test]

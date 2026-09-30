@@ -51,7 +51,7 @@ import ax_driver  # noqa: E402
 from cdp_guest import ChromeGuestSession, RemoteChromeGuestSession  # noqa: E402  (re-execs into .venv if needed)
 from decider import DeciderAction, MeetingDecider  # noqa: E402
 from platforms import PLATFORMS, NotSignedIn, PlatformAdapter  # noqa: E402
-from recording_check import GuestSpeaker, HostSpeaker, ensure_model_loaded, restore_default_input, verify_recording  # noqa: E402
+from recording_check import GuestSpeaker, HostSpeaker, app_snapshot, ensure_model_loaded, restore_default_input, verify_recording  # noqa: E402
 from voiceprint_check import verify_voiceprints  # noqa: E402
 
 CONTROL_PORT = int(os.environ.get("TAURSCRIBE_CONTROL_PORT", "8766"))
@@ -147,7 +147,7 @@ class AppObserver:
         self.report = report
 
     def look(self, expected_platform: str) -> Dict[str, Any]:
-        snap = ax_driver.snapshot(self.pid)
+        snap = app_snapshot(self.pid)
         verdict = self.decider.assess_meeting_detection(snap, expected_platform)
         verdict["_snapshot"] = snap
         return verdict
@@ -207,7 +207,7 @@ class ChromeHostAX:
         tell application "Google Chrome"
             set w to make new window
             set URL of active tab of w to "{url}"
-            return id of w
+            return (id of w as text)
         end tell''')
         self.report.log("HOST", f"opened {url} in your Chrome (pid {self.pid})")
 

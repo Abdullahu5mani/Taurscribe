@@ -407,8 +407,14 @@ def ensure_model_loaded(app, decider: MeetingDecider, report) -> None:
         report.log("DECIDER", f"app says LOAD REQUIRED; pressing '{load['text']}'")
         ax_driver.press(app.pid, load["index"])
         deadline = time.time() + 120
-        while time.time() < deadline and decider.find_load_model_control(app_snapshot(app.pid)):
-            time.sleep(2)
+        while time.time() < deadline:
+            loading_snapshot = app_snapshot(app.pid)
+            status = next((e["text"] for e in loading_snapshot["elements"] if "status" in e["text"].lower()), "")
+            if "status ready" in status.lower():
+                break
+            # The Load button disappears as soon as loading starts. Its absence
+            # is not proof that the model is ready for another recording.
+            time.sleep(0.5)
     snap = app_snapshot(app.pid)
     status = next((e["text"] for e in snap["elements"] if "status" in e["text"].lower()), "")
     report.check("status ready" in status.lower(), "Transcription model is loaded in the app", status or "no engine status visible")

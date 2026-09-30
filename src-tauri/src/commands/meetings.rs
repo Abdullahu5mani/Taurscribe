@@ -45,7 +45,8 @@ pub fn ensure_meetings_schema(conn: &Connection) -> Result<(), String> {
             summary             TEXT,
             action_items        TEXT,
             category            TEXT NOT NULL,
-            speaker_count       INTEGER NOT NULL DEFAULT 1
+            speaker_count       INTEGER NOT NULL DEFAULT 1,
+            reviewed            INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE INDEX IF NOT EXISTS idx_meetings_created_at
@@ -92,6 +93,9 @@ pub fn ensure_meetings_schema(conn: &Connection) -> Result<(), String> {
     let _ = conn.execute("ALTER TABLE speaker_vault ADD COLUMN meeting_count INTEGER NOT NULL DEFAULT 0", []);
     // Recordings joined into this meeting (restarting the same call continues it).
     let _ = conn.execute("ALTER TABLE meetings ADD COLUMN parts INTEGER NOT NULL DEFAULT 1", []);
+    // Older versions did not track review saves. Preserve their metadata rather
+    // than risking loss of edits that cannot be distinguished from generated notes.
+    let _ = conn.execute("ALTER TABLE meetings ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 1", []);
 
     Ok(())
 }
@@ -444,7 +448,40 @@ pub fn replace_meeting_content(
         .unwrap_or_default();
 
     let tx = conn.unchecked_transaction().map_err(|e| format!("Failed to begin meeting transaction: {}", e))?;
-    let summary_output = extract_summary_heuristics(turns, &title);
+    let mut summary_output = extract_summary_heuristics(turns, &title);
+    let (reviewed, previous_duration, category, summary, actions): (bool, i64, String, Option<String>, Option<String>) = tx
+        .query_row("SELECT reviewed, duration_ms, category, summary, action_items FROM meetings WHERE id = ?1", [meeting_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .map_err(|e| format!("Failed to read meeting review: {e}"))?;
+    if reviewed {
+        summary_output.category = category;
+        summary_output.summary = serde_json::from_str(summary.as_deref().unwrap_or("[]"))
+            .map_err(|e| format!("Invalid saved meeting summary: {e}"))?;
+        summary_output.action_items = serde_json::from_str(actions.as_deref().unwrap_or("[]"))
+            .map_err(|e| format!("Invalid saved meeting action items: {e}"))?;
+        // Only suggest notes from the appended recording. Re-extracting the old
+        // speech would bring back deleted tasks or replace reviewed assignments.
+        let appended: Vec<_> = turns.iter().filter(|t| t.start_ms >= previous_duration.max(0) as u64).cloned().collect();
+        if !appended.is_empty() {
+            let additions = extract_summary_heuristics(&appended, &title);
+            for point in additions.summary {
+                if !summary_output.summary.contains(&point) {
+                    summary_output.summary.push(point);
+                }
+            }
+            for mut action in additions.action_items {
+                if summary_output.action_items.iter().any(|old| old.task.trim().eq_ignore_ascii_case(action.task.trim()) && old.assignee == action.assignee) {
+                    continue;
+                }
+                loop {
+                    action.id = format!("continued_action_{:016x}", rand::random::<u64>());
+                    if !summary_output.action_items.iter().any(|old| old.id == action.id) { break; }
+                }
+                summary_output.action_items.push(action);
+            }
+        }
+    }
     let mut speaker_ids: Vec<&str> = turns.iter().map(|t| t.speaker_id.as_str()).collect();
     speaker_ids.sort();
     speaker_ids.dedup();
@@ -860,7 +897,7 @@ pub async fn update_meeting(
         conn.execute(
             r#"
             UPDATE meetings
-            SET title = ?1, category = ?2, summary = ?3, action_items = ?4
+            SET title = ?1, category = ?2, summary = ?3, action_items = ?4, reviewed = 1
             WHERE id = ?5
             "#,
             params![title, category, sum_json, act_json, meeting_id],
@@ -921,7 +958,7 @@ fn save_meeting_review_internal(
         rename_speaker_internal(&tx, meeting_id, &rename.speaker_id, name, true)?;
     }
     let changed = tx.execute(
-        "UPDATE meetings SET title = ?1, category = ?2, summary = ?3, action_items = ?4 WHERE id = ?5",
+        "UPDATE meetings SET title = ?1, category = ?2, summary = ?3, action_items = ?4, reviewed = 1 WHERE id = ?5",
         params![title, category, sum_json, act_json, meeting_id],
     ).map_err(|e| format!("Failed to update meeting: {}", e))?;
     if changed == 0 {
@@ -1612,6 +1649,139 @@ mod tests {
 
     fn meeting_with(conn: &Connection, turns: &[DiarizedTurn]) -> i64 {
         insert_completed_meeting(conn, "Sync", "meet", "Google Chrome", "", 6000, None, "text", turns).unwrap()
+    }
+
+    #[test]
+    fn continuation_preserves_review_and_adds_only_new_suggestions() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let mut old = turn("speaker_you", "You", 0, 0);
+        old.text = "I will send the proposal tomorrow.".into();
+        let id = meeting_with(&conn, &[old.clone()]);
+        let actions = vec![ActionItem { id: "action_1".into(), task: "Send proposal".into(), assignee: "Alice".into(), status: "done".into() }];
+        save_meeting_review_internal(&conn, id, "Approved title", "Planning", &["Approved summary".into()], &actions, &[]).unwrap();
+        let mut new = turn("speaker_you", "You", 0, 7000);
+        new.text = "I will review the design tomorrow.".into();
+        replace_meeting_content(&conn, id, 10000, None, "Continued speech", &[old, new]).unwrap();
+        let (title, category, summary, saved_actions): (String, String, String, String) = conn.query_row(
+            "SELECT title, category, summary, action_items FROM meetings WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        ).unwrap();
+        assert_eq!(title, "Approved title");
+        assert_eq!(category, "Planning");
+        let summary: Vec<String> = serde_json::from_str(&summary).unwrap();
+        assert_eq!(summary[0], "Approved summary");
+        assert_eq!(summary.len(), 2);
+        let saved: Vec<ActionItem> = serde_json::from_str(&saved_actions).unwrap();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved[0], actions[0]);
+        assert_ne!(saved[0].id, saved[1].id);
+        assert!(saved[1].task.contains("review the design"));
+    }
+
+    #[test]
+    fn unreviewed_continuation_updates_generated_notes() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let old = turn("speaker_you", "You", 0, 0);
+        let id = meeting_with(&conn, &[old.clone()]);
+        let mut new = turn("speaker_you", "You", 0, 7000);
+        new.text = "I will fix the backend bug tomorrow.".into();
+        replace_meeting_content(&conn, id, 10000, None, "Continued speech", &[old, new]).unwrap();
+        let (category, reviewed): (String, bool) = conn.query_row("SELECT category, reviewed FROM meetings WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(category, "Engineering");
+        assert!(!reviewed);
+    }
+
+    fn content_state(conn: &Connection, id: i64) -> (i64, i64, Option<String>, String, String, String, String, String, bool) {
+        conn.query_row(
+            "SELECT duration_ms, parts, audio_path, transcript_raw, title, summary, action_items, category, reviewed FROM meetings WHERE id=?1",
+            [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+        ).unwrap()
+    }
+
+    #[test]
+    fn failed_continuation_turn_insert_preserves_entire_meeting_and_audio() {
+        let dir = std::env::temp_dir().join(format!("ts_continue_failure_{:016x}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths: Vec<_> = ["old.webm", "old_clip.wav", "new.webm", "new_clip.wav"]
+            .iter().map(|name| dir.join(name)).collect();
+        for path in &paths { std::fs::write(path, b"retained audio").unwrap(); }
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let mut old = turn("speaker_you", "You", 0, 0);
+        old.snippet_path = Some(paths[1].to_string_lossy().into_owned());
+        let id = insert_completed_meeting(&conn, "Reviewed", "meet", "Chrome", "", 6000,
+            Some(&paths[0].to_string_lossy()), "Original speech", &[old.clone()]).unwrap();
+        save_meeting_review_internal(&conn, id, "Approved", "Planning", &["Approved note".into()], &[], &[]).unwrap();
+        let before = content_state(&conn, id);
+        let before_turns = stored_turns(&conn, id);
+        let mut new = turn("speaker_remote_1", "Guest", 1, 6000);
+        new.text = "reject".into();
+        new.snippet_path = Some(paths[3].to_string_lossy().into_owned());
+        conn.execute_batch("CREATE TRIGGER reject_continuation BEFORE INSERT ON meeting_turns WHEN NEW.text='reject' BEGIN SELECT RAISE(ABORT, 'injected failure'); END;").unwrap();
+
+        assert!(replace_meeting_content(&conn, id, 10000, Some(&paths[2].to_string_lossy()), "New speech", &[old, new]).is_err());
+        assert_eq!(content_state(&conn, id), before);
+        assert_eq!(stored_turns(&conn, id), before_turns);
+        for path in &paths { assert_eq!(std::fs::read(path).unwrap(), b"retained audio"); }
+        // Retrying after the failure must work on the same connection.
+        conn.execute_batch("DROP TRIGGER reject_continuation;").unwrap();
+        replace_meeting_content(&conn, id, 10000, Some(&paths[2].to_string_lossy()), "Retried speech", &[]).unwrap();
+        assert!(!paths[0].exists());
+        assert!(!paths[1].exists());
+        assert!(paths[2].exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_review_json_blocks_continuation_without_erasing_saved_work() {
+        for column in ["summary", "action_items"] {
+            let conn = Connection::open_in_memory().unwrap();
+            ensure_meetings_schema(&conn).unwrap();
+            let old = turn("speaker_you", "You", 0, 0);
+            let id = meeting_with(&conn, &[old.clone()]);
+            conn.execute(&format!("UPDATE meetings SET reviewed=1, {column}='invalid JSON' WHERE id=?1"), [id]).unwrap();
+            let before = content_state(&conn, id);
+            let before_turns = stored_turns(&conn, id);
+            assert!(replace_meeting_content(&conn, id, 10000, None, "New speech", &[old]).is_err());
+            assert_eq!(content_state(&conn, id), before, "{column}");
+            assert_eq!(stored_turns(&conn, id), before_turns);
+        }
+    }
+
+    #[test]
+    fn continuation_keeps_deleted_tasks_deleted_and_includes_exact_boundary() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let mut old = turn("speaker_you", "You", 0, 0);
+        old.text = "I will send the proposal tomorrow.".into();
+        let id = meeting_with(&conn, &[old.clone()]);
+        save_meeting_review_internal(&conn, id, "Approved", "Planning", &[], &[], &[]).unwrap();
+        let mut new = turn("speaker_you", "You", 0, 6000);
+        new.text = "I will review the design tomorrow.".into();
+        replace_meeting_content(&conn, id, 10000, None, "Continued speech", &[old.clone(), new.clone()]).unwrap();
+        let actions: Vec<ActionItem> = serde_json::from_str(&content_state(&conn, id).6).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(actions[0].task.contains("review the design"));
+        // A subsequent part with no new task must preserve the exact action,
+        // including its stable ID, instead of resurrecting the deleted proposal.
+        replace_meeting_content(&conn, id, 14000, None, "Continued speech", &[old, new]).unwrap();
+        let after: Vec<ActionItem> = serde_json::from_str(&content_state(&conn, id).6).unwrap();
+        assert_eq!(after, actions);
+    }
+
+    #[test]
+    fn legacy_meeting_reviews_are_preserved_by_migration() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        conn.execute_batch("ALTER TABLE meetings DROP COLUMN reviewed;").unwrap();
+        let id = meeting_with(&conn, &[turn("speaker_you", "You", 0, 0)]);
+        conn.execute("UPDATE meetings SET summary='[\"Legacy approved summary\"]', category='Planning', action_items='[]' WHERE id=?1", [id]).unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        replace_meeting_content(&conn, id, 10000, None, "Continued speech", &[turn("speaker_you", "You", 0, 0)]).unwrap();
+        let (summary, category): (String, String) = conn.query_row("SELECT summary,category FROM meetings WHERE id=?1", [id], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(summary, "[\"Legacy approved summary\"]");
+        assert_eq!(category, "Planning");
     }
 
     fn vault_rows(conn: &Connection) -> Vec<(String, String, i64)> {

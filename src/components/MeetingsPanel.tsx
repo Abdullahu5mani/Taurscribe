@@ -113,6 +113,7 @@ export function MeetingsPanel({
   const [audioDuration, setAudioDuration] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const fullAudioRef = useRef<HTMLAudioElement | null>(null);
+  const selectedAudioPathRef = useRef<string | null>(null);
 
   // Speaker Snippet Preview Playback
   const [playingSnippetSpeakerId, setPlayingSnippetSpeakerId] = useState<string | null>(null);
@@ -143,6 +144,11 @@ export function MeetingsPanel({
       setSelectedMeeting(null);
       setEditingTitle("");
       setLoadingDetail(false);
+      stopFullAudio();
+      stopSnippetAudio();
+      setAudioCurrentTime(0);
+      setAudioDuration(0);
+      selectedAudioPathRef.current = null;
     }
     setSelectedMeetingId(id);
   };
@@ -228,6 +234,12 @@ export function MeetingsPanel({
         meetingId: id,
       });
       if (request !== detailRequestRef.current || selectedMeetingIdRef.current !== id) return;
+      const audioPath = detail.audio_path ?? null;
+      if (selectedAudioPathRef.current !== audioPath) {
+        setAudioCurrentTime(0);
+        setAudioDuration(0);
+      }
+      selectedAudioPathRef.current = audioPath;
       setSelectedMeeting(detail);
       setAudioFailed(false);
       setEditingTitle(detail.title);
@@ -268,6 +280,9 @@ export function MeetingsPanel({
           setProcessingError("Nothing was saved: no speech was transcribed from the recording.");
         }
         loadMeetings();
+        if (!event.payload?.error && event.payload?.meeting_id && event.payload.meeting_id === selectedMeetingIdRef.current) {
+          void loadMeetingDetail(event.payload.meeting_id);
+        }
       }),
     ];
     return () => {
@@ -286,17 +301,21 @@ export function MeetingsPanel({
   // Listen for backend meeting processing completion event
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     listen<{ meeting_id: number }>("meeting-processing-complete", (event) => {
       const id = event.payload?.meeting_id;
       if (id) {
         setReviewMeetingId(id);
         loadMeetings();
+        if (id === selectedMeetingIdRef.current) void loadMeetingDetail(id);
       }
     }).then((u) => {
-      unlisten = u;
+      if (disposed) u();
+      else unlisten = u;
     });
 
     return () => {
+      disposed = true;
       if (unlisten) unlisten();
       stopFullAudio();
       stopSnippetAudio();
@@ -1286,6 +1305,8 @@ export function MeetingsPanel({
         onViewInCatalog={(id) => {
           setReviewMeetingId(null);
           selectMeeting(id);
+          if (selectedMeetingId === id) void loadMeetingDetail(id);
+          void loadMeetings();
         }}
       />
     </div>

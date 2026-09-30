@@ -16,6 +16,19 @@ use std::sync::{
 use tauri::{AppHandle, Emitter, Manager};
 use crate::AudioState;
 
+#[cfg(target_os = "macos")]
+#[path = "meeting_browser.rs"]
+mod browser_activity;
+
+fn is_browser_prejoin(pid: u32, app_name: &str, url: &str, platform: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    if platform == "meet" && app_name.to_lowercase().contains("chrome") {
+        return browser_activity::state(pid, url) == Some(false);
+    }
+    let _ = (pid, app_name, url, platform);
+    false
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeetingInfo {
     pub pid: u32,
@@ -103,7 +116,7 @@ mod platform_impl {
     /// cannot read a title or URL for it, so list every tab over AppleScript and
     /// pick the one that is a call.
     #[cfg(target_os = "macos")]
-    fn resolve_browser_tab_info(app_name: &str) -> Option<(String, String, String)> {
+    fn resolve_browser_tab_info(app_name: &str, pid: u32, detected_title: &str, detected_url: &str) -> Option<(String, String, String)> {
         if !app_name.to_lowercase().contains("chrome") {
             return None;
         }
@@ -129,11 +142,21 @@ mod platform_impl {
             return None;
         }
         let listing = String::from_utf8_lossy(&output.stdout);
-        listing.lines().find_map(|line| {
+        let mut candidates: Vec<_> = listing.lines().filter_map(|line| {
             let (title, url) = line.split_once("|||")?;
             let platform = super::classify_meeting_url(url.trim())?;
             Some((title.trim().to_string(), url.trim().to_string(), platform.to_string()))
-        })
+        }).collect();
+        // A preview tab can precede a live call in Chrome's tab order. Prefer a
+        // page with actual call controls before an unknown or pre-join page.
+        candidates.sort_by_key(|(_, url, platform)| {
+            let room = url.split('/').nth(3).unwrap_or("").split(['?', '#']).next().unwrap_or("");
+            let matches_source = url == detected_url || (!room.is_empty() && detected_title.contains(room));
+            if platform == "meet" {
+                match super::browser_activity::state(pid, url) { Some(true) => 0, _ if matches_source => 1, None => 2, Some(false) => 3 }
+            } else if matches_source { 1 } else { 2 }
+        });
+        candidates.into_iter().next()
     }
 
     pub fn scan_meetings() -> Vec<MeetingInfo> {
@@ -147,8 +170,8 @@ mod platform_impl {
             let mut app_name = m.app_name.clone();
 
             #[cfg(target_os = "macos")]
-            if (title.trim().is_empty() || platform == "browser" || platform == "other") && app_name.to_lowercase().contains("chrome") {
-                if let Some((tab_title, tab_url, tab_platform)) = resolve_browser_tab_info(&app_name) {
+            if (title.trim().is_empty() || platform == "browser" || platform == "other" || platform == "meet") && app_name.to_lowercase().contains("chrome") {
+                if let Some((tab_title, tab_url, tab_platform)) = resolve_browser_tab_info(&app_name, m.pid, &title, &url) {
                     title = tab_title;
                     url = tab_url;
                     platform = tab_platform;
@@ -157,7 +180,7 @@ mod platform_impl {
             }
 
             // Apply pre-join suppression filter
-            if is_prejoin_window_title(&title) {
+            if is_prejoin_window_title(&title) || is_browser_prejoin(m.pid, &app_name, &url, &platform) {
                 continue;
             }
 
@@ -205,8 +228,8 @@ mod platform_impl {
             let mut app_name = meeting.app_name.clone();
 
             #[cfg(target_os = "macos")]
-            if (title.trim().is_empty() || platform == "browser" || platform == "other") && app_name.to_lowercase().contains("chrome") {
-                if let Some((tab_title, tab_url, tab_platform)) = resolve_browser_tab_info(&app_name) {
+            if (title.trim().is_empty() || platform == "browser" || platform == "other" || platform == "meet") && app_name.to_lowercase().contains("chrome") {
+                if let Some((tab_title, tab_url, tab_platform)) = resolve_browser_tab_info(&app_name, meeting.pid, &title, &url) {
                     title = tab_title;
                     url = tab_url;
                     platform = tab_platform;
@@ -214,7 +237,7 @@ mod platform_impl {
                 }
             }
 
-            let is_prejoin = is_prejoin_window_title(&title);
+            let is_prejoin = is_prejoin_window_title(&title) || is_browser_prejoin(meeting.pid, &app_name, &url, &platform);
             let info = MeetingInfo {
                 pid: meeting.pid,
                 app_name,

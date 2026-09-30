@@ -198,8 +198,9 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                     <span className="setting-card-label">Continue a call after a restart</span>
                 </div>
                 <p className="setting-card-desc">
-                    If you stop recording a call and record the same call again within this time, the new part is
-                    added to the same meeting (speakers and names carry over) instead of saving a second meeting.
+                    When the app can identify the same call, stopping and restarting within this time adds the
+                    new part to the same meeting. Speakers, names, and reviewed notes carry over.
+                    Calls that cannot be reliably identified are saved separately.
                 </p>
                 <div
                     id="continue-window-group"
