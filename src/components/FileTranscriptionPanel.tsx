@@ -4,10 +4,15 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { formatModelDisplay } from "../utils/modelDisplay";
+import { saveFileHistory } from "../utils/fileHistory";
+import type { FileImportMethod } from "../types/fileHistory";
+import { FileHistory } from "./FileHistory";
 
 interface FileItem {
     id: string;
     path: string;
+    importMethod: FileImportMethod;
+    completedAt?: string;
     name: string;
     engine: string;
     modelId?: string | null;
@@ -20,18 +25,6 @@ interface FileItem {
     error?: string;
     historyError?: string;
     historySaving?: boolean;
-}
-
-async function saveFileHistory(item: FileItem): Promise<void> {
-    await invoke("save_transcript_history", {
-        transcript: item.transcript,
-        engine: item.engine,
-        durationMs: item.audioDurationMs,
-        grammarLlmUsed: false,
-        processingTimeMs: item.processingTimeMs,
-        modelId: item.modelId ?? null,
-        audioSource: item.name,
-    });
 }
 
 interface FileTranscriptionResult {
@@ -76,6 +69,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
 
     const [files, setFiles] = useState<FileItem[]>([]);
     const [isDragOver, setIsDragOver] = useState(false);
+    const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
     const processingRef = useRef(false);
     const activeFileRef = useRef<{ id: string; path: string } | null>(null);
     const queueRef = useRef<FileItem[]>([]);
@@ -92,7 +86,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
         onFileProcessingChange?.(isFileProcessing);
     }, [isFileProcessing, onFileProcessingChange]);
 
-    const addPaths = useCallback((paths: string[]) => {
+    const addPaths = useCallback((paths: string[], importMethod: FileImportMethod) => {
         if (isModelLoadingRef.current) return;
         const audio = paths.filter(p => AUDIO_EXTS.includes(getExt(p)));
         if (audio.length === 0) return;
@@ -107,6 +101,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                 return {
                     id: crypto.randomUUID(),
                     path: p,
+                    importMethod,
                     name: isDupe ? `${baseName} (1)` : baseName,
                     engine,
                     modelId: model,
@@ -179,7 +174,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                     if (!blocked) setIsDragOver(true);
                 } else if (event.payload.type === "drop") {
                     setIsDragOver(false);
-                    if (!blocked) addPaths((event.payload as { type: "drop"; paths: string[] }).paths);
+                    if (!blocked) addPaths((event.payload as { type: "drop"; paths: string[] }).paths, "drop");
                 } else {
                     setIsDragOver(false);
                 }
@@ -255,6 +250,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
             );
             try {
                 await saveFileHistory(completed);
+                setHistoryRefreshKey(key => key + 1);
                 setFiles(prev => prev.map(f => f.id === queued.id
                     ? { ...f, historySaving: false }
                     : f));
@@ -370,7 +366,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
         });
         if (selected) {
             const paths = Array.isArray(selected) ? selected : [selected];
-            addPaths(paths);
+            addPaths(paths, "picker");
         }
     };
 
@@ -389,7 +385,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                 paths.push((file as unknown as { path: string }).path);
             }
         }
-        if (paths.length) addPaths(paths);
+        if (paths.length) addPaths(paths, "drop");
     };
 
     const isEmpty = files.length === 0;
@@ -530,6 +526,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                                     onClick={() => {
                                                         setFiles(prev => prev.map(f => f.id === item.id ? { ...f, historySaving: true } : f));
                                                         void saveFileHistory(item).then(() => {
+                                                            setHistoryRefreshKey(key => key + 1);
                                                             setFiles(prev => prev.map(f => f.id === item.id ? { ...f, historySaving: false, historyError: undefined } : f));
                                                         }).catch(error => {
                                                             setFiles(prev => prev.map(f => f.id === item.id ? { ...f, historySaving: false, historyError: String(error) } : f));
@@ -706,6 +703,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                     ))}
                 </div>
             )}
+            <FileHistory refreshKey={historyRefreshKey} />
         </div>
     );
 }

@@ -8,6 +8,8 @@
  * and the feed picks it up from history.
  */
 
+import type { FileHistoryRecord } from "../types/fileHistory";
+
 type Callback = (msg: { event: string; id: number; payload: unknown }) => void;
 
 const HOUR = 3600_000;
@@ -15,7 +17,7 @@ const now = Date.now();
 const at = (msAgo: number) => new Date(now - msAgo).toISOString();
 
 let nextId = 100;
-const history = [
+const history: FileHistoryRecord[] = [
     { text: "Can you move the design review to Thursday at 3? Friday is packed with the launch prep.", engine: "granite", model: "granite-speech-5-nc", ago: 0.2 * HOUR, dur: 5200, proc: 410, llm: true },
     { text: "Remind me to send Priya the updated pricing sheet before the call tomorrow.", engine: "granite", model: "granite-speech-5-nc", ago: 1.1 * HOUR, dur: 3900, proc: 380, llm: true },
     { text: "The onboarding flow should skip the hardware step when the machine has already been checked. Let's cache that result and only rerun it if the user changes GPUs.", engine: "qwen3", model: "qwen3-asr-0.6b", ago: 2.4 * HOUR, dur: 9800, proc: 920, llm: true },
@@ -33,7 +35,14 @@ const history = [
     model_id: h.model,
     audio_source: "microphone",
     kind: "dictation",
+    source_path: null,
+    import_method: null,
 }));
+history.push(
+    { id: 84, created_at: at(2 * HOUR), transcript: "We agreed to review the draft on Thursday.\nThe updated schedule will be shared tomorrow.", engine: "granite", model_id: "granite-speech-5-nc", audio_source: "Product notes.m4a", source_path: "/Users/me/Documents/Project notes/Product notes.m4a", import_method: "drop", duration_ms: 84000, processing_time_ms: 4200, grammar_llm_used: false, kind: "file" },
+    { id: 83, created_at: at(24 * HOUR), transcript: "Remember to send the revised proposal before Friday.", engine: "whisper", model_id: "small.en-q5_1", audio_source: "Voice memo.wav", source_path: "/Users/me/Downloads/Voice memo.wav", import_method: "picker", duration_ms: 12000, processing_time_ms: 1300, grammar_llm_used: false, kind: "file" },
+    { id: 82, created_at: at(48 * HOUR), transcript: "A transcript saved before source tracking was added.", engine: "qwen3", model_id: "qwen3-asr-0.6b", audio_source: "Older recording.mp3", source_path: null, import_method: null, duration_ms: 9000, processing_time_ms: 1100, grammar_llm_used: false, kind: "file" },
+);
 
 const turn = (speaker_id: string, speaker_name: string, start: number, end: number, channel: number, text: string) =>
     ({ speaker_id, speaker_name, start_ms: start * 1000, end_ms: end * 1000, channel, text, snippet_path: null, candidate_snippets: [], current_snippet_idx: 0 });
@@ -203,7 +212,7 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
             history.unshift({
                 id, created_at: new Date().toISOString(), transcript: DEMO_DICTATION,
                 engine: "granite", duration_ms: Date.now() - recStart, grammar_llm_used: false, processing_time_ms: 390,
-                model_id: "granite-speech-5-nc", audio_source: "microphone", kind: "dictation",
+                model_id: "granite-speech-5-nc", audio_source: "microphone", kind: "dictation", source_path: null, import_method: null,
             });
             return ok({
                 transcript: DEMO_DICTATION, kind: "dictation", meeting_id: null,
@@ -218,14 +227,24 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "cancel_recording": stopLevels(); return ok(null);
         case "correct_text": return args.text;
         case "save_transcript_history": {
+            const source = args.audioSource == null ? null : String(args.audioSource);
             history.unshift({
-                id: nextId++, created_at: new Date().toISOString(), transcript: String(args.transcript ?? DEMO_DICTATION),
-                engine: "granite", duration_ms: Date.now() - recStart, grammar_llm_used: false, processing_time_ms: 390,
-                model_id: "granite-speech-5-nc", audio_source: "microphone", kind: "dictation",
+                id: nextId++, created_at: String(args.completedAt ?? new Date().toISOString()), transcript: String(args.transcript ?? DEMO_DICTATION),
+                engine: String(args.engine ?? "granite"), duration_ms: args.durationMs == null ? null : Number(args.durationMs),
+                grammar_llm_used: Boolean(args.grammarLlmUsed), processing_time_ms: args.processingTimeMs == null ? null : Number(args.processingTimeMs),
+                model_id: args.modelId == null ? null : String(args.modelId), audio_source: source,
+                kind: args.sourcePath != null || (source != null && source !== "microphone") ? "file" : "dictation",
+                source_path: args.sourcePath == null ? null : String(args.sourcePath),
+                import_method: args.importMethod == null ? null : String(args.importMethod),
             });
             return ok(null);
         }
-        case "list_transcript_history": return history;
+        case "list_transcript_history": {
+            const rows = history.filter(row => !args.kind || row.kind === args.kind)
+                .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id);
+            const offset = Number(args.offset ?? 0);
+            return rows.slice(offset, offset + Number(args.limit ?? 50));
+        }
 
         // Meetings
         case "get_meeting_detection_status": return { is_watching: true, active_meetings_count: 0, active_meetings: [] };
