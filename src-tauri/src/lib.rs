@@ -217,6 +217,8 @@ pub fn run() {
                 eprintln!("[WARN] Failed to start models watcher: {}", e);
             }
 
+            // Before recordings are used: undo a move the app stopped in the middle of.
+            storage::recover_interrupted_move();
             storage::allow_recordings_in_asset_scope(app.handle());
 
             // A kept recording for continuing a meeting outlives its window if the
@@ -351,6 +353,7 @@ pub fn run() {
             commands::correct_text,
             commands::type_text,
             commands::save_transcript_history,
+            commands::update_transcript_history,
             commands::list_transcript_history,
             commands::delete_transcript_history,
             commands::download_model,

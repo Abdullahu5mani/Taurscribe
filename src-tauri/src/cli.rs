@@ -322,18 +322,32 @@ fn cmd_dictate(cmd: &str, o: &Opts) -> Result<(), Fail> {
         return Ok(());
     }
     if o.print {
-        // The frontend saves each dictation to history once post-processing is done.
+        // The app saves the recognized text as it stops; the UI then replaces it
+        // with its final text (dictionary, grammar correction, snippets) and
+        // pastes. Read the entry once the UI is done with it.
+        let nothing = || Fail::Other("no transcript was saved (the recording may have been too short, or silent)".into());
         let deadline = Instant::now() + Duration::from_secs(180);
+        let mut done_without_text = 0;
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(300));
-            if let Some((id, text)) = crate::mcp_server::latest_transcript() {
-                if before.map_or(true, |b| id > b) {
+            let ui_done = try_status()?.map_or(true, |s| s["ui_ready"].as_bool() == Some(true));
+            let latest = crate::mcp_server::latest_transcript().filter(|(id, _)| before.map_or(true, |b| *id > b));
+            match (latest, ui_done) {
+                (Some((_, text)), true) => {
                     println!("{text}");
                     return Ok(());
                 }
+                // Finished with nothing saved; seen twice to be sure it is over.
+                (None, true) => {
+                    done_without_text += 1;
+                    if done_without_text >= 2 {
+                        return Err(nothing());
+                    }
+                }
+                _ => done_without_text = 0,
             }
         }
-        return Err(Fail::Other("no transcript was saved (the recording may have been too short, or silent)".into()));
+        return Err(nothing());
     }
     Ok(())
 }

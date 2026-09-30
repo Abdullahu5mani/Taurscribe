@@ -11,6 +11,7 @@
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use crossbeam_channel::bounded;
+use std::collections::VecDeque;
 use crossbeam_channel::Sender;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -79,6 +80,40 @@ pub struct CaptureDiagnostics {
     pub fell_back_to_system: bool,
     pub dropped_file_seconds: f64,
     pub dropped_transcriber_seconds: f64,
+    /// Silence put in for a track that stopped delivering (see fill_stalled_track).
+    pub gap_filled_seconds: f64,
+}
+
+/// A track this far behind the other has stopped delivering (a stalled or
+/// restarted tap), not jittered: arrival jitter is tens of milliseconds.
+const MAX_TRACK_LAG: usize = 48_000; // 1 s @ 48 kHz
+
+/// When one track is more than MAX_TRACK_LAG behind the other, fills the gap
+/// with silence so the other track is still recorded in step, and the backlog
+/// can't grow without bound. Returns the samples filled.
+fn fill_stalled_track(mic: &mut VecDeque<f32>, sys: &mut VecDeque<f32>) -> usize {
+    let lag = mic.len().abs_diff(sys.len());
+    if lag <= MAX_TRACK_LAG {
+        return 0;
+    }
+    let behind = if mic.len() < sys.len() { mic } else { sys };
+    behind.extend(std::iter::repeat(0.0).take(lag));
+    lag
+}
+
+/// Pairs the tracks into the stereo file frames (mic left, call right) and the
+/// mono mix the live transcriber gets.
+fn interleave_and_mix(mic: &mut VecDeque<f32>, sys: &mut VecDeque<f32>, frames: usize) -> (Vec<f32>, Vec<f32>) {
+    let mut interleaved = Vec::with_capacity(frames * 2);
+    let mut mono_mix = Vec::with_capacity(frames);
+    for _ in 0..frames {
+        let m = mic.pop_front().unwrap_or(0.0);
+        let s = sys.pop_front().unwrap_or(0.0);
+        interleaved.push(m);
+        interleaved.push(s);
+        mono_mix.push((m * 0.5) + (s * 0.5));
+    }
+    (interleaved, mono_mix)
 }
 
 static DIAGNOSTICS: std::sync::Mutex<Option<CaptureDiagnostics>> = std::sync::Mutex::new(None);
@@ -252,7 +287,6 @@ pub fn start_dual_channel_capture(
     stop_signal: Arc<AtomicBool>,
     mic_device: Option<String>,
 ) -> Result<DualChannelCaptureHandle, String> {
-    use std::collections::VecDeque;
 
     let rig = start_rig(target, &stop_signal, mic_device.as_deref())?;
 
@@ -270,6 +304,7 @@ pub fn start_dual_channel_capture(
         let mut dropped_transcriber_samples: u64 = 0;
         let mut dropped_file_samples: u64 = 0;
         let mut warned_drop = false;
+        let mut gap_filled_samples: u64 = 0;
 
         // Callers-track watchdog (meeting-process captures only): the tap covers
         // the meeting app's processes that did audio at start; restart it when
@@ -367,28 +402,21 @@ pub fn start_dual_channel_capture(
             // every poll accumulated silence repeatedly and made a 38-second
             // meeting play back as ~57 seconds. Pair only frames that both tracks
             // actually delivered; pad a final unmatched tail once on stop below.
+            // Only a track that has stopped delivering for a second is filled.
+            let filled = fill_stalled_track(&mut mic_deque, &mut sys_deque);
+            if filled > 0 {
+                if gap_filled_samples == 0 {
+                    eprintln!("[WARN] A dual-channel track stopped delivering audio; recording silence for it meanwhile");
+                }
+                gap_filled_samples += filled as u64;
+            }
 
             // Interleave available matching frames in steady 20ms chunks
             let available = mic_deque.len().min(sys_deque.len());
             if available >= CHUNK_SIZE {
                 let chunks_to_process = available / CHUNK_SIZE;
                 for _ in 0..chunks_to_process {
-                    let mut interleaved = Vec::with_capacity(CHUNK_SIZE * 2);
-                    let mut mono_mix = Vec::with_capacity(CHUNK_SIZE);
-
-                    for _ in 0..CHUNK_SIZE {
-                        let m = mic_deque.pop_front().unwrap_or(0.0);
-                        let s = sys_deque.pop_front().unwrap_or(0.0);
-
-                        // Channel 1: Left ear = User Microphone
-                        interleaved.push(m);
-                        // Channel 2: Right ear = System / Remote caller
-                        interleaved.push(s);
-
-                        // Equal-power mix for real-time transcription feed
-                        mono_mix.push((m * 0.5) + (s * 0.5));
-                    }
-
+                    let (interleaved, mono_mix) = interleave_and_mix(&mut mic_deque, &mut sys_deque, CHUNK_SIZE);
                     level_samples += CHUNK_SIZE;
 
                     if file_tx.try_send(interleaved).is_err() {
@@ -443,17 +471,15 @@ pub fn start_dual_channel_capture(
             sys_deque.extend(frames);
         }
 
+        // The tail goes to the live transcriber as well as the file.
         let remaining = mic_deque.len().max(sys_deque.len());
         if remaining > 0 {
-            let mut interleaved = Vec::with_capacity(remaining * 2);
-            for _ in 0..remaining {
-                let m = mic_deque.pop_front().unwrap_or(0.0);
-                let s = sys_deque.pop_front().unwrap_or(0.0);
-                interleaved.push(m);
-                interleaved.push(s);
-            }
+            let (interleaved, mono_mix) = interleave_and_mix(&mut mic_deque, &mut sys_deque, remaining);
             if file_tx.try_send(interleaved).is_err() {
                 dropped_file_samples += remaining as u64;
+            }
+            if whisper_tx.try_send(mono_mix).is_err() {
+                dropped_transcriber_samples += remaining as u64;
             }
         }
 
@@ -462,6 +488,7 @@ pub fn start_dual_channel_capture(
             d.active = false;
             d.dropped_file_seconds = secs(dropped_file_samples);
             d.dropped_transcriber_seconds = secs(dropped_transcriber_samples);
+            d.gap_filled_seconds = secs(gap_filled_samples);
         });
         if dropped_file_samples > 0 || dropped_transcriber_samples > 0 {
             eprintln!(
@@ -664,6 +691,43 @@ pub fn start_dual_channel_capture(
     _mic_device: Option<String>,
 ) -> Result<DualChannelCaptureHandle, String> {
     Err("Dual-channel meeting audio capture is not supported on Linux".into())
+}
+
+#[cfg(test)]
+mod track_tests {
+    use super::*;
+
+    fn deque(n: usize, v: f32) -> VecDeque<f32> {
+        std::iter::repeat(v).take(n).collect()
+    }
+
+    #[test]
+    fn jitter_is_left_alone() {
+        let (mut mic, mut sys) = (deque(48_000, 0.1), deque(1_000, 0.2));
+        assert_eq!(fill_stalled_track(&mut mic, &mut sys), 0);
+        assert_eq!((mic.len(), sys.len()), (48_000, 1_000));
+    }
+
+    #[test]
+    fn a_stalled_track_is_filled_so_the_other_keeps_recording() {
+        let (mut mic, mut sys) = (deque(60_000, 0.1), deque(1_000, 0.2));
+        assert_eq!(fill_stalled_track(&mut mic, &mut sys), 59_000);
+        assert_eq!(sys.len(), 60_000);
+        // The call audio that did arrive stays first; silence follows it.
+        assert_eq!((sys[999], sys[1_000]), (0.2, 0.0));
+        let (file, mono) = interleave_and_mix(&mut mic, &mut sys, 60_000);
+        assert_eq!((file.len(), mono.len()), (120_000, 60_000));
+        assert_eq!((file[2 * 1_000], file[2 * 1_000 + 1]), (0.1, 0.0));
+    }
+
+    #[test]
+    fn the_tail_is_mixed_for_the_live_transcriber_too() {
+        let (mut mic, mut sys) = (deque(959, 0.4), deque(900, 0.2));
+        let (file, mono) = interleave_and_mix(&mut mic, &mut sys, 959);
+        assert_eq!((file.len(), mono.len()), (1_918, 959));
+        assert!((mono[0] - 0.3).abs() < 1e-6);
+        assert!((mono[958] - 0.2).abs() < 1e-6);
+    }
 }
 
 #[cfg(test)]

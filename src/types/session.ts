@@ -37,6 +37,23 @@ export interface CommandResult<T> {
   error: CommandErrorPayload | null;
 }
 
+/** What `stop_recording` returns (RecordingOutcome in recording.rs). */
+export interface RecordingOutcome {
+  transcript: string;
+  /** Decided when the recording started: two-channel recordings are meetings. */
+  kind: "dictation" | "meeting";
+  meeting_id: number | null;
+  /** Length of the captured audio; excludes the processing after Stop. */
+  duration_ms: number | null;
+  /** A dictation too short to keep: not saved, and not to be pasted. */
+  too_short: boolean;
+  /** A dictation is saved to history before its recording is deleted. */
+  history:
+    | { status: "saved"; id: number }
+    | { status: "not_saved"; error: string; recording_path: string | null }
+    | { status: "skipped" };
+}
+
 export interface EngineSelectionState {
   active_engine: "whisper" | "granite" | "qwen3";
   selected_model_id: string | null;

@@ -1,3 +1,28 @@
+import { expect, mock, test } from "bun:test";
+import { renderHook } from "./hookHarness";
+
+type Call = { cmd: string; args?: Record<string, unknown> };
+let calls: Call[] = [];
+let initGate: Promise<void> = Promise.resolve();
+
+const realCore = { ...(await import("@tauri-apps/api/core")) };
+mock.module("@tauri-apps/api/core", () => ({
+    ...realCore,
+    invoke: async (cmd: string, args?: Record<string, unknown>) => {
+        calls.push({ cmd, args });
+        if (cmd === "check_grammar_llm_available") return true;
+        if (cmd === "init_llm") {
+            await initGate;
+            return "FlowScribe loaded";
+        }
+        return null;
+    },
+}));
+const realEvent = { ...(await import("@tauri-apps/api/event")) };
+mock.module("@tauri-apps/api/event", () => ({ ...realEvent, listen: async () => () => {} }));
+
+const { usePostProcessing } = await import("../../src/hooks/usePostProcessing");
+
 function start(settings: Record<string, unknown>) {
     calls = [];
     const store = {

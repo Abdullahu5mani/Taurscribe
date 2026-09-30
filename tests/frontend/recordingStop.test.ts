@@ -1,3 +1,12 @@
+import { beforeEach, expect, mock, test } from "bun:test";
+import { renderHook } from "./hookHarness";
+import type { RecordingOutcome, SessionNotice } from "../../src/types/session";
+
+type Call = { cmd: string; args?: Record<string, unknown> };
+let calls: Call[] = [];
+let stopOutcome: RecordingOutcome;
+let failSave = false;
+
 const realCore = { ...(await import("@tauri-apps/api/core")) };
 mock.module("@tauri-apps/api/core", () => ({
     ...realCore,

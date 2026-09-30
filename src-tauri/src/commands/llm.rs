@@ -16,6 +16,9 @@ pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<Str
     // loaded, instead of loading another ~1.5 GB copy and dropping one.
     static LOADING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _loading = LOADING.lock().await;
+    // Atomically participate in the same lifecycle gate as model relocation.
+    // Checking models_moving alone has a check-then-load race.
+    let _model_operation = state.begin_model_operation()?;
     // FlowScribe isn't under the ASR model gate; don't open its weights in a
     // models folder that is being moved.
     if crate::commands::models_moving() {
@@ -68,6 +71,7 @@ pub async fn correct_text(
         text.len()
     );
     let llm_handle = state.llm.clone();
+    let _model_operation = state.begin_model_operation()?;
     // v3 context: which recognizer produced the text, the clean-up level, the
     // app being typed into (still frontmost at this point) and the dictionary.
     let engine_tag = match *state.active_engine.lock().unwrap() {
@@ -116,13 +120,15 @@ pub async fn correct_text(
 }
 
 #[tauri::command]
-pub fn unload_llm(state: State<'_, AudioState>) -> Result<String, String> {
-    let mut llm_guard = state.llm.lock().unwrap();
-    if llm_guard.is_none() {
-        return Ok("LLM was not loaded".to_string());
-    }
-    *llm_guard = None;
-    crate::memory::trim_process_memory();
-    println!("[INFO] Qwen LLM unloaded.");
-    Ok("LLM unloaded successfully".to_string())
+pub async fn unload_llm(state: State<'_, AudioState>) -> Result<String, String> {
+    let operation = state.begin_model_operation()?;
+    let handle = state.llm.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = operation;
+        let engine = handle.lock().map_err(|e| e.to_string())?.take();
+        let loaded = engine.is_some();
+        drop(engine);
+        crate::memory::trim_process_memory();
+        Ok(if loaded { "LLM unloaded successfully" } else { "LLM was not loaded" }.to_string())
+    }).await.map_err(|e| format!("LLM unload task failed: {e}"))?
 }

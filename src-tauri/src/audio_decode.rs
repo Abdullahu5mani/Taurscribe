@@ -105,6 +105,13 @@ where
         .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
         .ok_or("No audio track found in file")?;
 
+    if track.codec_params.codec == symphonia::core::codecs::CODEC_TYPE_OPUS {
+        // Symphonia demuxes Ogg Opus but has no Opus decoder. Reuse the
+        // libopus already bundled for meeting playback, with gapless trimming.
+        drop(format);
+        return decode_opus_packets(path, on_packet);
+    }
+
     let track_id = track.id;
     let sample_rate = track
         .codec_params
@@ -204,6 +211,78 @@ where
     }
 
     Ok((total_frames, decoded_rate.unwrap_or(sample_rate), actual_channels))
+}
+
+
+/// Decode Ogg Opus through the existing demuxer and bundled multistream decoder.
+/// Gapless packet bounds remove both Opus pre-skip and final encoder padding.
+fn decode_opus_packets<F>(path: &Path, mut on_packet: F) -> Result<(u64, u32, u32), String>
+where
+    F: FnMut(&[f32], usize, u32, u64, Option<u64>) -> Result<(), String>,
+{
+    let file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
+    let source = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension("ogg");
+    let options = FormatOptions { enable_gapless: true, ..Default::default() };
+    let mut format = symphonia::default::get_probe()
+        .format(&hint, source, &options, &MetadataOptions::default())
+        .map_err(|e| format!("Cannot probe Opus audio: {e}"))?.format;
+    let track = format.tracks().iter()
+        .find(|t| t.codec_params.codec == symphonia::core::codecs::CODEC_TYPE_OPUS)
+        .ok_or("No Opus track found")?;
+    let track_id = track.id;
+    let expected_frames = track.codec_params.n_frames;
+    let header = track.codec_params.extra_data.as_deref().ok_or("Missing Opus header")?;
+    if header.len() < 19 || &header[..8] != b"OpusHead" || header[8] > 15 {
+        return Err("Invalid Opus identification header".into());
+    }
+    let channels = header[9] as usize;
+    let (streams, coupled, mapping) = match header[18] {
+        0 if channels == 1 => (1, 0, vec![0]),
+        0 if channels == 2 => (1, 1, vec![0, 1]),
+        1 if (1..=8).contains(&channels) && header.len() >= 21 + channels => {
+            // Opus family 1 uses Vorbis speaker order. Present the same
+            // channel-mask order as other Symphonia decoders.
+            let order: &[usize] = match channels {
+                1 => &[0], 2 => &[0, 1], 3 => &[0, 2, 1], 4 => &[0, 1, 2, 3],
+                5 => &[0, 2, 1, 3, 4], 6 => &[0, 2, 1, 5, 3, 4],
+                7 => &[0, 2, 1, 6, 5, 3, 4], 8 => &[0, 2, 1, 7, 5, 6, 3, 4],
+                _ => unreachable!(),
+            };
+            (header[19], header[20], order.iter().map(|&i| header[21 + i]).collect())
+        }
+        _ => return Err(format!("Unsupported Opus channel mapping for {channels} channels")),
+    };
+    let gain = i16::from_le_bytes([header[16], header[17]]) as i32;
+    let mut decoder = opus::MSDecoder::new(48_000, streams, coupled, &mapping)
+        .map_err(|e| format!("Cannot create Opus decoder: {e}"))?;
+    decoder.set_gain(gain).map_err(|e| format!("Cannot apply Opus output gain: {e}"))?;
+    // An Opus packet can contain at most 120 ms, regardless of encoder rate.
+    let mut samples = vec![0.0f32; 5_760 * channels];
+    let mut total = 0u64;
+    loop {
+        let packet = match format.next_packet() {
+            Ok(packet) => packet,
+            Err(SymphError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(format!("Opus audio read failed: {e}")),
+        };
+        if packet.track_id() != track_id { continue; }
+        // An empty packet would ask libopus to synthesize packet-loss audio.
+        // A file import must not silently manufacture that data.
+        if packet.data.is_empty() { return Err("Empty Opus audio packet".into()); }
+        let frames = decoder.decode_float(&packet.data, &mut samples, false)
+            .map_err(|e| format!("Opus audio packet could not be decoded: {e}"))?;
+        let start = packet.trim_start() as usize;
+        let trim_end = packet.trim_end() as usize;
+        if start + trim_end > frames { return Err("Invalid Opus packet trim bounds".into()); }
+        let end = frames - trim_end;
+        if start == end { continue; }
+        total += (end - start) as u64;
+        on_packet(&samples[start * channels..end * channels], channels, 48_000, total, expected_frames)?;
+    }
+    if total == 0 { return Err("Opus audio file contains no decoded samples".into()); }
+    Ok((total, 48_000, channels as u32))
 }
 
 #[cfg(test)]

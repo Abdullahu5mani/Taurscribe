@@ -567,6 +567,9 @@ fn transcribe_file_window(
     mut mono: Vec<f32>,
 ) -> Result<String, String> {
     emit_progress(app, path, 20, "decoding", None);
+    // DC bias raises the RMS noise floor. Remove it before either gate can
+    // discard speech; removing it after VAD cannot recover missing words.
+    audio_preprocess::remove_dc(&mut mono);
     // Trim long edge silence before energy VAD.
     audio_preprocess::trim_file_buffer_edges_16k(&mut mono);
 

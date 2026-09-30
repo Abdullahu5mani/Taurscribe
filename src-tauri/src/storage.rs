@@ -774,12 +774,13 @@ pub async fn set_storage_location(
     };
     if let (Some(gate), true) = (&models_gate, move_files) {
         // Loaded weights keep their files open (and locked on Windows).
-        let unloaded = state.unload_all_loaded_asr()?;
+        let unloaded = state.unload_all_loaded_asr_exclusive(gate)?;
         if !unloaded.is_empty() {
             crate::tray::reconcile_model_loaded_tray(&app, &state);
             let _ = app.emit("model-unloaded", ());
         }
     }
+    let llm = state.llm.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let old = current_dir(area)?;
         let new = match &path {

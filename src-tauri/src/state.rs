@@ -1,5 +1,4 @@
 use crate::audio::RecordingHandle;
-use crate::denoise::Denoiser;
 use crate::gguf_asr::{GgufAsrManager, GRANITE_MODELS, QWEN3_MODELS};
 use crate::types::{ASREngine, HotkeyBinding};
 use crate::vad::VADManager;
@@ -92,8 +91,6 @@ pub struct AudioState {
     // macOS fix: Arc-wrapped for async command access.
     pub selected_input_device: Arc<Mutex<Option<String>>>,
 
-    // RNNoise denoiser (created fresh per recording session, None when idle)
-    pub denoiser: Arc<Mutex<Option<Denoiser>>>,
 
     // What happens when the user clicks the window close button.
     // "tray"  → hide to system tray (default)
@@ -213,7 +210,6 @@ impl AudioState {
             llm: Arc::new(Mutex::new(None)),
             hotkey_config: Arc::new(RwLock::new(HotkeyBinding::default())),
             selected_input_device: Arc::new(Mutex::new(None)),
-            denoiser: Arc::new(Mutex::new(None)),
             close_behavior: Arc::new(Mutex::new("tray".to_string())),
             qwen3: Arc::new(Mutex::new(qwen3)),
             hotkey_suppressed: Arc::new(AtomicBool::new(false)),
@@ -312,6 +308,19 @@ impl AudioState {
         {
             return Err("An audio or model operation is in progress".into());
         }
+        self.unload_asr_managers()
+    }
+
+    /// Unloads every ASR model for a caller that already holds the exclusive
+    /// model gate (a models-folder move), which keeps loads out until it drops.
+    pub fn unload_all_loaded_asr_exclusive(&self, gate: &ModelOperationGuard) -> Result<Vec<&'static str>, String> {
+        if !gate.exclusive {
+            return Err("Unloading needs the exclusive model gate".into());
+        }
+        self.unload_asr_managers()
+    }
+
+    fn unload_asr_managers(&self) -> Result<Vec<&'static str>, String> {
         let mut unloaded = Vec::new();
 
         {
@@ -360,6 +369,26 @@ mod model_activity_tests {
         assert!(state.begin_model_operation().is_err());
         drop(switch);
         assert!(state.unload_all_loaded_asr().is_ok());
+    }
+
+    #[test]
+    fn a_models_move_keeps_loads_out_until_it_finishes() {
+        let state = AudioState::new(
+            WhisperManager::new(),
+            GgufAsrManager::granite(),
+            VADManager::new().unwrap(),
+            GgufAsrManager::qwen3(),
+        );
+        let moving = state.begin_exclusive_model_operation().unwrap();
+        assert!(state.unload_all_loaded_asr_exclusive(&moving).is_ok());
+        // A model load (exclusive) and a transcription both wait for the move.
+        assert!(state.begin_exclusive_model_operation().is_err());
+        assert!(state.begin_model_operation().is_err());
+        let shared = {
+            drop(moving);
+            state.begin_model_operation().unwrap()
+        };
+        assert!(state.unload_all_loaded_asr_exclusive(&shared).is_err());
     }
 
     #[test]

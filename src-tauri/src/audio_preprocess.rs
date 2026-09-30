@@ -277,7 +277,7 @@ fn lf_excess_ratio(samples: &[f32]) -> f32 {
     (rms_ma / rms_x).min(2.0)
 }
 
-fn remove_dc(samples: &mut [f32]) {
+pub fn remove_dc(samples: &mut [f32]) {
     if samples.is_empty() {
         return;
     }

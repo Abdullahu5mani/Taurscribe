@@ -7,7 +7,7 @@ import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
 import { ensureEngineModel } from "../utils/engineLoader";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
-import type { CommandResult, SessionNotice } from "../types/session";
+import type { CommandResult, RecordingOutcome, SessionNotice } from "../types/session";
 
 interface UseRecordingParams {
     activeEngineRef: React.RefObject<ASREngine>;
@@ -41,8 +41,6 @@ interface UseRecordingParams {
     setSessionLatency?: (latency: number | null) => void;
 }
 
-/** Minimum live mic time before stop; enforced in this hook only (not Rust). */
-const MIN_RECORDING_MS = 300;
 type OverlayPhase =
     | "recording"
     | "paused"
@@ -394,7 +392,8 @@ export function useRecording({
     const handlePauseRecording = async () => {
         if (!isRecordingRef.current || isPausedRef.current || isProcessingTranscriptRef.current) return;
         try {
-            await invoke("pause_recording");
+            const result = await invoke<CommandResult<string>>("pause_recording");
+            if (!result.ok) throw result.error?.message ?? "not paused";
             setIsPaused(true);
             isPausedRef.current = true;
             pausedAtRef.current = Date.now();
@@ -410,7 +409,8 @@ export function useRecording({
     const handleResumeRecording = async () => {
         if (!isRecordingRef.current || !isPausedRef.current || isProcessingTranscriptRef.current) return;
         try {
-            await invoke("resume_recording");
+            const result = await invoke<CommandResult<string>>("resume_recording");
+            if (!result.ok) throw result.error?.message ?? "not resumed";
             settlePauseWindow();
             setIsPaused(false);
             isPausedRef.current = false;
@@ -432,6 +432,8 @@ export function useRecording({
         setIsRecording(false);
         isRecordingRef.current = false;
         settlePauseWindow();
+        // Taken now: the time spent processing after Stop is not recording time.
+        const recordedMsAtStop = getEffectiveRecordingMs();
         setIsPaused(false);
         isPausedRef.current = false;
         setProcessingTranscript(true);
@@ -444,17 +446,18 @@ export function useRecording({
             await setTrayState(meetingSessionRef.current ? "processing_meeting" : "processing_speech");
             if (currentEngine === "whisper") setHeaderStatus("Processing transcription...", 15_000, true);
 
-            const stopResult = await invoke<CommandResult<string>>("stop_recording");
-            if (!stopResult.ok) {
+            const stopResult = await invoke<CommandResult<RecordingOutcome>>("stop_recording");
+            if (!stopResult.ok || !stopResult.data) {
                 throw stopResult.error ?? new Error("Failed to stop recording");
             }
-            let finalTrans = stopResult.data ?? "";
+            const outcome = stopResult.data;
+            let finalTrans = outcome.transcript;
 
-            // Meeting (dual-channel) recordings belong to the meetings area only:
-            // the backend saves and processes them there. Never paste a meeting
-            // transcript into the frontmost app or add it to dictation history.
-            if (meetingSessionRef.current) {
-                meetingSessionRef.current = false;
+            // Meeting recordings belong to the meetings area only: the backend
+            // saves and processes them there, and says which kind this was.
+            // Never paste a meeting transcript or add it to dictation history.
+            meetingSessionRef.current = false;
+            if (outcome.kind === "meeting") {
                 if (muteBackgroundAudioRef.current) {
                     await invoke("unmute_system_audio").catch(() => {});
                 }
@@ -472,8 +475,9 @@ export function useRecording({
             // Apply custom dictionary substitutions (before grammar LLM)
             finalTrans = applyDictionary(finalTrans, dictionaryRef.current ?? []);
 
-            const recordingDurationMs = getEffectiveRecordingMs();
-            if (recordingDurationMs < MIN_RECORDING_MS) {
+            // Measured by the backend from the audio captured.
+            const recordingDurationMs = outcome.duration_ms ?? recordedMsAtStop;
+            if (outcome.too_short) {
                 setHeaderStatus("Recording too short — try holding a little longer", 5000);
                 if (muteBackgroundAudioRef.current) {
                     await invoke("unmute_system_audio").catch(() => {});
@@ -578,26 +582,48 @@ export function useRecording({
                 await invoke("unmute_system_audio").catch(e => console.warn("unmute_system_audio failed:", e));
             }
 
-            // Persist a lightweight history entry regardless of paste outcome —
-            // the transcript was generated successfully and is visible in the UI.
-            try {
-                const activeModelId =
-                    currentEngine === "whisper" ? currentModel :
-                    currentEngine === "granite" ? currentGraniteModel :
-                    currentEngine === "qwen3" ? currentQwen3Model : null;
-                await invoke("save_transcript_history", {
-                    transcript: finalTrans,
-                    engine: currentEngine,
-                    durationMs: recordingDurationMs,
-                    grammarLlmUsed: enableGrammarLMRef.current,
-                    processingTimeMs: totalMs,
-                    modelId: activeModelId ?? null,
-                    audioSource: "microphone",
-                });
+            // The backend saved the recognized text before deleting the
+            // recording; store the final text (dictionary, grammar, snippets)
+            // in the same entry. If the backend could not save it, try once
+            // more, and otherwise say so: the recording was kept.
+            let historyError: string | null = null;
+            if (outcome.history.status === "saved") {
+                try {
+                    await invoke("update_transcript_history", {
+                        id: outcome.history.id,
+                        transcript: finalTrans,
+                        grammarLlmUsed: enableGrammarLMRef.current,
+                        processingTimeMs: totalMs,
+                    });
+                } catch (e) {
+                    console.warn("Failed to update transcript history (the recognized text is saved):", e);
+                }
                 onHistorySaved?.();
-            } catch (e) {
-                console.warn("Failed to save transcript history:", e);
+            } else if (outcome.history.status === "not_saved") {
+                try {
+                    const activeModelId =
+                        currentEngine === "whisper" ? currentModel :
+                        currentEngine === "granite" ? currentGraniteModel :
+                        currentEngine === "qwen3" ? currentQwen3Model : null;
+                    await invoke("save_transcript_history", {
+                        transcript: finalTrans,
+                        engine: currentEngine,
+                        durationMs: recordingDurationMs,
+                        grammarLlmUsed: enableGrammarLMRef.current,
+                        processingTimeMs: totalMs,
+                        modelId: activeModelId ?? null,
+                        audioSource: "microphone",
+                    });
+                    onHistorySaved?.();
+                } catch (e) {
+                    console.warn("Failed to save transcript history:", e);
+                    const kept = outcome.history.recording_path ? ` The recording is kept at ${outcome.history.recording_path}.` : "";
+                    historyError = `It couldn't be saved to history (${outcome.history.error}).${kept}`;
+                }
             }
+            const unsavedNotice: SessionNotice | null = historyError
+                ? { level: "warning", code: "history_not_saved", title: "Transcript not saved to history", message: historyError, sticky: true }
+                : null;
 
             if (pasteError) {
                 let headerMsg: string;
@@ -616,7 +642,7 @@ export function useRecording({
                     level: "warning",
                     code: pasteError.includes("secure_input") ? "paste_blocked_secure_input" : pasteError.includes("console") ? "paste_blocked_console" : "paste_failed",
                     title: "Transcript ready but paste was blocked",
-                    message: headerMsg,
+                    message: historyError ? `${headerMsg}. ${historyError}` : headerMsg,
                     sticky: true,
                 });
                 if (showOverlay) {
@@ -638,8 +664,8 @@ export function useRecording({
                 }
                 playPaste?.();
                 await setTrayState("done", undefined, finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : ""));
-                setSessionPhase?.("success");
-                showNotice(null);
+                setSessionPhase?.(unsavedNotice ? "warning" : "success");
+                showNotice(unsavedNotice);
                 if (showOverlay) {
                     const preview = finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : "");
                     overlayTerminalRef.current = true;

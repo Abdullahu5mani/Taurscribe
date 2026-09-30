@@ -278,6 +278,12 @@ fn collapse_spaces_trim(s: &str) -> String {
 ///
 /// A run of 3+ identical tokens is collapsed to 1. Consecutive duplicate sentences
 /// (any length) are collapsed to 1.
+/// Whisper can loop on one word or sentence ("you you you you you …"). People
+/// repeat themselves too ("No. No.", "very very very"), so only runs longer
+/// than anyone says on purpose are collapsed, to a single copy.
+const MAX_REPEATED_WORDS: usize = 4;
+const MAX_REPEATED_SENTENCES: usize = 3;
+
 fn remove_repetitions(text: &str) -> String {
     // ── Pass 1: token-level ──────────────────────────────────────────────────
     let parts: Vec<&str> = text.split(' ').collect();
@@ -290,8 +296,7 @@ fn remove_repetitions(text: &str) -> String {
             j += 1;
         }
         let run = j - i;
-        // Runs of 3+ identical tokens -> keep 1; shorter runs kept as-is
-        let keep = if run >= 3 { 1 } else { run };
+        let keep = if run > MAX_REPEATED_WORDS { 1 } else { run };
         t_out.extend_from_slice(&parts[i..i + keep]);
         i = j;
     }
@@ -315,15 +320,15 @@ fn remove_repetitions(text: &str) -> String {
         sentences.push(buf.trim().to_string());
     }
 
-    // Deduplicate consecutive identical sentences (case-insensitive)
+    // Collapse long runs of the same sentence (case-insensitive)
     let mut deduped: Vec<String> = Vec::new();
-    let mut prev_key = String::new();
-    for sent in sentences {
-        let key = sent.to_lowercase();
-        if key != prev_key {
-            deduped.push(sent);
-            prev_key = key;
-        }
+    let mut i = 0;
+    while i < sentences.len() {
+        let key = sentences[i].to_lowercase();
+        let run = sentences[i..].iter().take_while(|s| s.to_lowercase() == key).count();
+        let keep = if run > MAX_REPEATED_SENTENCES { 1 } else { run };
+        deduped.extend(sentences[i..i + keep].iter().cloned());
+        i += run;
     }
 
     deduped.join(" ")
@@ -348,4 +353,27 @@ pub fn get_recordings_dir() -> Result<std::path::PathBuf, String> {
 /// AppData/Local/Taurscribe/models, or the folder chosen in Settings → Storage).
 pub fn get_models_dir() -> Result<std::path::PathBuf, String> {
     crate::storage::resolve_dir(crate::storage::Area::Models)
+}
+
+#[cfg(test)]
+mod repetition_tests {
+    use super::remove_repetitions;
+
+    #[test]
+    fn spoken_repetition_is_kept() {
+        for text in ["one one one", "No. No.", "No. No. No.", "That is very very very important.", "no no no no"] {
+            assert_eq!(remove_repetitions(text), text);
+        }
+    }
+
+    #[test]
+    fn hallucination_loops_are_collapsed() {
+        assert_eq!(remove_repetitions("you you you you you you you you"), "you");
+        assert_eq!(remove_repetitions("I said thank thank thank thank thank you"), "I said thank you");
+        assert_eq!(
+            remove_repetitions("Thanks for watching. Thanks for watching. Thanks for watching. Thanks for watching."),
+            "Thanks for watching."
+        );
+        assert_eq!(remove_repetitions("Hello. Bye. Bye. Bye. Bye. Bye. See you."), "Hello. Bye. See you.");
+    }
 }

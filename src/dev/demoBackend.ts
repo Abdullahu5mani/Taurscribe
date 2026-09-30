@@ -199,8 +199,21 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "start_recording": startLevels(); return ok("/tmp/demo.wav");
         case "stop_recording": {
             stopLevels();
-            const text = DEMO_DICTATION;
-            return ok(text);
+            const id = nextId++;
+            history.unshift({
+                id, created_at: new Date().toISOString(), transcript: DEMO_DICTATION,
+                engine: "granite", duration_ms: Date.now() - recStart, grammar_llm_used: false, processing_time_ms: 390,
+                model_id: "granite-speech-5-nc", audio_source: "microphone", kind: "dictation",
+            });
+            return ok({
+                transcript: DEMO_DICTATION, kind: "dictation", meeting_id: null,
+                duration_ms: Date.now() - recStart, too_short: false, history: { status: "saved", id },
+            });
+        }
+        case "update_transcript_history": {
+            const row = history.find(r => r.id === args.id);
+            if (row) row.transcript = String(args.transcript ?? row.transcript);
+            return null;
         }
         case "cancel_recording": stopLevels(); return ok(null);
         case "correct_text": return args.text;
