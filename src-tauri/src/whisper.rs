@@ -938,15 +938,27 @@ mod tests {
     }
 
     #[test]
-    fn only_english_models_are_forced_to_english() {
-        use super::decode_language;
+    fn english_models_use_english_and_multilingual_ones_the_system_language() {
+        use super::{decode_language, system_language};
         assert_eq!(decode_language(Some("tiny.en-q5_1")), Some("en"));
         assert_eq!(decode_language(Some("medium.en")), Some("en"));
-        // Multilingual models (including large-v3 and turbo) detect the language.
-        assert_eq!(decode_language(Some("base-q5_1")), None);
-        assert_eq!(decode_language(Some("large-v3-turbo-q5_0")), None);
-        assert_eq!(decode_language(Some("small")), None);
-        assert_eq!(decode_language(None), None);
+        // Multilingual models (including large-v3 and turbo) use the system language.
+        assert_eq!(decode_language(Some("base-q5_1")), system_language());
+        assert_eq!(decode_language(Some("large-v3-turbo-q5_0")), system_language());
+        assert_eq!(decode_language(None), system_language());
+    }
+
+    #[test]
+    fn locales_map_to_whisper_languages() {
+        use super::whisper_language_of_locale as lang;
+        assert_eq!(lang("en-US").as_deref(), Some("en"));
+        assert_eq!(lang("de_DE.UTF-8").as_deref(), Some("de"));
+        assert_eq!(lang("zh-Hans-CN").as_deref(), Some("zh"));
+        assert_eq!(lang("fr").as_deref(), Some("fr"));
+        // Not a Whisper language: the model detects it instead.
+        assert_eq!(lang("C.UTF-8"), None);
+        assert_eq!(lang("POSIX"), None);
+        assert_eq!(lang(""), None);
     }
 
     #[test]

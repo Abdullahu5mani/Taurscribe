@@ -1875,7 +1875,37 @@ fn stop_recording_blocking(
 ) -> Result<(String, Option<i64>), String> {
     // Brief tail capture for OS audio scheduling; silence padding in the
     // transcriber thread handles the actual word-boundary safety margin.
-    teardown_recording(recording, 80)?;
+    if let Err(write_error) = teardown_recording(recording, 80) {
+        // The WAV is incomplete (e.g. a full disk), but the live transcriber
+        // already has the text: keep it rather than losing the dictation.
+        let live = session_transcript.lock().unwrap().clone();
+        if live.trim().is_empty() {
+            return Err(write_error);
+        }
+        eprintln!("[ERROR] {write_error}; using the live transcript");
+        let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
+        let text = crate::context::apply_custom_vocabulary_casing(&clean_transcript(&live), &custom_vocab);
+        // A meeting is saved from the partial WAV where possible; a dictation no longer needs it.
+        let meeting_id = process_and_save_meeting_if_applicable(
+            is_meeting,
+            last_recording_path.as_deref(),
+            &text,
+            meeting_info,
+            active_engine,
+            &whisper_arc,
+            gguf.as_ref(),
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("[ERROR] {e}");
+            None
+        });
+        if !is_meeting || meeting_id.is_some() {
+            if let Some(path) = last_recording_path.as_ref() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        return Ok((text, meeting_id));
+    }
 
     // Ensure final inference pass runs on P-cores with elevated priority on Windows
     crate::platform_tuning::apply_thread_performance_affinity();
