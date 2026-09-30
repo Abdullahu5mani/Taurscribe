@@ -1,5 +1,5 @@
 use crossbeam_channel::Sender;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 // Wrapper struct to make the Audio Stream "moveable" between threads.

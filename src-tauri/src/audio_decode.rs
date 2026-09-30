@@ -261,6 +261,7 @@ where
     // An Opus packet can contain at most 120 ms, regardless of encoder rate.
     let mut samples = vec![0.0f32; 5_760 * channels];
     let mut total = 0u64;
+    let mut decoded_position = 0u64;
     loop {
         let packet = match format.next_packet() {
             Ok(packet) => packet,

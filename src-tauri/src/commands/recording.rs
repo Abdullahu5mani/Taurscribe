@@ -548,6 +548,7 @@ impl LiveTranscriber {
 
     /// VAD-gated transcription of one chunk on the active engine.
     fn transcribe_gated(&self, chunk: &mut Vec<f32>, buffered_samples: usize, context: &str) {
+        let source_frames = chunk.len() as u64;
         if let Some(gguf) = &self.gguf {
             let mut manager = gguf.lock().unwrap();
             let mut transcribe = |c: &[f32], sr| manager.transcribe_chunk(c, sr, None);

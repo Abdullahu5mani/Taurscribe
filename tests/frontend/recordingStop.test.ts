@@ -32,6 +32,7 @@ let phases: string[] = [];
 
 function stop(outcome: Partial<RecordingOutcome>) {
     stopOutcome = {
+        warnings: [], recording_path: null,
         transcript: "hello world",
         kind: "dictation",
         meeting_id: null,
