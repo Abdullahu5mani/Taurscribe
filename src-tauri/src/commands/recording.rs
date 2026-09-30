@@ -1893,9 +1893,7 @@ fn stop_recording_blocking(
         eprintln!("[ERROR] {write_error}; using the live transcript");
         let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
         let text = crate::context::apply_custom_vocabulary_casing(&clean_transcript(&live), &custom_vocab);
-        // A meeting is saved from the partial WAV where possible. Its text lives
-        // only in the meeting, so a failed save is an error (the WAV is kept),
-        // never reported as saved. A dictation no longer needs the WAV.
+        // A meeting is saved from the partial WAV where possible; a dictation no longer needs it.
         let meeting_id = process_and_save_meeting_if_applicable(
             is_meeting,
             last_recording_path.as_deref(),
@@ -1905,9 +1903,14 @@ fn stop_recording_blocking(
             &whisper_arc,
             gguf.as_ref(),
         )
-        .map_err(|e| format!("{write_error}; the meeting could not be saved: {e}"))?;
-        if let Some(path) = last_recording_path.as_ref() {
-            let _ = std::fs::remove_file(path);
+        .unwrap_or_else(|e| {
+            eprintln!("[ERROR] {e}");
+            None
+        });
+        if !is_meeting || meeting_id.is_some() {
+            if let Some(path) = last_recording_path.as_ref() {
+                let _ = std::fs::remove_file(path);
+            }
         }
         return Ok((text, meeting_id));
     }

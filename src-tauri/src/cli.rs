@@ -200,7 +200,8 @@ fn try_status() -> Result<Option<Value>, Fail> {
     }
 }
 
-/// Starts the app if needed and waits until its UI can receive dictation events.
+/// Starts the app if needed and waits until its UI can receive dictation events
+/// (listeners registered and the startup model load finished).
 fn ensure_running() -> Result<(), Fail> {
     if let Some(st) = try_status()? {
         if st["ui_ready"].as_bool() == Some(true) {
@@ -210,7 +211,8 @@ fn ensure_running() -> Result<(), Fail> {
         eprintln!("Starting Taurscribe…");
         launch_app()?;
     }
-    let deadline = Instant::now() + Duration::from_secs(60);
+    // Includes loading the model at startup, which takes a while for large ones.
+    let deadline = Instant::now() + Duration::from_secs(180);
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(400));
         if let Some(st) = try_status()? {
@@ -219,12 +221,17 @@ fn ensure_running() -> Result<(), Fail> {
             }
         }
     }
-    Err(Fail::Other("Taurscribe did not finish starting within 60 seconds".into()))
+    Err(Fail::Other("Taurscribe did not finish starting within 3 minutes".into()))
 }
 
 /// The real executable, with any `install-cli` symlink resolved.
 fn app_exe() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("could not find the Taurscribe executable: {e}"))?;
+    // Windows has no install-cli symlink to resolve, and canonicalize there gives
+    // a \\?\C:\… path, which would end up in the user's PATH.
+    if cfg!(windows) {
+        return Ok(exe);
+    }
     Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
 }
 
@@ -321,11 +328,13 @@ fn cmd_dictate(cmd: &str, o: &Opts) -> Result<(), Fail> {
 /// Waits until the app reports `recording == want`. The app can ignore a
 /// dictation event (the last transcript is still processing, no model is
 /// installed), so the emitted event alone doesn't mean it happened. A model
-/// load before the recording starts extends the wait.
+/// load before the recording starts extends the wait, and a start gets longer
+/// because the first one can wait on the microphone permission prompt.
 fn wait_for_recording(want: bool) -> Result<(), Fail> {
     let give_up = Instant::now() + Duration::from_secs(180);
+    let patience = Duration::from_secs(if want { 30 } else { 10 });
     let mut last_busy = Instant::now();
-    while Instant::now() < give_up && last_busy.elapsed() < Duration::from_secs(10) {
+    while Instant::now() < give_up && last_busy.elapsed() < patience {
         let st = try_status()?.ok_or(Fail::NotRunning)?;
         if st["recording"].as_bool() == Some(want) {
             return Ok(());
@@ -347,21 +356,29 @@ fn cmd_transcribe(o: &Opts) -> Result<(), Fail> {
     if o.pos.is_empty() {
         return Err(Fail::Usage("transcribe needs at least one audio file".into()));
     }
+    // `absolute`, not `canonicalize`: on Windows the latter gives \\?\C:\… paths,
+    // which then show up in the output instead of the names that were passed.
     let files: Vec<PathBuf> = o
         .pos
         .iter()
-        .map(|f| std::fs::canonicalize(f).map_err(|_| Fail::Other(format!("no such file: {f}"))))
+        .map(|f| match std::path::absolute(f) {
+            Ok(p) if p.is_file() => Ok(p),
+            _ => Err(Fail::Other(format!("no such file: {f}"))),
+        })
         .collect::<Result<_, _>>()?;
     ensure_running()?;
     let many = files.len() > 1;
     let mut failed = 0;
-    for f in &files {
+    for (i, f) in files.iter().enumerate() {
         let shown = f.display().to_string();
+        // Keep the model loaded between files even with "unload after each use";
+        // the last file unloads it.
+        let defer = i + 1 < files.len();
         eprintln!("Transcribing {shown}…");
         // An app started just now may still be loading its model.
         let load_deadline = Instant::now() + Duration::from_secs(180);
         let reply = loop {
-            match request("transcribe", json!({ "path": shown }), None) {
+            match request("transcribe", json!({ "path": shown, "defer_unload": defer }), None) {
                 Err(Fail::Other(e)) if e.starts_with("ASR model is still loading") && Instant::now() < load_deadline => {
                     std::thread::sleep(Duration::from_millis(500));
                 }
@@ -443,6 +460,8 @@ pub struct InstallStatus {
     pub location: String,
     /// Shown next to the button, e.g. "~/.local/bin is not on your PATH".
     pub note: Option<String>,
+    /// Put on PATH by a system package (Linux .deb): nothing to install or remove here.
+    pub managed: bool,
 }
 
 #[cfg(target_os = "macos")]
@@ -467,14 +486,19 @@ pub fn install_status() -> InstallStatus {
         let installed = points_to_us(Path::new(LINK));
         let note = (!installed && Path::new(LINK).exists())
             .then(|| format!("{LINK} already exists and points somewhere else; installing replaces it"));
-        InstallStatus { installed, location: LINK.into(), note }
+        InstallStatus { installed, location: LINK.into(), note, managed: false }
     }
     #[cfg(target_os = "linux")]
     {
         // Distro packages already put the binary in /usr/bin.
         if let Ok(exe) = app_exe() {
             if exe.parent() == Some(Path::new("/usr/bin")) {
-                return InstallStatus { installed: true, location: exe.display().to_string(), note: None };
+                return InstallStatus {
+                    installed: true,
+                    location: exe.display().to_string(),
+                    note: Some("Installed by your package manager".into()),
+                    managed: true,
+                };
             }
         }
         let link = link_path().unwrap_or_default();
@@ -483,20 +507,22 @@ pub fn install_status() -> InstallStatus {
             installed: points_to_us(&link),
             location: link.display().to_string(),
             note: (!on_path).then(|| "~/.local/bin is not on your PATH; add it in your shell profile".into()),
+            managed: false,
         }
     }
     #[cfg(windows)]
     {
         let dir = app_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)).unwrap_or_default();
-        let installed = windows_user_path().is_some_and(|p| p.split(';').any(|d| same_dir(d, &dir)));
+        let installed = windows_user_path().is_ok_and(|p| p.split(';').any(|d| same_dir(d, &dir)));
         InstallStatus {
             installed,
             location: dir.display().to_string(),
             note: installed.then(|| "open a new terminal to pick up the PATH change".into()),
+            managed: false,
         }
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-    InstallStatus { installed: false, location: String::new(), note: Some("not supported on this platform".into()) }
+    InstallStatus { installed: false, location: String::new(), note: Some("not supported on this platform".into()), managed: false }
 }
 
 pub fn install() -> Result<String, String> {
@@ -547,7 +573,9 @@ pub fn install() -> Result<String, String> {
     #[cfg(windows)]
     {
         let dir = exe.parent().ok_or("no install folder")?.to_path_buf();
-        let current = windows_user_path().unwrap_or_default();
+        // An unreadable PATH must stop the install: treating it as empty would
+        // write back a PATH holding only our folder.
+        let current = windows_user_path()?;
         if current.split(';').any(|d| same_dir(d, &dir)) {
             return Ok("Already on your PATH. Open a new terminal and run `taurscribe help`.".into());
         }
@@ -585,6 +613,9 @@ pub fn uninstall() -> Result<String, String> {
     }
     #[cfg(target_os = "linux")]
     {
+        if app_exe()?.parent() == Some(Path::new("/usr/bin")) {
+            return Ok("Installed by your package manager; remove the package to uninstall it.".into());
+        }
         let link = link_path().ok_or("no home directory")?;
         if !points_to_us(&link) {
             return Ok("Nothing to remove.".into());
@@ -595,7 +626,7 @@ pub fn uninstall() -> Result<String, String> {
     #[cfg(windows)]
     {
         let dir = app_exe()?.parent().ok_or("no install folder")?.to_path_buf();
-        let current = windows_user_path().unwrap_or_default();
+        let current = windows_user_path()?;
         let kept: Vec<&str> = current.split(';').filter(|d| !d.is_empty() && !same_dir(d, &dir)).collect();
         if kept.len() == current.split(';').filter(|d| !d.is_empty()).count() {
             return Ok("Nothing to remove.".into());
@@ -624,20 +655,31 @@ fn same_dir(entry: &str, dir: &Path) -> bool {
 
 /// The user's own PATH (not the merged system + user value), read from
 /// HKCU\Environment as UTF-16 and unexpanded, so non-ASCII folders and
-/// entries like %USERPROFILE%\bin survive being written back.
+/// entries like %USERPROFILE%\bin survive being written back. Empty when the
+/// user has no PATH of their own; an error for anything else, so a failed read
+/// is never mistaken for an empty PATH.
 #[cfg(windows)]
-fn windows_user_path() -> Option<String> {
+fn windows_user_path() -> Result<String, String> {
     use windows::core::w;
+    use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
     use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_NOEXPAND, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ};
     let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
+    let fail = |e: windows::Win32::Foundation::WIN32_ERROR| format!("could not read your PATH ({})", windows::core::Error::from(e));
     unsafe {
         let mut bytes = 0u32;
-        RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, None, Some(&mut bytes)).ok().ok()?;
+        match RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, None, Some(&mut bytes)) {
+            e if e == ERROR_FILE_NOT_FOUND => return Ok(String::new()),
+            e if e.is_err() => return Err(fail(e)),
+            _ => {}
+        }
         let mut buf = vec![0u16; (bytes as usize).div_ceil(2)];
         let mut bytes = (buf.len() * 2) as u32;
-        RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, Some(buf.as_mut_ptr().cast()), Some(&mut bytes)).ok().ok()?;
+        let e = RegGetValueW(HKEY_CURRENT_USER, w!("Environment"), w!("Path"), flags, None, Some(buf.as_mut_ptr().cast()), Some(&mut bytes));
+        if e.is_err() {
+            return Err(fail(e));
+        }
         let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        Some(String::from_utf16_lossy(&buf[..len]))
+        Ok(String::from_utf16_lossy(&buf[..len]))
     }
 }
 

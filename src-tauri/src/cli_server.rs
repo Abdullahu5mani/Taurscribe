@@ -53,11 +53,25 @@ const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 
 /// Set once the frontend has registered its hotkey listeners; before that a
 /// dictation event from the CLI would be emitted to nobody.
-static UI_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static UI_LISTENING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The frontend's own "loading a model" state, during which it ignores a
+/// dictation start. True until the frontend first reports it.
+static UI_LOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 #[tauri::command]
 pub fn cli_ui_ready() {
-    UI_READY.store(true, std::sync::atomic::Ordering::Relaxed);
+    UI_LISTENING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[tauri::command]
+pub fn cli_ui_loading(loading: bool) {
+    UI_LOADING.store(loading, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The UI can take a dictation event right now.
+fn ui_ready() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    UI_LISTENING.load(Relaxed) && !UI_LOADING.load(Relaxed)
 }
 
 #[tauri::command]
@@ -213,7 +227,7 @@ fn status(app: &AppHandle) -> Value {
         "model": model,
         "backend": if backend.is_empty() { Value::Null } else { Value::String(backend) },
         "engine_loading": state.engine_loading.load(Ordering::Relaxed),
-        "ui_ready": UI_READY.load(Ordering::Relaxed),
+        "ui_ready": ui_ready(),
     })
 }
 
@@ -250,8 +264,8 @@ async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, Strin
     match cmd {
         "status" => Ok(status(app)),
         "dictate" => {
-            if !UI_READY.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err("Taurscribe is still starting; try again in a moment".into());
+            if !ui_ready() {
+                return Err("Taurscribe is still starting or loading a model; try again in a moment".into());
             }
             let action = args.get("action").and_then(Value::as_str).unwrap_or("toggle");
             let recording = is_recording(&app.state::<AudioState>());
@@ -274,6 +288,8 @@ async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, Strin
             let state = app.state::<AudioState>();
             let engine = state.active_engine.lock().map(|e| *e).unwrap_or(ASREngine::Whisper);
             let model = cli_model(&state, engine);
+            // More files follow in this CLI batch: don't auto-unload in between.
+            let defer_unload = args.get("defer_unload").and_then(Value::as_bool).unwrap_or(false);
             let res = crate::commands::transcribe_file(
                 app.clone(),
                 state,
@@ -281,7 +297,7 @@ async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, Strin
                 Some(engine_name(&engine).to_string()),
                 model,
                 None,
-                None,
+                Some(defer_unload),
                 Some(use_gpu_setting()),
             )
             .await?;

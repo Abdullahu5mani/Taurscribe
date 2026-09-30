@@ -5,6 +5,8 @@ interface CliInstallStatus {
     installed: boolean;
     location: string;
     note: string | null;
+    /** Put on PATH by a system package (Linux .deb): no install/uninstall here. */
+    managed: boolean;
 }
 
 const EXAMPLES = [
@@ -48,14 +50,16 @@ export function CliSection() {
                         <span>taurscribe command</span>
                         <span className="setting-card-meta">{status.installed ? 'installed' : 'not installed'}</span>
                     </div>
-                    <button
-                        type="button"
-                        id="cli-install-btn"
-                        data-testid="cli-install-btn"
-                        className="about-open-btn"
-                        disabled={busy}
-                        onClick={() => run(status.installed ? 'uninstall_cli' : 'install_cli')}
-                    >{busy ? 'Working…' : status.installed ? 'Uninstall' : 'Install'}</button>
+                    {!status.managed && (
+                        <button
+                            type="button"
+                            id="cli-install-btn"
+                            data-testid="cli-install-btn"
+                            className="about-open-btn"
+                            disabled={busy}
+                            onClick={() => run(status.installed ? 'uninstall_cli' : 'install_cli')}
+                        >{busy ? 'Working…' : status.installed ? 'Uninstall' : 'Install'}</button>
+                    )}
                 </div>
                 <p className="setting-card-desc">
                     Dictate, transcribe files and search your history from a terminal or a script.

@@ -242,7 +242,7 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "get_meeting_continue_minutes": return 10;
         case "get_mcp_setup": return { command: "/Applications/Taurscribe.app/Contents/MacOS/taurscribe", args: ["mcp"] };
         case "get_gpu_report": return { primary: { name: "AMD Radeon RX 7800 XT", vendor: "amd" }, build_flavor: "vulkan", build_label: "Vulkan (Intel and other GPUs)", recommended_flavor: "amd", recommended_label: "AMD (ROCm)", better_build_available: true };
-        case "cli_install_status": return { installed: false, location: "/usr/local/bin/taurscribe", note: null };
+        case "cli_install_status": return { installed: false, location: "/usr/local/bin/taurscribe", note: null, managed: false };
         case "cli_ui_ready": return null;
         case "get_storage_locations": return [
             { area: "models", path: "/Users/me/Library/Application Support/Taurscribe/models", default_path: "/Users/me/Library/Application Support/Taurscribe/models", is_custom: false, is_other_drive: false, is_removable: false, available: true, used_bytes: 4.2e9, free_bytes: 212e9, drive_name: "Macintosh HD" },

@@ -435,6 +435,12 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [downloadProgress]);
 
+  // The `taurscribe` CLI waits for this before sending a dictation start, which
+  // the hotkey handler ignores while a model is loading (including at startup).
+  useEffect(() => {
+    invoke("cli_ui_loading", { loading: isLoading || isInitialLoading }).catch(() => {});
+  }, [isLoading, isInitialLoading]);
+
   // File transcription shows in the tray too (recording is blocked meanwhile).
   const fileTrayActiveRef = useRef(false);
   useEffect(() => {

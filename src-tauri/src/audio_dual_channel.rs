@@ -171,6 +171,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
         crate::platform_tuning::apply_thread_performance_affinity();
         let mut mic_frames = 0usize;
         let mic_started = std::time::Instant::now();
+        let mut to_48k = MonoTo48k::new();
         if let Some(track) = session_mic.microphone() {
             println!(
                 "[INFO] Dual-channel mic track started: rate={:.1}Hz, channels={}",
@@ -180,11 +181,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
             while !stop_mic.load(Ordering::Relaxed) {
                 match track.recv() {
                     Some(chunk) => {
-                        let mono_48k = process_chunk_to_mono_48k(
-                            chunk.frames,
-                            chunk.channels,
-                            chunk.sample_rate,
-                        );
+                        let mono_48k = to_48k.push(&chunk.frames, chunk.channels, chunk.sample_rate);
                         mic_frames += mono_48k.len();
                         if mic_tx.send(mono_48k).is_err() {
                             break;
@@ -203,6 +200,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
         crate::platform_tuning::apply_thread_performance_affinity();
         let mut sys_frames = 0usize;
         let sys_started = std::time::Instant::now();
+        let mut to_48k = MonoTo48k::new();
         let track = session_sys.system_audio();
         println!(
             "[INFO] Dual-channel sys track started: rate={:.1}Hz, channels={}",
@@ -212,11 +210,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
         while !stop_sys.load(Ordering::Relaxed) {
             match track.recv() {
                 Some(chunk) => {
-                    let mono_48k = process_chunk_to_mono_48k(
-                        chunk.frames,
-                        chunk.channels,
-                        chunk.sample_rate,
-                    );
+                    let mono_48k = to_48k.push(&chunk.frames, chunk.channels, chunk.sample_rate);
                     sys_frames += mono_48k.len();
                     if sys_tx.send(mono_48k).is_err() {
                         break;
@@ -350,7 +344,7 @@ pub fn start_dual_channel_capture(
                             new_pids
                         );
                         let (old_mic_rx, old_sys_rx) =
-                            restart_rig(&mut rig, DualChannelTarget::Process(pid), &stop_for_rig, mic_device.as_deref());
+                            restart_rig(&mut rig, DualChannelTarget::Process(pid), &stop_for_rig, mic_device.as_deref(), &app_handle);
                         // Keep whatever the old session had already delivered.
                         while let Ok(frames) = old_mic_rx.try_recv() {
                             mic_deque.extend(frames);
@@ -498,6 +492,7 @@ fn restart_rig(
     target: DualChannelTarget,
     stop_signal: &Arc<AtomicBool>,
     mic_device: Option<&str>,
+    app: &AppHandle,
 ) -> (crossbeam_channel::Receiver<Vec<f32>>, crossbeam_channel::Receiver<Vec<f32>>) {
     // The crate allows one capture session at a time: stop before starting anew.
     // A cpal microphone has to be released too before the new rig reopens it.
@@ -511,7 +506,17 @@ fn restart_rig(
     match fresh {
         Ok(new_rig) => std::mem::replace(rig, new_rig).shutdown(),
         Err(e) => {
-            eprintln!("[ERROR] Could not restart dual-channel capture ({}); callers track stays silent", e);
+            // Both tracks are stopped now, and the recording would silently write
+            // nothing for the rest of the call. Tell the UI, which stops the
+            // recording and saves the meeting up to here.
+            eprintln!("[ERROR] Could not restart dual-channel capture ({}); meeting audio stopped", e);
+            let _ = app.emit(
+                "audio-disconnected",
+                serde_json::json!({
+                    "code": "meeting_capture_lost",
+                    "message": format!("meeting audio capture stopped and could not restart ({e})"),
+                }),
+            );
             let (_, empty_mic) = bounded::<Vec<f32>>(1);
             let (_, empty_sys) = bounded::<Vec<f32>>(1);
             (empty_mic, empty_sys)
@@ -556,24 +561,16 @@ fn spawn_named_mic_capture(
             let format = supported.sample_format();
             let config: cpal::StreamConfig = supported.into();
             let (channels, rate) = (config.channels as u32, config.sample_rate.0);
-            // One resampler for the whole stream: resampling each callback on its
-            // own rounds every chunk's length, and the mic track drifts against the
-            // 48 kHz callers track over a long meeting. 1024-frame blocks keep the
-            // added latency around 20 ms.
-            let mut resampler = crate::audio_preprocess::StreamingResampler::with_target(rate, 48_000, 1024)?;
+            let mut to_48k = MonoTo48k::new();
             let stream = crate::audio::build_input_stream_f32(
                 &device,
                 &config,
                 format,
                 move |data: &[f32]| {
-                    let mono = crate::audio_preprocess::downmix_interleaved_to_mono(data, channels as usize);
-                    match resampler.push(&mono) {
+                    let out = to_48k.push(data, channels, rate as f64);
+                    if !out.is_empty() {
                         // Never block the audio callback; a full queue drops the chunk.
-                        Ok(out) if !out.is_empty() => {
-                            let _ = tx.try_send(out);
-                        }
-                        Ok(_) => {}
-                        Err(e) => eprintln!("[ERROR] Meeting microphone resample failed: {}", e),
+                        let _ = tx.try_send(out);
                     }
                 },
                 |e| eprintln!("[ERROR] Meeting microphone stream error: {}", e),
@@ -606,51 +603,44 @@ fn spawn_named_mic_capture(
     }
 }
 
-/// Downmix to mono and resample to 48 kHz if needed to ensure both channels
-/// are perfectly rate-matched before interleaving.
-fn process_chunk_to_mono_48k(frames: Vec<f32>, channels: u32, sample_rate: f64) -> Vec<f32> {
-    if frames.is_empty() {
-        return Vec::new();
-    }
-
-    // 1. Downmix to mono if multi-channel
-    let mono = if channels > 1 {
-        let ch = channels as usize;
-        frames
-            .chunks(ch)
-            .map(|chunk| chunk.iter().sum::<f32>() / ch as f32)
-            .collect()
-    } else {
-        frames
-    };
-
-    // 2. Resample to 48,000 Hz if needed
-    let target_rate = 48000.0;
-    if (sample_rate - target_rate).abs() > 1.0 && sample_rate > 1000.0 {
-        resample_linear(&mono, sample_rate, target_rate)
-    } else {
-        mono
-    }
+/// One track's audio as mono 48 kHz, through a single resampler for the whole
+/// stream. Resampling each chunk on its own rounds every chunk's length, and
+/// the mic and callers tracks drift apart over a long meeting.
+struct MonoTo48k {
+    rate: u32,
+    resampler: Option<crate::audio_preprocess::StreamingResampler>,
 }
 
-/// Fast, low-latency linear interpolation resampler for streaming audio buffers.
-fn resample_linear(input: &[f32], from_rate: f64, to_rate: f64) -> Vec<f32> {
-    if input.is_empty() || (from_rate - to_rate).abs() < 1.0 {
-        return input.to_vec();
+impl MonoTo48k {
+    fn new() -> Self {
+        Self { rate: 0, resampler: None }
     }
-    let ratio = from_rate / to_rate;
-    let out_len = ((input.len() as f64) / ratio).round() as usize;
-    let mut out = Vec::with_capacity(out_len);
-    for i in 0..out_len {
-        let src_idx = (i as f64) * ratio;
-        let idx0 = src_idx.floor() as usize;
-        let frac = (src_idx - idx0 as f64) as f32;
-        let idx1 = (idx0 + 1).min(input.len().saturating_sub(1));
-        let s0 = input.get(idx0).copied().unwrap_or(0.0);
-        let s1 = input.get(idx1).copied().unwrap_or(s0);
-        out.push(s0 + frac * (s1 - s0));
+
+    fn push(&mut self, frames: &[f32], channels: u32, sample_rate: f64) -> Vec<f32> {
+        let mono = crate::audio_preprocess::downmix_interleaved_to_mono(frames, channels as usize);
+        let rate = sample_rate.round() as u32;
+        if rate < 1000 {
+            return mono;
+        }
+        // Created from the first chunk's rate (and again if the device changes it).
+        if self.resampler.is_none() || self.rate != rate {
+            // 1024-frame blocks keep the added latency around 20 ms.
+            match crate::audio_preprocess::StreamingResampler::with_target(rate, 48_000, 1024) {
+                Ok(r) => {
+                    self.resampler = Some(r);
+                    self.rate = rate;
+                }
+                Err(e) => {
+                    eprintln!("[ERROR] Meeting audio resampler: {}", e);
+                    return mono;
+                }
+            }
+        }
+        self.resampler.as_mut().unwrap().push(&mono).unwrap_or_else(|e| {
+            eprintln!("[ERROR] Meeting audio resample failed: {}", e);
+            Vec::new()
+        })
     }
-    out
 }
 
 // ── Linux Fallback Implementation ───────────────────────────────────────────
@@ -732,19 +722,20 @@ mod tests {
     }
 
     #[test]
-    fn test_resample_linear_and_downmix() {
-        let stereo = vec![0.2, 0.4, 0.6, 0.8]; // 2 frames of stereo
-        let mono_48k = super::process_chunk_to_mono_48k(stereo, 2, 48000.0);
+    fn mono_48k_downmixes_and_keeps_the_stream_length() {
+        let mut t = super::MonoTo48k::new();
+        let mono_48k = t.push(&[0.2, 0.4, 0.6, 0.8], 2, 48000.0); // 2 stereo frames, no resampling
         assert_eq!(mono_48k.len(), 2);
         assert!((mono_48k[0] - 0.3).abs() < 1e-5);
         assert!((mono_48k[1] - 0.7).abs() < 1e-5);
 
-        // 44.1k to 48k resampling length test
-        let input_44k = vec![0.5f32; 4410]; // 100ms at 44.1kHz
-        let resampled_48k = super::resample_linear(&input_44k, 44100.0, 48000.0);
-        assert_eq!(resampled_48k.len(), 4800); // 100ms at 48kHz
-        for &s in &resampled_48k {
-            assert!((s - 0.5).abs() < 1e-4);
-        }
+        // 44.1 kHz in 512-frame chunks: resampled per chunk this lost 0.28 samples
+        // every time (about 2 230 over these 8 000 chunks). One resampler only lags
+        // by what is still buffered: less than one 1024-frame block (1 115 samples).
+        let mut t = super::MonoTo48k::new();
+        let chunk = vec![0.5f32; 512];
+        let out: usize = (0..8000).map(|_| t.push(&chunk, 1, 44100.0).len()).sum();
+        let exact = 8000.0 * 512.0 * 48000.0 / 44100.0;
+        assert!(out as f64 <= exact + 1.0 && out as f64 >= exact - 1115.0, "{out} vs {exact}");
     }
 }
