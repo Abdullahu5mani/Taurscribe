@@ -8,7 +8,7 @@ use std::sync::{
 };
 use tauri::{AppHandle, Emitter, State};
 
-use crate::audio::{RecordingHandle, SendStream};
+use crate::audio::{CaptureLoss, RecordingHandle, SendStream};
 use crate::audio_preprocess;
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
@@ -121,6 +121,7 @@ fn append_transcript_with_word_overlap(base: &mut String, next: &str) {
 fn transcribe_final_pass(
     manager: &Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>,
     audio: Vec<f32>,
+    engine: ASREngine,
 ) -> Result<String, String> {
     println!(
         "[FINAL_PASS] Transcribing saved recording ({:.2}s)...",
@@ -130,14 +131,16 @@ fn transcribe_final_pass(
         .lock()
         .map_err(|_| "ASR lock poisoned".to_string())?;
 
-    if audio.len() <= FINAL_PASS_FULL_MAX_SAMPLES {
+    let chunk_samples = if engine == ASREngine::Qwen3 { 16_000 * 30 } else { FINAL_PASS_CHUNK_SAMPLES };
+    let full_max = if engine == ASREngine::Qwen3 { chunk_samples } else { FINAL_PASS_FULL_MAX_SAMPLES };
+    if audio.len() <= full_max {
         return manager.transcribe_chunk(&audio, 16000, None);
     }
 
     let mut merged = String::new();
     let mut start = 0usize;
     while start < audio.len() {
-        let end = (start + FINAL_PASS_CHUNK_SAMPLES).min(audio.len());
+        let end = (start + chunk_samples).min(audio.len());
         let text = manager.transcribe_chunk(&audio[start..end], 16000, None)?;
         append_transcript_with_word_overlap(&mut merged, &text);
         if end == audio.len() {
@@ -536,6 +539,7 @@ struct LiveTranscriber {
     session_transcript: Arc<Mutex<String>>,
     denoise: bool,
     denoiser: Arc<Mutex<Option<Denoiser>>>,
+    capture_loss: Arc<CaptureLoss>,
     /// Callbacks and samples the capture side dropped because this thread was behind.
     dropped_callbacks: Arc<AtomicU64>,
     dropped_samples: Arc<AtomicU64>,
@@ -551,7 +555,11 @@ impl LiveTranscriber {
         let source_frames = chunk.len() as u64;
         if let Some(gguf) = &self.gguf {
             let mut manager = gguf.lock().unwrap();
-            let mut transcribe = |c: &[f32], sr| manager.transcribe_chunk(c, sr, None);
+            let mut transcribe = |c: &[f32], sr| {
+                let result = manager.transcribe_chunk(c, sr, None);
+                if result.is_err() { self.capture_loss.preview_frames.fetch_add(source_frames, Ordering::Relaxed); }
+                result
+            };
             vad_gated_transcribe(
                 chunk,
                 self.sample_rate,
@@ -641,6 +649,7 @@ impl LiveTranscriber {
             while buffer.len() >= chunk_size {
                 if buffer.len() > max_buffer_size {
                     println!("[WARNING] Buffer full, dropping old audio to catch up");
+                    self.capture_loss.preview_frames.fetch_add(chunk_size as u64, Ordering::Relaxed);
                     discard_audio_front(&mut buffer, chunk_size);
                 }
                 pop_audio_chunk(&mut buffer, chunk_size, &mut chunk);
@@ -710,6 +719,7 @@ fn spawn_level_thread(app: AppHandle, audio_level: Arc<AtomicU32>, stop: Arc<Ato
 
 /// Where the capture side sends audio, and the counters it updates.
 struct CaptureSinks {
+    capture_loss: Arc<CaptureLoss>,
     file_tx: crossbeam_channel::Sender<Vec<f32>>,
     whisper_tx: crossbeam_channel::Sender<Vec<f32>>,
     audio_level: Arc<AtomicU32>,
@@ -729,16 +739,19 @@ fn permission_aware_stream_error(msg: String, what: &str) -> String {
 /// `try_send`s raw audio to the WAV writer and a mono mix to the transcriber.
 fn start_mic_stream(app_handle: &AppHandle, mic: MicConfig, sinks: CaptureSinks) -> Result<cpal::Stream, String> {
     let channels = mic.config.channels as usize;
-    let CaptureSinks { file_tx, whisper_tx, audio_level, dropped_callbacks, dropped_samples } = sinks;
+    let CaptureSinks { capture_loss, file_tx, whisper_tx, audio_level, dropped_callbacks, dropped_samples } = sinks;
     let level_counter = AtomicU32::new(0);
     let app_for_error = app_handle.clone();
+    let app_for_capture = app_handle.clone();
     let stream = crate::audio::build_input_stream_f32(
         &mic.device,
         &mic.config,
         mic.sample_format,
         move |data: &[f32]| {
             // File writer always gets raw (unprocessed) audio
-            file_tx.try_send(data.to_vec()).ok();
+            if capture_loss.send_file(&file_tx, data.to_vec(), channels) {
+                let _ = app_for_capture.emit("recording-write-error", "Recording queue overflowed; audio is incomplete and will be retained.");
+            }
 
             let mono_data: Vec<f32> = if channels > 1 {
                 data.chunks(channels)
@@ -761,6 +774,7 @@ fn start_mic_stream(app_handle: &AppHandle, mic: MicConfig, sinks: CaptureSinks)
 
             let mono_len = mono_data.len();
             if whisper_tx.try_send(mono_data).is_err() {
+                capture_loss.preview_frames.fetch_add(mono_len as u64, Ordering::Relaxed);
                 let dropped = dropped_callbacks.fetch_add(1, Ordering::Relaxed) + 1;
                 dropped_samples.fetch_add(mono_len as u64, Ordering::Relaxed);
                 if dropped == 1 || dropped % 100 == 0 {
@@ -795,6 +809,7 @@ fn start_meeting_capture(
     state: &AudioState,
     file_tx: crossbeam_channel::Sender<Vec<f32>>,
     whisper_tx: crossbeam_channel::Sender<Vec<f32>>,
+    capture_loss: Arc<CaptureLoss>,
 ) -> Result<crate::audio_dual_channel::DualChannelCaptureHandle, String> {
     use crate::audio_dual_channel::DualChannelTarget;
     let dual_stop = Arc::new(AtomicBool::new(false));
@@ -823,6 +838,7 @@ fn start_meeting_capture(
         app_handle.clone(),
         dual_stop.clone(),
         meeting_mic.clone(),
+        capture_loss.clone(),
     ) {
         Ok(handle) => Ok(handle),
         Err(e) if target != DualChannelTarget::System => {
@@ -835,6 +851,7 @@ fn start_meeting_capture(
                 app_handle.clone(),
                 dual_stop,
                 meeting_mic,
+                capture_loss,
             )
         }
         Err(e) => Err(e),
@@ -934,6 +951,7 @@ fn start_recording_blocking(
     // disappeared" symptom. 512 messages ≈ 10.7 s of headroom.
     let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5s headroom at 48kHz/1024
     let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(512);
+    let capture_loss = Arc::new(CaptureLoss::default());
     let dropped_callbacks = Arc::new(AtomicU64::new(0));
     let dropped_samples = Arc::new(AtomicU64::new(0));
     let audio_level = Arc::new(AtomicU32::new(0));
@@ -959,6 +977,7 @@ fn start_recording_blocking(
         vad: state.vad.clone(),
         session_transcript: state.session_transcript.clone(),
         denoise: denoise_enabled,
+        capture_loss: capture_loss.clone(),
         // Owned by this session's transcriber, so it still denoises the audio it
         // drains after Stop, and RNNoise state never leaks into the next session.
         denoiser: Arc::new(Mutex::new(denoise_enabled.then(|| {
@@ -974,12 +993,13 @@ fn start_recording_blocking(
     // 5. Capture. On failure stop the level thread too (the writer and
     // transcriber exit on their own once the senders are dropped).
     let capture = match mic {
-        None => start_meeting_capture(&app_handle, &state, file_tx.clone(), whisper_tx.clone()).map(|handle| {
+        None => start_meeting_capture(&app_handle, &state, file_tx.clone(), whisper_tx.clone(), capture_loss.clone()).map(|handle| {
             println!("[INFO] Dual-channel recording started: {}", path.display());
             (None, Some(handle))
         }),
         Some(mic) => {
             let sinks = CaptureSinks {
+                capture_loss: capture_loss.clone(),
                 file_tx: file_tx.clone(),
                 whisper_tx: whisper_tx.clone(),
                 audio_level,
@@ -998,6 +1018,7 @@ fn start_recording_blocking(
     };
 
     *state.recording_handle.lock().unwrap() = Some(RecordingHandle {
+        capture_loss,
         stream,
         file_tx,
         whisper_tx,
@@ -1033,6 +1054,7 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) -> Resul
     use cpal::traits::StreamTrait;
 
     let RecordingHandle {
+        capture_loss: _,
         stream,
         file_tx,
         whisper_tx,
@@ -1106,12 +1128,10 @@ pub fn resume_recording(state: State<'_, AudioState>) -> Result<CommandResult<St
         return Ok(CommandResult::err("not_recording", "Not recording"));
     };
 
-    if let Some(ref stream) = handle.stream {
-        stream
-            .0
-            .play()
-            .map_err(|e| format!("Failed to resume recording: {}", e))?;
-    }
+    let Some(ref stream) = handle.stream else {
+        return Ok(CommandResult::err("pause_unsupported", "Meeting recordings can't be paused"));
+    };
+    stream.0.play().map_err(|e| format!("Failed to resume recording: {e}"))?;
     state.recording_paused.store(false, Ordering::Relaxed);
     Ok(CommandResult::ok("Recording resumed".to_string()))
 }
@@ -1646,34 +1666,19 @@ fn meeting_turn_transcriber<'a>(
     active_engine: ASREngine,
     whisper_arc: &'a Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
     gguf: Option<&'a Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,
-) -> Option<Box<dyn FnMut(&[f32], u32) -> Option<String> + 'a>> {
-    let to_16k = |samples: &[f32], rate: u32| -> Option<Vec<f32>> {
-        if rate == 16000 {
-            Some(samples.to_vec())
-        } else {
-            audio_preprocess::resample_mono_to_16k(samples, rate).ok()
-        }
-    };
-    match (active_engine, gguf) {
-        (ASREngine::Whisper, _) | (_, None) => Some(Box::new(move |samples: &[f32], rate: u32| {
-            let audio = to_16k(samples, rate)?;
-            let text = whisper_arc
-                .lock()
-                .ok()?
-                .transcribe_audio_data(&audio, None)
-                .ok()?;
-            Some(clean_transcript(&text))
-        })),
-        (_, Some(gguf)) => Some(Box::new(move |samples: &[f32], rate: u32| {
-            let audio = to_16k(samples, rate)?;
-            let text = gguf
-                .lock()
-                .ok()?
-                .transcribe_chunk(&audio, 16000, None)
-                .ok()?;
-            Some(clean_transcript(&text))
-        })),
-    }
+) -> Option<Box<dyn FnMut(&[f32], u32) -> Result<String, String> + 'a>> {
+    Some(Box::new(move |samples: &[f32], rate: u32| {
+        let audio = audio_preprocess::resample_mono_to_16k(samples, rate)?;
+        let text = match active_engine {
+            ASREngine::Whisper => whisper_arc.lock().map_err(|e| e.to_string())?
+                .transcribe_audio_data(&audio, None)?,
+            ASREngine::Granite | ASREngine::Qwen3 => gguf
+                .ok_or("Meeting's ASR engine is unavailable")?
+                .lock().map_err(|e| e.to_string())?
+                .transcribe_chunk(&audio, 16000, None)?,
+        };
+        Ok(clean_transcript(&text))
+    }))
 }
 
 /// Length of a WAV in milliseconds (None when unreadable).
@@ -1717,6 +1722,8 @@ pub enum HistoryOutcome {
 /// Everything the UI needs from a stopped recording.
 #[derive(serde::Serialize, Debug)]
 pub struct RecordingOutcome {
+    pub warnings: Vec<String>,
+    pub recording_path: Option<String>,
     pub transcript: String,
     pub kind: RecordingKind,
     pub meeting_id: Option<i64>,
@@ -1738,6 +1745,7 @@ fn engine_id(engine: ASREngine) -> &'static str {
 
 /// What a stop needs to store its result.
 struct Finishing<'a> {
+    warnings: Vec<String>,
     kind: RecordingKind,
     meeting_info: Option<crate::meeting_detector::MeetingInfo>,
     path: Option<&'a str>,
@@ -1800,14 +1808,14 @@ impl Finishing<'_> {
                 }
             }
         };
-        let keep = matches!(history, HistoryOutcome::NotSaved { .. })
+        let keep = !self.warnings.is_empty() || matches!(history, HistoryOutcome::NotSaved { .. })
             || (keep_recording && self.kind == RecordingKind::Dictation);
         if !keep {
             if let Some(path) = self.path {
                 let _ = std::fs::remove_file(path);
             }
         }
-        Ok(RecordingOutcome { transcript, kind: self.kind, meeting_id, duration_ms: self.duration_ms, too_short, history })
+        Ok(RecordingOutcome { warnings: self.warnings, recording_path: if keep { self.path.map(str::to_string) } else { None }, transcript, kind: self.kind, meeting_id, duration_ms: self.duration_ms, too_short, history })
     }
 }
 
@@ -1883,7 +1891,7 @@ fn process_and_save_meeting_if_applicable(
         turn_transcriber
             .as_mut()
             .map(|t| t.as_mut() as crate::diarization::TurnTranscriber<'_>),
-    );
+    ).map_err(|e| format!("Meeting processing is incomplete ({e}); stereo recording retained at {}", dest_path.display()))?;
     // With per-turn transcription the turns are the complete record (the live
     // transcript can have gaps where its queue overflowed), so save their text.
     let turns_text = turns
@@ -2023,8 +2031,11 @@ fn stop_recording_blocking(
 ) -> Result<RecordingOutcome, String> {
     // Brief tail capture for OS audio scheduling; silence padding in the
     // transcriber thread handles the actual word-boundary safety margin.
+    let capture_loss = recording.capture_loss.clone();
     let teardown = teardown_recording(recording, 80);
-    let finishing = Finishing {
+    let preview_incomplete = capture_loss.preview_frames.load(Ordering::Relaxed) > 0;
+    let mut finishing = Finishing {
+        warnings: capture_loss.warnings(),
         kind,
         meeting_info,
         path: last_recording_path.as_deref(),
@@ -2036,6 +2047,7 @@ fn stop_recording_blocking(
         started,
     };
     if let Err(write_error) = teardown {
+        finishing.warnings.push(write_error.clone());
         // The WAV is incomplete (e.g. a full disk), but the live transcriber
         // already has the text: keep it rather than losing the dictation.
         let live = session_transcript.lock().unwrap().clone();
@@ -2049,7 +2061,7 @@ fn stop_recording_blocking(
         // only in the meeting, so a failed save is an error (the WAV is kept),
         // never reported as saved.
         return finishing
-            .conclude(text, false)
+            .conclude(text, true)
             .map_err(|e| format!("{write_error}; the meeting could not be saved: {e}"));
     }
 
@@ -2058,11 +2070,12 @@ fn stop_recording_blocking(
 
     // Granite re-transcribes the whole saved recording: one pass over the full
     // audio beats the stitched live chunks and costs well under a second.
-    if active_engine == ASREngine::Granite {
+    if active_engine == ASREngine::Granite
+        || (active_engine == ASREngine::Qwen3 && kind == RecordingKind::Dictation && preview_incomplete) {
         match (gguf.as_ref(), last_recording_path.as_ref()) {
             (Some(granite), Some(path)) => {
                 match load_recording_for_final_pass(path)
-                    .and_then(|audio| transcribe_final_pass(granite, audio))
+                    .and_then(|audio| transcribe_final_pass(granite, audio, active_engine))
                 {
                     Ok(raw_text) => {
                         let cleaned = clean_transcript(&raw_text);
@@ -2073,13 +2086,16 @@ fn stop_recording_blocking(
                         println!("[FINAL_TRANSCRIPT] (Granite final)\n{}", final_text);
                         return finishing.conclude(final_text, false);
                     }
-                    Err(e) => eprintln!(
-                        "[ERROR] Granite final pass failed; using the live transcript: {}",
-                        e
-                    ),
+                    Err(e) => {
+                        finishing.warnings.push(format!("Final transcription failed; live text may be incomplete: {e}"));
+                        eprintln!("[ERROR] Final pass failed; using the live transcript: {e}");
+                    },
                 }
             }
-            _ => eprintln!("[ERROR] Granite final pass skipped: no saved recording"),
+            _ => {
+                finishing.warnings.push("Final transcription could not run because the saved recording or model is unavailable; live text may be incomplete.".into());
+                eprintln!("[ERROR] Final pass skipped: no saved recording or model");
+            },
         }
     }
 
@@ -2186,6 +2202,7 @@ fn stop_recording_blocking(
                 finishing.conclude(final_text, false)
             }
             Err(e) => {
+                finishing.warnings.push(format!("Final transcription failed; live text may be incomplete: {e}"));
                 eprintln!("[ERROR] Final transcription failed: {}", e);
                 let live = session_transcript.lock().unwrap().clone();
                 if live.trim().is_empty() {
@@ -2369,7 +2386,7 @@ mod tests {
         let level_thread = std::thread::spawn(|| {});
         teardown_recording(
             RecordingHandle {
-                stream: None,
+                capture_loss: Arc::new(CaptureLoss::default()),                stream: None,
                 file_tx,
                 whisper_tx,
                 writer_thread,
@@ -2393,7 +2410,7 @@ mod tests {
         let writer_thread = std::thread::spawn(|| Err("disk full".to_string()));
         let transcriber_thread = std::thread::spawn(move || while whisper_rx.recv().is_ok() {});
         let handle = RecordingHandle {
-            stream: None,
+            capture_loss: Arc::new(CaptureLoss::default()),            stream: None,
             file_tx,
             whisper_tx,
             writer_thread,
@@ -2414,7 +2431,7 @@ mod tests {
         let finished = Arc::new(AtomicBool::new(false));
         let worker_finished = finished.clone();
         let handle = RecordingHandle {
-            stream: None,
+            capture_loss: Arc::new(CaptureLoss::default()),            stream: None,
             file_tx,
             whisper_tx,
             writer_thread: std::thread::spawn(|| -> Result<(), String> {
@@ -2479,6 +2496,7 @@ mod tests {
     ) -> RecordingOutcome {
         let whisper = Arc::new(std::sync::Mutex::new(crate::whisper::WhisperManager::new()));
         let finishing = Finishing {
+            warnings: Vec::new(),
             kind: RecordingKind::Dictation,
             meeting_info: None,
             path: path.to_str(),

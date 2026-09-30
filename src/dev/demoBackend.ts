@@ -207,7 +207,7 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
             });
             return ok({
                 transcript: DEMO_DICTATION, kind: "dictation", meeting_id: null,
-                duration_ms: Date.now() - recStart, too_short: false, history: { status: "saved", id },
+                duration_ms: Date.now() - recStart, too_short: false, warnings: [], recording_path: null, history: { status: "saved", id },
             });
         }
         case "update_transcript_history": {

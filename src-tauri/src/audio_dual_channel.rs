@@ -154,7 +154,7 @@ impl CaptureRig {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
-fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_device: Option<&str>) -> Result<CaptureRig, String> {
+fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_device: Option<&str>, loss: Arc<crate::audio::CaptureLoss>) -> Result<CaptureRig, String> {
     use meeting_record::{capture, CaptureOptions, CaptureTarget, MicrophoneSource};
 
     let capture_target = match target {
@@ -169,7 +169,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
     // chosen in Settings is captured through cpal instead.
     let mic_stop = Arc::new(AtomicBool::new(false));
     let custom_mic = mic_device.and_then(|name| {
-        spawn_named_mic_capture(name, mic_tx.clone(), [stop_signal.clone(), mic_stop.clone()])
+        spawn_named_mic_capture(name, mic_tx.clone(), [stop_signal.clone(), mic_stop.clone()], loss.clone())
             .unwrap_or_else(|e| {
                 eprintln!("[WARN] Selected microphone '{}' unavailable for the meeting ({}); using the default", name, e);
                 None
@@ -286,9 +286,10 @@ pub fn start_dual_channel_capture(
     app_handle: AppHandle,
     stop_signal: Arc<AtomicBool>,
     mic_device: Option<String>,
+    loss: Arc<crate::audio::CaptureLoss>,
 ) -> Result<DualChannelCaptureHandle, String> {
 
-    let rig = start_rig(target, &stop_signal, mic_device.as_deref())?;
+    let rig = start_rig(target, &stop_signal, mic_device.as_deref(), loss.clone())?;
 
     let stop_combiner = stop_signal.clone();
     let stop_for_rig = stop_signal.clone();
@@ -379,7 +380,7 @@ pub fn start_dual_channel_capture(
                             new_pids
                         );
                         let (old_mic_rx, old_sys_rx) =
-                            restart_rig(&mut rig, DualChannelTarget::Process(pid), &stop_for_rig, mic_device.as_deref(), &app_handle);
+                            restart_rig(&mut rig, DualChannelTarget::Process(pid), &stop_for_rig, mic_device.as_deref(), &app_handle, loss.clone());
                         // Keep whatever the old session had already delivered.
                         while let Ok(frames) = old_mic_rx.try_recv() {
                             mic_deque.extend(frames);
@@ -408,6 +409,7 @@ pub fn start_dual_channel_capture(
                 if gap_filled_samples == 0 {
                     eprintln!("[WARN] A dual-channel track stopped delivering audio; recording silence for it meanwhile");
                 }
+                loss.gap_frames.fetch_add(filled as u64, Ordering::Relaxed);
                 gap_filled_samples += filled as u64;
             }
 
@@ -419,10 +421,13 @@ pub fn start_dual_channel_capture(
                     let (interleaved, mono_mix) = interleave_and_mix(&mut mic_deque, &mut sys_deque, CHUNK_SIZE);
                     level_samples += CHUNK_SIZE;
 
-                    if file_tx.try_send(interleaved).is_err() {
-                        dropped_file_samples += CHUNK_SIZE as u64;
+                    let before = loss.file_frames.load(Ordering::Relaxed);
+                    if loss.send_file(&file_tx, interleaved, 2) {
+                        let _ = app_handle.emit("recording-write-error", "Meeting recording queue overflowed; audio is incomplete and will be retained.");
                     }
+                    dropped_file_samples += loss.file_frames.load(Ordering::Relaxed) - before;
                     if whisper_tx.try_send(mono_mix).is_err() {
+                        loss.preview_frames.fetch_add(CHUNK_SIZE as u64, Ordering::Relaxed);
                         dropped_transcriber_samples += CHUNK_SIZE as u64;
                     }
                     if !warned_drop && (dropped_file_samples > 0 || dropped_transcriber_samples > 0) {
@@ -475,10 +480,13 @@ pub fn start_dual_channel_capture(
         let remaining = mic_deque.len().max(sys_deque.len());
         if remaining > 0 {
             let (interleaved, mono_mix) = interleave_and_mix(&mut mic_deque, &mut sys_deque, remaining);
-            if file_tx.try_send(interleaved).is_err() {
-                dropped_file_samples += remaining as u64;
+            let before = loss.file_frames.load(Ordering::Relaxed);
+            if loss.send_file(&file_tx, interleaved, 2) {
+                let _ = app_handle.emit("recording-write-error", "Meeting recording tail could not be written; audio is incomplete and will be retained.");
             }
+            dropped_file_samples += loss.file_frames.load(Ordering::Relaxed) - before;
             if whisper_tx.try_send(mono_mix).is_err() {
+                loss.preview_frames.fetch_add(remaining as u64, Ordering::Relaxed);
                 dropped_transcriber_samples += remaining as u64;
             }
         }
@@ -520,15 +528,16 @@ fn restart_rig(
     stop_signal: &Arc<AtomicBool>,
     mic_device: Option<&str>,
     app: &AppHandle,
+    loss: Arc<crate::audio::CaptureLoss>,
 ) -> (crossbeam_channel::Receiver<Vec<f32>>, crossbeam_channel::Receiver<Vec<f32>>) {
     // The crate allows one capture session at a time: stop before starting anew.
     // A cpal microphone has to be released too before the new rig reopens it.
     rig.session.stop();
     rig.mic_stop.store(true, Ordering::Relaxed);
-    let fresh = start_rig(target, stop_signal, mic_device).or_else(|e| {
+    let fresh = start_rig(target, stop_signal, mic_device, loss.clone()).or_else(|e| {
         eprintln!("[WARN] Restarting the meeting tap failed ({}); falling back to system audio", e);
         update_diagnostics(|d| d.fell_back_to_system = true);
-        start_rig(DualChannelTarget::System, stop_signal, mic_device)
+        start_rig(DualChannelTarget::System, stop_signal, mic_device, loss.clone())
     });
     match fresh {
         Ok(new_rig) => std::mem::replace(rig, new_rig).shutdown(),
@@ -561,6 +570,7 @@ fn spawn_named_mic_capture(
     name: &str,
     tx: Sender<Vec<f32>>,
     stops: [Arc<AtomicBool>; 2],
+    loss: Arc<crate::audio::CaptureLoss>,
 ) -> Result<Option<std::thread::JoinHandle<()>>, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
@@ -597,7 +607,10 @@ fn spawn_named_mic_capture(
                     let out = to_48k.push(data, channels, rate as f64);
                     if !out.is_empty() {
                         // Never block the audio callback; a full queue drops the chunk.
-                        let _ = tx.try_send(out);
+                        let frames = out.len();
+                        if tx.try_send(out).is_err() {
+                            loss.input_frames.fetch_add(frames as u64, Ordering::Relaxed);
+                        }
                     }
                 },
                 |e| eprintln!("[ERROR] Meeting microphone stream error: {}", e),
@@ -689,6 +702,7 @@ pub fn start_dual_channel_capture(
     _app_handle: AppHandle,
     _stop_signal: Arc<AtomicBool>,
     _mic_device: Option<String>,
+    _loss: Arc<crate::audio::CaptureLoss>,
 ) -> Result<DualChannelCaptureHandle, String> {
     Err("Dual-channel meeting audio capture is not supported on Linux".into())
 }
@@ -775,7 +789,7 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::bounded(4);
         let stops = [Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false))];
         // start_rig falls back to the default microphone on this error.
-        assert!(super::spawn_named_mic_capture("Taurscribe test mic that does not exist", tx, stops).is_err());
+        assert!(super::spawn_named_mic_capture("Taurscribe test mic that does not exist", tx, stops, Arc::new(crate::audio::CaptureLoss::default())).is_err());
     }
 
     #[test]

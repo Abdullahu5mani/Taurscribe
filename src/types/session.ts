@@ -39,6 +39,9 @@ export interface CommandResult<T> {
 
 /** What `stop_recording` returns (RecordingOutcome in recording.rs). */
 export interface RecordingOutcome {
+  /** Unrecoverable capture loss or a failed final pass; audio is kept. */
+  warnings: string[];
+  recording_path: string | null;
   transcript: string;
   /** Decided when the recording started: two-channel recordings are meetings. */
   kind: "dictation" | "meeting";

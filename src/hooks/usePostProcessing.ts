@@ -212,6 +212,18 @@ export function usePostProcessing(
             });
     }, [llmBackend, llmStatus, setHeaderStatus]);
 
+    // Storage moves release mapped weights. Reload only once the backend has
+    // finished the move (including rollback after a failed copy).
+    useEffect(() => {
+        let disposed = false;
+        let unlisten: (() => void) | undefined;
+        listen("grammar-llm-unloaded", () => {
+            appliedLlmBackendRef.current = null;
+            setLlmStatus("Not Loaded");
+        }).then((fn) => { if (disposed) fn(); else unlisten = fn; });
+        return () => { disposed = true; unlisten?.(); };
+    }, []);
+
     // ── Re-check LLM availability when models change (e.g. after download) ──
     useEffect(() => {
         if (llmStatus !== "Not Downloaded") return;

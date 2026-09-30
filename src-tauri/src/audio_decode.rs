@@ -215,7 +215,9 @@ where
 
 
 /// Decode Ogg Opus through the existing demuxer and bundled multistream decoder.
-/// Gapless packet bounds remove both Opus pre-skip and final encoder padding.
+/// Header pre-skip and the final granule count remove encoder delay/padding.
+/// Symphonia's first buffered page can lack packet trims, especially in short
+/// files, so apply those bounds to decoded positions rather than packet flags.
 fn decode_opus_packets<F>(path: &Path, mut on_packet: F) -> Result<(u64, u32, u32), String>
 where
     F: FnMut(&[f32], usize, u32, u64, Option<u64>) -> Result<(), String>,
@@ -232,11 +234,15 @@ where
         .find(|t| t.codec_params.codec == symphonia::core::codecs::CODEC_TYPE_OPUS)
         .ok_or("No Opus track found")?;
     let track_id = track.id;
-    let expected_frames = track.codec_params.n_frames;
+    let granule_frames = track.codec_params.n_frames;
     let header = track.codec_params.extra_data.as_deref().ok_or("Missing Opus header")?;
     if header.len() < 19 || &header[..8] != b"OpusHead" || header[8] > 15 {
         return Err("Invalid Opus identification header".into());
     }
+    let pre_skip = u16::from_le_bytes([header[10], header[11]]) as u64;
+    let expected_frames = granule_frames
+        .and_then(|frames| frames.checked_sub(pre_skip))
+        .ok_or("Cannot determine Opus audio length after pre-skip")?;
     let channels = header[9] as usize;
     let (streams, coupled, mapping) = match header[18] {
         0 if channels == 1 => (1, 0, vec![0]),
@@ -274,21 +280,80 @@ where
         if packet.data.is_empty() { return Err("Empty Opus audio packet".into()); }
         let frames = decoder.decode_float(&packet.data, &mut samples, false)
             .map_err(|e| format!("Opus audio packet could not be decoded: {e}"))?;
-        let start = packet.trim_start() as usize;
-        let trim_end = packet.trim_end() as usize;
-        if start + trim_end > frames { return Err("Invalid Opus packet trim bounds".into()); }
-        let end = frames - trim_end;
-        if start == end { continue; }
+        let start = pre_skip.saturating_sub(decoded_position).min(frames as u64) as usize;
+        let end = (pre_skip + expected_frames)
+            .saturating_sub(decoded_position).min(frames as u64) as usize;
+        decoded_position += frames as u64;
+        if end <= start { continue; }
         total += (end - start) as u64;
-        on_packet(&samples[start * channels..end * channels], channels, 48_000, total, expected_frames)?;
+        on_packet(&samples[start * channels..end * channels], channels, 48_000, total, Some(expected_frames))?;
     }
     if total == 0 { return Err("Opus audio file contains no decoded samples".into()); }
+    if total != expected_frames {
+        return Err(format!("Opus audio ended early: decoded {total} of {expected_frames} frames"));
+    }
     Ok((total, 48_000, channels as u32))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ogg_opus_preserves_gapless_bounds_and_channel_order() {
+        for channels in [1usize, 2, 6, 8] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/opus-{channels}ch.ogg"));
+            let mut interleaved = Vec::new();
+            let (frames, rate, decoded_channels) = decode_audio_packets(&path,
+                |samples, count, sr, _, _| {
+                    assert_eq!(count, channels);
+                    assert_eq!(sr, 48000);
+                    interleaved.extend_from_slice(samples);
+                    Ok(())
+                }).unwrap();
+            assert_eq!((frames, rate, decoded_channels), (10003, 48000, channels as u32));
+            assert_eq!(interleaved.len(), 10003 * channels);
+            assert!(interleaved.iter().all(|v| v.is_finite()));
+            // Each channel has its own frequency in standard speaker order.
+            // A mapping error changes which frequency dominates that channel.
+            for c in 0..channels {
+                let energy = |freq: f64| {
+                    let (mut re, mut im) = (0.0, 0.0);
+                    for n in 1000..9000 {
+                        let phase = 2.0 * std::f64::consts::PI * freq * n as f64 / 48000.0;
+                        let v = interleaved[n*channels+c] as f64;
+                        re += v * phase.cos(); im += v * phase.sin();
+                    }
+                    re*re + im*im
+                };
+                let wanted = energy((200+100*c) as f64);
+                assert!(wanted > 1000.0);
+                for other in 0..channels {
+                    if other != c { assert!(wanted > 20.0 * energy((200+100*other) as f64), "channel {c} mapped to {other}"); }
+                }
+            }
+            let (batch, _) = decode_audio_mono_f32(&path).unwrap();
+            let mut stream = Vec::new();
+            decode_audio_mono_stream(&path, |samples, _, _, _| {
+                stream.extend_from_slice(samples); Ok(())
+            }).unwrap();
+            assert_eq!(batch, stream);
+            assert_eq!(batch.len(), 10003);
+            let cancelled = decode_audio_mono_stream(&path, |_, _, _, _| Err("cancelled".into()));
+            assert_eq!(cancelled.unwrap_err(), "cancelled");
+        }
+    }
+
+    #[test]
+    fn ogg_opus_applies_header_gain() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let (base, _) = decode_audio_mono_f32(&fixtures.join("opus-1ch.ogg")).unwrap();
+        let (gain, _) = decode_audio_mono_f32(&fixtures.join("opus-gain.ogg")).unwrap();
+        assert_eq!(base.len(), gain.len());
+        let factor = 10.0_f32.powf(6.0/20.0);
+        assert!(base.iter().zip(&gain).all(|(a,b)| (a*factor-b).abs() < 0.00001));
+    }
 
     #[test]
     fn streamed_mono_matches_full_decode_and_reports_source_duration() {

@@ -782,6 +782,19 @@ pub async fn set_storage_location(
     }
     let llm = state.llm.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // Keep exclusion inside the worker too: if the command future is
+        // cancelled, spawn_blocking still runs to completion.
+        let _models_gate = models_gate;
+        let _models_move = _models_move;
+        let _recording_transition = _recording_transition;
+        let _move_in_progress = _move_in_progress;
+        let llm_unloaded = if area == Area::Models && move_files {
+            let engine = llm.lock().map_err(|e| e.to_string())?.take();
+            let unloaded = engine.is_some();
+            drop(engine); // release FlowScribe's mapped weights before moving files
+            unloaded
+        } else { false };
+        let result = (|| {
         let old = current_dir(area)?;
         let new = match &path {
             Some(p) => PathBuf::from(p),
@@ -872,6 +885,17 @@ pub async fn set_storage_location(
             let _ = app.emit("models-changed", ());
         }
         area_info(area)
+        })();
+        // Native unload happened even if copying failed. Publish it after all
+        // exclusion is released so the UI can reload from the effective folder.
+        drop(_models_gate);
+        drop(_models_move);
+        drop(_recording_transition);
+        drop(_move_in_progress);
+        if llm_unloaded {
+            let _ = app.emit("grammar-llm-unloaded", ());
+        }
+        result
     })
     .await
     .map_err(|e| e.to_string())?

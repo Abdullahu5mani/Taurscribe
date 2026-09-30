@@ -451,6 +451,11 @@ export function useRecording({
                 throw stopResult.error ?? new Error("Failed to stop recording");
             }
             const outcome = stopResult.data;
+            const captureWarning = (outcome.warnings ?? []).join(" ");
+            const recovery = outcome.recording_path ? ` Recording retained at ${outcome.recording_path}.` : "";
+            const captureNotice: SessionNotice | null = captureWarning
+                ? { level: "warning", code: "recording_incomplete", title: "Recording needs attention", message: captureWarning + recovery, sticky: true }
+                : null;
             let finalTrans = outcome.transcript;
 
             // Meeting recordings belong to the meetings area only: the backend
@@ -464,8 +469,9 @@ export function useRecording({
                 resetRecordingSession();
                 setProcessingTranscript(false);
                 await setTrayState("done", undefined, "Meeting saved to Meetings");
-                setSessionPhase?.("idle");
-                setHeaderStatus("Meeting recording saved to Meetings", 4000);
+                setSessionPhase?.(captureNotice ? "warning" : "idle");
+                showNotice(captureNotice);
+                setHeaderStatus(captureNotice ? "Meeting saved with incomplete audio — check the warning" : "Meeting recording saved to Meetings", 6000);
                 if (isOverlay) {
                     hideOverlay();
                 }
@@ -487,7 +493,7 @@ export function useRecording({
                 setProcessingTranscript(false);
                 await setTrayState("nothing_heard", undefined, "Recording too short");
                 setSessionPhase?.("warning");
-                showNotice({
+                showNotice(captureNotice ?? {
                     level: "warning",
                     code: "recording_too_short",
                     title: "Recording too short",
@@ -515,7 +521,7 @@ export function useRecording({
                 setProcessingTranscript(false);
                 await setTrayState("nothing_heard", undefined, "Nothing heard — check your microphone");
                 setSessionPhase?.("warning");
-                showNotice({
+                showNotice(captureNotice ?? {
                     level: "warning",
                     code: "nothing_heard",
                     title: "Nothing was heard",
@@ -597,6 +603,7 @@ export function useRecording({
                     });
                 } catch (e) {
                     console.warn("Failed to update transcript history (the recognized text is saved):", e);
+                    historyError = "The recognized text is saved, but the final edits could not be stored in history.";
                 }
                 onHistorySaved?.();
             } else if (outcome.history.status === "not_saved") {
@@ -622,8 +629,8 @@ export function useRecording({
                 }
             }
             const unsavedNotice: SessionNotice | null = historyError
-                ? { level: "warning", code: "history_not_saved", title: "Transcript not saved to history", message: historyError, sticky: true }
-                : null;
+                ? { level: "warning", code: "history_not_saved", title: "Transcript not saved to history", message: [historyError, captureNotice?.message].filter(Boolean).join(" "), sticky: true }
+                : captureNotice;
 
             if (pasteError) {
                 let headerMsg: string;
@@ -642,7 +649,7 @@ export function useRecording({
                     level: "warning",
                     code: pasteError.includes("secure_input") ? "paste_blocked_secure_input" : pasteError.includes("console") ? "paste_blocked_console" : "paste_failed",
                     title: "Transcript ready but paste was blocked",
-                    message: historyError ? `${headerMsg}. ${historyError}` : headerMsg,
+                    message: [headerMsg, unsavedNotice?.message].filter(Boolean).join(" "),
                     sticky: true,
                 });
                 if (showOverlay) {
@@ -660,7 +667,7 @@ export function useRecording({
                 // Clear the "Processing transcription..." status only when no
                 // grammar LM ran (the grammar branch already set its own message).
                 if (!enableGrammarLMRef.current) {
-                    setHeaderStatus("Done!", 900);
+                    setHeaderStatus(unsavedNotice ? unsavedNotice.title : "Done!", unsavedNotice ? 6000 : 900);
                 }
                 playPaste?.();
                 await setTrayState("done", undefined, finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : ""));

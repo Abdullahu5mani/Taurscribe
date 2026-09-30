@@ -3,6 +3,7 @@ import { renderHook } from "./hookHarness";
 
 type Call = { cmd: string; args?: Record<string, unknown> };
 let calls: Call[] = [];
+let unloaded: (() => void) | undefined;
 let initGate: Promise<void> = Promise.resolve();
 
 const realCore = { ...(await import("@tauri-apps/api/core")) };
@@ -19,7 +20,7 @@ mock.module("@tauri-apps/api/core", () => ({
     },
 }));
 const realEvent = { ...(await import("@tauri-apps/api/event")) };
-mock.module("@tauri-apps/api/event", () => ({ ...realEvent, listen: async () => () => {} }));
+mock.module("@tauri-apps/api/event", () => ({ ...realEvent, listen: async (name: string, callback: () => void) => { if (name === "grammar-llm-unloaded") unloaded = callback; return () => {}; } }));
 
 const { usePostProcessing } = await import("../../src/hooks/usePostProcessing");
 
@@ -73,4 +74,14 @@ test("the saved backend is used from the start, without a reload", async () => {
     await settle();
     expect(handle.current.llmStatus).toBe("Loaded");
     expect(llmCalls()).toEqual(["init:cpu"]);
+});
+
+test("a storage move unloading FlowScribe triggers reload on the selected backend", async () => {
+    const { handle, settle } = start({ enable_grammar_lm: true, llm_backend: "cpu" });
+    await settle();
+    expect(handle.current.llmStatus).toBe("Loaded");
+    unloaded?.();
+    await settle();
+    expect(llmCalls()).toEqual(["init:cpu", "init:cpu"]);
+    expect(handle.current.llmStatus).toBe("Loaded");
 });

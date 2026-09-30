@@ -12,6 +12,7 @@ unsafe impl Sync for SendStream {} // Can be accessed from multiple threads
 
 /// Keeps track of the tools needed while recording involves.
 pub struct RecordingHandle {
+    pub capture_loss: Arc<CaptureLoss>,
     pub stream: Option<SendStream>, // The actual connection to the microphone hardware (None in dual-channel mode)
     pub file_tx: Sender<Vec<f32>>,  // Pipe to send audio to the "File Writer" thread
     pub whisper_tx: Sender<Vec<f32>>, // Pipe to send audio to the "Whisper AI" thread
@@ -22,6 +23,34 @@ pub struct RecordingHandle {
     pub is_dual_channel: bool,
     pub dual_channel_stop: Option<Arc<AtomicBool>>,
     pub dual_channel_thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Per-session diagnostics shared by nonblocking callbacks and Stop. Durable
+/// audio loss must survive worker teardown and must never look like completion.
+#[derive(Default)]
+pub struct CaptureLoss {
+    pub file_frames: AtomicU64,
+    pub input_frames: AtomicU64,
+    pub gap_frames: AtomicU64,
+    pub preview_frames: AtomicU64,
+}
+
+impl CaptureLoss {
+    /// Returns true only for the first failed write-queue send, so the callback
+    /// can notify the UI once without blocking or flooding its event queue.
+    pub fn send_file(&self, tx: &Sender<Vec<f32>>, samples: Vec<f32>, channels: usize) -> bool {
+        let frames = samples.len() / channels.max(1);
+        tx.try_send(samples).is_err()
+            && self.file_frames.fetch_add(frames as u64, Ordering::Relaxed) == 0
+    }
+
+    pub fn warnings(&self) -> Vec<String> {
+        let file = self.file_frames.load(Ordering::Relaxed);
+        let input = self.input_frames.load(Ordering::Relaxed);
+        let gaps = self.gap_frames.load(Ordering::Relaxed);
+        if file == 0 && input == 0 && gaps == 0 { return Vec::new(); }
+        vec![format!("Recording is incomplete: {file} frames could not be written, {input} input frames were lost, and {gaps} frames were replaced with silence.")]
+    }
 }
 
 /// Sample formats `build_input_stream_f32` can open (everything it converts).
@@ -102,6 +131,29 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_file_queue_counts_frames_and_notifies_once() {
+        let loss = CaptureLoss::default();
+        let (tx, _rx) = crossbeam_channel::bounded(1);
+        assert!(!loss.send_file(&tx, vec![0.0; 1920], 2));
+        assert!(loss.send_file(&tx, vec![0.0; 1920], 2));
+        assert!(!loss.send_file(&tx, vec![0.0; 1920], 2));
+        assert_eq!(loss.file_frames.load(Ordering::Relaxed), 1920);
+        assert!(loss.warnings()[0].contains("1920 frames"));
+    }
+
+    #[test]
+    fn disconnected_writer_is_audio_loss_but_recoverable_preview_loss_is_not() {
+        let loss = CaptureLoss::default();
+        loss.preview_frames.store(5000, Ordering::Relaxed);
+        assert!(loss.warnings().is_empty());
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        drop(rx);
+        assert!(loss.send_file(&tx, vec![0.0; 160], 1));
+        assert_eq!(loss.file_frames.load(Ordering::Relaxed), 160);
+        assert_eq!(loss.warnings().len(), 1);
+    }
 
     #[test]
     fn integer_samples_convert_to_unit_range() {

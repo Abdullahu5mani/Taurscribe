@@ -339,12 +339,16 @@ async fn feed_meeting_handler(
     }
 
     let snippets_dir = meetings_dir.join("snippets");
-    let turns = crate::diarization::diarize_meeting_recording(
+    let turns = match crate::diarization::diarize_meeting_recording(
         &dest_path,
         &body.transcript,
         &snippets_dir,
         meeting_timestamp,
-    );
+    ) {
+        Ok(turns) => turns,
+        Err(e) => return error_response(StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Meeting processing failed: {e}; recording retained at {}", dest_path.display())),
+    };
 
     let duration_ms = if let Ok(reader) = hound::WavReader::open(&dest_path) {
         let spec = reader.spec();

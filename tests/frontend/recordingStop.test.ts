@@ -6,6 +6,7 @@ type Call = { cmd: string; args?: Record<string, unknown> };
 let calls: Call[] = [];
 let stopOutcome: RecordingOutcome;
 let failSave = false;
+let failUpdate = false;
 
 const realCore = { ...(await import("@tauri-apps/api/core")) };
 mock.module("@tauri-apps/api/core", () => ({
@@ -15,6 +16,9 @@ mock.module("@tauri-apps/api/core", () => ({
         switch (cmd) {
             case "stop_recording": return { ok: true, data: stopOutcome, error: null };
             case "type_text": return { ok: true, data: null, error: null };
+            case "update_transcript_history":
+                if (failUpdate) throw new Error("database locked");
+                return null;
             case "save_transcript_history":
                 if (failSave) throw new Error("database or disk is full");
                 return null;
@@ -74,6 +78,7 @@ beforeEach(() => {
     notices = [];
     phases = [];
     failSave = false;
+    failUpdate = false;
 });
 
 test("a dictation's history entry, saved by the backend, gets the final text", async () => {
@@ -115,4 +120,27 @@ test("a retried save that works clears the problem", async () => {
     expect(cmds()).toContain("save_transcript_history");
     expect(phases.at(-1)).toBe("success");
     expect(notices.at(-1)).toBeNull();
+});
+
+test("incomplete capture keeps a warning even when history and paste succeed", async () => {
+    await stop({ warnings: ["Recording is incomplete: 960 frames could not be written."], recording_path: "/tmp/recovery.wav" });
+    expect(cmds()).toContain("type_text");
+    expect(phases.at(-1)).toBe("warning");
+    expect(notices.at(-1)?.message).toContain("960 frames");
+    expect(notices.at(-1)?.message).toContain("/tmp/recovery.wav");
+});
+
+test("an incomplete meeting is not reported as a successfully completed recording", async () => {
+    await stop({ kind: "meeting", meeting_id: 9, history: { status: "skipped" }, warnings: ["Input audio was lost"], recording_path: "/tmp/meeting.wav" });
+    expect(cmds()).not.toContain("type_text");
+    expect(phases.at(-1)).toBe("warning");
+    expect(notices.at(-1)?.code).toBe("recording_incomplete");
+});
+
+ test("failed final history edits show a warning while retaining the backend transcript", async () => {
+    failUpdate = true;
+    await stop({});
+    expect(phases.at(-1)).toBe("warning");
+    expect(notices.at(-1)?.code).toBe("history_not_saved");
+    expect(notices.at(-1)?.message).toContain("recognized text is saved");
 });

@@ -309,23 +309,12 @@ fn summarize_report(report: &MemoryRegressionReport) {
 
         // Spike annotation
         if biggest_jump > 100 * 1024 * 1024 {
-            let is_first_inference = biggest_jump_label.contains("first transcription")
-                || biggest_jump_label.contains("first transcription");
-            let interpretation = if is_first_inference {
-                "likely CUDA/ORT memory-mapped at first inference — not additional system RAM"
-            } else {
-                "review snapshot above"
-            };
             eprintln!(
-                "  SPIKE     +{:.0} MB at \"{}\"",
-                bytes_to_mb(biggest_jump as u64),
-                biggest_jump_label,
+                "  SPIKE     +{:.0} MiB at \"{}\"",
+                bytes_to_mb(biggest_jump as u64), biggest_jump_label,
             );
-            eprintln!("            interpretation: {}", interpretation);
-            eprintln!(
-                "            working_set vs private: WS spike reflects GPU VRAM pages mapped \
-                into process address space — compare private_bytes for true RAM pressure"
-            );
+            eprintln!("            cold runtime caches and model allocations can both contribute; this snapshot alone does not identify their ownership");
+
         }
 
         // Leak check
@@ -383,9 +372,9 @@ fn summarize_report(report: &MemoryRegressionReport) {
     eprintln!(
         "[memory-test]  OVERALL: {}",
         if all_pass {
-            "✓ PASS — no leaks detected"
+            "✓ PASS — retained memory is within the configured bounds"
         } else {
-            "✗ FAIL — possible leak(s) above"
+            "✗ FAIL — retained memory exceeds a configured bound"
         }
     );
     eprintln!("[memory-test] ═══════════════════════════════════════════════════════");
@@ -683,7 +672,7 @@ fn memory_engine_regression() {
             let retained = after_unload_ws.saturating_sub(baseline_ws);
             assert!(
                 retained <= LEAK_THRESHOLD_BYTES,
-                "[memory-test] LEAK DETECTED in scenario '{}': \
+                "[memory-test] MEMORY RETENTION ABOVE BOUND in scenario '{}': \
                 after-unload WS={:.1} MB, baseline={:.1} MB, retained={:.1} MB (threshold={:.0} MB). \
                 Check engine unload paths.",
                 scenario.name,

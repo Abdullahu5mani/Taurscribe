@@ -556,6 +556,12 @@ mod vm_feature_tests {
     }
 }
 
+fn prepare_file_window_edges(mono: &mut Vec<f32>) {
+    // DC bias raises the adaptive RMS floor; correct it before either gate.
+    audio_preprocess::remove_dc(mono);
+    audio_preprocess::trim_file_buffer_edges_16k(mono);
+}
+
 fn transcribe_file_window(
     app: &AppHandle,
     path: &str,
@@ -567,11 +573,7 @@ fn transcribe_file_window(
     mut mono: Vec<f32>,
 ) -> Result<String, String> {
     emit_progress(app, path, 20, "decoding", None);
-    // DC bias raises the RMS noise floor. Remove it before either gate can
-    // discard speech; removing it after VAD cannot recover missing words.
-    audio_preprocess::remove_dc(&mut mono);
-    // Trim long edge silence before energy VAD.
-    audio_preprocess::trim_file_buffer_edges_16k(&mut mono);
+    prepare_file_window_edges(&mut mono);
 
     ensure_not_cancelled(app, path, &cancel)?;
 
@@ -751,6 +753,25 @@ fn transcribe_file_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dc_biased_speech_survives_file_edge_and_energy_gates() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/jfk.wav");
+        let (audio, rate) = crate::audio_decode::decode_audio_mono_f32(&path).unwrap();
+        let speech = audio_preprocess::resample_mono_to_16k(&audio, rate).unwrap();
+        let mut clean = vec![0.0; 16_000];
+        clean.extend(speech);
+        clean.extend(vec![0.0; 16_000]);
+        let mut biased: Vec<f32> = clean.iter().map(|s| s + 0.05).collect();
+        prepare_file_window_edges(&mut clean);
+        prepare_file_window_edges(&mut biased);
+        let clean = crate::vad::assemble_speech_audio(&clean, None).unwrap();
+        let biased = crate::vad::assemble_speech_audio(&biased, None).unwrap();
+        assert!(clean.len() > 80_000, "fixture must retain several seconds of speech");
+        assert_eq!(clean.len(), biased.len(), "DC bias must not truncate speech");
+        assert!(clean.iter().zip(&biased).all(|(a,b)| (a-b).abs() < 0.0001));
+    }
 
     #[test]
     fn same_path_jobs_cannot_replace_each_others_progress_identity() {

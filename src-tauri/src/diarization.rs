@@ -660,7 +660,7 @@ pub fn align_transcript_to_turns(
     sys_samples: &[f32],
     sample_rate: u32,
     transcriber: Option<TurnTranscriber<'_>>,
-) -> Vec<DiarizedTurn> {
+) -> Result<Vec<DiarizedTurn>, String> {
     let mut all_turns: Vec<(u64, u64, u8, String, String, Option<String>, Vec<String>)> = Vec::new();
 
     // 1. Process local mic turns (Channel 0 = You)
@@ -717,7 +717,7 @@ pub fn align_transcript_to_turns(
 
     // If no acoustic turns were found, create a fallback single turn
     if all_turns.is_empty() {
-        return vec![DiarizedTurn {
+        return Ok(vec![DiarizedTurn {
             speaker_id: "speaker_you".to_string(),
             speaker_name: "You".to_string(),
             start_ms: 0,
@@ -727,7 +727,7 @@ pub fn align_transcript_to_turns(
             snippet_path: None,
             candidate_snippets: Vec::new(),
             current_snippet_idx: 0,
-        }];
+        }]);
     }
 
     // Consolidate consecutive turns by the same speaker if gap is small (< 1500ms)
@@ -763,7 +763,10 @@ pub fn align_transcript_to_turns(
             if end <= start || end - start < min_len {
                 continue;
             }
-            if let Some(text) = transcribe(&source[start..end], sample_rate) {
+            let text = transcribe(&source[start..end], sample_rate).map_err(|e| {
+                format!("Could not transcribe {} at {}–{} ms: {e}", t.4, t.0, t.1)
+            })?;
+            {
                 let text = text.trim().to_string();
                 if !text.is_empty() {
                     per_turn.push(DiarizedTurn {
@@ -782,7 +785,7 @@ pub fn align_transcript_to_turns(
         }
         if !per_turn.is_empty() {
             println!("[DIARIZE] Transcribed {} turns from their own channels", per_turn.len());
-            return per_turn;
+            return Ok(per_turn);
         }
         println!("[DIARIZE] Per-turn transcription produced no text; falling back to transcript distribution");
     }
@@ -798,7 +801,7 @@ pub fn align_transcript_to_turns(
     }
     if sentences.is_empty() {
         let first = &consolidated[0];
-        return vec![DiarizedTurn {
+        return Ok(vec![DiarizedTurn {
             speaker_id: first.3.clone(),
             speaker_name: first.4.clone(),
             start_ms: first.0,
@@ -808,7 +811,7 @@ pub fn align_transcript_to_turns(
             snippet_path: first.5.clone(),
             candidate_snippets: first.6.clone(),
             current_snippet_idx: 0,
-        }];
+        }]);
     }
 
     // Duration-weighted assignment of sentences to speech turns
@@ -882,7 +885,7 @@ pub fn align_transcript_to_turns(
         });
     }
 
-    result_turns
+    Ok(result_turns)
 }
 
 /// Splits the call channel into speakers: Nemotron-3 Diarization when its model
@@ -948,8 +951,9 @@ fn turns_to_segments(
     (segments, profiles)
 }
 
-/// Transcribes one turn's audio (mono samples at the given rate); None/empty = no text.
-pub type TurnTranscriber<'a> = &'a mut dyn FnMut(&[f32], u32) -> Option<String>;
+/// Transcribes one turn's audio; an empty success means no speech, an error
+/// aborts completion so the caller keeps the stereo source for recovery.
+pub type TurnTranscriber<'a> = &'a mut dyn FnMut(&[f32], u32) -> Result<String, String>;
 
 /// Convenience pipeline: loads a recorded WAV (mono or stereo), extracts channels,
 /// detects speech segments, clusters remote callers, extracts 3s snippets, and aligns text.
@@ -958,7 +962,7 @@ pub fn diarize_meeting_recording(
     raw_transcript: &str,
     snippets_dir: &Path,
     meeting_id: i64,
-) -> Vec<DiarizedTurn> {
+) -> Result<Vec<DiarizedTurn>, String> {
     diarize_meeting_recording_with(wav_path, raw_transcript, snippets_dir, meeting_id, None)
 }
 
@@ -970,50 +974,39 @@ pub fn diarize_meeting_recording_with(
     snippets_dir: &Path,
     meeting_id: i64,
     transcriber: Option<TurnTranscriber<'_>>,
-) -> Vec<DiarizedTurn> {
-    let Ok(mut reader) = hound::WavReader::open(wav_path) else {
-        return vec![DiarizedTurn {
-            speaker_id: "speaker_you".to_string(),
-            speaker_name: "You".to_string(),
-            start_ms: 0,
-            end_ms: 1000,
-            channel: 0,
-            text: raw_transcript.trim().to_string(),
-            snippet_path: None,
-            candidate_snippets: Vec::new(),
-            current_snippet_idx: 0,
-        }];
-    };
-
+) -> Result<Vec<DiarizedTurn>, String> {
+    let mut reader = hound::WavReader::open(wav_path)
+        .map_err(|e| format!("Could not open meeting audio {}: {e}", wav_path.display()))?;
     let spec = reader.spec();
     let sample_rate = spec.sample_rate;
     let channels = spec.channels;
-
+    if sample_rate == 0 || channels == 0 {
+        return Err("Meeting audio has an invalid sample rate or channel count".into());
+    }
+    // Read directly into the channels: do not retain another full stereo copy,
+    // and never silently skip corrupt samples and shift the channels' alignment.
     let mut mic_samples = Vec::new();
     let mut sys_samples = Vec::new();
-
-    let raw_samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader.samples::<f32>().filter_map(Result::ok).collect(),
-        hound::SampleFormat::Int => {
-            let max_val = (1i64 << (spec.bits_per_sample.max(1) - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .filter_map(Result::ok)
-                .map(|s| (s as f32 / max_val).clamp(-1.0, 1.0))
-                .collect()
+    let mut push = |idx: usize, sample: f32| {
+        match idx % channels as usize {
+            0 => mic_samples.push(sample),
+            1 => sys_samples.push(sample),
+            _ => {},
         }
     };
-
-    if channels >= 2 {
-        for (idx, sample) in raw_samples.iter().enumerate() {
-            if idx % (channels as usize) == 0 {
-                mic_samples.push(*sample);
-            } else if idx % (channels as usize) == 1 {
-                sys_samples.push(*sample);
+    match spec.sample_format {
+        hound::SampleFormat::Float => {
+            for (idx, sample) in reader.samples::<f32>().enumerate() {
+                push(idx, sample.map_err(|e| format!("Could not read meeting audio: {e}"))?);
             }
         }
-    } else {
-        mic_samples = raw_samples;
+        hound::SampleFormat::Int => {
+            let max_val = (1i64 << (spec.bits_per_sample.max(1) - 1)) as f32;
+            for (idx, sample) in reader.samples::<i32>().enumerate() {
+                let sample = sample.map_err(|e| format!("Could not read meeting audio: {e}"))?;
+                push(idx, (sample as f32 / max_val).clamp(-1.0, 1.0));
+            }
+        }
     }
 
     let mic_turns = detect_channel_speech_segments(&mic_samples, sample_rate, 0, 0.015);
@@ -1124,6 +1117,40 @@ pub fn diarize_meeting_recording_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_middle_turn_cannot_become_a_completed_partial_meeting() {
+        let segments: Vec<_> = (0..3).map(|n| AudioTurnSegment {
+            channel: 0, start_sample: n * 48000, end_sample: n*48000+16000,
+            start_ms: n as u64 * 3000, end_ms: n as u64 * 3000+1000,
+            features: AcousticFeatures::default(), cluster_id: 0,
+        }).collect();
+        let mut calls = 0;
+        let mut transcribe = |_: &[f32], _: u32| {
+            calls += 1;
+            if calls == 2 { Err("native inference failed".into()) }
+            else { Ok("recognized turn".into()) }
+        };
+        let dir = std::env::temp_dir().join(format!("turn-failure-{}", rand::random::<u64>()));
+        let result = align_transcript_to_turns(&segments, &[], &[], "preview", &dir,
+            1, &vec![0.1; 112000], &[], 16000, Some(&mut transcribe));
+        let error = result.unwrap_err();
+        assert!(error.contains("native inference failed"));
+        assert!(error.contains("3000") && error.contains("4000"));
+        assert_eq!(calls, 2, "stop at failed turn instead of dropping it");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn valid_empty_turn_is_not_an_inference_failure() {
+        let seg = AudioTurnSegment { channel: 0, start_sample: 0, end_sample: 16000,
+            start_ms: 0, end_ms: 1000, features: AcousticFeatures::default(), cluster_id: 0 };
+        let mut transcribe = |_: &[f32], _: u32| Ok(String::new());
+        let dir = std::env::temp_dir().join(format!("empty-turn-{}", rand::random::<u64>()));
+        assert!(align_transcript_to_turns(&[seg], &[], &[], "", &dir, 1,
+            &vec![0.0; 16000], &[], 16000, Some(&mut transcribe)).is_ok());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn test_extract_acoustic_features_synthetic() {
@@ -1271,7 +1298,7 @@ mod tests {
             &sys_dummy,
             48000,
             None,
-        );
+        ).unwrap();
 
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].speaker_name, "You");
@@ -1315,7 +1342,7 @@ mod tests {
         let profiles = cluster_remote_turns(&mut remote.clone(), 0.40);
         let text = "also a popular contrivance whereby love making may be suspended he hoped there would be stew for dinner turnips and carrots and bruised potatoes and fat mutton pieces to be ladled out in thick peppered flour fattened sauce";
         let dir = std::env::temp_dir().join(format!("taurscribe_align_{}", std::process::id()));
-        let turns = align_transcript_to_turns(&mic, &remote, &profiles, text, &dir, 1, &[], &[], 16_000, None);
+        let turns = align_transcript_to_turns(&mic, &remote, &profiles, text, &dir, 1, &[], &[], 16_000, None).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(turns.iter().any(|t| t.channel == 0) && turns.iter().any(|t| t.channel == 1),
                 "both speakers kept: {:?}", turns.iter().map(|t| (t.channel, t.text.len())).collect::<Vec<_>>());
@@ -1436,15 +1463,15 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
 
         let mut calls = 0;
-        let mut fake = |samples: &[f32], _rate: u32| -> Option<String> {
+        let mut fake = |samples: &[f32], _rate: u32| -> Result<String, String> {
             calls += 1;
             let mean = samples.iter().sum::<f32>() / samples.len() as f32;
-            Some(if (mean - 0.1).abs() < 0.01 { "said on mic".into() } else { "said on call".into() })
+            Ok(if (mean - 0.1).abs() < 0.01 { "said on mic".into() } else { "said on call".into() })
         };
         let turns = align_transcript_to_turns(
             &mic_turns, &remote_turns, &[], "ignored when per-turn text exists",
             &dir, 1, &mic, &sys, rate, Some(&mut fake),
-        );
+        ).unwrap();
 
         assert_eq!(calls, 2);
         assert_eq!(turns.len(), 2);

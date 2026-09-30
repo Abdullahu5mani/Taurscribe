@@ -9,6 +9,19 @@ pub struct ProcessMemoryStats {
     pub source: String,
 }
 
+impl ProcessMemoryStats {
+    /// The legacy field name is kept for report compatibility; Darwin reports
+    /// physical footprint, including charged compressed memory, rather than RSS.
+    pub fn memory_metric_name(&self) -> &'static str {
+        match self.source.as_str() {
+            "darwin_task_vm_info" => "physical_footprint",
+            "windows_psapi" => "working_set",
+            "sysinfo" => "resident_memory",
+            _ => "unavailable_memory",
+        }
+    }
+}
+
 fn mb(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
 }
@@ -50,8 +63,9 @@ fn print_process_memory_line(label: &str, stats: &ProcessMemoryStats, sizes: &[(
         format!(" | {joined}")
     };
     println!(
-        "[MEMORY] {} | working_set={:.1} MB | private={} | virtual={} | peak_ws={} | source={}{}",
+        "[MEMORY] {} | {}={:.1} MiB | private={} | virtual={} | peak_ws={} | source={}{}",
         label,
+        stats.memory_metric_name(),
         mb(stats.working_set_bytes),
         private_mb
             .map(|v| format!("{v:.1} MB"))

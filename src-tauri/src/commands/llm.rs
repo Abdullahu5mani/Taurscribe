@@ -25,31 +25,25 @@ pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<Str
         return Err("The models folder is being moved; FlowScribe loads once the move finishes".into());
     }
 
-    // Check if already loaded
-    {
-        let llm_guard = state.llm.lock().unwrap();
-        if llm_guard.is_some() {
+    let llm_handle = state.llm.clone();
+    // The worker owns both guards through publication. Cancelling the command
+    // cannot allow a relocation or second load while native loading continues.
+    tauri::async_runtime::spawn_blocking(move || {
+        let _loading = _loading;
+        let _model_operation = _model_operation;
+        let mut llm = llm_handle.lock().map_err(|e| e.to_string())?;
+        if llm.is_some() {
             return Ok("LLM already initialized".to_string());
         }
-    }
+        let engine = LLMEngine::new(use_gpu)
+            .map_err(|e| format!("Failed to load LLM: {e}"))?;
+        *llm = Some(engine);
+        println!("[SUCCESS] Grammar LLM initialized!");
+        Ok("Grammar LLM initialized successfully".to_string())
+    })
+    .await
+    .map_err(|e| format!("JoinError: {e}"))?
 
-    // Load in a blocking task since it's heavy
-    let result = tauri::async_runtime::spawn_blocking(move || LLMEngine::new(use_gpu))
-        .await
-        .map_err(|e| format!("JoinError: {}", e))?;
-
-    match result {
-        Ok(engine) => {
-            let mut llm_guard = state.llm.lock().unwrap();
-            *llm_guard = Some(engine);
-            println!("[SUCCESS] Grammar LLM initialized!");
-            Ok("Grammar LLM initialized successfully".to_string())
-        }
-        Err(e) => {
-            eprintln!("[ERROR] Failed to load LLM: {}", e);
-            Err(format!("Failed to load LLM: {}", e))
-        }
-    }
 }
 
 
@@ -93,7 +87,8 @@ pub async fn correct_text(
     };
 
     let output = tauri::async_runtime::spawn_blocking(move || {
-        let mut llm_guard = llm_handle.lock().unwrap();
+        let _model_operation = _model_operation;
+        let mut llm_guard = llm_handle.lock().map_err(|e| e.to_string())?;
         if let Some(engine) = llm_guard.as_mut() {
             println!(
                 "[LLM] Cleaning transcript (engine={}, level={}, app={}, vocab={})",
