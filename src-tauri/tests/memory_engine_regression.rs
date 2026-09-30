@@ -7,18 +7,21 @@
 //! - explicit unload verification after each sequence
 //!
 //! Requires:
-//! - `jfk.wav` at `tests/fixtures/jfk.wav`, repo root, or `JFK_WAV`
-//! - Whisper / Granite models installed under `%LOCALAPPDATA%\Taurscribe\models`
+//! - Checked-in `taurscribe-runtime/samples/jfk.wav` (or `JFK_WAV` override)
+//! - Whisper / Granite models installed in the platform Taurscribe models directory
 //!
 //! Run with:
 //!   cargo test memory_engine_regression -- --ignored --nocapture
 //!
 //! Optional env vars:
-//! - `TAURSCRIBE_ASR_SMOKE_SKIP=1` skip the test
 //! - `TAURSCRIBE_MEMORY_REPORT=path.json` write a JSON report
 //! - `TAURSCRIBE_MEMORY_FORCE_CPU=1` force CPU loads where supported
 
 use std::fs;
+#[path = "support/asr_reference.rs"]
+mod asr_reference;
+use asr_reference::check_transcript;
+
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -113,7 +116,7 @@ fn resolve_jfk_wav() -> Option<PathBuf> {
         }
     }
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    for rel in ["tests/fixtures/jfk.wav", "../jfk.wav"] {
+    for rel in ["../taurscribe-runtime/samples/jfk.wav", "tests/fixtures/jfk.wav", "../jfk.wav"] {
         let p = manifest.join(rel);
         if p.is_file() {
             return Some(p);
@@ -405,11 +408,11 @@ fn run_whisper_cycle(
     snapshots.push(snapshot("whisper after initialize"));
 
     let text1 = w.transcribe_audio_data(pcm, None)?;
-    notes.push(format!("first transcript chars={}", text1.len()));
+    notes.push(format!("first transcript WER={:.3}", check_transcript("Whisper", &text1)?));
     snapshots.push(snapshot("whisper after first transcription"));
 
     let text2 = w.transcribe_audio_data(pcm, None)?;
-    notes.push(format!("second transcript chars={}", text2.len()));
+    notes.push(format!("second transcript WER={:.3}", check_transcript("Whisper", &text2)?));
     snapshots.push(snapshot("whisper after second transcription"));
 
     w.unload();
@@ -463,13 +466,13 @@ fn run_granite_load_path_cycle(
     snapshots.push(snapshot(format!("granite after initialize ({load_path})")));
 
     let text1 = p.transcribe_chunk(pcm, 16000, None)?;
-    notes.push(format!("first transcript chars={}", text1.len()));
+    notes.push(format!("first transcript WER={:.3}", check_transcript(name, &text1)?));
     snapshots.push(snapshot(format!(
         "granite after first transcription ({load_path})"
     )));
 
     let text2 = p.transcribe_chunk(pcm, 16000, None)?;
-    notes.push(format!("second transcript chars={}", text2.len()));
+    notes.push(format!("second transcript WER={:.3}", check_transcript(name, &text2)?));
     snapshots.push(snapshot(format!(
         "granite after second transcription ({load_path})"
     )));
@@ -509,7 +512,7 @@ fn run_switch_sequence(
                 w.initialize(Some(whisper_model_id), force_cpu)?;
                 snapshots.push(snapshot("after whisper init"));
                 let text = w.transcribe_audio_data(pcm, None)?;
-                notes.push(format!("whisper transcript chars={}", text.len()));
+                notes.push(format!("whisper transcript WER={:.3}", check_transcript("Whisper switch", &text)?));
                 snapshots.push(snapshot("after whisper transcription"));
             }
             "granite" => {
@@ -518,7 +521,7 @@ fn run_switch_sequence(
                 p.initialize(Some(granite_model_id), force_cpu)?;
                 snapshots.push(snapshot("after granite init"));
                 let text = p.transcribe_chunk(pcm, 16000, None)?;
-                notes.push(format!("granite transcript chars={}", text.len()));
+                notes.push(format!("granite transcript WER={:.3}", check_transcript("Granite switch", &text)?));
                 snapshots.push(snapshot("after granite transcription"));
             }
             other => return Err(format!("unknown switch step: {other}")),
@@ -545,11 +548,6 @@ fn run_switch_sequence(
 #[test]
 #[ignore = "Needs JFK fixture + installed Whisper and Granite models. Run with --ignored --nocapture."]
 fn memory_engine_regression() {
-    if std::env::var("TAURSCRIBE_ASR_SMOKE_SKIP").as_deref() == Ok("1") {
-        eprintln!("SKIP memory_engine_regression (TAURSCRIBE_ASR_SMOKE_SKIP=1)");
-        return;
-    }
-
     let force_cpu = std::env::var("TAURSCRIBE_MEMORY_FORCE_CPU").as_deref() == Ok("1");
     let (fixture_path, pcm) =
         jfk_pcm16_preprocessed_for_asr().unwrap_or_else(|e| panic!("fixture error: {e}"));

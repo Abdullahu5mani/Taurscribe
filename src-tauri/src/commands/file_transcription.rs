@@ -790,7 +790,7 @@ mod tests {
 
     #[test]
     fn dc_biased_speech_survives_file_edge_and_energy_gates() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jfk.wav");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../taurscribe-runtime/samples/jfk.wav");
         let (audio, rate) = crate::audio_decode::decode_audio_mono_f32(&path).unwrap();
         let speech = audio_preprocess::resample_mono_to_16k(&audio, rate).unwrap();
         let mut clean = vec![0.0; 16_000];

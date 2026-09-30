@@ -1,18 +1,37 @@
-//! Integration smoke test: runs preprocessed `jfk.wav` through Whisper and Granite.
+//! Fixed-fixture accuracy tests: preprocessed `jfk.wav` through installed engines.
 //!
 //! Requires:
-//! - `jfk.wav` at `tests/fixtures/jfk.wav`, repo root, or `JFK_WAV` env var
-//! - **Whisper**: at least one `ggml-*.bin` in `%LOCALAPPDATA%\Taurscribe\models`
-//! - **Granite**: a detected ONNX bundle under the same models dir
+//! - The checked-in `taurscribe-runtime/samples/jfk.wav` (or `JFK_WAV` override)
+//! - **Whisper**: at least one installed ggml model in Taurscribe's models dir
+//! - **Granite**: an installed Granite GGUF bundle in the same models dir
+//! - **Qwen3**: an installed Qwen3-ASR GGUF bundle for its separate test
 //!
 //! The smoke test is `#[ignore]` by default. Run with:
 //!   cargo test jfk_audio_through_whisper_and_granite -- --ignored --nocapture
 //!
-//! Set `TAURSCRIBE_ASR_SMOKE_SKIP=1` to no-op pass when models are absent.
+//! An explicitly requested run fails if a requested engine or the fixture is missing.
 
 use std::path::{Path, PathBuf};
 use taurscribe_lib::gguf_asr::GgufAsrManager;
 use taurscribe_lib::whisper::WhisperManager;
+
+#[path = "support/asr_reference.rs"]
+mod asr_reference;
+use asr_reference::{check_transcript, word_error_rate, JFK_REFERENCE};
+
+#[test]
+fn transcript_metric_ignores_case_and_punctuation_but_penalizes_missing_words() {
+    assert_eq!(word_error_rate("Ask not, Americans!", "ASK NOT AMERICANS."), 0.0);
+    assert_eq!(word_error_rate("a b c d", "a c d"), 0.25);
+    assert_eq!(word_error_rate("a b c d", "a b changed d extra"), 0.5);
+}
+
+#[test]
+fn unrelated_nonempty_output_cannot_pass_the_asr_smoke_test() {
+    assert!(check_transcript("test", "hello world").is_err());
+    assert!(check_transcript("test", "").is_err());
+    assert!(check_transcript("test", JFK_REFERENCE).is_ok());
+}
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -25,7 +44,7 @@ fn resolve_jfk_wav() -> Option<PathBuf> {
         }
     }
     let m = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    for rel in ["tests/fixtures/jfk.wav", "../jfk.wav"] {
+    for rel in ["../taurscribe-runtime/samples/jfk.wav", "tests/fixtures/jfk.wav", "../jfk.wav"] {
         let p = m.join(rel);
         if p.is_file() {
             return Some(p);
@@ -104,13 +123,23 @@ fn jfk_pcm16_preprocessed_for_asr() -> Result<Vec<f32>, String> {
 // ── Smoke test ────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "Needs jfk.wav + Whisper, Granite in %LOCALAPPDATA%/Taurscribe/models. Run with --ignored."]
-fn jfk_audio_through_whisper_and_granite() {
-    if std::env::var("TAURSCRIBE_ASR_SMOKE_SKIP").as_deref() == Ok("1") {
-        eprintln!("SKIP jfk ASR smoke (TAURSCRIBE_ASR_SMOKE_SKIP=1)");
-        return;
-    }
+#[ignore = "Needs an installed Qwen3-ASR model. Run with --ignored --nocapture."]
+fn jfk_audio_through_qwen3() {
+    let pcm = jfk_pcm16_preprocessed_for_asr().unwrap_or_else(|e| panic!("{e}"));
+    let mut manager = GgufAsrManager::qwen3();
+    let models = manager.list_available_models().expect("list installed Qwen3 models");
+    let id = &models.first().expect("install a Qwen3-ASR model before explicitly running this test").id;
+    manager.initialize(Some(id), false).expect("initialize Qwen3");
+    eprintln!("Qwen3 model: {id}; backend: {}", manager.get_status().backend);
+    let result = manager.transcribe_chunk(&pcm, 16000, None);
+    manager.unload();
+    assert!(!manager.get_status().loaded);
+    check_transcript("Qwen3", &result.expect("transcribe Qwen3 fixture")).unwrap();
+}
 
+#[test]
+#[ignore = "Needs installed Whisper and Granite models. Run with --ignored --nocapture."]
+fn jfk_audio_through_whisper_and_granite() {
     let pcm = jfk_pcm16_preprocessed_for_asr().unwrap_or_else(|e| panic!("{e}"));
     assert!(
         pcm.len() > 8000,
@@ -124,13 +153,11 @@ fn jfk_audio_through_whisper_and_granite() {
     match WhisperManager::list_available_models() {
         Ok(models) if !models.is_empty() => {
             let id = models[0].id.clone();
+            eprintln!("Whisper model: {id}");
             let mut w = WhisperManager::new();
             match w.initialize(Some(id.as_str()), true) {
                 Ok(_) => match w.transcribe_audio_data(&pcm, None) {
-                    Ok(text) if text.trim().is_empty() => {
-                        failures.push("Whisper: empty transcript".into())
-                    }
-                    Ok(_) => {}
+                    Ok(text) => if let Err(e) = check_transcript("Whisper", &text) { failures.push(e); },
                     Err(e) => failures.push(format!("Whisper transcribe: {e}")),
                 },
                 Err(e) => failures.push(format!("Whisper init ({id}): {e}")),
@@ -146,13 +173,12 @@ fn jfk_audio_through_whisper_and_granite() {
     // ── Granite ──────────────────────────────────────────────────────────────
     match GgufAsrManager::granite().list_available_models() {
         Ok(models) if !models.is_empty() => {
+            let id = models[0].id.clone();
+            eprintln!("Granite model: {id}");
             let mut p = GgufAsrManager::granite();
-            match p.initialize(None, true) {
+            match p.initialize(Some(id.as_str()), true) {
                 Ok(_) => match p.transcribe_chunk(&pcm, 16000, None) {
-                    Ok(text) if text.trim().is_empty() => {
-                        failures.push("Granite: empty transcript".into())
-                    }
-                    Ok(_) => {}
+                    Ok(text) => if let Err(e) = check_transcript("Granite", &text) { failures.push(e); },
                     Err(e) => failures.push(format!("Granite transcribe: {e}")),
                 },
                 Err(e) => failures.push(format!("Granite init: {e}")),
@@ -160,7 +186,7 @@ fn jfk_audio_through_whisper_and_granite() {
             p.unload();
         }
         Ok(_) => failures
-            .push("Granite: no ONNX bundle in models dir (download Granite/Granite Speech 5)".into()),
+            .push("Granite: no GGUF bundle in models dir (download Granite Speech 5)".into()),
         Err(e) => failures.push(format!("Granite list_models: {e}")),
     }
 

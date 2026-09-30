@@ -106,6 +106,8 @@ export function useRecording({
     const meetingSessionRef = useRef(false);
     const isProcessingTranscriptRef = useRef(false);
     const isPausedRef = useRef(false);
+    // Pause/resume commands may settle after Stop or after a new session begins.
+    const recordingGenerationRef = useRef(0);
     const recordingStartTimeRef = useRef(0);
     const hotkeySessionRef = useRef(false);
     const overlayHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -208,12 +210,14 @@ export function useRecording({
         const unlistenPromise = listen<{ is_recording: boolean; is_dual_channel: boolean }>("recording-state", (event) => {
             const { is_recording, is_dual_channel } = event.payload;
             if (is_recording && !isRecordingRef.current) {
+                recordingGenerationRef.current += 1;
                 setIsRecording(true);
                 isRecordingRef.current = true;
                 setIsDualChannelRecording(is_dual_channel);
                 meetingSessionRef.current = is_dual_channel;
                 setSessionPhase?.("recording");
             } else if (!is_recording && isRecordingRef.current) {
+                recordingGenerationRef.current += 1;
                 setIsRecording(false);
                 isRecordingRef.current = false;
                 resetRecordingSession();
@@ -228,8 +232,8 @@ export function useRecording({
 
     useEffect(() => {
         const unlistenPromise = listen<{ mic: number; system: number }>("dual-audio-levels", (event) => {
+            if (!isRecordingRef.current || !meetingSessionRef.current) return;
             setDualLevels(event.payload);
-            setIsDualChannelRecording(true);
         });
         return () => {
             unlistenPromise.then((unlisten) => unlisten());
@@ -334,6 +338,7 @@ export function useRecording({
             recordingStartTimeRef.current = Date.now();
             setIsRecording(true);
             isRecordingRef.current = true;
+            setIsDualChannelRecording(isDual);
             setSessionPhase?.("recording");
             showNotice(null);
             if (fromHotkey) {
@@ -382,6 +387,7 @@ export function useRecording({
     const handleStartRecording = async (fromHotkey = false, audioSource?: string) => {
         if (startingRef.current || isRecordingRef.current || isProcessingTranscriptRef.current) return;
         startingRef.current = true;
+        recordingGenerationRef.current += 1;
         try {
             await startRecordingOnce(fromHotkey, audioSource);
         } finally {
@@ -391,8 +397,10 @@ export function useRecording({
 
     const handlePauseRecording = async () => {
         if (!isRecordingRef.current || isPausedRef.current || isProcessingTranscriptRef.current) return;
+        const generation = recordingGenerationRef.current;
         try {
             const result = await invoke<CommandResult<string>>("pause_recording");
+            if (generation !== recordingGenerationRef.current) return;
             if (!result.ok) throw result.error?.message ?? "not paused";
             setIsPaused(true);
             isPausedRef.current = true;
@@ -402,14 +410,17 @@ export function useRecording({
             setSessionPhase?.("paused");
             await emitOverlayState("paused", liveTranscriptRef.current);
         } catch (e) {
+            if (generation !== recordingGenerationRef.current) return;
             setHeaderStatus("Couldn't pause recording: " + e, 4000);
         }
     };
 
     const handleResumeRecording = async () => {
         if (!isRecordingRef.current || !isPausedRef.current || isProcessingTranscriptRef.current) return;
+        const generation = recordingGenerationRef.current;
         try {
             const result = await invoke<CommandResult<string>>("resume_recording");
+            if (generation !== recordingGenerationRef.current) return;
             if (!result.ok) throw result.error?.message ?? "not resumed";
             settlePauseWindow();
             setIsPaused(false);
@@ -419,11 +430,14 @@ export function useRecording({
             setSessionPhase?.("recording");
             await emitOverlayState("recording", liveTranscriptRef.current);
         } catch (e) {
+            if (generation !== recordingGenerationRef.current) return;
             setHeaderStatus("Couldn't resume recording: " + e, 4000);
         }
     };
 
     const handleStopRecording = async () => {
+        if (isProcessingTranscriptRef.current) return;
+        recordingGenerationRef.current += 1;
         const currentEngine = activeEngineRef.current;
         const processingStartMs = Date.now();
         const isOverlay = hotkeySessionRef.current;              // true for any hotkey session
@@ -457,6 +471,8 @@ export function useRecording({
                 ? { level: "warning", code: "recording_incomplete", title: "Recording needs attention", message: captureWarning + recovery, sticky: true }
                 : null;
             let finalTrans = outcome.transcript;
+            let grammarNotice: SessionNotice | null = null;
+            let grammarApplied = false;
 
             // Meeting recordings belong to the meetings area only: the backend
             // saves and processes them there, and says which kind this was.
@@ -548,16 +564,18 @@ export function useRecording({
                 try {
                     const activeStyle = transcriptionStyleRef.current;
                     finalTrans = await invoke("correct_text", { text: finalTrans, style: activeStyle });
+                    grammarApplied = true;
                     setHeaderStatus("Transcribed & Corrected!");
                 } catch (e) {
                     setHeaderStatus("Transcript ready — grammar step failed: " + e, 5000);
-                    showNotice({
+                    grammarNotice = {
                         level: "warning",
                         code: "unknown",
                         title: "Grammar correction failed",
                         message: "The transcript is ready, but the grammar correction step failed.",
                         sticky: true,
-                    });
+                    };
+                    showNotice(grammarNotice);
                 }
             }
 
@@ -598,7 +616,7 @@ export function useRecording({
                     await invoke("update_transcript_history", {
                         id: outcome.history.id,
                         transcript: finalTrans,
-                        grammarLlmUsed: enableGrammarLMRef.current,
+                        grammarLlmUsed: grammarApplied,
                         processingTimeMs: totalMs,
                     });
                 } catch (e) {
@@ -616,7 +634,7 @@ export function useRecording({
                         transcript: finalTrans,
                         engine: currentEngine,
                         durationMs: recordingDurationMs,
-                        grammarLlmUsed: enableGrammarLMRef.current,
+                        grammarLlmUsed: grammarApplied,
                         processingTimeMs: totalMs,
                         modelId: activeModelId ?? null,
                         audioSource: "microphone",
@@ -629,8 +647,10 @@ export function useRecording({
                 }
             }
             const unsavedNotice: SessionNotice | null = historyError
-                ? { level: "warning", code: "history_not_saved", title: outcome.history.status === "saved" ? "Final edits not saved to history" : "Transcript not saved to history", message: [historyError, captureNotice?.message].filter(Boolean).join(" "), sticky: true }
-                : captureNotice;
+                ? { level: "warning", code: "history_not_saved", title: outcome.history.status === "saved" ? "Final edits not saved to history" : "Transcript not saved to history", message: [historyError, captureNotice?.message, grammarNotice?.message].filter(Boolean).join(" "), sticky: true }
+                : captureNotice
+                    ? { ...captureNotice, message: [captureNotice.message, grammarNotice?.message].filter(Boolean).join(" ") }
+                    : grammarNotice;
 
             if (pasteError) {
                 let headerMsg: string;
@@ -725,6 +745,7 @@ export function useRecording({
         clearPendingOverlayHide();
         try {
             await invoke("cancel_recording");
+            recordingGenerationRef.current += 1;
             if (muteBackgroundAudioRef.current) {
                 await invoke("unmute_system_audio").catch(() => {});
             }
