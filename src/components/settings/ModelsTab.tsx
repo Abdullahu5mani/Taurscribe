@@ -20,6 +20,17 @@ const WHISPER_LANGUAGES: { value: WhisperLanguage; label: string; description: s
     { value: 'english', label: 'English', description: 'Best if you only dictate English.' },
     { value: 'multilingual', label: 'Multilingual', description: 'Use this for non-English or mixed-language speech.' },
 ];
+/** What multilingual Whisper models are told the speech is (settings key `whisper_language`, read by whisper.rs). */
+const SPOKEN_LANGUAGES: { value: string; label: string }[] = [
+    { value: 'system', label: 'Same as my computer' },
+    { value: 'auto', label: 'Detect automatically' },
+    { value: 'en', label: 'English' }, { value: 'es', label: 'Spanish' }, { value: 'fr', label: 'French' },
+    { value: 'de', label: 'German' }, { value: 'it', label: 'Italian' }, { value: 'pt', label: 'Portuguese' },
+    { value: 'nl', label: 'Dutch' }, { value: 'pl', label: 'Polish' }, { value: 'ru', label: 'Russian' },
+    { value: 'uk', label: 'Ukrainian' }, { value: 'tr', label: 'Turkish' }, { value: 'ar', label: 'Arabic' },
+    { value: 'hi', label: 'Hindi' }, { value: 'ur', label: 'Urdu' }, { value: 'ja', label: 'Japanese' },
+    { value: 'ko', label: 'Korean' }, { value: 'zh', label: 'Chinese' }, { value: 'sv', label: 'Swedish' },
+];
 const WHISPER_OPTIMIZATIONS: { value: WhisperOptimization; label: string; description: string }[] = [
     { value: 'quantized', label: 'Quantized', description: 'Smaller download and lower RAM. Slightly less accurate.' },
     { value: 'full', label: 'Full precision', description: 'Largest file. Best quality and best CoreML pairing on Mac.' },
@@ -107,6 +118,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
     const [useCase, setUseCase] = useState<OnboardingUseCase>('quick_notes');
     const [autoUnloadTimeout, setAutoUnloadTimeout] = useState<number>(1800);
+    const [spokenLanguage, setSpokenLanguage] = useState('system');
     const hydratedTierRef = useRef(false);
     const [pulseModelIds, setPulseModelIds] = useState<Set<string>>(new Set());
     const whisperGroupRef = useRef<HTMLDivElement>(null);
@@ -121,6 +133,8 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             .then(async (store) => {
                 const savedUseCase = await store.get<OnboardingUseCase>('onboarding_use_case');
                 if (savedUseCase) setUseCase(savedUseCase);
+                const savedLanguage = await store.get<string>('whisper_language');
+                if (savedLanguage) setSpokenLanguage(savedLanguage);
                 const savedTimeout = await store.get<number>('auto_unload_timeout_secs');
                 if (savedTimeout !== null && savedTimeout !== undefined) {
                     setAutoUnloadTimeout(savedTimeout);
@@ -138,6 +152,17 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
             await store.save();
         } catch (e) {
             console.error('Failed to save auto-unload timeout:', e);
+        }
+    };
+
+    const handleSpokenLanguage = async (value: string) => {
+        setSpokenLanguage(value);
+        try {
+            const store = await Store.load('settings.json');
+            await store.set('whisper_language', value);
+            await store.save();
+        } catch (e) {
+            console.error('Failed to save spoken language:', e);
         }
     };
 
@@ -408,6 +433,28 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                             <ModelRow model={selectedCoremlModel} {...rowProps} />
                         </div>
                     )}
+                </div>
+
+                <div className="setting-card" id="whisper-spoken-language" style={{ marginTop: '12px' }}>
+                    <div className="setting-card-header">
+                        <span className="setting-card-label">Spoken language</span>
+                        <select
+                            id="whisper-spoken-language-select"
+                            data-testid="whisper-spoken-language-select"
+                            aria-label="Language you speak, for multilingual Whisper models"
+                            value={spokenLanguage}
+                            onChange={(e) => handleSpokenLanguage(e.target.value)}
+                        >
+                            {SPOKEN_LANGUAGES.map(({ value, label }) => (
+                                <option key={value} value={value}>{label}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <p className="setting-card-desc">
+                        For multilingual models; English models always use English. Pick the language you dictate in
+                        if it differs from your computer's. “Detect automatically” re-checks every few seconds and can
+                        misread short phrases.
+                    </p>
                 </div>
             </div>
 

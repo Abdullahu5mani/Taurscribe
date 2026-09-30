@@ -51,6 +51,11 @@ fn cancel_flags() -> &'static Mutex<HashMap<String, FileJobState>> {
     FILE_TRANSCRIBE_CANCEL.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// True while any file (from the UI or the CLI) is being transcribed.
+pub(crate) fn file_job_active() -> bool {
+    !cancel_flags().lock().unwrap().is_empty()
+}
+
 fn register_cancel_flag(path: &str, job_id: Option<String>) -> Result<Arc<AtomicBool>, String> {
     let flag = Arc::new(AtomicBool::new(false));
     let mut jobs = cancel_flags().lock().unwrap();
@@ -105,7 +110,17 @@ pub async fn transcribe_file(
         );
     }
 
+    // A file job and a recording can't share the engine: the live transcriber
+    // stalls behind a file window (dropping audio) and the file job's try_lock
+    // fails mid-way. The UI blocks recording during its own file jobs, but CLI
+    // jobs bypass the UI. Holding the recording transition while registering
+    // keeps a start from slipping in; start_recording checks file_job_active().
+    let transition = state.begin_recording_transition()?;
+    if state.recording_handle.lock().unwrap().is_some() {
+        return Err("Stop the recording before transcribing a file".into());
+    }
     let cancel = register_cancel_flag(&path, job_id)?;
+    drop(transition);
     let whisper = state.whisper.clone();
     let granite = state.granite.clone();
     let qwen3 = state.qwen3.clone();

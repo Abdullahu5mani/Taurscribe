@@ -24,9 +24,35 @@ fn cancel_flags() -> &'static Mutex<HashMap<String, DownloadCancelState>> {
     CANCEL_FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Set while Settings → Storage moves the models folder (see `begin_models_move`).
+static MODELS_MOVING: AtomicBool = AtomicBool::new(false);
+
+/// Blocks new downloads until the returned guard is dropped. Fails if one is
+/// already running. Checked and set under the download map's lock, so a
+/// download can't register in between.
+pub fn begin_models_move() -> Result<ModelsMoveGuard, String> {
+    let flags = cancel_flags().lock().unwrap();
+    if !flags.is_empty() {
+        return Err("Wait for model downloads to finish before moving the models folder.".into());
+    }
+    MODELS_MOVING.store(true, Ordering::SeqCst);
+    Ok(ModelsMoveGuard)
+}
+
+pub struct ModelsMoveGuard;
+
+impl Drop for ModelsMoveGuard {
+    fn drop(&mut self) {
+        MODELS_MOVING.store(false, Ordering::SeqCst);
+    }
+}
+
 fn register_cancel_flag(model_id: &str) -> Result<Arc<AtomicBool>, String> {
     let flag = Arc::new(AtomicBool::new(false));
     let mut flags = cancel_flags().lock().unwrap();
+    if MODELS_MOVING.load(Ordering::SeqCst) {
+        return Err("The models folder is being moved; download again once the move finishes.".into());
+    }
     if flags.contains_key(model_id) {
         return Err(format!("A download is already active for {}", model_id));
     }

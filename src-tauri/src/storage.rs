@@ -164,6 +164,32 @@ fn nearest_existing(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// True when both folders are on the same volume, so a move between them can
+/// hard-link files instead of copying them.
+fn same_device(a: &Path, b: &Path) -> bool {
+    let (Some(a), Some(b)) = (nearest_existing(a), nearest_existing(b)) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        matches!((std::fs::metadata(&a), std::fs::metadata(&b)), (Ok(x), Ok(y)) if x.dev() == y.dev())
+    }
+    #[cfg(windows)]
+    {
+        let root = |p: &Path| {
+            let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+            p.components().next().map(|c| c.as_os_str().to_string_lossy().to_ascii_uppercase())
+        };
+        matches!((root(&a), root(&b)), (Some(x), Some(y)) if x == y)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (a, b);
+        false
+    }
+}
+
 /// True when `path` is on a different drive than the system/home drive.
 pub fn is_other_drive(path: &Path) -> bool {
     let Some(existing) = nearest_existing(path) else {
@@ -629,9 +655,13 @@ pub async fn set_storage_location(
     if state.recording_handle.lock().unwrap().is_some() {
         return Err("Stop the current recording before changing where files are stored.".into());
     }
-    if area == Area::Models && crate::commands::any_download_active() {
-        return Err("Wait for model downloads to finish before moving the models folder.".into());
-    }
+    // Held until the move is done: a download started meanwhile would write into
+    // the old folder and be left behind there.
+    let _models_move = if area == Area::Models {
+        Some(crate::commands::begin_models_move()?)
+    } else {
+        None
+    };
     if area == Area::Models && move_files {
         use std::sync::atomic::Ordering;
         if state.engine_loading.load(Ordering::Relaxed) {
@@ -672,7 +702,8 @@ pub async fn set_storage_location(
                 return Err("The new folder can't be inside the current one.".into());
             }
             let total = dir_size(&old);
-            if let (Some(free), _, _) = disk_info(&new) {
+            // On the same volume files are hard-linked and need no space.
+            if let (false, (Some(free), _, _)) = (same_device(&old, &new), disk_info(&new)) {
                 if free < total {
                     return Err(format!(
                         "Not enough space: {:.1} GB needed, {:.1} GB free.",

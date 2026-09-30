@@ -35,17 +35,31 @@ fn infer_whisper_backend_from_system_info(info: &str) -> Option<GpuBackend> {
     None
 }
 
-/// Language passed to the decoder. English-only models (`*.en`) are told the
-/// speech is English. Multilingual models get the system language: forcing
-/// "en" made non-English speech come out as English, while detecting it on
-/// every chunk costs an extra encoder pass and misfires on short clips (a
-/// quiet "yes" can come back in another language). They detect it themselves
-/// only when the system language is not one Whisper knows.
-fn decode_language(model_id: Option<&str>) -> Option<&'static str> {
-    match model_id {
-        Some(id) if id.contains(".en") => Some("en"),
-        _ => system_language(),
+/// Language passed to the decoder, from Settings → Models → Spoken language.
+fn decode_language(model_id: Option<&str>) -> Option<String> {
+    decode_language_with(model_id, language_setting().as_deref())
+}
+
+/// English-only models (`*.en`) are always told the speech is English. For
+/// multilingual models `setting` is a Whisper code ("de"), "auto" (detect on
+/// every chunk: an extra encoder pass, and short clips can be misread), or
+/// "system"/unset: the OS language, detecting only when Whisper doesn't know it.
+fn decode_language_with(model_id: Option<&str>, setting: Option<&str>) -> Option<String> {
+    if model_id.is_some_and(|id| id.contains(".en")) {
+        return Some("en".into());
     }
+    match setting.map(str::trim) {
+        Some("auto") => None,
+        Some(code) if !code.is_empty() && code != "system" => whisper_language_of_locale(code),
+        _ => system_language().map(str::to_string),
+    }
+}
+
+/// The `whisper_language` value the frontend saves in settings.json.
+fn language_setting() -> Option<String> {
+    let text = std::fs::read_to_string(crate::mcp_server::settings_path()?).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    json.get("whisper_language")?.as_str().map(str::to_string)
 }
 
 /// The system language as a Whisper language code, looked up once.
@@ -716,6 +730,8 @@ impl WhisperManager {
             .map_err(|e| format!("Failed to create state: {:?}", e))?;
 
         // ⚙️ STEP 3: Configure Transcription Parameters
+        // (declared first: `params` borrows it)
+        let language = decode_language(self.current_model.as_deref());
         // "Greedy" strategy picks the most likely word immediately (fastest)
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
@@ -729,7 +745,7 @@ impl WhisperManager {
         .min(8) as i32;
         params.set_n_threads(n_threads);
         params.set_translate(false);
-        params.set_language(decode_language(self.current_model.as_deref()));
+        params.set_language(language.as_deref());
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -844,6 +860,9 @@ impl WhisperManager {
             .create_state()
             .map_err(|e| format!("Failed to create state: {:?}", e))?;
 
+        // Declared before `params`, which borrows it.
+        let language = decode_language(self.current_model.as_deref());
+
         // CoreML file decoding can hang in the BeamSearch path on macOS even
         // though the same context works with the live Greedy decoder. Keep the
         // higher-accuracy BeamSearch path on other platforms.
@@ -860,7 +879,7 @@ impl WhisperManager {
             .unwrap_or(8);
         params.set_n_threads(n_threads);
         params.set_translate(false);
-        params.set_language(decode_language(self.current_model.as_deref()));
+        params.set_language(language.as_deref());
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -938,14 +957,20 @@ mod tests {
     }
 
     #[test]
-    fn english_models_use_english_and_multilingual_ones_the_system_language() {
-        use super::{decode_language, system_language};
-        assert_eq!(decode_language(Some("tiny.en-q5_1")), Some("en"));
-        assert_eq!(decode_language(Some("medium.en")), Some("en"));
-        // Multilingual models (including large-v3 and turbo) use the system language.
-        assert_eq!(decode_language(Some("base-q5_1")), system_language());
-        assert_eq!(decode_language(Some("large-v3-turbo-q5_0")), system_language());
-        assert_eq!(decode_language(None), system_language());
+    fn spoken_language_setting_picks_the_decoder_language() {
+        use super::{decode_language_with as lang, system_language};
+        let system = system_language().map(str::to_string);
+        // English-only models are English whatever the setting says.
+        assert_eq!(lang(Some("tiny.en-q5_1"), Some("de")).as_deref(), Some("en"));
+        assert_eq!(lang(Some("medium.en"), None).as_deref(), Some("en"));
+        // Multilingual models: unset / "system" → OS language; "auto" → detect; a code → that code.
+        assert_eq!(lang(Some("large-v3-turbo-q5_0"), None), system);
+        assert_eq!(lang(Some("base-q5_1"), Some("system")), system);
+        assert_eq!(lang(Some("base-q5_1"), Some("auto")), None);
+        assert_eq!(lang(Some("large-v3-turbo"), Some("en")).as_deref(), Some("en"));
+        assert_eq!(lang(Some("small"), Some("de")).as_deref(), Some("de"));
+        // A value Whisper doesn't know falls back to detection rather than a bad token.
+        assert_eq!(lang(Some("small"), Some("klingon")), None);
     }
 
     #[test]
