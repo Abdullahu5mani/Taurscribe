@@ -187,7 +187,7 @@ pub async fn list_transcript_history(
     offset: Option<u32>,
     kind: Option<String>,
 ) -> Result<Vec<TranscriptRecord>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_transcript_history_blocking(limit, offset))
+    tauri::async_runtime::spawn_blocking(move || list_transcript_history_blocking(limit, offset, kind))
         .await
         .map_err(|e| format!("list_transcript_history task failed: {}", e))?
 }
@@ -195,11 +195,12 @@ pub async fn list_transcript_history(
 fn list_transcript_history_blocking(
     limit: Option<u32>,
     offset: Option<u32>,
+    kind: Option<String>,
 ) -> Result<Vec<TranscriptRecord>, String> {
     let conn = ensure_history_db()?;
     let limit = limit.unwrap_or(50) as i64;
     let offset = offset.unwrap_or(0) as i64;
-    let out = query_history(&conn, limit, offset)?;
+    let out = query_history(&conn, limit, offset, kind.as_deref())?;
 
     println!(
         "[HISTORY] list_transcript_history: limit={}, offset={}, rows={}",
@@ -211,23 +212,25 @@ fn list_transcript_history_blocking(
     Ok(out)
 }
 
-fn query_history(conn: &Connection, limit: i64, offset: i64) -> Result<Vec<TranscriptRecord>, String> {
+/// `kind` ("dictation" / "file") filters before the limit, so a page of one
+/// kind isn't emptied by newer rows of the other.
+fn query_history(conn: &Connection, limit: i64, offset: i64, kind: Option<&str>) -> Result<Vec<TranscriptRecord>, String> {
 
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind
              FROM transcriptions
              WHERE ?3 IS NULL OR COALESCE(kind, {KIND_FROM_SOURCE_SQL}) = ?3
              ORDER BY datetime(created_at) DESC, id DESC
-             LIMIT ?1 OFFSET ?2",
-        )
+             LIMIT ?1 OFFSET ?2"
+        ))
         .map_err(|e| {
             eprintln!("[HISTORY] Failed to prepare history query: {}", e);
             format!("Failed to prepare history query: {}", e)
         })?;
 
     let rows = stmt
-        .query_map(params![limit, offset], |row| {
+        .query_map(params![limit, offset, kind], |row| {
             let grammar_int: i64 = row.get(5)?;
             Ok(TranscriptRecord {
                 id: row.get(0)?,
@@ -296,18 +299,33 @@ mod tests {
             insert_history_row(&conn, "2026-09-27T10:00:00.5+00:00", text, "whisper", None, false, None, None, None).unwrap();
         }
         insert_history_row(&conn, "2026-09-26T10:00:00+00:00", "older", "whisper", None, false, None, None, None).unwrap();
-        let rows = query_history(&conn, 10, 0).unwrap();
+        let rows = query_history(&conn, 10, 0, None).unwrap();
         let texts: Vec<&str> = rows.iter().map(|r| r.transcript.as_str()).collect();
         assert_eq!(texts, ["third", "second", "first", "older"]);
-        let page: Vec<String> = query_history(&conn, 2, 1).unwrap().into_iter().map(|r| r.transcript).collect();
+        let page: Vec<String> = query_history(&conn, 2, 1, None).unwrap().into_iter().map(|r| r.transcript).collect();
         assert_eq!(page, ["second", "first"]);
+    }
+
+    #[test]
+    fn kind_filter_applies_before_the_limit() {
+        let conn = mem_db();
+        insert_history_row(&conn, "2026-09-26T10:00:00+00:00", "dictated", "whisper", None, false, None, None, None).unwrap();
+        for i in 0..5 {
+            insert_history_row(&conn, &format!("2026-09-27T10:00:0{i}+00:00"), "file", "whisper", None, false, None, None, Some("talk.mp3")).unwrap();
+        }
+        // A row whose kind was never backfilled still counts by its source.
+        conn.execute("INSERT INTO transcriptions (created_at, transcript, engine, grammar_llm_used) VALUES ('2026-09-25T10:00:00+00:00', 'legacy', 'whisper', 0)", []).unwrap();
+        let dictations: Vec<String> = query_history(&conn, 2, 0, Some("dictation")).unwrap().into_iter().map(|r| r.transcript).collect();
+        assert_eq!(dictations, ["dictated", "legacy"]);
+        assert_eq!(query_history(&conn, 10, 0, Some("file")).unwrap().len(), 5);
+        assert_eq!(query_history(&conn, 10, 0, None).unwrap().len(), 7);
     }
 
     #[test]
     fn inserted_rows_round_trip() {
         let conn = mem_db();
         insert_history_row(&conn, "2026-09-27T10:00:00+00:00", "hello", "qwen3", Some(1200), true, Some(300), Some("qwen3-asr-0.6b"), Some("talk.mp3")).unwrap();
-        let r = &query_history(&conn, 1, 0).unwrap()[0];
+        let r = &query_history(&conn, 1, 0, None).unwrap()[0];
         assert_eq!((r.engine.as_str(), r.duration_ms, r.grammar_llm_used), ("qwen3", Some(1200), true));
         assert_eq!((r.processing_time_ms, r.model_id.as_deref()), (Some(300), Some("qwen3-asr-0.6b")));
         assert_eq!((r.audio_source.as_deref(), r.kind.as_str()), (Some("talk.mp3"), "file"));
@@ -324,7 +342,7 @@ mod tests {
         .unwrap();
         init_history_schema(&conn).unwrap();
         init_history_schema(&conn).unwrap(); // idempotent
-        let r = &query_history(&conn, 5, 0).unwrap()[0];
+        let r = &query_history(&conn, 5, 0, None).unwrap()[0];
         assert_eq!((r.transcript.as_str(), r.kind.as_str(), r.model_id.as_deref()), ("old", "dictation", None));
     }
 

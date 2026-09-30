@@ -195,11 +195,19 @@ pub fn assemble_speech_audio(
     let p75 = sorted[(n * 75 / 100).min(n.saturating_sub(1))];
 
     let noise_floor = p10.max(p25 * 0.85);
-    let energy_threshold = (noise_floor * 20.0)
-        .max(p50 * 0.55)
-        .max(p25 * 2.0)
-        .max(0.005_f32)
-        .min(0.08_f32);
+    // TEMP-VADEVAL: env overrides for the evaluation run; removed before finishing.
+    let ev = |k: &str, d: f32| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let p95 = sorted[(n * 95 / 100).min(n.saturating_sub(1))];
+    let energy_threshold = if std::env::var("VADEVAL_MODE").as_deref() == Ok("b") {
+        (p10 * ev("VADEVAL_K", 4.0))
+            .min(p95 * ev("VADEVAL_KS", 0.1))
+            .max(p10 * ev("VADEVAL_MINR", 2.0))
+            .max(ev("VADEVAL_ABS", 0.001))
+    } else { (noise_floor * ev("VADEVAL_K", 20.0))
+        .max(p50 * ev("VADEVAL_P50", 0.55))
+        .max(p25 * ev("VADEVAL_P25", 2.0))
+        .max(ev("VADEVAL_FLOOR", 0.005))
+        .min(ev("VADEVAL_CAP", 0.08)) };
 
     println!(
         "[FILE_TRANSCRIBE] Energy VAD: frames={}, p10={:.5} p25={:.5} p50={:.5} p75={:.5} threshold={:.5}",
