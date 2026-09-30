@@ -259,10 +259,11 @@ class ChromeGuestSession:
 
         print(f"[DECIDER_GUEST] Attempting auto-join as '{display_name}' (timeout: {timeout}s)...")
         try:
-            from decider import MeetingDecider
+            from meeting_decider import MeetingDecider
         except ImportError:
-            from scripts.harness.decider import MeetingDecider
+            from scripts.harness.meeting_decider import MeetingDecider
         decider = MeetingDecider()
+        self.decider = decider
 
         deadline = time.time() + timeout
         step = 0
@@ -295,6 +296,9 @@ class ChromeGuestSession:
                             if self.is_in_call():
                                 return True
                             time.sleep(1.0)
+                            continue
+                        elif action.operation == "WAIT":
+                            time.sleep(0.8)
                             continue
                         elif action.operation == "CLICK" and action.target is not None:
                             self.page.evaluate(f"""
@@ -330,20 +334,11 @@ class ChromeGuestSession:
                             time.sleep(0.5)
                             continue
                 except Exception as e:
+                    if decider.require_model:
+                        raise
                     print(f"[DECIDER_GUEST] Snapshot evaluation warning: {e}")
-
-            # Fallback legacy selector heuristics
-            self.page.click("Join now")
-            self.page.evaluate("window.startAudio && window.startAudio()")
-            self.page.click("Continue without microphone|Dismiss|Got it")
-            self.page.type_text("input[placeholder*='name' i]", display_name)
-            self.page.type_text("input[aria-label*='name' i]", display_name)
-            self.page.type_text("input[type='text']", display_name)
-            self.page.click("Ask to join|Join now|Join meeting")
-            self.page.click("Continue on this browser|Join on the web instead")
-            self.page.type_text("input[data-tid='prejoin-display-name-input']", display_name)
-            self.page.click("Join now")
-
+            # Unreadable observations are retried, never replaced with broad
+            # selectors that click/type without an indexed decision.
             time.sleep(1.0)
 
         return self.is_in_call()

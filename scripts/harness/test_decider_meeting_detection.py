@@ -49,7 +49,7 @@ if str(HARNESS_DIR) not in sys.path:
 
 import ax_driver  # noqa: E402
 from cdp_guest import ChromeGuestSession, RemoteChromeGuestSession  # noqa: E402  (re-execs into .venv if needed)
-from decider import DeciderAction, MeetingDecider  # noqa: E402
+from meeting_decider import DeciderAction, MeetingDecider  # noqa: E402
 from platforms import PLATFORMS, NotSignedIn, PlatformAdapter  # noqa: E402
 from recording_check import GuestSpeaker, HostSpeaker, app_snapshot, ensure_model_loaded, restore_default_input, verify_recording  # noqa: E402
 from voiceprint_check import verify_voiceprints  # noqa: E402
@@ -106,6 +106,7 @@ class Report:
     def finish(self, passed: bool, error: str = ""):
         (self.dir / "report.json").write_text(json.dumps({
             "passed": passed, "error": error, "checks": self.checks, "steps": self.steps,
+            "decider": self.decider_metadata() if hasattr(self, "decider_metadata") else None,
         }, indent=2))
         print(f"\n  Report: {self.dir}")
 
@@ -160,12 +161,12 @@ class AppObserver:
         last_state = None
         while time.time() < deadline:
             verdict = self.look(expected_platform)
-            state = bool(verdict["detected"])
+            state = verdict["detected"]
             if state != last_state:
                 self.report.log("DECIDER", f"app says detected={state} ({verdict['reason']})",
                                 evidence=verdict.get("evidence"), mode=verdict.get("mode"))
                 last_state = state
-            if state == want_detected:
+            if state is not None and state == want_detected:
                 stable_since = stable_since or time.time()
                 if time.time() - stable_since >= STABLE_WINDOW:
                     verdict["latency_s"] = round(stable_since - (deadline - timeout), 1)
@@ -647,10 +648,20 @@ def run(platform_key: str, check_recording: bool = True, guest_where: str = "vm"
     adapter = PLATFORMS[platform_key]
     report = Report(platform_key)
     decider = MeetingDecider()
+    report.decider_metadata = lambda: {
+        "requested_backend": decider.backend, "model": decider.model_name,
+        "actual_navigation_decisions": dict(decider.decision_counts),
+        "fallback_count": len(decider.fallbacks), "fallback_errors": list(decider.fallbacks),
+        "assertion_mode": "system1", "require_model": decider.require_model,
+        "guest_navigation_decisions": dict(guest.session.decider.decision_counts)
+            if guest and getattr(getattr(guest, "session", None), "decider", None) else {},
+        "guest_fallback_errors": list(guest.session.decider.fallbacks)
+            if guest and getattr(getattr(guest, "session", None), "decider", None) else [],
+    }
     host: Optional[ChromeHostAX] = None
     guest: Optional[GuestCDP] = None
     app: Optional[AppObserver] = None
-    mode = "LLM @ " + decider.api_base if decider.prefer_local_runner else "System-1 rules (no LLM runner configured)"
+    mode = f"{decider.backend} (requested); actual decision counts are logged at cleanup"
 
     print("=" * 78)
     print(f" DECIDER MEETING DETECTION E2E — {adapter.display_name}")
@@ -791,6 +802,11 @@ def run(platform_key: str, check_recording: bool = True, guest_where: str = "vm"
             print("  ✓ real voices          → named caller recognised later, other voice not confused")
         print("  ✓ meeting stopped      → detection stopped")
         print("=" * 78)
+        if decider.require_model:
+            metadata = report.decider_metadata()
+            decisions = [*metadata["actual_navigation_decisions"].items(), *metadata["guest_navigation_decisions"].items()]
+            report.check(any(mode != "system1" and count > 0 for mode, count in decisions),
+                         "Required model made at least one successful decision")
         report.finish(True)
         return "passed"
 
@@ -824,6 +840,9 @@ def run(platform_key: str, check_recording: bool = True, guest_where: str = "vm"
         return "failed"
 
     finally:
+        report.log("DECIDER", "Actual navigation decision sources", counts=decider.decision_counts,
+                   fallback_count=len(decider.fallbacks), fallback_errors=decider.fallbacks,
+                   assertion_mode="system1")
         print("\n[CLEANUP]")
         restore_default_input()  # never leave BlackHole as the user's default mic
         # Never leave the app recording after a failed run.

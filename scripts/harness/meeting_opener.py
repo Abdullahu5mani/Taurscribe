@@ -29,7 +29,7 @@ except ImportError:
         sys.exit("websocket-client not installed. Run: pip install websocket-client")
 
 from cdp_guest import CDPPage, CHROME_BIN
-from decider import MeetingDecider
+from meeting_decider import MeetingDecider
 
 SNAPSHOT_JS_PATH = Path(__file__).resolve().parent / "snapshot.js"
 SNAPSHOT_JS = SNAPSHOT_JS_PATH.read_text() if SNAPSHOT_JS_PATH.exists() else ""

@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import ax_driver
-from decider import MeetingDecider
+from meeting_decider import MeetingDecider
 from recording_check import (HISTORY_DB, LOCAL_MIC_DEVICE, PLAYER_BIN, PLAYER_SRC, PROCESSING_TIMEOUT, api,
                              coverage, restore_default_input, use_local_mic)
 

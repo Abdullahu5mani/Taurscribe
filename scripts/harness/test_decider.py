@@ -2,11 +2,15 @@
 """Unit tests for MeetingDecider and Jev Ultrafast DOM action selection."""
 
 import unittest
-from decider import MeetingDecider, DeciderAction, PlanStep
+from unittest.mock import patch
+from meeting_decider import MeetingDecider, DeciderAction, PlanStep
 
 
 class TestMeetingDecider(unittest.TestCase):
     def setUp(self):
+        env = patch.dict("os.environ", {}, clear=True)
+        env.start()
+        self.addCleanup(env.stop)
         self.decider = MeetingDecider()
 
     def test_in_call_done(self):

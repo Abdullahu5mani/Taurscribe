@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "bun test tests/frontend",
+    "test:harness": "scripts/harness/.venv/bin/python scripts/harness/run_unit_tests.py",
     "tauri": "tauri",
     "build:macos": "bun scripts/build-macos.ts",
     "build:windows": "bun scripts/build-windows.ts --bundles nsis",

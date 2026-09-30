@@ -16,7 +16,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from decider import PlanStep
+from meeting_decider import PlanStep
 
 if TYPE_CHECKING:
     from test_decider_meeting_detection import ChromeHostAX
@@ -185,7 +185,7 @@ class MicrosoftTeams(PlatformAdapter):
         people = next((e for e in snapshot["elements"]
                        if e["role"] == "AXButton" and e["text"] == "People" and not e["disabled"]), None)
         if people:
-            from decider import DeciderAction
+            from meeting_decider import DeciderAction
             action = DeciderAction("CLICK", target=people["index"], reason="Open the People pane to see the lobby")
             host.report.log("HOST", f"Decider → {action}")
             host.act(action)
@@ -295,7 +295,7 @@ class Zoom(PlatformAdapter):
             snap = host.snapshot()
             info = next((e for e in snap["elements"] if re.search(r"meeting info", e["text"], re.I)), None)
             if info:
-                from decider import DeciderAction
+                from meeting_decider import DeciderAction
                 host.act(DeciderAction("CLICK", target=info["index"], reason="Open meeting information"))
                 time.sleep(1.5)
         return None

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import ax_driver
-from decider import MeetingDecider, PlanStep
+from meeting_decider import MeetingDecider, PlanStep
 from cdp_guest import SNAPSHOT_JS
 
 HARNESS_DIR = Path(__file__).resolve().parent
@@ -411,6 +411,8 @@ def ensure_model_loaded(app, decider: MeetingDecider, report) -> None:
             loading_snapshot = app_snapshot(app.pid)
             status = next((e["text"] for e in loading_snapshot["elements"] if "status" in e["text"].lower()), "")
             if "status ready" in status.lower():
+                break
+            if re.search(r"status (error|failed|load failed)", status, re.I):
                 break
             # The Load button disappears as soon as loading starts. Its absence
             # is not proof that the model is ready for another recording.

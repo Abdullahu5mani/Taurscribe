@@ -40,9 +40,9 @@ BASE_URL = f"http://127.0.0.1:{CONTROL_PORT}"
 
 # Import Decider
 try:
-    from decider import MeetingDecider, DeciderAction
+    from meeting_decider import MeetingDecider, DeciderAction
 except ImportError:
-    from scripts.harness.decider import MeetingDecider, DeciderAction
+    from scripts.harness.meeting_decider import MeetingDecider, DeciderAction
 
 
 class TaurscribeClient:
