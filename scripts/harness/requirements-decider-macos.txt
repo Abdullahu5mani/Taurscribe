@@ -1,0 +1,8 @@
+# Install these in an isolated Python 3.12 environment. Install decider-ai with
+# --no-deps afterward: its Triton/CUDA training dependency is not needed on MPS.
+torch==2.14.1
+transformers==5.18.0
+numpy==2.5.3
+huggingface_hub==1.33.0
+Jinja2==3.1.6
+psutil==7.2.2

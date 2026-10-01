@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "bun test tests/frontend",
     "test:harness": "scripts/harness/.venv/bin/python scripts/harness/run_unit_tests.py",
+    "test:decider": "scripts/harness/run_decider_benchmark.sh",
     "test:native": "cargo test --manifest-path src-tauri/Cargo.toml --all-targets",
     "test:asr": "cargo test --manifest-path src-tauri/Cargo.toml --test jfk_asr_smoke -- --ignored --nocapture",
     "test:playback": "cargo test --manifest-path src-tauri/Cargo.toml --test meeting_playback_stress -- --ignored --nocapture",

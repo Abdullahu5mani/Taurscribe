@@ -41,6 +41,8 @@ import { useAutoUnload, AUTO_UNLOAD_OPTIONS, formatTimeoutLabel, formatRemaining
 import { useSlidingIndicator } from "./hooks/useSlidingIndicator";
 import { useDismissOnOutside } from "./hooks/useDismissOnOutside";
 import { OverlayScrollbarsComponent } from "overlayscrollbars-react";
+import type { EventListeners } from "overlayscrollbars";
+import { trackScrollState } from "./utils/scrollState";
 import type { CommandResult } from "./types/session";
 
 
@@ -137,6 +139,22 @@ function App() {
   /** Whether the output area is in mic, meetings, or file-transcription mode */
   const [navMode, setNavMode] = useState<NavMode>("mic");
   const modeIndicator = useSlidingIndicator(modeToggleRef, ".mode-toggle-btn--active", navMode);
+  // Scroll state of the main area as data attributes on it (edge fades,
+  // hover pause while scrolling); see utils/scrollState.ts.
+  const feedScrollEvents = useMemo<EventListeners>(() => {
+    let stop: (() => void) | undefined;
+    return {
+      initialized: (os) => {
+        stop?.();
+        const { host, viewport } = os.elements();
+        stop = trackScrollState(host, viewport);
+      },
+      destroyed: () => {
+        stop?.();
+        stop = undefined;
+      },
+    };
+  }, []);
   const setFileMode = (files: boolean) => setNavMode(files ? "files" : "mic");
   /** True while FileTranscriptionPanel has a file actively transcribing */
   const [isFileTranscribing, setIsFileTranscribing] = useState(false);
@@ -1335,6 +1353,7 @@ function App() {
               scrollbars: { theme: "os-theme-pure", autoHide: "move", autoHideDelay: 400 },
               overflow: { x: "hidden" },
             }}
+            events={feedScrollEvents}
             defer
           >
             <div className="nav-view-enter" style={navMode === "files" ? undefined : { display: 'none' }}>

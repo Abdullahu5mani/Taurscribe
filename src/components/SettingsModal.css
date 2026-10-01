@@ -130,7 +130,7 @@
   flex-direction: column;
   gap: 14px;
   content-visibility: auto;
-  contain-intrinsic-size: 740px;
+  contain-intrinsic-size: auto 740px;
 }
 
 .model-item {
@@ -146,7 +146,7 @@
               background 0.2s cubic-bezier(0.25, 1, 0.5, 1);
   contain: paint;
   content-visibility: auto;
-  contain-intrinsic-size: 130px;
+  contain-intrinsic-size: auto 130px;
 }
 
 .model-item:hover {

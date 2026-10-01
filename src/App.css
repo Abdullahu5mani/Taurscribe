@@ -1446,6 +1446,58 @@ button.auto-unload-timer-btn--active {
   padding: 0;
 }
 
+/* Edge fades: content dissolves into the top and bottom edges while there is
+   more to scroll that way (state from utils/scrollState.ts). */
+.output-area--feed::before,
+.output-area--feed::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 36px;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.output-area--feed::before {
+  top: 0;
+  background: linear-gradient(to bottom, var(--bg-secondary), transparent);
+}
+
+.output-area--feed::after {
+  bottom: 0;
+  background: linear-gradient(to top, var(--bg-secondary), transparent);
+}
+
+.output-area--feed[data-scrolled]::before,
+.output-area--feed[data-more]::after {
+  opacity: 1;
+}
+
+/* Keep the scrollbar above the fades. */
+.output-area--feed .os-scrollbar {
+  z-index: 2;
+}
+
+/* While scrolling, rows passing under the pointer don't flash their hover
+   state; it comes back as soon as scrolling stops. */
+.output-area--feed[data-scrolling] .feed-item {
+  pointer-events: none;
+}
+
+/* Scrolled into the history: older rows come up from their recency fade so
+   they can be read. */
+.output-area--feed[data-scrolled] .feed-item:not([data-distance="0"]) {
+  opacity: 0.78;
+}
+
+.output-area--feed[data-scrolled] .feed-item:hover,
+.output-area--feed[data-scrolled] .feed-item:focus-within {
+  opacity: 1;
+}
+
 /* Transcript scrollbar (OverlayScrollbars custom theme) — a barely-there
  * floating pill that only appears while the pointer is moving over the area
  * or while actively scrolling, so it never competes with the transcript. */
@@ -1695,7 +1747,7 @@ button.auto-unload-timer-btn--active {
   overflow: hidden;
   /* clip during expansion */
   content-visibility: auto;
-  contain-intrinsic-size: 96px;
+  contain-intrinsic-size: auto 96px;
 }
 
 @keyframes feedExpand {
@@ -1921,7 +1973,6 @@ button.auto-unload-timer-btn--active {
     line-height 0.22s var(--ease-smooth),
     color 0.16s ease,
     opacity 0.16s ease;
-  will-change: font-size, line-height;
 }
 
 .feed-empty {
@@ -2398,7 +2449,7 @@ button.auto-unload-timer-btn--active {
   display: flex;
   flex-direction: column;
   content-visibility: auto;
-  contain-intrinsic-size: 620px;
+  contain-intrinsic-size: auto 620px;
 }
 
 /* Section divider label */
@@ -2985,7 +3036,7 @@ button#top-settings-btn:hover {
   flex-direction: column;
   gap: 10px;
   content-visibility: auto;
-  contain-intrinsic-size: 540px;
+  contain-intrinsic-size: auto 540px;
 }
 
 .file-queue-header {
@@ -3043,7 +3094,7 @@ button#top-settings-btn:hover {
   gap: 8px;
   contain: layout paint;
   content-visibility: auto;
-  contain-intrinsic-size: 132px;
+  contain-intrinsic-size: auto 132px;
 }
 
 .file-card--done {
