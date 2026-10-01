@@ -89,7 +89,9 @@ def check_case(decider, runner, row, torch):
         torch.mps.synchronize()
         result['action'] = action.to_dict()
         invoked = runner.calls - before
-        result['ok'] = evaluate(row, action) and ((invoked == 0 and action.mode == 'guard') if row.get('guard') else (invoked == 1 and action.mode == 'native'))
+        source_verified = ((invoked == 0 and action.mode == 'guard' and action.operation == 'WAIT')
+                           or (invoked == 1 and action.mode == 'native'))
+        result['ok'] = evaluate(row, action) and source_verified
         if runner.last:
             result['model_output'] = runner.last[0]
     except Exception as error:
@@ -129,6 +131,18 @@ def native_ui(decider, runner, torch, app=None, on_result=None):
                 app.wait(lambda: app.has('Close settings'),5)
             if i >= 6:
                 app.close_settings()
+            # Every navigation checkpoint must require an actual transition.
+            # A prior model WAIT can leave a later target already selected.
+            if post and (post in ('Meetings', 'Recording', 'Models', 'About') or post.endswith('mode')):
+                if app.checked(post, 'AXRadioButton'):
+                    alternate = ('General' if not post.endswith('mode') else
+                                 ('Microphone dictation mode' if post != 'Microphone dictation mode' else
+                                  'Meeting detection and dual-channel recording mode'))
+                    if not app.press(alternate, 'AXRadioButton', exact=True) or not app.wait(
+                            lambda: app.checked(alternate, 'AXRadioButton'), 5):
+                        raise RuntimeError('Could not establish unselected navigation target')
+                if app.checked(post, 'AXRadioButton'):
+                    raise RuntimeError('Native checkpoint target is already selected')
             snap = app.snap()
             row = dict(id=f'native-ui/{i}-{label}', entry='ui', goal=goal, snapshot=navigation_snapshot(snap), expected={'operation':'CLICK','label':label})
             if i == 0:
@@ -166,11 +180,14 @@ def main():
     parser.add_argument('--variants', type=int, default=3)
     parser.add_argument('--native-ui', action='store_true')
     parser.add_argument('--native-only', action='store_true', help='Run native checkpoints without repeating fixture replay')
+    parser.add_argument('--unrestricted-replay', action='store_true', help='Historical raw-adapter baseline; replay only, never actuate UI')
     args = parser.parse_args()
     if args.repeats < 1 or not 1 <= args.variants <= 3:
         parser.error('repeats >= 1 and variants between 1 and 3 required')
     if args.native_only and not args.native_ui:
         parser.error('--native-only requires --native-ui')
+    if args.unrestricted_replay and args.native_ui:
+        parser.error('Unrestricted decisions are permitted only for non-actuating fixture replay')
     if args.model_dir.name != PINNED_REVISION or not (args.model_dir/'model.safetensors').is_file():
         parser.error('Use the pinned, complete Decider 2B snapshot, not an arbitrary model')
     import psutil
@@ -185,12 +202,15 @@ def main():
         app = App(UIReport())
         app.wait_ready()
     start = time.perf_counter()
-    decider = MeetingDecider(model_name=str(args.model_dir), backend='native', require_model=True)
+    decider = MeetingDecider(model_name=str(args.model_dir), backend='native', require_model=True,
+                             restrict_actions=not args.unrestricted_replay)
+    decider.load_model()
     if decider.model_name != str(args.model_dir):
         raise ValueError('DECIDER_MODEL must not override the pinned benchmark model directory')
     runner = ObservedRunner(decider._decider_lib, torch)
     decider._decider_lib = runner
     metadata = {'model':'Mapika/decider-2b', 'revision':PINNED_REVISION,
+                'action_policy': 'unrestricted-replay' if args.unrestricted_replay else 'task-and-phase',
                 'model_sha256':hashlib.file_digest((args.model_dir/'model.safetensors').open('rb'), 'sha256').hexdigest(),
                 'package':importlib.metadata.version('decider-ai'), 'torch':torch.__version__,
                 'transformers':importlib.metadata.version('transformers'), 'platform':platform.platform(),

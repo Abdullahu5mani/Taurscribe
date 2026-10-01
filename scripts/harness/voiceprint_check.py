@@ -36,7 +36,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import ax_driver
 from meeting_decider import MeetingDecider
 from recording_check import (HISTORY_DB, LOCAL_MIC_DEVICE, PLAYER_BIN, PLAYER_SRC, PROCESSING_TIMEOUT, api,
-                             coverage, restore_default_input, use_local_mic)
+                             coverage, restore_default_input, suspend_navigation_models, use_local_mic)
 
 LIBRI = Path.home() / ".taurscribe-harness" / "librispeech" / "LibriSpeech" / "test-clean"
 CACHE = Path.home() / ".taurscribe-harness" / "librispeech" / "clips"
@@ -182,6 +182,7 @@ def caller_turns(meeting: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def verify_voiceprints(app, remote, adapter, decider: MeetingDecider, report) -> None:
+    suspend_navigation_models(decider, remote, report)
     engine = (api("/api/status").get("voiceprints") or {}).get("engine")
     report.check(engine == "neural", "Speaker recognition model is installed (voice engine: neural)", str(engine))
 

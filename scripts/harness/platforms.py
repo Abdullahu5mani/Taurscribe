@@ -120,6 +120,17 @@ class GoogleMeet(PlatformAdapter):
                 return int(els[i + 1]["text"])
         return None
 
+    def host_sees_guest(self, snapshot, guest_name):
+        # Current Meet AX exposes a named roster group and its microphone
+        # control even when no numerical count is published. A pending admission
+        # card/name alone is not proof the participant has joined.
+        elements = snapshot.get('elements', [])
+        named = any(e.get('role') == 'AXGroup' and e.get('text') == guest_name for e in elements)
+        microphone = re.compile(r'^(?:mute|unmute) ' + re.escape(guest_name) + r"['’]s microphone$", re.I)
+        if named and any(e.get('role') == 'AXButton' and microphone.fullmatch(e.get('text', '')) for e in elements):
+            return True
+        return super().host_sees_guest(snapshot, guest_name)
+
 
 class MicrosoftTeams(PlatformAdapter):
     """Personal Teams (teams.live.com) 'Meet now'. Work accounts use the same UI."""

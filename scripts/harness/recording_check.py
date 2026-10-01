@@ -22,6 +22,8 @@ import shutil
 import subprocess
 import time
 import urllib.request
+import urllib.error
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -40,6 +42,7 @@ CLIPS = [  # the guest's clean lines
     ("02_remote1_clean1.wav", "Thank you. I am speaker one, and I am speaking clearly from the remote conference room."),
     ("04_remote1_clean2.wav", "Here is another clean statement from speaker one, perfect for candidate snippet cycling."),
 ]
+CONTINUATION_CLIP = ("07_remote1_call2.wav", "Hello again. This is speaker one following up in our second scheduled meeting.")
 
 # "You" speak through a virtual mic: audio played into BlackHole's output comes
 # out of its input, which the test makes the macOS default input (Taurscribe's
@@ -90,6 +93,38 @@ def api(path: str) -> Any:
     req = urllib.request.Request(f"http://127.0.0.1:8766{path}", headers={"Authorization": "Bearer " + os.environ["TAURSCRIBE_CONTROL_TOKEN"]})
     with urllib.request.urlopen(req, timeout=20) as r:
         return json.loads(r.read().decode())
+
+
+def verify_pause_rejected(report, recording: bool):
+    """Native contract: idle and dual-channel pause/resume fail without mutation."""
+    before = api('/api/status')['recording']
+    report.check(before['is_recording'] == recording, 'Pause precondition matches native recording state')
+    expected = "Meeting recordings can't be paused" if recording else 'Not recording'
+    for operation in ('pause', 'resume'):
+        request = urllib.request.Request(
+            f'http://127.0.0.1:8766/api/capture/{operation}', data=b'', method='POST',
+            headers={'Authorization': 'Bearer ' + os.environ['TAURSCRIBE_CONTROL_TOKEN']})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                code, body = response.status, json.loads(response.read())
+        except urllib.error.HTTPError as response:
+            code, body = response.code, json.loads(response.read())
+        report.check(code == 400 and body.get('success') is False and body.get('detail') == expected,
+                     f'Native {operation} honestly rejects unsupported state', f'{code}: {body.get("detail")}')
+        after = api('/api/status')['recording']
+        report.check(after == before, f'Rejected {operation} leaves recording state unchanged')
+    if recording:
+        request = urllib.request.Request(
+            'http://127.0.0.1:8766/api/capture/input', method='POST', data=b'{"name":null}',
+            headers={'Authorization': 'Bearer ' + os.environ['TAURSCRIBE_CONTROL_TOKEN'],
+                     'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                code = response.status
+        except urllib.error.HTTPError as response:
+            code = response.code
+        report.check(code == 409 and api('/api/status')['recording'] == before,
+                     'Fixture input changes are rejected during active capture without mutation')
 
 
 def read_wav(path: str):
@@ -166,6 +201,38 @@ def restore_default_input() -> None:
             _original_input = None
 
 
+def select_app_microphone(app, name, report):
+    """Authenticated fixture setup; never changes the persisted user preference."""
+    request = urllib.request.Request(
+        'http://127.0.0.1:8766/api/capture/input', method='POST',
+        data=json.dumps({'name': name}).encode(), headers={
+            'Authorization': 'Bearer ' + os.environ['TAURSCRIBE_CONTROL_TOKEN'],
+            'Content-Type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        result = json.loads(response.read())
+    if not result.get('success') or api('/api/status')['recording']['selected_input_device'] != name:
+        raise AssertionError(f'Native test input was not selected: {name}')
+
+
+@contextmanager
+def app_microphone_for_test(app, report):
+    original = api('/api/status')['recording']['selected_input_device']
+    try:
+        select_app_microphone(app, LOCAL_MIC_DEVICE, report)
+        report.log('REPORT', 'Native capture input set to BlackHole through authenticated fixture setup; OS default alone is insufficient')
+        yield
+    finally:
+        if api('/api/status')['recording'].get('is_recording'):
+            request = urllib.request.Request(
+                'http://127.0.0.1:8766/api/capture/stop', method='POST',
+                headers={'Authorization': 'Bearer ' + os.environ['TAURSCRIBE_CONTROL_TOKEN']})
+            with urllib.request.urlopen(request, timeout=PROCESSING_TIMEOUT) as response:
+                if not json.loads(response.read()).get('success'):
+                    raise AssertionError('Could not stop the test capture before restoring input')
+        select_app_microphone(app, original, report)
+        report.log('REPORT', 'Restored original native input; persisted microphone preference was not changed')
+
+
 def speak_locally(clip: str) -> subprocess.Popen:
     """Plays a clip into the virtual mic (non-blocking)."""
     if not PLAYER_BIN.exists() or PLAYER_BIN.stat().st_mtime < PLAYER_SRC.stat().st_mtime:
@@ -186,6 +253,15 @@ def dictation_history_count() -> int:
         return con.execute("SELECT COUNT(*) FROM transcriptions").fetchone()[0]
     finally:
         con.close()
+
+
+def meeting_parts(meeting_id: int) -> int:
+    import sqlite3
+    with sqlite3.connect(f'file:{HISTORY_DB}?mode=ro', uri=True) as connection:
+        row = connection.execute('SELECT parts FROM meetings WHERE id = ?', (meeting_id,)).fetchone()
+        if row is None:
+            raise AssertionError(f'Meeting {meeting_id} disappeared')
+        return row[0]
 
 
 def channel_correlation(path: str) -> float:
@@ -474,20 +550,55 @@ def open_meetings_view(app, report) -> None:
         time.sleep(1.5)
 
 
+def suspend_navigation_models(decider, remote, report):
+    decider.suspend_model()
+    session = getattr(getattr(remote, "guest", None), "session", None)
+    guest_decider = getattr(session, "decider", None)
+    if guest_decider is not None and guest_decider is not decider:
+        guest_decider.suspend_model()
+    report.log("REPORT", "optional Decider released; recording and processing use deterministic controls")
+
+
+def saved_meeting_is_selected(snapshot, detail):
+    titles = [e.get('value') for e in snapshot.get('elements', [])
+              if e.get('role') == 'AXTextField' and e.get('text') == 'Meeting title']
+    modal = any(e.get('text') == 'Save & View Notes' for e in snapshot.get('elements', []))
+    return titles == [detail['title']] and not modal
+
+
+def view_saved_meeting(app, report, detail):
+    """Select the new recording via its real review flow, never a similar old card."""
+    snap = app_snapshot(app.pid)
+    review = next((e for e in snap['elements'] if e['text'] == 'Save & View Notes'), None)
+    title_matches = any(e.get('text') == 'Meeting title' and e.get('value') == detail['title'] for e in snap['elements'])
+    report.check(review is not None and title_matches, 'Review modal belongs to the just-recorded meeting')
+    ax_driver.press(app.pid, review['index'], expect=review['text'])
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        snap = app_snapshot(app.pid)
+        if saved_meeting_is_selected(snap, detail):
+            break
+        time.sleep(.5)
+    report.check(saved_meeting_is_selected(snap, detail), 'Just-recorded meeting is selected before transcript/playback assertions')
+
+
 def verify_recording(app, remote, adapter, decider: MeetingDecider, report) -> None:
     """Runs the recording phase; raises AssertionError via report.check on failure."""
+    suspend_navigation_models(decider, remote, report)
+    verify_pause_rejected(report, recording=False)
     open_meetings_view(app, report)
-    snap = app_snapshot(app.pid)
-    # The mic channel records the default input, so point it at the virtual mic
-    # before the recording opens it. Always restored (here and in the test's cleanup).
+    # Configure both OS input and app preference before capture. An explicit
+    # app device wins over OS default. Both are restored after the test.
     use_local_mic(report)
     try:
-        _record_conversation(app, remote, adapter, decider, report, snap)
+        with app_microphone_for_test(app, report):
+            detail = _record_conversation(app, remote, adapter, decider, report, app_snapshot(app.pid))
+            verify_continuation(app, remote, decider, report, detail)
     finally:
         restore_default_input()
 
 
-def _record_conversation(app, remote, adapter, decider: MeetingDecider, report, snap) -> None:
+def _record_conversation(app, remote, adapter, decider: MeetingDecider, report, snap) -> Dict[str, Any]:
     # 2. Decider starts the dual-channel recording from the meeting pill.
     before = {m["id"] for m in api("/api/meetings")}
     history_before = dictation_history_count()
@@ -507,6 +618,7 @@ def _record_conversation(app, remote, adapter, decider: MeetingDecider, report, 
     rec_status = api("/api/status")["recording"]
     report.check(rec_status["is_recording"] and rec_status["is_dual_channel"],
                  "API cross-check: dual-channel recording running", json.dumps(rec_status))
+    verify_pause_rejected(report, recording=True)
 
     # 3. A two-person conversation: "you" on the local (virtual) mic, the guest in
     #    the meeting, one overlapping exchange, then the guest again.
@@ -660,6 +772,8 @@ def _record_conversation(app, remote, adapter, decider: MeetingDecider, report, 
     report.check(history_after == history_before, "Meeting transcript stays out of the dictation (Mic) history",
                  f"dictation history rows {history_before} → {history_after}")
 
+    view_saved_meeting(app, report, detail)
+
     # 6. Decider finds the meeting and the guest's words in the app's transcript area.
     title = detail.get("title", "")
     seen: Dict[str, Any] = {}
@@ -678,3 +792,80 @@ def _record_conversation(app, remote, adapter, decider: MeetingDecider, report, 
     report.check(seen.get("listed"), "Decider sees the new meeting in the app's meetings list", f"title '{title}'")
     report.check(seen.get("coverage", 0) >= MIN_CALL_CHANNEL_COVERAGE, "Decider reads the conversation in the app's transcript area",
                  f"{seen.get('coverage', 0):.0%} of script words visible under MEETING TRANSCRIPT")
+    return detail
+
+
+def continuation_checks(before, after, ids_before, ids_after, parts_before, parts_after):
+    """Independent postconditions; a second history card is not continuation."""
+    old_words = before.get('transcript_raw', '')
+    return {
+        'Continuation keeps the original meeting ID and adds no history card':
+            before['id'] == after['id'] and ids_before == ids_after,
+        'Continuation increments parts exactly once': parts_after == parts_before + 1,
+        'Continuation extends recording duration': after['duration_ms'] > before['duration_ms'] + 1000,
+        'Continuation preserves earlier speech': bool(words(old_words)) and coverage(old_words, after.get('transcript_raw', '')) >= .9,
+        'Continuation includes the new remote speech': coverage(CONTINUATION_CLIP[1], after.get('transcript_raw', '')) >= MIN_TRANSCRIPT_COVERAGE,
+        'New remote speech remains on the call channel': coverage(
+            CONTINUATION_CLIP[1], ' '.join(t['text'] for t in after.get('turns', [])
+                if t.get('channel') == 1 and t.get('start_ms', 0) >= before['duration_ms'])) >= MIN_CALL_CHANNEL_COVERAGE,
+    }
+
+
+def verify_continuation(app, remote, decider, report, before):
+    ids_before = {m['id'] for m in api('/api/meetings')}
+    parts_before = meeting_parts(before['id'])
+    history_before = dictation_history_count()
+    record = decider.find_record_call_control(app_snapshot(app.pid))
+    report.check(record is not None, 'Same live call can be recorded again from its UI pill')
+    ax_driver.press(app.pid, record['index'], expect=record['text'])
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        if decider.assess_recording(app_snapshot(app.pid))['recording']:
+            break
+        time.sleep(.5)
+    report.check(decider.assess_recording(app_snapshot(app.pid))['recording'], 'Continuation visibly starts recording')
+    report.check(api('/api/status')['recording']['is_dual_channel'], 'Continuation uses both audio channels')
+    seconds = remote.play(AUDIO_DIR / CONTINUATION_CLIP[0])
+    report.log('GUEST', f'Continuation speech: "{CONTINUATION_CLIP[1]}"')
+    time.sleep(seconds + 3)
+    stop = decider.find_stop_recording_control(app_snapshot(app.pid))
+    report.check(stop is not None, 'Continuation has a visible Stop recording control')
+    ax_driver.press(app.pid, stop['index'], expect=stop['text'])
+    indicator_seen = False
+    deadline = time.time() + PROCESSING_TIMEOUT
+    after = before
+    while time.time() < deadline:
+        snap = app_snapshot(app.pid)
+        processing = any(e['text'].startswith('Processing meeting') for e in snap['elements'])
+        indicator_seen = indicator_seen or processing
+        report.check(not any(e['text'] == 'Meeting processing failed' for e in snap['elements']),
+                     'Continuation reports no processing failure')
+        after = api(f'/api/meetings/{before["id"]}')
+        if indicator_seen and not processing and meeting_parts(before['id']) == parts_before + 1:
+            break
+        time.sleep(1)
+    report.check(indicator_seen and not processing, 'Continuation shows processing and clears it when saved')
+    (report.dir / 'continued_meeting.json').write_text(json.dumps(after, indent=2))
+    ids_after = {m['id'] for m in api('/api/meetings')}
+    for label, ok in continuation_checks(before, after, ids_before, ids_after, parts_before, meeting_parts(before['id'])).items():
+        report.check(ok, label)
+    report.check(dictation_history_count() == history_before, 'Continuation stays out of dictation history')
+    old_audio, new_audio = before.get('audio_path'), after.get('audio_path')
+    report.check(bool(old_audio and new_audio) and old_audio != new_audio and not Path(old_audio).exists(),
+                 'Successful continuation replaces playback and removes only its old audio')
+    check_playback_file(report, new_audio, after['duration_ms'] / 1000)
+    snap = app_snapshot(app.pid)
+    dismiss = next((e for e in snap['elements'] if e['text'] == 'Dismiss'), None)
+    if dismiss:
+        ax_driver.press(app.pid, dismiss['index'], expect='Dismiss')
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        snap = app_snapshot(app.pid)
+        if saved_meeting_is_selected(snap, after) and coverage(CONTINUATION_CLIP[1], ' '.join(e['text'] for e in snap['elements'])) >= MIN_CALL_CHANNEL_COVERAGE:
+            break
+        time.sleep(.5)
+    report.save_snapshot('phase2b_continuation_ui', snap)
+    report.check(saved_meeting_is_selected(snap, after) and coverage(CONTINUATION_CLIP[1], ' '.join(e['text'] for e in snap['elements'])) >= MIN_CALL_CHANNEL_COVERAGE,
+                 'Selected meeting UI refreshes with the continuation transcript')
+    verify_playback(app, report, after['duration_ms'] / 1000)
+    app.screenshot('phase2b_continued_meeting')

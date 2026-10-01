@@ -606,13 +606,15 @@ class GuestCDP:
             for _ in range(4):
                 page.call("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": size[0] // 2, "y": size[1] // 2})
                 action = decider.decide_leave(page.evaluate(SNAPSHOT_JS) or {})
-                if action.operation != "CLICK":
+                if action.operation == "DONE":
                     left = True
                     break
-                self.report.log("GUEST", f"Decider → {action}")
-                guest_click(self.session, action.target)
+                if action.operation == "CLICK":
+                    self.report.log("GUEST", f"Decider → {action}")
+                    guest_click(self.session, action.target)
                 time.sleep(2.0)
-            left = left or not self.session.is_in_call()
+            if not left:
+                left = decider.decide_leave(page.evaluate(SNAPSHOT_JS) or {}).operation == "DONE"
         except Exception as e:
             print(f"  [GUEST] leave warning: {e}")
         self.report.log("GUEST", "left the call" if left else "leave not confirmed; closing the guest browser")
@@ -653,6 +655,9 @@ def run(platform_key: str, check_recording: bool = True, guest_where: str = "vm"
         "actual_navigation_decisions": dict(decider.decision_counts),
         "fallback_count": len(decider.fallbacks), "fallback_errors": list(decider.fallbacks),
         "assertion_mode": "system1", "require_model": decider.require_model,
+        "action_policy": "task-and-phase" if decider.restrict_actions else "unrestricted",
+        "model_suspended": decider.model_suspended,
+        "native_weights_resident": decider._decider_lib is not None,
         "guest_navigation_decisions": dict(guest.session.decider.decision_counts)
             if guest and getattr(getattr(guest, "session", None), "decider", None) else {},
         "guest_fallback_errors": list(guest.session.decider.fallbacks)
@@ -805,7 +810,7 @@ def run(platform_key: str, check_recording: bool = True, guest_where: str = "vm"
         if decider.require_model:
             metadata = report.decider_metadata()
             decisions = [*metadata["actual_navigation_decisions"].items(), *metadata["guest_navigation_decisions"].items()]
-            report.check(any(mode != "system1" and count > 0 for mode, count in decisions),
+            report.check(any(mode in ("native", "systemone", "chat") and count > 0 for mode, count in decisions),
                          "Required model made at least one successful decision")
         report.finish(True)
         return "passed"
