@@ -133,6 +133,8 @@ pub struct GgufAsrManager {
     sentence_case: bool,
     engine: Option<GgufAsr>,
     model_id: Option<String>,
+    /// `gpu::Target` key the loaded model was loaded for.
+    device_key: String,
     /// Copy of `get_status()` kept up to date by `initialize` / `unload`, so the
     /// UI can read it without waiting on this manager's lock (held for a whole
     /// transcription).
@@ -158,6 +160,7 @@ impl GgufAsrManager {
             sentence_case,
             engine: None,
             model_id: None,
+            device_key: String::new(),
             snapshot: Arc::new(std::sync::Mutex::new(GgufStatus {
                 loaded: false,
                 model_id: None,
@@ -195,6 +198,11 @@ impl GgufAsrManager {
         self.model_id = None;
         self.publish_status();
         crate::memory::trim_process_memory();
+    }
+
+    /// The `gpu::Target` key the loaded model was loaded for.
+    pub fn device_key(&self) -> &str {
+        &self.device_key
     }
 
     /// Stateless per-chunk engine: nothing to reset between recordings.

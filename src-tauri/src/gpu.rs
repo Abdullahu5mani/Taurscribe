@@ -357,6 +357,35 @@ fn platform_devices() -> Vec<GpuDevice> {
     Vec::new()
 }
 
+// ── device choice ────────────────────────────────────────────────────────────
+//
+// whisper.cpp and transcribe.cpp share one statically linked ggml, so one
+// device registry serves both. A device is named "<backend>:<description>"
+// (e.g. "vulkan:AMD Radeon(TM) Graphics"): registry indices are not stable
+// across runs, names are. llama.cpp has its own registry (DLLs); it is matched
+// by the same name.
+
+/// A device the speech engines can run on, or an NPU they can't use yet.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ComputeDevice {
+    /// "auto", "cpu", or "<backend>:<description>"; what Settings stores.
+    pub id: String,
+    pub name: String,
+    /// "CUDA", "Vulkan", "Metal", "ROCm", "CPU" or "NPU".
+    pub backend: String,
+    /// "gpu", "igpu", "cpu" or "npu".
+    pub kind: &'static str,
+    pub memory_gb: Option<f32>,
+    /// False for hardware no engine in this build can run on.
+    pub usable: bool,
+    pub note: Option<String>,
+}
+
+pub const AUTO_DEVICE: &str = "auto";
+pub const CPU_DEVICE: &str = "cpu";
+/// Settings key of the chosen device.
+pub const DEVICE_SETTING: &str = "compute_device";
+
 // ── Tauri command ────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]

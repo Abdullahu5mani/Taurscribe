@@ -14,6 +14,7 @@ import { useSyncedRef } from "../utils/useSyncedRef";
  *   transcription_style string
  *   llm_backend         "gpu" | "cpu"
  *   asr_backend         "gpu" | "cpu"
+ *   compute_device      "auto" or a GPU id (gpu.rs); used when asr_backend is "gpu"
  *   enable_denoise      boolean
  *   enable_overlay      boolean
  *   mute_background_audio boolean

@@ -144,6 +144,7 @@ async fn status_handler(State(state): State<ServerState>) -> impl IntoResponse {
             "is_paused": is_paused,
             "active_engine": active_engine,
             "is_dual_channel": is_dual_channel,
+            "selected_input_device": audio_state.selected_input_device.lock().unwrap().clone(),
         },
         "detector": {
             "is_watching": detector.is_watching,
@@ -294,6 +295,68 @@ async fn capture_stop_handler(headers: HeaderMap, State(state): State<ServerStat
         }
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
+}
+
+// Test-mode routes exercise the actual native pause/resume contract, including
+// the unsupported dual-channel case, without adding a production UI feature.
+async fn capture_pause_handler(headers: HeaderMap, State(state): State<ServerState>) -> impl IntoResponse {
+    capture_pause_or_resume(headers, state, false)
+}
+
+async fn capture_resume_handler(headers: HeaderMap, State(state): State<ServerState>) -> impl IntoResponse {
+    capture_pause_or_resume(headers, state, true)
+}
+
+fn capture_pause_or_resume(headers: HeaderMap, state: ServerState, resume: bool) -> impl IntoResponse {
+    if let Some((status, msg)) = authorize_control(&headers) {
+        return error_response(status, msg);
+    }
+    let audio_state = state.app_handle.state::<AudioState>();
+    let result = if resume {
+        crate::commands::resume_recording(audio_state)
+    } else {
+        crate::commands::pause_recording(audio_state)
+    };
+    match result {
+        Ok(res) if res.ok => success_response(
+            if resume { "Capture resumed" } else { "Capture paused" },
+            res.data.map(|data| serde_json::json!(data)),
+        ),
+        Ok(res) => error_response(StatusCode::BAD_REQUEST, res.error.map(|e| e.message).unwrap_or_default()),
+        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+#[derive(Deserialize)]
+struct CaptureInputBody {
+    name: Option<String>,
+}
+
+async fn capture_input_handler(
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+    Json(body): Json<CaptureInputBody>,
+) -> impl IntoResponse {
+    if let Some((status, msg)) = authorize_control(&headers) {
+        return error_response(status, msg);
+    }
+    let audio_state = state.app_handle.state::<AudioState>();
+    let _transition = match audio_state.begin_recording_transition() {
+        Ok(transition) => transition,
+        Err(error) => return error_response(StatusCode::CONFLICT, error),
+    };
+    if audio_state.recording_handle.lock().unwrap().is_some() {
+        return error_response(StatusCode::CONFLICT, "Stop capture before changing the test input");
+    }
+    if let Some(name) = body.name.as_ref() {
+        if !crate::commands::list_input_devices().await.contains(name) {
+            return error_response(StatusCode::BAD_REQUEST, "Input device unavailable");
+        }
+    }
+    // Fixture setup changes only the next capture's native input. It neither
+    // edits the user's settings store nor drives an unreliable native menu.
+    crate::commands::set_input_device(audio_state, body.name.clone());
+    success_response("Test capture input selected", Some(serde_json::json!({"name": body.name})))
 }
 
 #[derive(Deserialize)]
@@ -506,6 +569,9 @@ pub fn build_router(app_handle: AppHandle) -> Router {
             .route("/api/simulate/{event}", post(simulate_event_handler))
             .route("/api/capture/start", post(capture_start_handler))
             .route("/api/capture/stop", post(capture_stop_handler))
+            .route("/api/capture/pause", post(capture_pause_handler))
+            .route("/api/capture/resume", post(capture_resume_handler))
+            .route("/api/capture/input", post(capture_input_handler))
             .route("/api/simulate/feed-meeting", post(feed_meeting_handler))
             .route("/api/simulate/cycle-turn-snippet", post(cycle_turn_snippet_handler))
             .route("/api/simulate/cycle-vault-snippet", post(cycle_vault_snippet_handler))

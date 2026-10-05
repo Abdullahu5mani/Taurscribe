@@ -194,6 +194,7 @@ pub struct WhisperManager {
     last_transcript: String,         // Memorizes what was said previously (context)
     backend: GpuBackend,             // Current hardware being used (CPU/GPU)
     current_model: Option<String>,   // Name of the currently loaded model
+    device_key: String,              // gpu::Target key the model was loaded for
     resampler: Option<(u32, usize, Box<SincFixedIn<f32>>)>, // (Sample Rate, Chunk Size, Resampler)
     /// Copy of (model, backend) kept up to date by `initialize` / `unload`, so the
     /// UI can read it without waiting on this manager's lock.
@@ -242,6 +243,7 @@ impl WhisperManager {
             last_transcript: String::new(), // Start with empty memory
             backend: GpuBackend::Cpu,       // Assume CPU until we prove otherwise
             current_model: None,            // No model selected yet
+            device_key: String::new(),
             resampler: None,
             snapshot: std::sync::Arc::new(std::sync::Mutex::new(WhisperStatus {
                 model: None,
@@ -390,6 +392,11 @@ impl WhisperManager {
     /// Get which GPU backend we are using
     pub fn get_backend(&self) -> &GpuBackend {
         &self.backend
+    }
+
+    /// The `gpu::Target` key the loaded model was loaded for.
+    pub fn device_key(&self) -> &str {
+        &self.device_key
     }
 
     /// Wipe the "memory" of the conversation (clear context)

@@ -8,6 +8,21 @@ export interface SystemInfo {
   backend_hint: string;
 }
 
+/** What `get_gpu_report` returns (gpu.rs): this build's GPU flavor and the best one for this machine. */
+export interface GpuReport {
+  primary: { name: string } | null;
+  build_flavor: string;
+  recommended_label: string;
+  better_build_available: boolean;
+}
+
+/** The setup wizard's hardware verdict. `title` leads in bold; `warn` shows it in amber. */
+export interface HardwareVerdict {
+  title?: string;
+  warn?: boolean;
+  text: string;
+}
+
 export type WhisperTier = "Tiny" | "Base" | "Small" | "Medium" | "Large";
 export type RecommendationEngine = "whisper" | "granite";
 export type OnboardingUseCase = "quick_notes" | "coding" | "meetings" | "multilingual";

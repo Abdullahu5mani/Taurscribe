@@ -25,6 +25,8 @@ interface UseEngineSwitchParams {
     setTrayState: (state: TrayState) => Promise<void>;
     asrBackend: "gpu" | "cpu";
     setAsrBackend: (backend: "gpu" | "cpu") => void;
+    computeDevice?: string;
+    setComputeDevice?: (id: string) => Promise<void>;
     isRecordingRef: React.RefObject<boolean>;
     downloadProgressRef: React.RefObject<Record<string, DownloadProgress>>;
     setSessionPhase?: (phase: "idle" | "loading_model" | "recording" | "paused" | "processing" | "success" | "warning" | "error") => void;

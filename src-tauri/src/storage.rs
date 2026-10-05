@@ -1064,6 +1064,12 @@ mod tests {
         conn
     }
 
+    /// `base` joined with `rest` the way this OS joins paths (a backslash on
+    /// Windows), as the move code writes them.
+    fn native(base: &str, rest: &str) -> String {
+        Path::new(base).join(rest).to_string_lossy().into_owned()
+    }
+
     fn journal_in(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("ts-journal-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -5,6 +5,7 @@ import {
   computeModelRecommendation,
   getWhisperTierFromModelId,
   ONBOARDING_USE_CASES,
+  type GpuReport,
   type SystemInfo,
 } from "../../src/modelRecommendations";
 
@@ -102,4 +103,39 @@ test("every Whisper id the Models tab offers is in the download registry", () =>
   const ids = [...new Set([...tab.matchAll(/'(whisper-[a-z0-9._-]+)'/g)].map((m) => m[1]))];
   expect(ids.length).toBeGreaterThan(10);
   expect(ids.filter((id) => !registryIds.has(id))).toEqual([]);
+});
+
+describe("hardwareVerdict", () => {
+  const rtx = { primary: { name: "NVIDIA GeForce RTX 5070" } };
+  const nvidiaPc = sys(32, { gpu_name: "NVIDIA GeForce RTX 5070", cuda_available: true, vram_gb: 12 });
+
+  test("a CPU build on a CUDA machine says the GPU isn't used and names the build that uses it", () => {
+    const gpu: GpuReport = { ...rtx, build_flavor: "cpu", recommended_label: "NVIDIA (CUDA)", better_build_available: true };
+    const v = hardwareVerdict(nvidiaPc, gpu, false);
+    expect(v?.warn).toBe(true);
+    expect(v?.title).toBe("This download doesn't use your GPU.");
+    expect(v?.text).toContain("NVIDIA (CUDA) build");
+    expect(v?.text).toContain("RTX 5070");
+  });
+
+  test("a GPU build that isn't the best one for the machine says which is faster", () => {
+    const gpu: GpuReport = { ...rtx, build_flavor: "vulkan", recommended_label: "NVIDIA (CUDA)", better_build_available: true };
+    const v = hardwareVerdict(nvidiaPc, gpu, false);
+    expect(v?.warn).toBeUndefined();
+    expect(v?.title).toBe("GPU acceleration ready.");
+    expect(v?.text).toContain("NVIDIA (CUDA) build of Taurscribe is faster");
+  });
+
+  test("the matching build keeps the full-speed verdict", () => {
+    const gpu: GpuReport = { ...rtx, build_flavor: "nvidia", recommended_label: "NVIDIA (CUDA)", better_build_available: false };
+    expect(hardwareVerdict(nvidiaPc, gpu, false)?.text).toBe("Whisper and Granite both run at full speed.");
+  });
+
+  test("Macs, machines without a GPU, and a missing report", () => {
+    const mac = sys(16, { gpu_name: "Apple M4", backend_hint: "Metal" });
+    const apple: GpuReport = { primary: null, build_flavor: "apple", recommended_label: "Apple (Metal)", better_build_available: false };
+    expect(hardwareVerdict(mac, apple, true)?.text).toBe("Models run on the GPU through Metal.");
+    expect(hardwareVerdict(sys(8, { gpu_name: "Unknown" }), null, false)?.title).toBeUndefined();
+    expect(hardwareVerdict(null, null, false)).toBeNull();
+  });
 });
