@@ -112,6 +112,8 @@ export function useRecording({
     const recordingGenerationRef = useRef(0);
     const recordingEventVersionRef = useRef(0);
     const recordingSessionRef = useRef(0);
+    // Only one Pause/Resume request per generation may be in flight.
+    const pauseResumeOperationRef = useRef<number | null>(null);
     const recordingStartTimeRef = useRef(0);
     const hotkeySessionRef = useRef(false);
     const overlayHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -428,8 +430,10 @@ export function useRecording({
             if (muteBackgroundAudioRef.current) {
                 await invoke("unmute_system_audio").catch(() => {});
             }
+            if (!isCurrent()) return;
             playError?.();
             await setTrayState("ready");
+            if (!isCurrent()) return;
             setIsRecording(false);
             isRecordingRef.current = false;
             setIsDualChannelRecording(false);
@@ -469,6 +473,8 @@ export function useRecording({
     const handlePauseRecording = async () => {
         if (!isRecordingRef.current || isPausedRef.current || isProcessingTranscriptRef.current) return;
         const generation = recordingGenerationRef.current;
+        if (pauseResumeOperationRef.current === generation) return;
+        pauseResumeOperationRef.current = generation;
         try {
             const result = await invoke<CommandResult<string>>("pause_recording");
             if (generation !== recordingGenerationRef.current) return;
@@ -483,12 +489,16 @@ export function useRecording({
         } catch (e) {
             if (generation !== recordingGenerationRef.current) return;
             setHeaderStatus("Couldn't pause recording: " + e, 4000);
+        } finally {
+            if (pauseResumeOperationRef.current === generation) pauseResumeOperationRef.current = null;
         }
     };
 
     const handleResumeRecording = async () => {
         if (!isRecordingRef.current || !isPausedRef.current || isProcessingTranscriptRef.current) return;
         const generation = recordingGenerationRef.current;
+        if (pauseResumeOperationRef.current === generation) return;
+        pauseResumeOperationRef.current = generation;
         try {
             const result = await invoke<CommandResult<string>>("resume_recording");
             if (generation !== recordingGenerationRef.current) return;
@@ -503,6 +513,8 @@ export function useRecording({
         } catch (e) {
             if (generation !== recordingGenerationRef.current) return;
             setHeaderStatus("Couldn't resume recording: " + e, 4000);
+        } finally {
+            if (pauseResumeOperationRef.current === generation) pauseResumeOperationRef.current = null;
         }
     };
 
@@ -540,6 +552,7 @@ export function useRecording({
 
         try {
             await setTrayState(meetingSessionRef.current ? "processing_meeting" : "processing_speech");
+            if (superseded()) return;
             if (currentEngine === "whisper") setHeaderStatus("Processing transcription...", 15_000, true);
 
             const stopResult = await invoke<CommandResult<RecordingOutcome>>("stop_recording");
@@ -566,9 +579,11 @@ export function useRecording({
                 if (muteBackgroundAudioRef.current) {
                     await invoke("unmute_system_audio").catch(() => {});
                 }
+                if (superseded()) return;
                 resetRecordingSession();
                 setStopProcessing(false);
                 await setTrayState("done", undefined, "Meeting saved to Meetings");
+                if (superseded()) return;
                 setSessionPhase?.(captureNotice ? "warning" : "idle");
                 showNotice(captureNotice);
                 setHeaderStatus(captureNotice ? "Meeting saved with incomplete audio — check the warning" : "Meeting recording saved to Meetings", 6000);
@@ -588,10 +603,12 @@ export function useRecording({
                 if (muteBackgroundAudioRef.current) {
                     await invoke("unmute_system_audio").catch(() => {});
                 }
+                if (superseded()) return;
                 playError?.();
                 resetRecordingSession();
                 setStopProcessing(false);
                 await setTrayState("nothing_heard", undefined, "Recording too short");
+                if (superseded()) return;
                 setSessionPhase?.("warning");
                 showNotice(captureNotice ?? {
                     level: "warning",
@@ -603,8 +620,10 @@ export function useRecording({
                 if (showOverlay) {
                     overlayTerminalRef.current = true;
                     await emitOverlayState("too_short");
+                    if (superseded()) return;
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
+                if (superseded()) return;
                 if (isOverlay) {
                     hideOverlay();
                 }
@@ -616,10 +635,12 @@ export function useRecording({
                 if (muteBackgroundAudioRef.current) {
                     await invoke("unmute_system_audio").catch(() => {});
                 }
+                if (superseded()) return;
                 playError?.();
                 resetRecordingSession();
                 setStopProcessing(false);
                 await setTrayState("nothing_heard", undefined, "Nothing heard — check your microphone");
+                if (superseded()) return;
                 setSessionPhase?.("warning");
                 showNotice(captureNotice ?? {
                     level: "warning",
@@ -631,8 +652,10 @@ export function useRecording({
                 if (showOverlay) {
                     overlayTerminalRef.current = true;
                     await emitOverlayState("nothing_heard");
+                    if (superseded()) return;
                     await new Promise(resolve => setTimeout(resolve, 1100));
                 }
+                if (superseded()) return;
                 if (isOverlay) {
                     hideOverlay();
                 }
@@ -752,6 +775,7 @@ export function useRecording({
                 setHeaderStatus(headerMsg, 5000);
                 playError?.();
                 await setTrayState("paste_failed", undefined, headerMsg);
+                if (superseded()) return;
                 setSessionPhase?.("warning");
                 showNotice({
                     level: "warning",
@@ -764,6 +788,7 @@ export function useRecording({
                     overlayTerminalRef.current = true;
                     await emitOverlayState("paste_failed", finalTrans);
                 }
+                if (superseded()) return;
                 if (isOverlay) {
                     clearPendingOverlayHide();
                     overlayHideTimerRef.current = setTimeout(() => {
@@ -779,6 +804,7 @@ export function useRecording({
                 }
                 playPaste?.();
                 await setTrayState("done", undefined, finalTrans.slice(0, 60) + (finalTrans.length > 60 ? "…" : ""));
+                if (superseded()) return;
                 setSessionPhase?.(unsavedNotice ? "warning" : "success");
                 showNotice(unsavedNotice);
                 if (showOverlay) {
@@ -786,6 +812,7 @@ export function useRecording({
                     overlayTerminalRef.current = true;
                     await emitOverlayState("done", preview, totalMs);
                 }
+                if (superseded()) return;
                 if (isOverlay) {
                     clearPendingOverlayHide();
                     overlayHideTimerRef.current = setTimeout(() => {
@@ -818,12 +845,14 @@ export function useRecording({
                 if (muteBackgroundAudioRef.current && !isRecordingRef.current) {
                     await invoke("unmute_system_audio").catch(() => {});
                 }
+                if (superseded()) return;
                 playError?.();
                 setSessionPhase?.("error");
                 showNotice(commandErrorToNotice(error, "Recording failed to stop cleanly"));
             }
             setStopProcessing(false);
             await setTrayState(isRecordingRef.current ? (isPausedRef.current ? "paused" : "recording") : "ready");
+            if (superseded()) return;
             if (isRecordingRef.current) setSessionPhase?.(isPausedRef.current ? "paused" : "recording");
             if (isOverlay && !isRecordingRef.current) {
                 overlayTerminalRef.current = true;

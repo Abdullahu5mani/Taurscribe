@@ -230,19 +230,28 @@ function TranscriptFeedComponent({
     const [items, setItems] = useState<TranscriptRecord[]>([]);
     const [animatingId, setAnimatingId] = useState<number | null>(null);
     const [copiedId, setCopiedId] = useState<number | null>(null);
+    const [copyError, setCopyError] = useState<string | null>(null);
     const prevTopIdRef = useRef<number | null>(null);
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const animTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const historyGenerationRef = useRef(0);
+    const copyGenerationRef = useRef(0);
+    const mountedRef = useRef(true);
+    const deletedIdsRef = useRef(new Set<number>());
 
     const loadHistory = useCallback(async () => {
+        const request = ++historyGenerationRef.current;
         try {
             // Only mic recordings here; file transcriptions have their own panel.
             // Filtered in the query so newer file rows can't push dictations out of the 50.
-            const rows = await invoke<TranscriptRecord[]>("list_transcript_history", {
+            const response = await invoke<TranscriptRecord[]>("list_transcript_history", {
                 limit: 50,
                 offset: 0,
                 kind: "dictation",
             });
+            if (!mountedRef.current || request !== historyGenerationRef.current) return;
+            // A read can capture a row just before its successful deletion.
+            const rows = response.filter(row => !deletedIdsRef.current.has(row.id));
             // Detect a newly added top item and trigger its enter animation.
             const isNewItem = rows.length > 0 && rows[0].id !== prevTopIdRef.current;
             if (isNewItem) {
@@ -263,7 +272,17 @@ function TranscriptFeedComponent({
 
 
     // Load on mount.
-    useEffect(() => { void loadHistory(); }, [loadHistory]);
+    useEffect(() => {
+        mountedRef.current = true;
+        void loadHistory();
+        return () => {
+            mountedRef.current = false;
+            ++historyGenerationRef.current;
+            ++copyGenerationRef.current;
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+            if (animTimerRef.current) clearTimeout(animTimerRef.current);
+        };
+    }, [loadHistory]);
 
     // Reload whenever the parent signals a new save.
     useEffect(() => {
@@ -271,18 +290,28 @@ function TranscriptFeedComponent({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [refreshKey]);
 
-    const onCopy = (e: React.MouseEvent, id: number, text: string) => {
+    const onCopy = async (e: React.MouseEvent, id: number, text: string) => {
         e.stopPropagation();
-        try { navigator.clipboard.writeText(text).catch(() => { }); } catch { /* non-critical */ }
+        const request = ++copyGenerationRef.current;
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        setCopiedId(id);
-        copyTimerRef.current = setTimeout(() => { setCopiedId(null); }, 1500);
+        setCopiedId(null);
+        setCopyError(null);
+        try {
+            await navigator.clipboard.writeText(text);
+            if (!mountedRef.current || request !== copyGenerationRef.current) return;
+            setCopiedId(id);
+            copyTimerRef.current = setTimeout(() => { setCopiedId(null); copyTimerRef.current = null; }, 1500);
+        } catch (error) {
+            if (mountedRef.current && request === copyGenerationRef.current) setCopyError(`Could not copy transcript: ${String(error)}`);
+        }
     };
 
     const onDelete = async (e: React.MouseEvent, id: number) => {
         e.stopPropagation();
         try {
             await invoke("delete_transcript_history", { id });
+            if (!mountedRef.current) return;
+            deletedIdsRef.current.add(id);
             setItems(prev => prev.filter(item => item.id !== id));
         } catch (err) {
             console.warn("[TranscriptFeed] Failed to delete row:", err);
@@ -303,6 +332,7 @@ function TranscriptFeedComponent({
             aria-label="Transcript feed"
             aria-live="polite"
         >
+            {copyError && <p className="file-card-error" role="alert">{copyError}</p>}
             {showLive && (
                 <div
                     className={`feed-live-row ${liveClass}`}
@@ -354,7 +384,7 @@ function TranscriptFeedComponent({
                                         </span>
                                     ) : null}
                                     <span className={`feed-badge feed-badge-engine--${item.engine}`}>
-                                        {item.engine === "granite" ? "Granite" : item.engine === "granite" ? "Granite" : "Whisper"}
+                                        {item.engine === "granite" ? "Granite" : item.engine === "qwen3" ? "Qwen3" : item.engine === "whisper" ? "Whisper" : item.engine}
                                     </span>
                                     {item.grammar_llm_used && (
                                         <span className="feed-badge feed-badge-llm">LLM</span>

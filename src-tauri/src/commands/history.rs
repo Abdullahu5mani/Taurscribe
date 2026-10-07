@@ -338,7 +338,7 @@ fn query_history(conn: &Connection, limit: i64, offset: i64, kind: Option<&str>)
             "SELECT id, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind, source_path, import_method
              FROM transcriptions
              WHERE ?3 IS NULL OR COALESCE(kind, {KIND_FROM_SOURCE_SQL}) = ?3
-             ORDER BY datetime(created_at) DESC, id DESC
+             ORDER BY julianday(created_at) DESC, id DESC
              LIMIT ?1 OFFSET ?2"
         ))
         .map_err(|e| {
@@ -423,6 +423,40 @@ mod tests {
         assert_eq!(texts, ["third", "second", "first", "older"]);
         let page: Vec<String> = query_history(&conn, 2, 1, None).unwrap().into_iter().map(|r| r.transcript).collect();
         assert_eq!(page, ["second", "first"]);
+    }
+
+    #[test]
+    fn completion_order_is_preserved_when_an_older_file_is_saved_later_in_the_same_second() {
+        let conn = mem_db();
+        // A retry of an older completed file can have a higher insertion id.
+        insert_history_row(&conn, "2026-10-07T12:00:00.900+00:00", "newer completion", "granite", None, false, None, None, Some("newer.wav")).unwrap();
+        insert_history_row(&conn, "2026-10-07T12:00:00.100+00:00", "older completion saved later", "granite", None, false, None, None, Some("older.wav")).unwrap();
+        let rows = query_history(&conn, 2, 0, Some("file")).unwrap();
+        println!("[HISTORY_TEST] subsecond order: {:?}", rows.iter().map(|r| (&r.created_at, &r.transcript)).collect::<Vec<_>>());
+        assert_eq!(rows[0].transcript, "newer completion");
+    }
+
+    #[test]
+    fn subsecond_history_pages_follow_completion_time_across_offsets_and_timezones() {
+        let conn = mem_db();
+        let mut expected = Vec::new();
+        for i in 0..40 {
+            let millis = (i * 137) % 1000;
+            let stamp = if i % 2 == 0 {
+                format!("2026-10-07T12:00:00.{millis:03}+00:00")
+            } else {
+                format!("2026-10-07T08:00:00.{millis:03}-04:00")
+            };
+            let id = insert_history_row(&conn, &stamp, &format!("synthetic row {i}"), "whisper", None, false, None, None, None).unwrap();
+            expected.push((chrono::DateTime::parse_from_rfc3339(&stamp).unwrap().timestamp_millis(), id));
+        }
+        expected.sort_by(|a, b| b.cmp(a));
+        let mut actual = Vec::new();
+        for offset in (0..40).step_by(7) {
+            actual.extend(query_history(&conn, 7, offset, None).unwrap().iter().map(|row| row.id));
+        }
+        println!("[HISTORY_TEST] paged time order: {actual:?}");
+        assert_eq!(actual, expected.iter().map(|(_, id)| *id).collect::<Vec<_>>());
     }
 
     #[test]

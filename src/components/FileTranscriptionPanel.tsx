@@ -72,6 +72,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
     const [isDragOver, setIsDragOver] = useState(false);
     const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
     const processingRef = useRef(false);
+    const batchOpenRef = useRef(false);
     const activeFileRef = useRef<{ id: string; path: string } | null>(null);
     const queueRef = useRef<FileItem[]>([]);
     const pendingProgressRef = useRef<Map<string, ProgressPayload>>(new Map());
@@ -216,13 +217,24 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
     useEffect(() => {
         queueRef.current = files;
         processNext();
-    }, [files]);
+    }, [files, isModelLoading, isVoiceEnrolling]);
+
+    const finishBatch = useCallback(() => {
+        if (!batchOpenRef.current) return;
+        batchOpenRef.current = false;
+        void invoke("finish_file_transcription_batch").catch(console.error);
+    }, []);
 
     const processNext = useCallback(async () => {
         if (!mountedRef.current || processingRef.current) return;
         const queued = queueRef.current.find(f => f.status === "queued");
-        if (!queued) return;
+        if (!queued) {
+            finishBatch();
+            return;
+        }
+        if (inputBlockedRef.current) return;
 
+        batchOpenRef.current = true;
         processingRef.current = true;
         activeFileRef.current = { id: queued.id, path: queued.path };
         setFiles(prev =>
@@ -291,12 +303,11 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
             pendingProgressRef.current.delete(queued.id);
             processingRef.current = false;
             setTimeout(() => {
-                const next = mountedRef.current && queueRef.current.find(f => f.status === "queued");
-                if (next) processNext();
-                else void invoke("finish_file_transcription_batch").catch(console.error);
+                if (mountedRef.current) processNext();
+                else finishBatch();
             }, 0);
         }
-    }, []);
+    }, [finishBatch]);
 
     const cancelAll = () => {
         const processing = files.find(f => f.status === "processing");
