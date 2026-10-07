@@ -483,8 +483,9 @@ export function useRecording({
             isPausedRef.current = true;
             pausedAtRef.current = Date.now();
             setHeaderStatus("Recording paused", 1500);
-            await setTrayState("paused");
             setSessionPhase?.("paused");
+            await setTrayState("paused");
+            if (generation !== recordingGenerationRef.current) return;
             await emitOverlayState("paused", liveTranscriptRef.current);
         } catch (e) {
             if (generation !== recordingGenerationRef.current) return;
@@ -507,8 +508,9 @@ export function useRecording({
             setIsPaused(false);
             isPausedRef.current = false;
             setHeaderStatus("Recording resumed", 1500);
-            await setTrayState("recording");
             setSessionPhase?.("recording");
+            await setTrayState("recording");
+            if (generation !== recordingGenerationRef.current) return;
             await emitOverlayState("recording", liveTranscriptRef.current);
         } catch (e) {
             if (generation !== recordingGenerationRef.current) return;
