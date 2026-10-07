@@ -119,18 +119,21 @@ fn malformed_wav_headers_return_errors_and_keep_the_file() {
 }
 
 #[test]
-#[ignore = "Bug-hunt discovery: explicit run checks rejection of nonfinite float audio"]
 fn nonfinite_float_audio_must_not_enter_the_asr_pipeline() {
-    let fixture = Fixture::new();
-    let mut writer = hound::WavWriter::create(fixture.path(), hound::WavSpec {
-        channels: 1, sample_rate: 16_000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float,
-    }).unwrap();
-    for n in 0..16_000 { writer.write_sample(if n == 8000 { f32::NAN } else { 0.3 * (n as f32 * 0.11).sin() }).unwrap(); }
-    writer.finalize().unwrap();
-    if let Ok((mut samples, _)) = decode_audio_mono_f32(fixture.path()) {
-        let nonfinite_before = samples.iter().filter(|s| !s.is_finite()).count();
-        taurscribe_lib::audio_preprocess::remove_dc(&mut samples);
-        let nonfinite_after = samples.iter().filter(|s| !s.is_finite()).count();
-        assert_eq!(nonfinite_after, 0, "one invalid sample must be rejected or sanitized, not poison the full ASR window: before={nonfinite_before}, after={nonfinite_after}");
+    for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let fixture = Fixture::new();
+        let mut writer = hound::WavWriter::create(fixture.path(), hound::WavSpec {
+            channels: 1, sample_rate: 16_000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float,
+        }).unwrap();
+        for n in 0..16_000 { writer.write_sample(if n == 8000 { invalid } else { 0.3 * (n as f32 * 0.11).sin() }).unwrap(); }
+        writer.finalize().unwrap();
+        let original = std::fs::read(fixture.path()).unwrap();
+        assert!(decode_audio_mono_f32(fixture.path()).unwrap_err().contains("nonfinite"));
+        assert!(decode_audio_interleaved_f32(fixture.path()).unwrap_err().contains("nonfinite"));
+        let error = decode_audio_mono_stream(fixture.path(), |pcm, _, _, _| {
+            assert!(pcm.iter().all(|s| s.is_finite()), "invalid audio cannot reach inference"); Ok(())
+        }).unwrap_err();
+        assert!(error.contains("nonfinite"));
+        assert_eq!(std::fs::read(fixture.path()).unwrap(), original);
     }
 }

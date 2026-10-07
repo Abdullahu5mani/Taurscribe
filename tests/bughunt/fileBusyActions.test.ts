@@ -77,6 +77,7 @@ beforeEach(() => {
 test("voice enrollment blocks Re-run without losing the completed transcript", async () => {
     const h = fixture(); drop("/saved.wav"); await h.settle();
     jobs[0].resolve(result("Original completed transcript")); await h.settle();
+    byLabel(h.handle.current, "Show transcript for saved.wav").props.onClick(); await h.settle();
     expect(text(h.handle.current)).toContain("Original completed transcript");
     h.setProps({ isVoiceEnrolling: true });
     const rerun = nodes(h.handle.current).find(n => n.props?.["aria-label"]?.startsWith("Re-transcribe saved.wav"));

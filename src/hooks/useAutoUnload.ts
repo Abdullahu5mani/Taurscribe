@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
 import type { ASREngine } from "./useEngineSwitch";
+import { serialTasks } from "../utils/serialTasks";
 
 export interface AutoUnloadStatus {
     timeout_seconds: number;
@@ -67,22 +68,29 @@ export function useAutoUnload({
     const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const storeRef = useRef<Store | null>(null);
+    const preferenceRevisionRef = useRef(0);
+    const preferenceQueueRef = useRef(serialTasks());
+    const appliedTimeoutRef = useRef(1800);
+    const mountedRef = useRef(true);
 
     // ── Load saved preference on mount ────────────────────────────────────────
     useEffect(() => {
         let isMounted = true;
+        mountedRef.current = true;
+        const revision = preferenceRevisionRef.current;
         const init = async () => {
             try {
                 const store = await Store.load("settings.json");
                 storeRef.current = store;
                 const saved = await store.get<number>("auto_unload_timeout_secs");
-                if (saved !== null && saved !== undefined && typeof saved === "number") {
-                    if (isMounted) setTimeoutSeconds(saved);
-                    await invoke("set_auto_unload_timeout", { seconds: saved }).catch(() => {});
-                } else {
-                    // Default to 1800 (30 minutes)
-                    await invoke("set_auto_unload_timeout", { seconds: 1800 }).catch(() => {});
-                }
+                if (!isMounted || revision !== preferenceRevisionRef.current) return;
+                const seconds = typeof saved === "number" && Number.isSafeInteger(saved) && saved >= 0 ? saved : 1800;
+                await preferenceQueueRef.current(async () => {
+                    if (!isMounted || revision !== preferenceRevisionRef.current) return;
+                    await invoke("set_auto_unload_timeout", { seconds });
+                    appliedTimeoutRef.current = seconds;
+                    if (isMounted && revision === preferenceRevisionRef.current) setTimeoutSeconds(seconds);
+                });
             } catch (e) {
                 console.warn("[AUTO-UNLOAD] Failed to load settings.json:", e);
             }
@@ -90,6 +98,7 @@ export function useAutoUnload({
         init();
         return () => {
             isMounted = false;
+            mountedRef.current = false;
         };
     }, []);
 
@@ -123,9 +132,11 @@ export function useAutoUnload({
     // ── Listen for auto-unload event from Rust background watchdog ─────────────
     useEffect(() => {
         let unlisten: (() => void) | undefined;
+        let active = true;
         listen<{ timeout_seconds: number; unloaded_engines: string[] }>(
             "model-auto-unloaded",
             (event) => {
+                if (!active) return;
                 setLoadedEngine(null);
                 setRemainingSeconds(null);
                 const timeoutLabel = formatTimeoutLabel(event.payload.timeout_seconds);
@@ -135,10 +146,11 @@ export function useAutoUnload({
                 setHeaderStatus(msg, 6000);
             },
         ).then((fn) => {
-            unlisten = fn;
-        });
+            if (active) unlisten = fn; else fn();
+        }).catch(console.error);
 
         return () => {
+            active = false;
             unlisten?.();
         };
     }, [setLoadedEngine, setHeaderStatus]);
@@ -146,18 +158,34 @@ export function useAutoUnload({
     // ── Change timeout setting ────────────────────────────────────────────────
     const updateTimeout = useCallback(
         async (newSeconds: number) => {
+            const revision = ++preferenceRevisionRef.current;
             setTimeoutSeconds(newSeconds);
-            try {
-                await invoke("set_auto_unload_timeout", { seconds: newSeconds });
-                const store = storeRef.current ?? (await Store.load("settings.json"));
-                storeRef.current = store;
-                await store.set("auto_unload_timeout_secs", newSeconds);
-                await store.save();
-            } catch (e) {
-                console.error("[AUTO-UNLOAD] Failed to save timeout:", e);
-            }
+            await preferenceQueueRef.current(async () => {
+                try {
+                    await invoke("set_auto_unload_timeout", { seconds: newSeconds });
+                } catch (e) {
+                    console.error("[AUTO-UNLOAD] Failed to apply timeout:", e);
+                    if (mountedRef.current && revision === preferenceRevisionRef.current) {
+                        setTimeoutSeconds(appliedTimeoutRef.current);
+                        setHeaderStatus(`Failed to change auto-unload timeout: ${e}`, 6000);
+                    }
+                    return;
+                }
+                appliedTimeoutRef.current = newSeconds;
+                try {
+                    const store = storeRef.current ?? (await Store.load("settings.json"));
+                    storeRef.current = store;
+                    await store.set("auto_unload_timeout_secs", newSeconds);
+                    await store.save();
+                } catch (e) {
+                    console.error("[AUTO-UNLOAD] Failed to save timeout:", e);
+                    if (mountedRef.current && revision === preferenceRevisionRef.current) {
+                        setHeaderStatus(`Auto-unload timeout applied, but could not save the preference: ${e}`, 6000);
+                    }
+                }
+            });
         },
-        [],
+        [setHeaderStatus],
     );
 
     return {

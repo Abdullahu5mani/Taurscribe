@@ -1168,7 +1168,7 @@ pub fn resume_recording(state: State<'_, AudioState>) -> Result<CommandResult<St
 }
 
 #[tauri::command]
-pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandResult<()>, String> {
+pub async fn cancel_recording(state: State<'_, AudioState>, app: AppHandle) -> Result<CommandResult<()>, String> {
     let _recording_transition = Arc::new(state.begin_recording_transition()?);
     let _model_operation = Arc::new(state.begin_model_operation()?);
     state.recording_paused.store(false, Ordering::Relaxed);
@@ -1176,6 +1176,7 @@ pub async fn cancel_recording(state: State<'_, AudioState>) -> Result<CommandRes
     let Some(recording) = state.recording_handle.lock().unwrap().take() else {
         return Ok(CommandResult::err("not_recording", "Not recording"));
     };
+    emit_recording_state(&app, &state);
     let last_recording_path = state.last_recording_path.lock().unwrap().clone();
     let session_transcript = state.session_transcript.clone();
     *state.recording_meeting.lock().unwrap() = None;

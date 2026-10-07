@@ -40,7 +40,6 @@ fn short_reply_can_match_an_established_voice_in_its_own_turn() {
     assert_ne!(voice_at(&out,s[1].0),voice_at(&out,s[0].0),"{out:?}");
 }
 #[test]
-#[ignore = "Known discovery: parent-turn fallback bypasses a clear short-reply voiceprint"]
 fn short_reply_must_not_inherit_a_different_voice_from_its_parent_turn() {
     // The separator merged A's sentence and B's brief reply into one turn;
     // both voices have eight seconds of independent reference speech.

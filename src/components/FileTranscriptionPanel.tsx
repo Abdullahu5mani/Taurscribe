@@ -54,7 +54,7 @@ interface FileTranscriptionPanelProps {
 
 function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGraniteModel, currentQwen3Model, asrBackend = "gpu", isModelLoading = false, isVoiceEnrolling = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
     const inputBlockedRef = useRef(isModelLoading || isVoiceEnrolling);
-    useEffect(() => { inputBlockedRef.current = isModelLoading || isVoiceEnrolling; }, [isModelLoading, isVoiceEnrolling]);
+    inputBlockedRef.current = isModelLoading || isVoiceEnrolling;
 
     // Keep a ref to the active model ID so addPaths (a stable callback) can read it.
     const activeModelIdRef = useRef<string | null>(null);
@@ -302,11 +302,12 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
         const processing = files.find(f => f.status === "processing");
         if (processing) cancelTranscription(processing.path);
         setFiles(prev => prev.filter(f =>
-            f.status === "done" || f.status === "error" || f.status === "cancelled"
+            f.status !== "queued"
         ));
     };
 
     const retranscribe = async (item: FileItem) => {
+        if (inputBlockedRef.current || (processingRef.current && activeFileRef.current?.id === item.id) || item.historySaving) return;
         setFiles(prev =>
             prev.map(f =>
                     f.id === item.id
@@ -573,7 +574,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                                 data-testid={`file-rerun-${item.id}`}
                                                 className="file-card-btn file-card-btn--secondary"
                                                 onClick={() => retranscribe(item)}
-                                                disabled={item.historySaving}
+                                                disabled={item.historySaving || isDisabled}
                                                 title={`Re-transcribe with ${engineLabel(activeEngineRef.current, activeModelIdRef.current)} (switch engine first to use a different model)`}
                                                 aria-label={`Re-transcribe ${item.name} with ${engineLabel(activeEngineRef.current, activeModelIdRef.current)}`}
                                             >
@@ -588,6 +589,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                             data-testid={`file-retry-${item.id}`}
                                             className="file-card-btn file-card-btn--error"
                                             onClick={() => retranscribe(item)}
+                                            disabled={isDisabled}
                                             title={`Retry with ${engineLabel(activeEngineRef.current, activeModelIdRef.current)}`}
                                             aria-label={`Retry transcribing ${item.name}`}
                                         >
@@ -601,6 +603,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                             data-testid={`file-run-${item.id}`}
                                             className="file-card-btn file-card-btn--secondary"
                                             onClick={() => retranscribe(item)}
+                                            disabled={isDisabled}
                                             title={`Transcribe with ${engineLabel(activeEngineRef.current, activeModelIdRef.current)}`}
                                             aria-label={`Transcribe ${item.name}`}
                                         >

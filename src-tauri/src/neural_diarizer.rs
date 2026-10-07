@@ -272,8 +272,8 @@ pub fn split_mixed_speakers(
             groups[target].extend(g);
         }
         // Each voice's pieces get its speaker. A shorter piece takes, in order:
-        // the one voice of the rest of its own turn (a sentence cut at a
-        // comma); a clear voiceprint match; the closest printed piece in time.
+        // a clear voiceprint match; the one voice of the rest of its own
+        // turn (a sentence cut at a comma); the closest printed piece in time.
         let mut voice_of: Vec<(usize, u64, u64, usize)> = Vec::new(); // (turn, start, end, speaker)
         for (n, g) in groups.iter().enumerate() {
             let id = if n == 0 { speaker } else { next_speaker + n - 1 };
@@ -299,10 +299,6 @@ pub fn split_mixed_speakers(
             }
             let p = pieces[i];
             let own: std::collections::BTreeSet<usize> = voice_of.iter().filter(|v| v.0 == turn_of[i]).map(|v| v.3).collect();
-            if own.len() == 1 {
-                pieces[i].speaker = *own.first().unwrap();
-                continue;
-            }
             if p.end_ms - p.start_ms >= MATCH_PIECE_MS {
                 let audio = &pcm[(p.start_ms * 16) as usize..((p.end_ms * 16) as usize).min(pcm.len())];
                 if let Some(e) = voiceprint(audio).filter(|e| !e.is_empty()) {
@@ -318,6 +314,10 @@ pub fn split_mixed_speakers(
                         continue;
                     }
                 }
+            }
+            if own.len() == 1 {
+                pieces[i].speaker = *own.first().unwrap();
+                continue;
             }
             let gap = |&(_, s, e, _): &(usize, u64, u64, usize)| if e <= p.start_ms { p.start_ms - e } else { s.saturating_sub(p.end_ms) };
             if let Some(&(_, _, _, id)) = voice_of.iter().min_by_key(|v| (v.0 != turn_of[i], gap(v))) {

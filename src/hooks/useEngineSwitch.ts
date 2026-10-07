@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import type { ModelInfo, GraniteModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { DownloadProgress } from "../components/settings/types";
-import type { SessionNotice } from "../types/session";
+import type { EngineSelectionState, SessionNotice } from "../types/session";
 import { loadEngineModel } from "../utils/engineLoader";
 
 export type ASREngine = "whisper" | "granite" | "qwen3";
@@ -80,6 +80,8 @@ export function useEngineSwitch({
         message: string,
         fn: () => Promise<void>
     ): Promise<void> => {
+        // Async status/device preflights can outlive the handler's initial check.
+        if (isLoadingRef.current || isRecordingRef.current) return;
         isLoadingRef.current = true;
         // Non-urgent UI: keep clicks/scroll responsive while the heavy invoke runs.
         startTransition(() => {
@@ -95,6 +97,16 @@ export function useEngineSwitch({
         try {
             await setTrayState("loading_model");
             await fn();
+        } catch (error) {
+            try {
+                const state = await invoke<EngineSelectionState>("get_engine_selection_state");
+                if (state) setLoadedEngine(state.loaded_engine);
+            } catch {
+                // Load failures can release the previous model. Never advertise
+                // it as loaded when the authoritative snapshot is unavailable.
+                setLoadedEngine(null);
+            }
+            throw error;
         } finally {
             isLoadingRef.current = false;
             startTransition(() => {
@@ -191,7 +203,7 @@ export function useEngineSwitch({
 
     // ── Granite ──────────────────────────────────────────────────────────
     const handleSwitchToGranite = async (targetModelOverride?: string) => {
-        if (isRecordingRef.current) return;
+        if (isRecordingRef.current || isLoadingRef.current) return;
         const progress = downloadProgressRef.current ?? {};
         const graniteDownloading = graniteModels.some(m => progress[m.id]) ||
             Object.keys(progress).some(k => k.startsWith("granite"));
@@ -253,7 +265,7 @@ export function useEngineSwitch({
     };
 
     const handleSwitchToQwen3 = async (targetModelOverride?: string) => {
-        if (isRecordingRef.current) return;
+        if (isRecordingRef.current || isLoadingRef.current) return;
         const progress = downloadProgressRef.current ?? {};
         if (Object.keys(progress).some(key => key.startsWith("qwen3"))) {
             setHeaderStatus("Qwen3-ASR is still downloading — please wait", 3000);
@@ -302,33 +314,22 @@ export function useEngineSwitch({
         if (isLoading || isLoadingRef.current) return;
         if (isRecordingRef.current) return;
 
-        if (deviceChanges && device) {
-            try {
-                await setComputeDevice?.(device);
-            } catch (e) {
-                setHeaderStatus(`Couldn't switch device: ${e}`, 5000);
-                return;
-            }
-        }
-        setAsrBackend(newBackend);
-
         const useGpu = newBackend === "gpu";
         const label = deviceLabel ?? (useGpu ? "GPU" : "CPU");
         const engine = activeEngineRef.current;
-
-        // Fast-path: no model loaded — just update preference
         const hasModel =
             (engine === "whisper" && !!currentModel) ||
             (engine === "granite" && !!(currentGraniteModel || graniteModels.length > 0)) ||
             (engine === "qwen3" && qwen3Models.length > 0);
 
-        if (!hasModel) {
-            setHeaderStatus(`ASR backend set to ${label}`);
-            return;
-        }
-
         // Heavy-path: reload active model on the new backend via withEngineLoad
-        await withEngineLoad(engine, `Reloading on ${label}...`, async () => {
+        await withEngineLoad(engine, hasModel ? `Reloading on ${label}...` : `Selecting ${label}...`, async () => {
+            if (deviceChanges && device) await setComputeDevice?.(device);
+            setAsrBackend(newBackend);
+            if (!hasModel) {
+                setHeaderStatus(`ASR backend set to ${label}`);
+                return;
+            }
             if (engine === "whisper") {
                 const displayName = models.find(m => m.id === currentModel)?.display_name || currentModel;
                 setLoadingMessage(`Reloading ${displayName} on ${label}...`);

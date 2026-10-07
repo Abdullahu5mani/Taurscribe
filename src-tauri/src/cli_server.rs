@@ -176,7 +176,10 @@ pub fn spawn_cli_server(app: AppHandle) {
                     Ok(0) | Err(_) => return,
                     Ok(_) => match serde_json::from_str::<CliRequest>(&line) {
                         Ok(req) if crate::control_server::constant_time_eq(req.token.as_bytes(), token.as_bytes()) => {
-                            let work = handle(&app, &req.cmd, &req.args);
+                            // A disconnect may be observed after the worker has
+                            // exited and another client has started the same path.
+                            let job_id = format!("cli-{:032x}", rand::random::<u128>());
+                            let work = handle(&app, &req.cmd, &req.args, &job_id);
                             tokio::pin!(work);
                             let mut rd = reader.into_inner().into_inner();
                             // Polling the job first registers its cancel flag before a
@@ -185,7 +188,7 @@ pub fn spawn_cli_server(app: AppHandle) {
                                 biased;
                                 reply = &mut work => reply,
                                 () = client_gone(&mut rd) => {
-                                    abandon(&app, &req, work).await;
+                                    abandon(&app, &req, &job_id, work).await;
                                     return;
                                 }
                             }
@@ -220,7 +223,7 @@ async fn client_gone(rd: &mut tokio::net::tcp::OwnedReadHalf) {
 /// The CLI went away mid-request: cancel its file job instead of transcribing
 /// for nobody (and holding up the next job and dictation), then finish the
 /// batch it was part of so "unload after each use" still unloads.
-async fn abandon(app: &AppHandle, req: &CliRequest, work: std::pin::Pin<&mut impl std::future::Future<Output = Result<Value, String>>>) {
+async fn abandon(app: &AppHandle, req: &CliRequest, job_id: &str, work: std::pin::Pin<&mut impl std::future::Future<Output = Result<Value, String>>>) {
     if req.cmd != "transcribe" {
         let _ = work.await;
         return;
@@ -305,7 +308,7 @@ fn cli_model(state: &AudioState, engine: ASREngine) -> Option<String> {
     loaded.or_else(|| setting(key)?.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string))
 }
 
-async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, String> {
+async fn handle(app: &AppHandle, cmd: &str, args: &Value, job_id: &str) -> Result<Value, String> {
     match cmd {
         "status" => Ok(status(app)),
         "benchmark" => {
@@ -354,7 +357,7 @@ async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, Strin
                 path,
                 Some(engine_name(&engine).to_string()),
                 model,
-                None,
+                Some(job_id.to_string()),
                 Some(defer_unload),
                 Some(use_gpu_setting()),
             )

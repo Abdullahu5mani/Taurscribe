@@ -21,9 +21,9 @@ function deferred<T>() {
     const promise = new Promise<T>(r => { resolve = r; });
     return { promise, resolve };
 }
-function fixture() {
+function fixture(getGate?: Promise<unknown>) {
     const settings: Record<string, unknown> = { enable_grammar_lm: true, llm_backend: "gpu" };
-    const store = { get: async (key: string) => settings[key] ?? null,
+    const store = { get: async (key: string) => { const value = settings[key] ?? null; if (getGate && key === "llm_backend") await getGate; return value; },
         set: async (key: string, value: unknown) => { settings[key] = value; }, save: async () => {} };
     const h = renderHook(() => usePostProcessing(() => {}, undefined, { current: store } as any));
     return { ...h, settings };
@@ -78,4 +78,14 @@ test("a rejected native GPU selection preserves the applied and saved preference
     expect(h.handle.current.computeDevice).toBe("auto");
     expect(h.settings.compute_device).toBeUndefined();
     expect(calls.filter(c => c.cmd === "unload_llm")).toHaveLength(0);
+});
+
+test("startup settings cannot overwrite a newer CPU selection", async () => {
+    const pending = deferred<null>();
+    const h = fixture(pending.promise); await h.settle();
+    h.handle.current.setLlmBackend("cpu"); await h.settle();
+    pending.resolve(null); await h.settle();
+    expect(h.handle.current.llmBackend).toBe("cpu");
+    expect(h.settings.llm_backend).toBe("cpu");
+    expect(calls.filter(c => c.cmd === "init_llm").at(-1)?.args?.useGpu).toBe(false);
 });

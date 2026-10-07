@@ -13,7 +13,7 @@ mock.module("@tauri-apps/api/core", () => ({ ...realCore, invoke: async (cmd: st
     switch (cmd) {
         case "get_granite_status": return { loaded: true, model_id: "granite-test" };
         case "get_audio_source_mode": return "mic";
-        case "start_recording": case "pause_recording": case "resume_recording": case "type_text":
+        case "start_recording": case "pause_recording": case "resume_recording": case "type_text": case "cancel_recording":
             return { ok: true, data: "ok" };
         case "stop_recording": return stopped();
         default: return null;
@@ -113,4 +113,101 @@ test("duplicate voice busy events do not prevent recording after enrollment fini
     await h.handle.current.handleStartRecording(); await h.settle();
     expect(calls.filter(c => c === "start_recording")).toHaveLength(1);
     expect(h.handle.current.isVoiceEnrolling).toBe(false);
+});
+
+test("a stopped session cannot paste into or overwrite a newer external capture", async () => {
+    const h = fixture(); await h.handle.current.handleStartRecording();
+    const pending = deferred<any>(); responses.set("stop_recording", () => pending.promise);
+    const stop = h.handle.current.handleStopRecording(); await h.settle();
+    fire("recording-state", { is_recording: false, is_dual_channel: false });
+    fire("recording-state", { is_recording: true, is_dual_channel: true });
+    h.handle.current.handleTranscriptionChunk("new meeting speech");
+    pending.resolve(stopped()); await stop; await h.settle();
+    expect(h.handle.current.isRecording).toBe(true);
+    expect(h.handle.current.isDualChannelRecording).toBe(true);
+    expect(calls.filter(c => c === "type_text")).toHaveLength(0);
+    expect(h.transcripts.at(-1)).toBe("new meeting speech");
+});
+
+test("a stop-state event preserves the transcript while native tail chunks drain", async () => {
+    const h = fixture(); await h.handle.current.handleStartRecording();
+    h.handle.current.handleTranscriptionChunk("before Stop");
+    const pending = deferred<any>(); responses.set("stop_recording", () => pending.promise);
+    const stop = h.handle.current.handleStopRecording(); await h.settle();
+    fire("recording-state", { is_recording: false, is_dual_channel: false });
+    h.handle.current.handleTranscriptionChunk("tail after Stop");
+    const visibleTail = h.transcripts.at(-1);
+    pending.resolve(stopped()); await stop;
+    expect(visibleTail).toBe("before Stop tail after Stop");
+});
+
+test("a rejected Stop preserves a paused capture and its background-audio mute", async () => {
+    const h = fixture({ mute: true }); await h.handle.current.handleStartRecording();
+    await h.handle.current.handlePauseRecording();
+    responses.set("stop_recording", () => { throw "A recording is starting or finishing; try again in a moment"; });
+    await h.handle.current.handleStopRecording(); await h.settle();
+    expect(h.handle.current.isRecording).toBe(true);
+    expect(h.handle.current.isPaused).toBe(true);
+    expect(calls.filter(c => c === "unmute_system_audio")).toHaveLength(0);
+});
+
+test("a delayed Cancel cannot clear a newer externally started recording", async () => {
+    const h = fixture(); await h.handle.current.handleStartRecording();
+    const pending = deferred<any>(); responses.set("cancel_recording", () => pending.promise);
+    const cancel = h.handle.current.handleCancelRecording(); await h.settle();
+    fire("recording-state", { is_recording: false, is_dual_channel: false });
+    fire("recording-state", { is_recording: true, is_dual_channel: true });
+    pending.resolve({ ok: true, data: null }); await cancel; await h.settle();
+    expect(h.handle.current.isRecording).toBe(true);
+    expect(h.handle.current.isDualChannelRecording).toBe(true);
+    expect(h.notices.at(-1)?.title).not.toBe("Recording discarded");
+});
+
+test("a structured Cancel error must not claim that the recording was discarded", async () => {
+    const h = fixture(); await h.handle.current.handleStartRecording();
+    responses.set("cancel_recording", () => ({ ok: false, error: { code: "not_recording", message: "Not recording" } }));
+    await h.handle.current.handleCancelRecording(); await h.settle();
+    expect(h.headers.at(-1)).toContain("Not recording");
+    expect(h.notices.at(-1)?.title).not.toBe("Recording discarded");
+});
+
+test("an old Stop cannot clear the processing flag owned by a newer Stop", async () => {
+    const h = fixture(); await h.handle.current.handleStartRecording();
+    const old = deferred<any>(); responses.set("stop_recording", () => old.promise);
+    const firstStop = h.handle.current.handleStopRecording(); await h.settle();
+    fire("recording-state", { is_recording: false, is_dual_channel: false });
+    fire("recording-state", { is_recording: true, is_dual_channel: true }); await h.settle();
+    expect(h.handle.current.isProcessingTranscript).toBe(false);
+    const current = deferred<any>(); responses.set("stop_recording", () => current.promise);
+    const secondStop = h.handle.current.handleStopRecording(); await h.settle();
+    expect(calls.filter(c => c === "stop_recording")).toHaveLength(2);
+    old.resolve(stopped()); await firstStop; await h.settle();
+    const stillBusy = h.handle.current.isProcessingTranscript;
+    current.resolve({ ...stopped(), data: { ...stopped().data, kind: "meeting" } }); await secondStop;
+    expect(stillBusy).toBe(true);
+});
+
+test("Cancel holds the busy state until native discard finishes", async () => {
+    const h = fixture(); await h.handle.current.handleStartRecording();
+    const pending = deferred<any>(); responses.set("cancel_recording", () => pending.promise);
+    const cancel = h.handle.current.handleCancelRecording(); await h.settle();
+    fire("recording-state", { is_recording: false, is_dual_channel: false }); await h.settle();
+    const busyDuringDiscard = h.handle.current.isProcessingTranscript;
+    pending.resolve({ ok: true, data: null }); await cancel; await h.settle();
+    expect(busyDuringDiscard).toBe(true);
+    expect(h.handle.current.isProcessingTranscript).toBe(false);
+});
+
+test("a cancelled Start releases a mute command that completed after Stop", async () => {
+    let muted = false;
+    const pending = deferred<null>();
+    responses.set("mute_system_audio", () => pending.promise.then(() => { muted = true; }));
+    responses.set("unmute_system_audio", () => { muted = false; return null; });
+    responses.set("stop_recording", () => ({ ok: false, error: { code: "not_recording", message: "Not recording" } }));
+    const h = fixture({ mute: true });
+    const start = h.handle.current.handleStartRecording(); await h.settle();
+    await h.handle.current.handleStopRecording();
+    pending.resolve(null); await start; await h.settle();
+    expect(muted).toBe(false);
+    expect(calls.filter(c => c === "start_recording")).toHaveLength(0);
 });

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "bun test tests/frontend",
+    "test": "bun test tests/frontend tests/bughunt",
     "test:harness": "scripts/harness/.venv/bin/python scripts/harness/run_unit_tests.py",
     "test:decider": "scripts/harness/run_decider_benchmark.sh",
     "test:native": "cargo test --manifest-path src-tauri/Cargo.toml --all-targets",

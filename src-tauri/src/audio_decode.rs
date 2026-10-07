@@ -171,6 +171,9 @@ where
                 }
                 let mut buf = SampleBuffer::<f32>::new(capacity, spec);
                 buf.copy_interleaved_ref(decoded);
+                if buf.samples().iter().any(|s| !s.is_finite()) {
+                    return Err("Audio contains nonfinite samples".into());
+                }
                 total_frames += (buf.samples().len() / channels) as u64;
                 on_packet(
                     buf.samples(),
