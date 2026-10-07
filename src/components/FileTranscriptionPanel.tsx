@@ -300,7 +300,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
 
     const cancelAll = () => {
         const processing = files.find(f => f.status === "processing");
-        if (processing) cancelTranscription(processing.path);
+        if (processing) cancelTranscription(processing);
         setFiles(prev => prev.filter(f =>
             f.status !== "queued"
         ));
@@ -313,6 +313,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                     f.id === item.id
                     ? {
                         ...f,
+                        id: crypto.randomUUID(),
                         status: "queued",
                         progress: 0,
                         transcript: "",
@@ -377,8 +378,8 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
         navigator.clipboard.writeText(text).catch(() => {});
     };
 
-    const cancelTranscription = (filePath: string) => {
-        invoke("cancel_file_transcription", { path: filePath }).catch(() => {});
+    const cancelTranscription = (item: FileItem) => {
+        invoke("cancel_file_transcription", { path: item.path, jobId: item.id }).catch(() => {});
     };
 
     const handleBrowse = async () => {
@@ -637,7 +638,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                                 id={`file-cancel-${item.id}`}
                                                 data-testid={`file-cancel-${item.id}`}
                                                 className="file-card-btn file-card-btn--error"
-                                                onClick={() => cancelTranscription(item.path)}
+                                                onClick={() => cancelTranscription(item)}
                                                 title="Stop transcription"
                                                 aria-label={`Cancel transcription for ${item.name}`}
                                             >

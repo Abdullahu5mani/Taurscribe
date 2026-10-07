@@ -81,6 +81,7 @@ test("Cancel all keeps the app busy until its active native job has stopped", as
     byLabel(h.handle.current, "Cancel all queued and active file transcriptions").props.onClick();
     await h.settle();
     expect(calls.filter(c => c.cmd === "cancel_file_transcription").map(c => c.args.path)).toEqual(["/long.wav"]);
+    expect(calls.find(c => c.cmd === "cancel_file_transcription")?.args.jobId).toBe(jobs[0].args.jobId);
     const busyBeforeNativeExit = h.processing.at(-1);
     const finishedBeforeExit = calls.some(c => c.cmd === "finish_file_transcription_batch");
     jobs[0].reject("Transcription cancelled"); await h.settle();
@@ -98,4 +99,30 @@ test("cancelling one file keeps the app busy while the native job drains", async
     expect(h.processing.at(-1)).toBe(true);
     jobs[0].reject("Transcription cancelled"); await h.settle();
     expect(h.processing.at(-1)).toBe(false);
+});
+
+test("file cancellation targets the exact run, so a delayed request cannot cancel a rerun", async () => {
+    const h = fixture(); drop("/repeat.wav"); await h.settle();
+    const cancel = nodes(h.handle.current).find(n => n.props?.["aria-label"]?.startsWith("Cancel transcription for"));
+    cancel.props.onClick(); await h.settle();
+    const request = calls.find(c => c.cmd === "cancel_file_transcription")!;
+    expect(request.args).toEqual({ path: "/repeat.wav", jobId: jobs[0].args.jobId });
+    jobs[0].reject("Transcription cancelled"); await h.settle();
+    const retry = byLabel(h.handle.current, "Transcribe repeat.wav");
+    expect(retry).toBeDefined();
+    retry.props.onClick(); await h.settle();
+    expect(jobs[1].args.jobId).not.toBe(request.args.jobId);
+});
+
+test("rerunning a finished file has a fresh identity and ignores progress from its earlier run", async () => {
+    const h = fixture(); drop("/again.wav"); await h.settle();
+    const previousId = jobs[0].args.jobId;
+    jobs[0].resolve(result()); await h.settle();
+    const rerun = nodes(h.handle.current).find(n => n.props?.["aria-label"]?.startsWith("Re-transcribe again.wav"));
+    rerun.props.onClick(); await h.settle();
+    expect(jobs[1].args.jobId).not.toBe(previousId);
+    progress(1, 30); flushFrames(); await h.settle();
+    progress(0, 99); flushFrames(); await h.settle();
+    expect(text(cards(h.handle.current)[0])).toContain("30%");
+    expect(text(cards(h.handle.current)[0])).not.toContain("99%");
 });

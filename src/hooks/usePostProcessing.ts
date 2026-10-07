@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Store } from "@tauri-apps/plugin-store";
 import { useSyncedRef } from "../utils/useSyncedRef";
+import { serialTasks } from "../utils/serialTasks";
 
 /**
  * Manages LLM grammar correction toggle state.
@@ -40,6 +41,8 @@ export function usePostProcessing(
     const settingsStoreRef = useRef<Store | null>(null);
     const changedSettingsRef = useRef(new Set<string>());
     const pendingSettingsRef = useRef(new Map<string, unknown>());
+    const persistQueueRef = useRef(serialTasks());
+    const deviceQueueRef = useRef(serialTasks());
 
     // useSyncedRef replaces the 6 useRef + useEffect sync pairs
     const enableGrammarLMRef = useSyncedRef(enableGrammarLM);
@@ -67,6 +70,15 @@ export function usePostProcessing(
     useEffect(() => {
         const load = async (store: Store) => {
             settingsStoreRef.current = store;
+            // Enqueue pre-store choices before exposing the store to new writes.
+            // Otherwise hydration could replay an old choice after a newer one.
+            for (const [key, value] of pendingSettingsRef.current) {
+                void persistQueueRef.current(async () => {
+                    await store.set(key, value);
+                    await store.save();
+                }).catch(console.error);
+            }
+            pendingSettingsRef.current.clear();
             const grammarLM = await store.get<boolean>("enable_grammar_lm");
             const denoise = await store.get<boolean>("enable_denoise");
             const overlay = await store.get<boolean>("enable_overlay");
@@ -86,11 +98,6 @@ export function usePostProcessing(
             if (asrBe != null && !changedSettingsRef.current.has("asr_backend")) setAsrBackendState(asrBe);
             if (device && !changedSettingsRef.current.has("compute_device")) setComputeDeviceState(device);
 
-            for (const [key, value] of pendingSettingsRef.current) {
-                await store.set(key, value);
-                if (pendingSettingsRef.current.get(key) === value) pendingSettingsRef.current.delete(key);
-            }
-            await store.save();
             if (mountedRef.current) setSettingsLoaded(true);
         };
 
@@ -130,9 +137,10 @@ export function usePostProcessing(
             pendingSettingsRef.current.set(key, value);
             return;
         }
-        store.set(key, value)
-            .then(() => store.save())
-            .catch(console.error);
+        void persistQueueRef.current(async () => {
+            await store.set(key, value);
+            await store.save();
+        }).catch(console.error);
     }, [storeRef]);
 
     // ── Public setters — update state AND persist ─────────────────────────
@@ -176,10 +184,12 @@ export function usePostProcessing(
     /** The GPU to run on; the backend applies it from the next model load. */
     const setComputeDevice = useCallback(async (id: string) => {
         // Publish the setting only after the backend can use it for a reload.
-        await invoke("set_compute_device", { id });
-        llmRevisionRef.current += 1;
-        setComputeDeviceState(id);
-        persist("compute_device", id);
+        await deviceQueueRef.current(async () => {
+            await invoke("set_compute_device", { id });
+            llmRevisionRef.current += 1;
+            setComputeDeviceState(id);
+            persist("compute_device", id);
+        });
     }, [persist]);
 
     // One lifecycle operation at a time. Preferences made during an operation

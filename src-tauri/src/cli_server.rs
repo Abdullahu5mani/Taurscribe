@@ -229,7 +229,7 @@ async fn abandon(app: &AppHandle, req: &CliRequest, job_id: &str, work: std::pin
         return;
     }
     if let Some(path) = req.args.get("path").and_then(Value::as_str) {
-        let _ = crate::commands::cancel_file_transcription(path.to_string()).await;
+        let _ = crate::commands::cancel_file_transcription(path.to_string(), Some(job_id.to_string())).await;
     }
     let _ = work.await;
     crate::commands::maybe_unload_after_file_batch(app, &app.state::<AudioState>());

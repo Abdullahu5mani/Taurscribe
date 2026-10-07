@@ -77,10 +77,15 @@ fn unregister_cancel_flag(path: &str) {
     cancel_flags().lock().unwrap().remove(path);
 }
 
-/// Cancel in-progress file transcription for the given file path.
+/// UI requests name a particular run, so a delayed cancellation cannot stop a
+/// successor reading the same file. Path-only callers retain their CLI behavior.
 #[tauri::command]
-pub async fn cancel_file_transcription(path: String) -> Result<(), String> {
+pub async fn cancel_file_transcription(path: String, job_id: Option<String>) -> Result<(), String> {
     if let Some(job) = cancel_flags().lock().unwrap().get(&path) {
+        if job_id.is_some() && job_id != job.job_id {
+            println!("[FILE_TRANSCRIBE] Ignoring cancel for superseded job {:?}", job_id);
+            return Ok(());
+        }
         job.flag.store(true, Ordering::Relaxed);
         println!("[FILE_TRANSCRIBE] Cancel requested for {}", path);
     }
@@ -916,5 +921,30 @@ mod tests {
             Some("second")
         );
         unregister_cancel_flag(&path);
+    }
+
+    #[tokio::test]
+    async fn delayed_cancellation_cannot_stop_a_successor_at_the_same_path() {
+        let path = format!("/tmp/taurscribe-cancel-{}", rand::random::<u64>());
+        let first = register_cancel_flag(&path, Some("first".into())).unwrap();
+        unregister_cancel_flag(&path);
+        let second = register_cancel_flag(&path, Some("second".into())).unwrap();
+        cancel_file_transcription(path.clone(), Some("first".into())).await.unwrap();
+        let successor_cancelled = second.load(Ordering::Relaxed);
+        cancel_file_transcription(path.clone(), Some("second".into())).await.unwrap();
+        let matching_cancelled = second.load(Ordering::Relaxed);
+        unregister_cancel_flag(&path);
+        assert!(!first.load(Ordering::Relaxed));
+        assert!(!successor_cancelled, "a stale request must not cancel a newer run");
+        assert!(matching_cancelled, "the matching run must still be cancellable");
+    }
+
+    #[tokio::test]
+    async fn path_only_cli_cancellation_still_cancels_a_file_job() {
+        let path = format!("/tmp/taurscribe-cli-cancel-{}", rand::random::<u64>());
+        let flag = register_cancel_flag(&path, None).unwrap();
+        cancel_file_transcription(path.clone(), None).await.unwrap();
+        unregister_cancel_flag(&path);
+        assert!(flag.load(Ordering::Relaxed));
     }
 }
