@@ -24,7 +24,8 @@ if (-not (Test-Path -LiteralPath $portable)) {
 }
 
 $required = @('taurscribe.exe', 'llama.dll', 'ggml.dll', 'ggml-base.dll', 'ggml-cpu.dll')
-if ($Flavor -eq 'nvidia') { $required += @('ggml-cuda.dll') }
+# The NVIDIA build carries Vulkan too (integrated GPUs, CUDA-vs-Vulkan choice).
+if ($Flavor -eq 'nvidia') { $required += @('ggml-cuda.dll', 'ggml-vulkan.dll') }
 if ($Flavor -eq 'vulkan') { $required += @('ggml-vulkan.dll') }
 if ($Flavor -eq 'adreno') { $required += @('ggml-opencl.dll') }
 foreach ($artifact in @($installers[0].FullName, $portable)) {

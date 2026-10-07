@@ -512,13 +512,23 @@ impl WhisperManager {
         // Try to load with GPU acceleration first (unless force_cpu). If that fails, fallback to CPU.
         // A build without a whisper GPU backend (the CPU flavor) must not attempt
         // a GPU context: it succeeds on the CPU and is then mislabeled.
-        let cpu_only = !crate::gpu::whisper_gpu_compiled() || !crate::gpu::gpu_worth_using();
-        let (ctx, backend) = if force_cpu || cpu_only {
+        let target = if crate::gpu::whisper_gpu_compiled() { crate::gpu::Target::resolve(force_cpu) } else { crate::gpu::Target::Cpu };
+        let (ctx, backend) = if target == crate::gpu::Target::Cpu {
             self.try_cpu(&absolute_path)?
         } else {
-            self.try_gpu(&absolute_path)
-                .or_else(|_| self.try_cpu(&absolute_path))?
+            let (ctx, backend) = self.try_gpu(&absolute_path, target.whisper_gpu_index())
+                .or_else(|_| self.try_cpu(&absolute_path))?;
+            // A build with two GPU backends reports both in its system info;
+            // the chosen device says which one runs.
+            let backend = match (&target, &backend) {
+                (_, GpuBackend::Cpu) => backend,
+                (crate::gpu::Target::Gpu(id), _) if id.starts_with("vulkan:") => GpuBackend::Vulkan,
+                (crate::gpu::Target::Gpu(id), _) if id.starts_with("cuda:") => GpuBackend::Cuda,
+                _ => backend,
+            };
+            (ctx, backend)
         };
+        self.device_key = target.key();
 
         // Save the loaded state
         self.context = Some(ctx);
@@ -551,12 +561,14 @@ impl WhisperManager {
     fn try_gpu(
         &self,
         model_path: &std::path::Path,
+        gpu_device: i32,
     ) -> Result<(WhisperContext, GpuBackend), String> {
-        println!("[GPU] Attempting GPU acceleration...");
+        println!("[GPU] Attempting GPU acceleration on GPU #{gpu_device}...");
 
         // Configure Whisper to use GPU
         let mut params = WhisperContextParameters::default();
         params.use_gpu(true);
+        params.gpu_device(gpu_device);
         params.flash_attn(true); // Flash Attention: fused QK^T·V kernel — faster + less VRAM on CUDA/Metal
 
         // Attempt load

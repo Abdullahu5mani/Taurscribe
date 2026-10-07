@@ -2589,6 +2589,7 @@ button.auto-unload-timer-btn--active {
 /* ── Backend toggle ── */
 .qs-backend-row {
   display: flex;
+  flex-wrap: wrap; /* one button per GPU when there are several */
   gap: 8px;
   padding: 4px 18px 8px;
 }

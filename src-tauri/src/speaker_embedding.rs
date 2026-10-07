@@ -475,15 +475,11 @@ impl SpeakerEmbeddingEngine {
                     builder.commit_from_file(model_path)
                 }
             }
-            #[cfg(target_os = "windows")]
-            {
-                if let Ok(mut b) = builder.clone().with_execution_providers([ort::ep::DirectML::default().build()]) {
-                    b.commit_from_file(model_path)
-                } else {
-                    builder.commit_from_file(model_path)
-                }
-            }
-            #[cfg(all(not(all(target_os = "macos", target_arch = "aarch64")), not(target_os = "windows")))]
+            // Elsewhere (Windows included) the CPU: DirectML rejects CAM++'s
+            // segment pooling for many input lengths ("AveragePool … The
+            // parameter is incorrect"), failing those voiceprints, and the
+            // model is small enough that the CPU takes milliseconds.
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
             {
                 builder.commit_from_file(model_path)
             }

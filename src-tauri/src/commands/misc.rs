@@ -249,7 +249,6 @@ fn get_system_info_blocking() -> SystemInfo {
         "nvidia" if cuda_backend_available => "CUDA",
         "amd" => "ROCm",
         "vulkan" => "Vulkan",
-        _ if cfg!(target_os = "windows") && gpu_name != "Unknown" => "DirectML / CPU",
         _ => "CPU",
     }
     .to_string();

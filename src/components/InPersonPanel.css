@@ -1,0 +1,172 @@
+/* ── In-person recording (top of the Meetings tab) ─────────────────────── */
+.inperson-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  animation: inpersonIn 0.22s ease-out both;
+}
+@keyframes inpersonIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+.inperson-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  transition: border-color 0.2s ease;
+}
+.inperson-stage--live { border-color: rgba(var(--recording-rgb, 239, 68, 68), 0.45); }
+
+.inperson-stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.inperson-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-base, 1rem);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.inperson-clock {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+.inperson-actions { display: flex; align-items: center; gap: 8px; }
+.inperson-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.inperson-icon-btn:hover { color: var(--text-primary); border-color: var(--border-color); }
+
+.inperson-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.inperson-btn:hover:not(:disabled) { border-color: var(--border-hover); background: var(--bg-tertiary); }
+.inperson-btn:disabled { opacity: 0.45; cursor: default; }
+.inperson-btn--record { border-color: rgba(var(--recording-rgb, 239, 68, 68), 0.5); color: var(--recording, #ef4444); }
+.inperson-btn--stop { background: rgba(var(--recording-rgb, 239, 68, 68), 0.12); border-color: rgba(var(--recording-rgb, 239, 68, 68), 0.5); }
+
+.inperson-meter {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}
+.inperson-meter-track { height: 5px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+.inperson-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--success, #34d399);
+  transition: width 0.08s linear;
+}
+.inperson-meter-fill--progress { background: var(--accent-primary); transition: width 0.1s linear; }
+.inperson-meter-hint { white-space: nowrap; }
+
+.inperson-feed {
+  height: clamp(110px, 24vh, 220px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.inperson-line { margin: 0; font-size: var(--font-base, 1rem); line-height: 1.55; color: var(--text-primary); }
+.inperson-placeholder { margin: 0; color: var(--text-muted); font-size: var(--font-sm); }
+.inperson-intro { margin: 0; color: var(--text-secondary); font-size: var(--font-sm); line-height: 1.55; }
+
+.inperson-saved { display: flex; align-items: center; gap: 8px; color: var(--success, #34d399); font-size: var(--font-sm); }
+
+.inperson-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: var(--font-sm);
+  line-height: 1.45;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+.inperson-note--warn { color: #ffdcaa; background: rgba(255, 184, 77, 0.08); border-color: rgba(255, 184, 77, 0.22); }
+.inperson-note > span { flex: 1; }
+
+.inperson-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.inperson-link:disabled { opacity: 0.45; cursor: default; }
+
+.inperson-voice-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 0 4px;
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+}
+
+/* Voice setup */
+.inperson-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+}
+.inperson-setup-title { margin: 0; font-size: 1.05rem; color: var(--text-primary); }
+.inperson-setup-desc { margin: 0; font-size: var(--font-sm); line-height: 1.55; color: var(--text-secondary); }
+.inperson-passage {
+  margin: 0;
+  padding: 12px 14px;
+  border-left: 3px solid var(--border-hover);
+  border-radius: 4px;
+  font-size: 1.02rem;
+  line-height: 1.65;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.02);
+}
+.inperson-passage--live { border-left-color: var(--recording, #ef4444); }
+.inperson-setup-actions { display: flex; gap: 8px; flex-wrap: wrap; }

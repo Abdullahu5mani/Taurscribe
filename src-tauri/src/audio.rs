@@ -10,6 +10,37 @@ pub struct SendStream(pub cpal::Stream);
 unsafe impl Send for SendStream {} // Can be moved to another thread
 unsafe impl Sync for SendStream {} // Can be accessed from multiple threads
 
+/// What a recording captures, from the `audio_source` the UI starts it with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureMode {
+    /// The microphone, pasted as a dictation ("mic").
+    Dictation,
+    /// A call: the microphone and the computer's sound as two channels
+    /// ("dual_channel"). Saved to Meetings.
+    Call,
+    /// A meeting in a room: everyone on one microphone ("in_person"). Saved to
+    /// Meetings, with the speakers told apart after it ends.
+    InPerson,
+}
+
+impl CaptureMode {
+    pub fn from_source(source: &str) -> Self {
+        match source {
+            "dual_channel" => CaptureMode::Call,
+            "in_person" => CaptureMode::InPerson,
+            _ => CaptureMode::Dictation,
+        }
+    }
+
+    pub fn is_meeting(self) -> bool {
+        self != CaptureMode::Dictation
+    }
+
+    pub fn is_dual_channel(self) -> bool {
+        self == CaptureMode::Call
+    }
+}
+
 /// Keeps track of the tools needed while recording involves.
 pub struct RecordingHandle {
     pub capture_loss: Arc<CaptureLoss>,
@@ -20,7 +51,7 @@ pub struct RecordingHandle {
     pub transcriber_thread: std::thread::JoinHandle<()>,
     pub level_stop: Arc<AtomicBool>, // Signal the level-emitter thread to exit
     pub level_thread: std::thread::JoinHandle<()>,
-    pub is_dual_channel: bool,
+    pub mode: CaptureMode,
     pub dual_channel_stop: Option<Arc<AtomicBool>>,
     pub dual_channel_thread: Option<std::thread::JoinHandle<()>>,
 }

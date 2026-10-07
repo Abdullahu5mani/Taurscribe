@@ -12,7 +12,13 @@ describe("beautifyModelName", () => {
   });
 
   test("replaces every dash and underscore, not just the first", () => {
-    expect(beautifyModelName("ggml-large-v3-turbo-q5_0.bin")).toBe("Large V3 Turbo Q5 0");
+    expect(beautifyModelName("ggml-large-v3-turbo-q5_0.bin")).toBe("Large V3 Turbo Q5_0");
+    expect(beautifyModelName("some_model-name_here")).toBe("Some Model Name Here");
+  });
+
+  test("keeps quantization names as written", () => {
+    expect(beautifyModelName("Base English (Q5_1)")).toBe("Base English (Q5_1)");
+    expect(beautifyModelName("Qwen3 ASR (q4_k_m)")).toBe("Qwen3 ASR (Q4_K_M)");
   });
 
   test("keeps backend display names readable", () => {

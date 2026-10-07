@@ -47,10 +47,12 @@ jobs:
             arch: 'x86_64'
 
           - platform: 'windows-2022'
-            name: 'Windows (x86_64, NVIDIA CUDA)'
+            name: 'Windows (x86_64, NVIDIA: CUDA + Vulkan)'
             target: 'x86_64-pc-windows-msvc'
             flavor: 'nvidia'
-            features: 'gpu-nvidia'
+            # Vulkan too, so Settings can run on the integrated GPU or compare
+            # CUDA with Vulkan; every NVIDIA driver installs vulkan-1.dll.
+            features: 'gpu-nvidia,gpu-vulkan'
             os_name: 'Windows'
             arch: 'x86_64'
 
@@ -79,10 +81,10 @@ jobs:
             arch: 'ARM64'
 
           - platform: 'ubuntu-24.04'
-            name: 'Linux (x86_64, NVIDIA CUDA)'
+            name: 'Linux (x86_64, NVIDIA: CUDA + Vulkan)'
             target: 'x86_64-unknown-linux-gnu'
             flavor: 'nvidia'
-            features: 'gpu-nvidia'
+            features: 'gpu-nvidia,gpu-vulkan'
             os_name: 'Linux'
             arch: 'x86_64'
 
@@ -262,7 +264,7 @@ jobs:
           echo "CCACHE_MAXSIZE=800M" >> $GITHUB_ENV
 
       - name: Install Vulkan SDK (Windows)
-        if: contains(matrix.platform, 'windows') && matrix.flavor == 'vulkan'
+        if: contains(matrix.platform, 'windows') && contains(matrix.features, 'gpu-vulkan')
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
@@ -271,7 +273,7 @@ jobs:
       # transcribe.cpp's Vulkan backend needs SPIRV-Headers (CMake package), which the
       # minimal Vulkan SDK install above doesn't include. Same version as the SDK.
       - name: Install SPIRV-Headers (Windows)
-        if: contains(matrix.platform, 'windows') && matrix.flavor == 'vulkan'
+        if: contains(matrix.platform, 'windows') && contains(matrix.features, 'gpu-vulkan')
         shell: bash
         run: |
           src="$(cygpath -m "$RUNNER_TEMP")/SPIRV-Headers"
@@ -324,7 +326,9 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
           # Bumped when native build flags change (whisper-rs doesn't rerun on them).
-          prefix-key: 'v2-nvcuda-delayload'
+          # Bumped when native build inputs change without Cargo noticing: whisper-rs
+          # does not rebuild when WHISPER_USE_SYSTEM_GGML changes (scripts/ggml-stack.ts).
+          prefix-key: 'v3-shared-ggml'
           key: ${{ matrix.flavor }}
 
       - uses: mozilla-actions/sccache-action@v0.0.9
@@ -444,6 +448,11 @@ jobs:
         if: matrix.os_name != 'Windows'
         run: |
           if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then unset CCACHE_DISABLE; fi
+          # Linux: one ggml for whisper.cpp and transcribe.cpp (scripts/ggml-stack.ts).
+          # --github-env keeps it for the bundle step's cargo run too.
+          if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then
+            while IFS='=' read -r key value; do export "$key=$value"; done < <(bun scripts/ggml-stack.ts --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} --github-env)
+          fi
           cd src-tauri
           cargo build --release --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
         env:
@@ -626,7 +635,7 @@ jobs:
             # Each flavor's .deb pulls in the runtime its GPU stack needs.
             case "${{ matrix.flavor }}" in
               amd)    DEPENDS='["rocm-hip-runtime", "hipblas", "rocblas"]' ;;
-              vulkan) DEPENDS='["libvulkan1"]' ;;
+              vulkan|nvidia) DEPENDS='["libvulkan1"]' ;;
               *)      DEPENDS='[]' ;;
             esac
             bun run tauri build --target ${{ matrix.target }} --bundles deb \
@@ -783,7 +792,7 @@ jobs:
       # smoke test starts the app like on a real PC; with no device it must fall
       # back to the CPU.
       - name: Install Vulkan runtime for the smoke test (Windows)
-        if: matrix.os_name == 'Windows' && matrix.flavor == 'vulkan'
+        if: matrix.os_name == 'Windows' && contains(matrix.features, 'gpu-vulkan')
         shell: pwsh
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'VulkanRT.exe'

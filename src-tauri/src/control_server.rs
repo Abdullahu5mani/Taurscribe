@@ -327,6 +327,20 @@ fn capture_pause_or_resume(headers: HeaderMap, state: ServerState, resume: bool)
     }
 }
 
+// Runs the real "Your voice" setup (records the selected input for ~22 s), so
+// a test can enroll a voice by playing it into a virtual microphone.
+async fn capture_my_voice_handler(headers: HeaderMap, State(state): State<ServerState>) -> impl IntoResponse {
+    if let Some((status, msg)) = authorize_control(&headers) {
+        return error_response(status, msg);
+    }
+    let audio_state = state.app_handle.state::<AudioState>();
+    match crate::commands::record_my_voice(state.app_handle.clone(), audio_state).await {
+        Ok(res) if res.ok => success_response("Voice saved", res.data.map(|d| serde_json::json!(d))),
+        Ok(res) => error_response(StatusCode::BAD_REQUEST, res.error.map(|e| e.message).unwrap_or_default()),
+        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
 #[derive(Deserialize)]
 struct CaptureInputBody {
     name: Option<String>,
@@ -572,6 +586,7 @@ pub fn build_router(app_handle: AppHandle) -> Router {
             .route("/api/capture/pause", post(capture_pause_handler))
             .route("/api/capture/resume", post(capture_resume_handler))
             .route("/api/capture/input", post(capture_input_handler))
+            .route("/api/capture/my-voice", post(capture_my_voice_handler))
             .route("/api/simulate/feed-meeting", post(feed_meeting_handler))
             .route("/api/simulate/cycle-turn-snippet", post(cycle_turn_snippet_handler))
             .route("/api/simulate/cycle-vault-snippet", post(cycle_vault_snippet_handler))

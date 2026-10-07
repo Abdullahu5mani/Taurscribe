@@ -186,6 +186,7 @@ export function useRecording({
         pausedAtRef.current = null;
         totalPausedMsRef.current = 0;
         setIsDualChannelRecording(false);
+        setIsInPersonRecording(false);
         setDualLevels({ mic: 0, system: 0 });
     };
 
@@ -202,19 +203,22 @@ export function useRecording({
     });
 
     const [isDualChannelRecording, setIsDualChannelRecording] = useState(false);
+    // An in-person meeting: one microphone, saved to Meetings like a call.
+    const [isInPersonRecording, setIsInPersonRecording] = useState(false);
     const [dualLevels, setDualLevels] = useState<{ mic: number; system: number }>({ mic: 0, system: 0 });
 
     // Recordings can start or stop outside the UI (control server, tray). Follow
     // the backend so the UI never keeps showing RECORDING for a stopped session.
     useEffect(() => {
-        const unlistenPromise = listen<{ is_recording: boolean; is_dual_channel: boolean }>("recording-state", (event) => {
-            const { is_recording, is_dual_channel } = event.payload;
+        const unlistenPromise = listen<{ is_recording: boolean; is_dual_channel: boolean; is_in_person?: boolean }>("recording-state", (event) => {
+            const { is_recording, is_dual_channel, is_in_person = false } = event.payload;
             if (is_recording && !isRecordingRef.current) {
                 recordingGenerationRef.current += 1;
                 setIsRecording(true);
                 isRecordingRef.current = true;
                 setIsDualChannelRecording(is_dual_channel);
-                meetingSessionRef.current = is_dual_channel;
+                setIsInPersonRecording(is_in_person);
+                meetingSessionRef.current = is_dual_channel || is_in_person;
                 setSessionPhase?.("recording");
             } else if (!is_recording && isRecordingRef.current) {
                 recordingGenerationRef.current += 1;
@@ -251,8 +255,11 @@ export function useRecording({
             }
         }
         const isDual = effectiveAudioSource === "dual_channel";
+        const isInPerson = effectiveAudioSource === "in_person";
+        const isMeeting = isDual || isInPerson;
         setIsDualChannelRecording(isDual);
-        meetingSessionRef.current = isDual;
+        setIsInPersonRecording(isInPerson);
+        meetingSessionRef.current = isMeeting;
         if (fromHotkey) {
             overlaySessionIdRef.current += 1;
             overlayTerminalRef.current = false;
@@ -325,12 +332,12 @@ export function useRecording({
             resetRecordingSession();
             // Play start sound before muting so the app's own audio isn't silenced.
             playStart?.();
-            if (muteBackgroundAudioRef.current && !isDual) {
+            if (muteBackgroundAudioRef.current && !isMeeting) {
                 await invoke("mute_system_audio").catch(e => console.warn("mute_system_audio failed:", e));
             }
             const result = await invoke<CommandResult<string>>("start_recording", {
                 denoise: enableDenoiseRef.current,
-                audioSource: isDual ? "dual_channel" : "mic",
+                audioSource: isDual ? "dual_channel" : isInPerson ? "in_person" : "mic",
             });
             if (!result.ok) throw result.error ?? new Error("Failed to start recording");
             // The command reports the temp file path; users only need to know it started.
@@ -339,6 +346,7 @@ export function useRecording({
             setIsRecording(true);
             isRecordingRef.current = true;
             setIsDualChannelRecording(isDual);
+            setIsInPersonRecording(isInPerson);
             setSessionPhase?.("recording");
             showNotice(null);
             if (fromHotkey) {
@@ -373,6 +381,7 @@ export function useRecording({
             setIsRecording(false);
             isRecordingRef.current = false;
             setIsDualChannelRecording(false);
+            setIsInPersonRecording(false);
             setDualLevels({ mic: 0, system: 0 });
             setSessionPhase?.("error");
             showNotice(commandErrorToNotice(error, "Recording failed to start"));
@@ -811,7 +820,12 @@ export function useRecording({
         isProcessingTranscript,
         latestLatency,
         isDualChannelRecording,
+        isInPersonRecording,
         dualLevels,
+        /** Recording time so far, not counting pauses. */
+        getRecordingMs: getEffectiveRecordingMs,
+        /** The live transcript of the recording so far. */
+        getLiveTranscript: () => liveTranscriptRef.current,
         handleStartRecording,
         handlePauseRecording,
         handleResumeRecording,

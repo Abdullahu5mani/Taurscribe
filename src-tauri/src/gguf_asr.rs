@@ -235,8 +235,12 @@ impl GgufAsrManager {
         })?;
 
         let started = std::time::Instant::now();
-        let backend = if force_cpu || !crate::gpu::gpu_worth_using() { transcribe_cpp::Backend::Cpu } else { transcribe_cpp::Backend::Auto };
-        let mut engine = GgufAsr::load_on(&path, backend)?;
+        let target = crate::gpu::Target::resolve(force_cpu);
+        let options = transcribe_cpp::ModelOptions {
+            backend: if target == crate::gpu::Target::Cpu { transcribe_cpp::Backend::Cpu } else { transcribe_cpp::Backend::Auto },
+            device: target.transcribe_device(),
+        };
+        let mut engine = GgufAsr::load_with(&path, &options)?;
         // Compile GPU kernels now rather than on the first dictation.
         let _ = engine.transcribe(&vec![0.0; 16_000]);
         println!(
@@ -249,6 +253,7 @@ impl GgufAsrManager {
         let message = format!("{} loaded ({})", spec.display_name, engine.backend());
         self.engine = Some(engine);
         self.model_id = Some(spec.id.to_string());
+        self.device_key = target.key();
         self.publish_status();
         Ok(message)
     }

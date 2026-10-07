@@ -80,17 +80,14 @@ pub async fn switch_model(
         let qwen3_loaded = qwen3_arc.lock().unwrap().get_status().loaded;
         let active = *active_engine_arc.lock().unwrap();
 
-        let whisper_on_cpu = {
-            let w = whisper_arc.lock().unwrap();
-            matches!(*w.get_backend(), whisper::GpuBackend::Cpu)
-        };
+        let same_device = whisper_arc.lock().unwrap().device_key() == crate::gpu::Target::resolve(force_cpu).key();
 
-        // 4. Skip only if same model, same engine, and CPU/GPU preference already matches (toggle must reload).
+        // 4. Skip only if same model, same engine, and same device (a device change must reload).
         if whisper_current.as_deref() == Some(mid.as_str())
             && active == ASREngine::Whisper
             && !granite_loaded
             && !qwen3_loaded
-            && whisper_on_cpu == force_cpu
+            && same_device
         {
             println!(
                 "[INFO] Whisper model '{}' is already loaded — skipping reload",
@@ -228,10 +225,12 @@ async fn init_gguf(
     let force_cpu = !use_gpu.unwrap_or(true);
     let result = tauri::async_runtime::spawn_blocking(move || {
         {
-            let status = target.lock().map_err(|e| e.to_string())?.get_status();
+            let manager = target.lock().map_err(|e| e.to_string())?;
+            let status = manager.get_status();
             let same_model = model_id.is_none() || status.model_id.as_deref() == model_id.as_deref();
-            let on_cpu = status.backend.eq_ignore_ascii_case("cpu");
-            if status.loaded && same_model && on_cpu == force_cpu && *active.lock().unwrap() == engine {
+            let same_device = manager.device_key() == crate::gpu::Target::resolve(force_cpu).key();
+            drop(manager);
+            if status.loaded && same_model && same_device && *active.lock().unwrap() == engine {
                 return Ok("Already loaded".to_string());
             }
         }

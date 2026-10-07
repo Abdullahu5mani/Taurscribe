@@ -1,17 +1,21 @@
+mod benchmark;
 mod file_transcription;
 mod history;
 mod llm;
 pub mod misc;
 pub mod model_registry;
 mod models;
+mod my_voice;
 mod recording;
 mod settings;
 
+pub use benchmark::*;
 pub use file_transcription::*;
 pub use history::*;
 pub use llm::*;
 pub use misc::*;
 pub use models::*;
+pub use my_voice::*;
 pub use recording::*;
 pub use settings::*;
 

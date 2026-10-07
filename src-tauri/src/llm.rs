@@ -319,7 +319,14 @@ impl LLMEngine {
             use_gpu, requested_layers
         );
 
-        let model_params = LlamaModelParams::default().with_n_gpu_layers(requested_layers);
+        let mut model_params = LlamaModelParams::default().with_n_gpu_layers(requested_layers);
+        // The GPU chosen in Settings, when llama.cpp's build has it too.
+        if requested_layers > 0 {
+            if let Some(index) = crate::gpu::Target::resolve(false).llama_device() {
+                println!("[LLM] Using llama.cpp device #{index}");
+                model_params = model_params.with_devices(&[index]).map_err(|e| Error::msg(e.to_string()))?;
+            }
+        }
 
         let (model, loaded_layers) =
             match LlamaModel::load_from_file(&backend, &model_path, &model_params) {

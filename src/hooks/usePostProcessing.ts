@@ -31,6 +31,7 @@ export function usePostProcessing(
     const [muteBackgroundAudio, setMuteBackgroundAudioState] = useState(false);
     const [llmBackend, setLlmBackendState] = useState<"gpu" | "cpu">("gpu");
     const [asrBackend, setAsrBackendState] = useState<"gpu" | "cpu">("gpu");
+    const [computeDevice, setComputeDeviceState] = useState("auto");
     const [transcriptionStyle, setTranscriptionStyleState] = useState("Clean");
 
     // Gate auto-load effects until settings are loaded from store,
@@ -59,6 +60,7 @@ export function usePostProcessing(
             const style = await store.get<string>("transcription_style");
             const backend = await store.get<"gpu" | "cpu">("llm_backend");
             const asrBe = await store.get<"gpu" | "cpu">("asr_backend");
+            const device = await store.get<string>("compute_device");
 
             if (grammarLM != null) setEnableGrammarLMState(grammarLM);
             if (denoise != null) setEnableDenoiseState(denoise);
@@ -68,6 +70,7 @@ export function usePostProcessing(
             if (style != null) setTranscriptionStyleState(["Verbatim", "Clean", "Formatted"].includes(style) ? style : "Clean");
             if (backend != null) setLlmBackendState(backend);
             if (asrBe != null) setAsrBackendState(asrBe);
+            if (device) setComputeDeviceState(device);
 
             setSettingsLoaded(true);
         };
@@ -145,6 +148,13 @@ export function usePostProcessing(
     const setAsrBackend = useCallback((val: "gpu" | "cpu") => {
         setAsrBackendState(val);
         persist("asr_backend", val);
+    }, [persist]);
+
+    /** The GPU to run on; the backend applies it from the next model load. */
+    const setComputeDevice = useCallback(async (id: string) => {
+        setComputeDeviceState(id);
+        persist("compute_device", id);
+        await invoke("set_compute_device", { id });
     }, [persist]);
 
     // ── Auto-load / unload LLM ────────────────────────────────────────────
@@ -258,5 +268,7 @@ export function usePostProcessing(
         setLlmBackend,
         asrBackend,
         setAsrBackend,
+        computeDevice,
+        setComputeDevice,
     };
 }

@@ -126,6 +126,211 @@ pub fn tidy_turns(mut turns: Vec<SpeakerTurn>) -> Vec<SpeakerTurn> {
     joined
 }
 
+// ── voiceprint check (in-person meetings) ────────────────────────────────────
+//
+// On one microphone the separator can hear two similar voices as one person
+// (two women with similar pitch, say). The speaker recognition model (CAM++)
+// tells them apart far more reliably: on test meetings the same voice scored
+// 0.69-0.91 against itself and similar different voices 0.42-0.53. So each
+// speaker's turns are cut at their pauses, voiceprinted, and a speaker whose
+// pieces form two clearly different voices is split in two.
+
+/// Pieces at least this long get a voiceprint that can start a new voice.
+const VOICEPRINT_PIECE_MS: u64 = 2_000;
+/// Shorter pieces at least this long are matched to a voice by voiceprint
+/// (too short to trust for finding voices, enough to pick between two);
+/// even shorter ones follow a neighbour.
+const MATCH_PIECE_MS: u64 = 800;
+/// A short piece's voiceprint decides only when its best voice beats the
+/// next by this much (short voiceprints are noisy).
+const MATCH_MARGIN: f32 = 0.15;
+/// Pieces whose average voiceprint similarity is at least this are one voice.
+/// Below the vault's match threshold (0.60): splitting one person in two is
+/// worse than leaving two similar voices together.
+const SAME_VOICE_SIMILARITY: f32 = 0.55;
+/// A split-off voice needs this much speech to count as another person.
+const MIN_SPLIT_SPEECH_MS: u64 = 4_000;
+/// Silence that separates two pieces inside a turn.
+const PIECE_PAUSE_MS: u64 = 280;
+
+/// The speech pieces of `turn`, cut where it pauses for PIECE_PAUSE_MS.
+fn pause_pieces(pcm: &[f32], turn: &SpeakerTurn) -> Vec<(u64, u64)> {
+    const FRAME_MS: u64 = 20;
+    let at = |ms: u64| ((ms * 16) as usize).min(pcm.len());
+    let (a, b) = (at(turn.start_ms), at(turn.end_ms));
+    let frame = (FRAME_MS * 16) as usize;
+    if b <= a || b - a < frame * 2 {
+        return vec![(turn.start_ms, turn.end_ms)];
+    }
+    let rms: Vec<f32> = pcm[a..b]
+        .chunks(frame)
+        .map(|f| (f.iter().map(|s| s * s).sum::<f32>() / f.len() as f32).sqrt())
+        .collect();
+    let mut sorted = rms.clone();
+    sorted.sort_by(f32::total_cmp);
+    let floor = sorted[sorted.len() / 10];
+    let loud = sorted[sorted.len() * 9 / 10];
+    // A turn that is mostly speech has no silence at its 10th percentile, so
+    // the threshold never goes above half the speech level.
+    let threshold = (floor * 3.0).max(loud * 0.12).min(loud * 0.5);
+    let pause_frames = (PIECE_PAUSE_MS / FRAME_MS) as usize;
+
+    let mut pieces = Vec::new();
+    let (mut start, mut quiet) = (None::<usize>, 0usize);
+    for (i, &r) in rms.iter().enumerate() {
+        if r >= threshold {
+            start.get_or_insert(i);
+            quiet = 0;
+        } else if let Some(s) = start {
+            quiet += 1;
+            if quiet >= pause_frames {
+                pieces.push((s, i + 1 - quiet));
+                start = None;
+                quiet = 0;
+            }
+        }
+    }
+    if let Some(s) = start {
+        pieces.push((s, rms.len() - quiet));
+    }
+    let to_ms = |f: usize| turn.start_ms + f as u64 * FRAME_MS;
+    let pieces: Vec<(u64, u64)> = pieces.into_iter().filter(|(s, e)| e > s).map(|(s, e)| (to_ms(s), to_ms(e).min(turn.end_ms))).collect();
+    if pieces.is_empty() { vec![(turn.start_ms, turn.end_ms)] } else { pieces }
+}
+
+/// Average-linkage clustering: groups of item indices whose average pairwise
+/// similarity stays at or above `threshold`.
+fn group_by_similarity(sim: &[Vec<f32>], threshold: f32) -> Vec<Vec<usize>> {
+    let mut groups: Vec<Vec<usize>> = (0..sim.len()).map(|i| vec![i]).collect();
+    loop {
+        let mut best: Option<(usize, usize, f32)> = None;
+        for i in 0..groups.len() {
+            for j in i + 1..groups.len() {
+                let total: f32 = groups[i].iter().flat_map(|&a| groups[j].iter().map(move |&b| (a, b))).map(|(a, b)| sim[a][b]).sum();
+                let avg = total / (groups[i].len() * groups[j].len()) as f32;
+                if avg >= threshold && best.is_none_or(|(_, _, s)| avg > s) {
+                    best = Some((i, j, avg));
+                }
+            }
+        }
+        let Some((i, j, _)) = best else { return groups };
+        let merged = groups.remove(j);
+        groups[i].extend(merged);
+    }
+}
+
+/// Splits speakers whose turns hold two clearly different voices (see above).
+/// `voiceprint` returns the speaker embedding of 16 kHz audio, or None.
+pub fn split_mixed_speakers(
+    turns: Vec<SpeakerTurn>,
+    pcm: &[f32],
+    voiceprint: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>,
+) -> Vec<SpeakerTurn> {
+    // Every piece, with the index of the turn it was cut from.
+    let (mut pieces, turn_of): (Vec<SpeakerTurn>, Vec<usize>) = turns
+        .iter()
+        .enumerate()
+        .flat_map(|(n, t)| pause_pieces(pcm, t).into_iter().map(move |(s, e)| (SpeakerTurn { start_ms: s, end_ms: e, speaker: t.speaker }, n)))
+        .unzip();
+    let mut next_speaker = count_speakers(&turns);
+    let mut changed = false;
+    for speaker in 0..count_speakers(&turns) {
+        let mine: Vec<usize> = (0..pieces.len()).filter(|&i| pieces[i].speaker == speaker).collect();
+        let printed: Vec<(usize, Vec<f32>)> = mine
+            .iter()
+            .filter(|&&i| pieces[i].end_ms - pieces[i].start_ms >= VOICEPRINT_PIECE_MS)
+            .filter_map(|&i| {
+                let p = &pieces[i];
+                let audio = &pcm[(p.start_ms * 16) as usize..((p.end_ms * 16) as usize).min(pcm.len())];
+                voiceprint(audio).filter(|e| !e.is_empty()).map(|e| (i, e))
+            })
+            .collect();
+        if printed.len() < 2 {
+            continue;
+        }
+        let sim: Vec<Vec<f32>> = printed
+            .iter()
+            .map(|(_, a)| printed.iter().map(|(_, b)| crate::speaker_embedding::cosine_similarity(a, b)).collect())
+            .collect();
+        let speech = |g: &[usize]| g.iter().map(|&k| pieces[printed[k].0].end_ms - pieces[printed[k].0].start_ms).sum::<u64>();
+        let mut groups = group_by_similarity(&sim, SAME_VOICE_SIMILARITY);
+        groups.sort_by_key(|g| std::cmp::Reverse(speech(g)));
+        // Small leftovers are not another person: they join the closest voice.
+        let (mut big, mut small) = (Vec::new(), Vec::new());
+        for (n, g) in groups.into_iter().enumerate() {
+            if n == 0 || speech(&g) >= MIN_SPLIT_SPEECH_MS { big.push(g) } else { small.push(g) }
+        }
+        if big.len() < 2 {
+            continue;
+        }
+        let mut groups = big;
+        for g in small {
+            let avg = |h: &Vec<usize>| {
+                g.iter().flat_map(|&a| h.iter().map(move |&b| (a, b))).map(|(a, b)| sim[a][b]).sum::<f32>() / (g.len() * h.len()) as f32
+            };
+            let target = (0..groups.len()).max_by(|&x, &y| avg(&groups[x]).total_cmp(&avg(&groups[y]))).unwrap();
+            groups[target].extend(g);
+        }
+        // Each voice's pieces get its speaker. A shorter piece takes, in order:
+        // the one voice of the rest of its own turn (a sentence cut at a
+        // comma); a clear voiceprint match; the closest printed piece in time.
+        let mut voice_of: Vec<(usize, u64, u64, usize)> = Vec::new(); // (turn, start, end, speaker)
+        for (n, g) in groups.iter().enumerate() {
+            let id = if n == 0 { speaker } else { next_speaker + n - 1 };
+            for &k in g {
+                let i = printed[k].0;
+                pieces[i].speaker = id;
+                voice_of.push((turn_of[i], pieces[i].start_ms, pieces[i].end_ms, id));
+            }
+        }
+        let centroids: Vec<Vec<f32>> = groups
+            .iter()
+            .map(|g| {
+                let mut c = vec![0.0; printed[g[0]].1.len()];
+                for &k in g {
+                    c.iter_mut().zip(&printed[k].1).for_each(|(a, b)| *a += b);
+                }
+                c
+            })
+            .collect();
+        for &i in &mine {
+            if printed.iter().any(|(j, _)| *j == i) {
+                continue;
+            }
+            let p = pieces[i];
+            let own: std::collections::BTreeSet<usize> = voice_of.iter().filter(|v| v.0 == turn_of[i]).map(|v| v.3).collect();
+            if own.len() == 1 {
+                pieces[i].speaker = *own.first().unwrap();
+                continue;
+            }
+            if p.end_ms - p.start_ms >= MATCH_PIECE_MS {
+                let audio = &pcm[(p.start_ms * 16) as usize..((p.end_ms * 16) as usize).min(pcm.len())];
+                if let Some(e) = voiceprint(audio).filter(|e| !e.is_empty()) {
+                    let mut sims: Vec<(f32, usize)> = centroids
+                        .iter()
+                        .enumerate()
+                        .map(|(n, c)| (crate::speaker_embedding::cosine_similarity(&e, c), n))
+                        .collect();
+                    sims.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    if sims.len() < 2 || sims[0].0 - sims[1].0 >= MATCH_MARGIN {
+                        let best = sims[0].1;
+                        pieces[i].speaker = if best == 0 { speaker } else { next_speaker + best - 1 };
+                        continue;
+                    }
+                }
+            }
+            let gap = |&(_, s, e, _): &(usize, u64, u64, usize)| if e <= p.start_ms { p.start_ms - e } else { s.saturating_sub(p.end_ms) };
+            if let Some(&(_, _, _, id)) = voice_of.iter().min_by_key(|v| (v.0 != turn_of[i], gap(v))) {
+                pieces[i].speaker = id;
+            }
+        }
+        println!("[DIARIZE] Voiceprints split speaker {} into {} voices", speaker + 1, groups.len());
+        next_speaker += groups.len() - 1;
+        changed = true;
+    }
+    if changed { tidy_turns(pieces) } else { turns }
+}
+
 fn count_speakers(turns: &[SpeakerTurn]) -> usize {
     turns.iter().map(|t| t.speaker + 1).max().unwrap_or(0)
 }
@@ -133,6 +338,96 @@ fn count_speakers(turns: &[SpeakerTurn]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 16 kHz audio of `(voice, seconds)` parts separated by 0.5 s pauses;
+    /// each voice is a tone at its own pitch.
+    fn talk(parts: &[(usize, f32)]) -> (Vec<f32>, Vec<(u64, u64, usize)>) {
+        let mut pcm = Vec::new();
+        let mut spans = Vec::new();
+        for &(voice, secs) in parts {
+            pcm.extend(vec![0.0; 8_000]);
+            let start = pcm.len() as u64 / 16;
+            let hz = 150.0 + 90.0 * voice as f32;
+            pcm.extend((0..(secs * 16_000.0) as usize).map(|n| 0.3 * (n as f32 * hz * std::f32::consts::TAU / 16_000.0).sin()));
+            spans.push((start, pcm.len() as u64 / 16, voice));
+        }
+        pcm.extend(vec![0.0; 8_000]);
+        (pcm, spans)
+    }
+
+    /// A stand-in voiceprint: which pitch the audio is, as a one-hot vector.
+    fn pitch_print(audio: &[f32]) -> Option<Vec<f32>> {
+        let crossings = audio.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f32;
+        let hz = crossings * 16_000.0 / audio.len() as f32;
+        let voice = ((hz - 150.0) / 90.0).round().clamp(0.0, 3.0) as usize;
+        let mut e = vec![0.05; 4];
+        e[voice] = 1.0;
+        Some(e)
+    }
+
+    #[test]
+    fn a_turn_is_cut_at_its_pauses() {
+        let (pcm, spans) = talk(&[(0, 2.0), (1, 3.0)]);
+        let whole = SpeakerTurn { start_ms: spans[0].0, end_ms: spans[1].1, speaker: 0 };
+        let pieces = pause_pieces(&pcm, &whole);
+        assert_eq!(pieces.len(), 2, "{pieces:?}");
+        for ((s, e), (ts, te, _)) in pieces.iter().zip(&spans) {
+            assert!(s.abs_diff(*ts) <= 40 && e.abs_diff(*te) <= 40, "{s}-{e} vs {ts}-{te}");
+        }
+    }
+
+    #[test]
+    fn two_voices_heard_as_one_speaker_are_split() {
+        // The separator put voices 0 and 1 together as speaker 0; voice 2 is speaker 1.
+        let (pcm, spans) = talk(&[(0, 4.0), (1, 3.0), (2, 3.0), (0, 3.0), (1, 4.0)]);
+        let turns = vec![
+            SpeakerTurn { start_ms: spans[0].0, end_ms: spans[1].1, speaker: 0 },
+            SpeakerTurn { start_ms: spans[2].0, end_ms: spans[2].1, speaker: 1 },
+            SpeakerTurn { start_ms: spans[3].0, end_ms: spans[4].1, speaker: 0 },
+        ];
+        let out = split_mixed_speakers(turns, &pcm, &mut pitch_print);
+        let speakers: Vec<usize> = out.iter().map(|t| t.speaker).collect();
+        assert_eq!(speakers, [0, 1, 2, 0, 1], "{out:?}");
+    }
+
+    #[test]
+    fn a_short_piece_follows_its_own_sentence_not_the_next_speaker() {
+        // Voice 1 says a short phrase, pauses, then a long one; voice 0 answers
+        // right after. The separator heard both as speaker 0.
+        let (pcm, spans) = talk(&[(0, 4.0), (1, 1.2), (1, 3.0), (0, 3.5), (1, 3.0)]);
+        let turns = vec![SpeakerTurn { start_ms: spans[0].0, end_ms: spans[4].1, speaker: 0 }];
+        let out = split_mixed_speakers(turns, &pcm, &mut pitch_print);
+        let voice_at = |ms: u64| out.iter().find(|t| t.start_ms <= ms && ms < t.end_ms).map(|t| t.speaker);
+        // The 1.2 s phrase belongs with the 3 s one after it (same voice).
+        assert_eq!(voice_at(spans[1].0 + 500), voice_at(spans[2].0 + 500), "{out:?}");
+        assert_ne!(voice_at(spans[1].0 + 500), voice_at(spans[0].0 + 500), "{out:?}");
+    }
+
+    #[test]
+    fn one_voice_is_never_split_and_short_leftovers_stay() {
+        let (pcm, spans) = talk(&[(0, 4.0), (0, 3.0), (3, 2.5), (0, 3.0)]);
+        // 2.5 s of a different voice is too little to be another person.
+        let turns = vec![SpeakerTurn { start_ms: spans[0].0, end_ms: spans[3].1, speaker: 0 }];
+        let out = split_mixed_speakers(turns.clone(), &pcm, &mut pitch_print);
+        assert_eq!(out, turns);
+        // Without voiceprints nothing changes either.
+        assert_eq!(split_mixed_speakers(turns.clone(), &pcm, &mut |_| None), turns);
+    }
+
+    #[test]
+    fn grouping_keeps_similar_items_together() {
+        let sim = vec![
+            vec![1.0, 0.8, 0.2, 0.3],
+            vec![0.8, 1.0, 0.25, 0.2],
+            vec![0.2, 0.25, 1.0, 0.7],
+            vec![0.3, 0.2, 0.7, 1.0],
+        ];
+        let mut groups = group_by_similarity(&sim, 0.55);
+        groups.iter_mut().for_each(|g| g.sort());
+        groups.sort();
+        assert_eq!(groups, vec![vec![0, 1], vec![2, 3]]);
+        assert_eq!(group_by_similarity(&sim, 0.1).len(), 1);
+    }
 
     fn t(start_ms: u64, end_ms: u64, speaker: usize) -> SpeakerTurn {
         SpeakerTurn { start_ms, end_ms, speaker }

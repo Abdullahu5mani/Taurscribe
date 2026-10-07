@@ -31,7 +31,9 @@ export function beautifyModelName(rawName: string): string {
     .replace("ctc-", "CTC ")
     .replace("tdt-", "TDT ")
     .replace("streaming", "Streaming")
-    .replace(/[-_]/g, " ")
+    // Dashes and underscores become spaces, except inside quantization names
+    // (Q5_1, Q8_0, Q4_K_M), which are shown as written.
+    .replace(/\b[qQ]\d+(?:_[0-9a-zA-Z]+)+\b|[-_]/g, (m) => (m.length > 1 ? m.toUpperCase() : " "))
     .trim();
   return name
     .replace(/Nemotron Streaming\s+Streaming/gi, "Nemotron Streaming")

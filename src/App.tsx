@@ -1017,7 +1017,7 @@ function App() {
       setSettingsInitialTab("models");
       setIsSettingsOpen(true);
     }
-  }, []);
+  }, [handleModelChange, handleSwitchToGranite, handleSwitchToQwen3]);
 
   useEffect(() => {
     (window as any).__TAURSCRIBE_TEST__ = {

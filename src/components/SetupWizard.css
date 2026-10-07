@@ -66,6 +66,13 @@
   scrollbar-gutter: stable both-edges;
 }
 
+/* Centred when the step fits, scrolled from the top when it doesn't. Its parts
+   keep their height: shrinking them clipped the hardware card's last row on
+   short windows (centring with justify-content also hid the overflowing top). */
+.setup-step > * { flex-shrink: 0; }
+.setup-step > :first-child { margin-top: auto; }
+.setup-step > :last-child { margin-bottom: auto; }
+
 /* Enter animations */
 .setup-step--enter-right {
   animation: stepEnterRight 0.38s cubic-bezier(0.4, 0, 0.2, 1) forwards;

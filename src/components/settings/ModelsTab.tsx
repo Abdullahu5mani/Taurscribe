@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
 import type { DownloadableModel, DownloadProgress } from './types';
 import { ModelRow } from './ModelRow';
+import { ComputeDeviceCard } from './ComputeDeviceCard';
 import { AUTO_UNLOAD_OPTIONS } from '../../hooks/useAutoUnload';
 import {
     computeModelRecommendation,
@@ -107,9 +108,13 @@ interface ModelsTabProps {
     onCancelDownload: (id: string) => void;
     scrollTarget?: string;
     onScrollHandled?: () => void;
+    asrBackend?: "gpu" | "cpu";
+    computeDevice?: string;
+    onSelectComputeDevice?: (backend: "gpu" | "cpu", device?: string, label?: string) => Promise<void>;
+    deviceSwitchBlocked?: boolean;
 }
 
-export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCancelDownload, scrollTarget, onScrollHandled }: ModelsTabProps) {
+export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCancelDownload, scrollTarget, onScrollHandled, asrBackend = "gpu", computeDevice = "auto", onSelectComputeDevice, deviceSwitchBlocked = false }: ModelsTabProps) {
     const [activeTier, setActiveTier] = useState<WhisperTier>('Small');
     const [whisperLanguage, setWhisperLanguage] = useState<WhisperLanguage>('english');
     const [whisperOptimization, setWhisperOptimization] = useState<WhisperOptimization>('quantized');
@@ -323,6 +328,15 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     ))}
                 </div>
             </div>
+
+            {onSelectComputeDevice && (
+                <ComputeDeviceCard
+                    asrBackend={asrBackend}
+                    computeDevice={computeDevice}
+                    onSelect={onSelectComputeDevice}
+                    blocked={deviceSwitchBlocked}
+                />
+            )}
 
             {/* ── Whisper ──────────────────────────────────────────── */}
             <div className="model-group" id="models-group-whisper" data-testid="models-group-whisper" ref={whisperGroupRef}>

@@ -306,6 +306,14 @@ fn cli_model(state: &AudioState, engine: ASREngine) -> Option<String> {
 async fn handle(app: &AppHandle, cmd: &str, args: &Value) -> Result<Value, String> {
     match cmd {
         "status" => Ok(status(app)),
+        "benchmark" => {
+            let result = crate::commands::benchmark_compute_devices(app.state::<AudioState>(), app.clone()).await?;
+            match (result.data, result.error) {
+                (Some(report), _) => serde_json::to_value(report).map_err(|e| e.to_string()),
+                (None, Some(e)) => Err(e.message),
+                (None, None) => Err("the speed test failed".into()),
+            }
+        }
         "dictate" => {
             if !ui_ready(&app.state::<AudioState>()) {
                 return Err("Taurscribe is busy (starting, loading a model, or finishing the last dictation); try again in a moment".into());

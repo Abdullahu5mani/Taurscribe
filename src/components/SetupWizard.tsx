@@ -10,6 +10,15 @@ import {
 import type { DownloadableModel, DownloadProgress } from './settings/types';
 import './SetupWizard.css';
 
+/** What finishing the wizard hands the app. `modelId`: the recommended model,
+ *  already downloaded, to start on. */
+export interface SetupResult {
+  openSettings: boolean;
+  useCase: OnboardingUseCase;
+  modelId?: string;
+}
+
+
 interface Props {
   onComplete: (result: { openSettings: boolean; useCase: OnboardingUseCase }) => void;
   handleDownload: (id: string, name: string) => void;

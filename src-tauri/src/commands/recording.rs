@@ -8,7 +8,7 @@ use std::sync::{
 };
 use tauri::{AppHandle, Emitter, State};
 
-use crate::audio::{CaptureLoss, RecordingHandle, SendStream};
+use crate::audio::{CaptureLoss, CaptureMode, RecordingHandle, SendStream};
 use crate::audio_preprocess;
 use crate::denoise::Denoiser;
 use crate::state::AudioState;
@@ -173,6 +173,7 @@ fn emit_recording_state(app: &AppHandle, state: &AudioState) {
         serde_json::json!({
             "is_recording": is_recording,
             "is_dual_channel": is_recording && state.last_recording_is_dual_channel.load(Ordering::SeqCst),
+            "is_in_person": is_recording && state.last_recording_is_in_person.load(Ordering::SeqCst),
         }),
     );
 }
@@ -206,13 +207,11 @@ pub async fn start_recording(
         ));
     }
 
-    // Only a two-channel session is a meeting recording (the UI starts meetings
-    // that way); a dictation during a call stays a dictation.
-    let is_dual_channel = audio_source
-        .as_deref()
-        .map(|s| s == "dual_channel")
-        .unwrap_or_else(|| *state.audio_source_mode.lock().unwrap() == "dual_channel");
-    let meeting_at_start = if is_dual_channel {
+    // Only a call or in-person session is a meeting recording (the UI starts
+    // meetings that way); a dictation during a call stays a dictation.
+    let mode = capture_mode(&state, audio_source.as_deref());
+    // Only a call belongs to a detected meeting app.
+    let meeting_at_start = if mode == CaptureMode::Call {
         state.meeting_detector.get_status().active_meetings.into_iter().next()
     } else {
         None
@@ -272,16 +271,16 @@ pub async fn start_recording(
 
 /// A microphone stream to open: the device and the configuration (with its
 /// native sample format) picked by `select_input_device`.
-struct MicConfig {
-    device: cpal::Device,
-    config: cpal::StreamConfig,
-    sample_format: cpal::SampleFormat,
+pub(crate) struct MicConfig {
+    pub(crate) device: cpal::Device,
+    pub(crate) config: cpal::StreamConfig,
+    pub(crate) sample_format: cpal::SampleFormat,
 }
 
 /// Picks the microphone: the one chosen in Settings, else (Linux with
 /// PipeWire/Pulse) the virtual PCM, else the system default; then its default
 /// configuration, or the first supported one in a sample format we convert.
-fn select_input_device(app_handle: &AppHandle, state: &AudioState) -> Result<MicConfig, String> {
+pub(crate) fn select_input_device(app_handle: &AppHandle, state: &AudioState) -> Result<MicConfig, String> {
     let host = cpal::default_host();
     let preferred = state.selected_input_device.lock().unwrap().clone();
 
@@ -881,12 +880,12 @@ fn start_meeting_capture(
 /// creates the session WAV. Returns its path and writer.
 fn prepare_session(
     state: &AudioState,
-    is_dual_channel: bool,
+    is_meeting: bool,
     channels: u16,
     sample_rate: u32,
 ) -> Result<(std::path::PathBuf, hound::WavWriter<std::io::BufWriter<std::fs::File>>), String> {
     let recordings_dir = get_recordings_dir()?;
-    let prefix = if is_dual_channel { "meeting" } else { "recording" };
+    let prefix = if is_meeting { "meeting" } else { "recording" };
     let filename = format!(
         "{}_{}_{:016x}.wav",
         prefix,
@@ -933,13 +932,12 @@ fn start_recording_blocking(
     denoise: Option<bool>,
     audio_source: Option<String>,
 ) -> Result<String, String> {
-    let denoise_enabled = denoise.unwrap_or(true);
+    let mode = capture_mode(&state, audio_source.as_deref());
+    let is_dual_channel = mode.is_dual_channel();
+    // RNNoise is tuned for a voice close to the mic; in a room it strips the
+    // quieter voices of people further away.
+    let denoise_enabled = denoise.unwrap_or(true) && mode != CaptureMode::InPerson;
     state.recording_paused.store(false, Ordering::Relaxed);
-
-    let is_dual_channel = audio_source
-        .as_deref()
-        .map(|s| s == "dual_channel")
-        .unwrap_or_else(|| *state.audio_source_mode.lock().unwrap() == "dual_channel");
 
     #[cfg(target_os = "linux")]
     if is_dual_channel {
@@ -947,6 +945,7 @@ fn start_recording_blocking(
     }
 
     state.last_recording_is_dual_channel.store(is_dual_channel, Ordering::SeqCst);
+    state.last_recording_is_in_person.store(mode == CaptureMode::InPerson, Ordering::SeqCst);
 
     // 1. Input: stereo 48 kHz for meetings, else the selected microphone.
     let (mic, channels, sample_rate) = if is_dual_channel {
@@ -959,7 +958,7 @@ fn start_recording_blocking(
     };
 
     // 2. Session WAV and per-session state.
-    let (path, writer) = prepare_session(&state, is_dual_channel, channels, sample_rate)?;
+    let (path, writer) = prepare_session(&state, mode.is_meeting(), channels, sample_rate)?;
 
     // 3. Channels. Bounded so a slow writer or transcriber cannot grow memory
     // without limit; the capture side uses try_send and never blocks.
@@ -1045,7 +1044,7 @@ fn start_recording_blocking(
         transcriber_thread,
         level_stop,
         level_thread,
-        is_dual_channel,
+        mode,
         dual_channel_stop: dual.as_ref().map(|d| d.stop_signal.clone()),
         dual_channel_thread: dual.map(|d| d.capture_thread),
     });
@@ -1069,6 +1068,15 @@ fn meeting_for_saving<M>(at_start: Option<M>, at_stop: Option<M>, is_dual_channe
     if is_dual_channel { at_start.or(at_stop) } else { None }
 }
 
+/// The capture mode a recording starts in: the UI's `audio_source`, else the
+/// saved source mode.
+fn capture_mode(state: &AudioState, audio_source: Option<&str>) -> CaptureMode {
+    match audio_source {
+        Some(source) => CaptureMode::from_source(source),
+        None => CaptureMode::from_source(&state.audio_source_mode.lock().unwrap()),
+    }
+}
+
 fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) -> Result<(), String> {
     use cpal::traits::StreamTrait;
 
@@ -1081,7 +1089,7 @@ fn teardown_recording(recording: RecordingHandle, tail_capture_ms: u64) -> Resul
         transcriber_thread,
         level_stop,
         level_thread,
-        is_dual_channel: _,
+        mode: _,
         dual_channel_stop,
         dual_channel_thread,
     } = recording;
@@ -1134,7 +1142,7 @@ pub fn pause_recording(state: State<'_, AudioState>) -> Result<CommandResult<Str
     // A meeting recording has no single stream to pause (its capture thread
     // keeps both tracks running), so say so instead of pretending.
     let Some(ref stream) = handle.stream else {
-        return Ok(CommandResult::err("pause_unsupported", "Meeting recordings can't be paused"));
+        return Ok(CommandResult::err("pause_unsupported", "Call recordings can't be paused"));
     };
     stream
         .0
@@ -1152,7 +1160,7 @@ pub fn resume_recording(state: State<'_, AudioState>) -> Result<CommandResult<St
     };
 
     let Some(ref stream) = handle.stream else {
-        return Ok(CommandResult::err("pause_unsupported", "Meeting recordings can't be paused"));
+        return Ok(CommandResult::err("pause_unsupported", "Call recordings can't be paused"));
     };
     stream.0.play().map_err(|e| format!("Failed to resume recording: {e}"))?;
     state.recording_paused.store(false, Ordering::Relaxed);
@@ -1725,8 +1733,11 @@ fn wav_duration_ms(path: &std::path::Path) -> u64 {
 /// tap of the hotkey.
 pub(crate) const MIN_DICTATION_MS: u64 = 300;
 
+/// The Meetings platform of an in-person meeting, as the list's filter shows it.
+pub const IN_PERSON_PLATFORM: &str = "In person";
+
 /// Whether a recording is a dictation or a meeting. Decided when it starts (a
-/// two-channel recording is a meeting), never guessed afterwards.
+/// call or in-person recording is a meeting), never guessed afterwards.
 #[derive(serde::Serialize, Debug, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordingKind {
@@ -1793,6 +1804,7 @@ fn save_recording_warnings(path: &str, warnings: &[String]) -> Result<(), String
 struct Finishing<'a> {
     warnings: Vec<String>,
     kind: RecordingKind,
+    mode: CaptureMode,
     meeting_info: Option<crate::meeting_detector::MeetingInfo>,
     path: Option<&'a str>,
     active_engine: ASREngine,
@@ -1838,6 +1850,7 @@ impl Finishing<'_> {
             RecordingKind::Meeting => {
                 let id = process_and_save_meeting_if_applicable(
                     true,
+                    self.mode == CaptureMode::InPerson,
                     self.path,
                     &transcript,
                     self.meeting_info,
@@ -1900,6 +1913,7 @@ impl Finishing<'_> {
 
 fn process_and_save_meeting_if_applicable(
     is_meeting: bool,
+    in_person: bool,
     last_recording_path: Option<&str>,
     final_text: &str,
     meeting_info: Option<crate::meeting_detector::MeetingInfo>,
@@ -1970,6 +1984,7 @@ fn process_and_save_meeting_if_applicable(
         turn_transcriber
             .as_mut()
             .map(|t| t.as_mut() as crate::diarization::TurnTranscriber<'_>),
+        in_person,
     ).map_err(|e| format!("Meeting processing is incomplete ({e}); stereo recording retained at {}", dest_path.display()))?;
     // With per-turn transcription the turns are the complete record (the live
     // transcript can have gaps where its queue overflowed), so save their text.
@@ -2024,6 +2039,13 @@ fn process_and_save_meeting_if_applicable(
 
     let (title, platform, app_name, url) = if let Some(info) = meeting_info {
         (info.title, info.platform, info.app_name, info.url)
+    } else if in_person {
+        (
+            format!("In-person meeting on {}", chrono::Local::now().format("%b %-d, %Y")),
+            IN_PERSON_PLATFORM.to_string(),
+            "Taurscribe".to_string(),
+            String::new(),
+        )
     } else {
         (
             format!("Meeting on {}", chrono::Local::now().format("%b %-d, %Y")),
@@ -2111,12 +2133,14 @@ fn stop_recording_blocking(
     // Brief tail capture for OS audio scheduling; silence padding in the
     // transcriber thread handles the actual word-boundary safety margin.
     let capture_loss = recording.capture_loss.clone();
+    let mode = recording.mode;
     let teardown = teardown_recording(recording, 80);
     let preview_incomplete = capture_loss.preview_frames.load(Ordering::Relaxed) > 0
         || capture_loss.preview_failed.load(Ordering::Relaxed);
     let mut finishing = Finishing {
         warnings: capture_loss.warnings(),
         kind,
+        mode,
         meeting_info,
         path: last_recording_path.as_deref(),
         active_engine,
@@ -2349,16 +2373,16 @@ pub async fn stop_recording(
     let gguf = state.gguf_manager(active_engine);
     let vad_arc = state.vad.clone();
 
-    let is_dual_channel = recording.is_dual_channel;
+    let mode = recording.mode;
     let active_meeting = meeting_for_saving(
         state.recording_meeting.lock().unwrap().take(),
         state.meeting_detector.get_status().active_meetings.into_iter().next(),
-        is_dual_channel,
+        mode.is_dual_channel(),
     );
-    // A dual-channel recording is a meeting recording even when no meeting app was
+    // A call recording is a meeting recording even when no meeting app was
     // detected: it is saved to the meetings area (as "Direct Audio") instead of
-    // being treated as dictation.
-    let kind = if is_dual_channel { RecordingKind::Meeting } else { RecordingKind::Dictation };
+    // being treated as dictation. So is an in-person one (as "In person").
+    let kind = if mode.is_meeting() { RecordingKind::Meeting } else { RecordingKind::Dictation };
     let is_meeting = kind == RecordingKind::Meeting;
     let model_id = match active_engine {
         ASREngine::Whisper => state.whisper_snapshot().model,
@@ -2370,6 +2394,9 @@ pub async fn stop_recording(
         let payload = match active_meeting.as_ref() {
             Some(m) => {
                 serde_json::json!({ "title": m.title, "platform": m.platform, "app_name": m.app_name })
+            }
+            None if mode == CaptureMode::InPerson => {
+                serde_json::json!({ "title": "In-person meeting", "platform": IN_PERSON_PLATFORM, "app_name": "Taurscribe" })
             }
             None => {
                 serde_json::json!({ "title": "Direct Audio recording", "platform": "Direct Audio", "app_name": "Taurscribe" })
@@ -2494,7 +2521,7 @@ mod tests {
                 }),
                 level_stop: Arc::new(AtomicBool::new(false)),
                 level_thread: std::thread::spawn(|| {}),
-                is_dual_channel: capture_panics,
+                mode: if capture_panics { CaptureMode::Call } else { CaptureMode::Dictation },
                 dual_channel_stop: None,
                 dual_channel_thread: if capture_panics {
                     Some(std::thread::spawn(|| panic!("simulated capture failure")))
@@ -2547,7 +2574,7 @@ mod tests {
                 transcriber_thread,
                 level_stop,
                 level_thread,
-                is_dual_channel: true,
+                mode: CaptureMode::Call,
                 dual_channel_stop: Some(stop),
                 dual_channel_thread: Some(capture_thread),
             },
@@ -2572,7 +2599,7 @@ mod tests {
             transcriber_thread,
             level_stop: Arc::new(AtomicBool::new(false)),
             level_thread: std::thread::spawn(|| {}),
-            is_dual_channel: false,
+            mode: CaptureMode::Dictation,
             dual_channel_stop: None,
             dual_channel_thread: None,
         };
@@ -2599,7 +2626,7 @@ mod tests {
             }),
             level_stop: Arc::new(AtomicBool::new(false)),
             level_thread: std::thread::spawn(|| {}),
-            is_dual_channel: false,
+            mode: CaptureMode::Dictation,
             dual_channel_stop: None,
             dual_channel_thread: None,
         };
@@ -2664,6 +2691,7 @@ mod tests {
         let finishing = Finishing {
             warnings,
             kind: RecordingKind::Dictation,
+            mode: CaptureMode::Dictation,
             meeting_info: None,
             path: path.to_str(),
             active_engine: ASREngine::Granite,

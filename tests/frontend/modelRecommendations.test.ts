@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   computeModelRecommendation,
   getWhisperTierFromModelId,
+  hardwareVerdict,
   ONBOARDING_USE_CASES,
   type GpuReport,
   type SystemInfo,

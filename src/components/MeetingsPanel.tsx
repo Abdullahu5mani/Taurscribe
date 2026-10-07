@@ -43,6 +43,10 @@ interface MeetingsPanelProps {
   onOpenSettings?: () => void;
   /** Opens Settings → Models (speaker recognition model for the Speaker Vault). */
   onOpenModelSettings?: () => void;
+  /** Shows the in-person recording section (InPersonPanel). */
+  onRecordInPerson?: () => void;
+  /** The in-person recording section, shown at the top while open. */
+  inPerson?: React.ReactNode;
 }
 
 
@@ -55,6 +59,7 @@ const PLATFORM_META: Record<string, { label: string; color: string; bg: string; 
   "Webex": { label: "Webex", color: "#06b6d4", bg: "rgba(6, 182, 212, 0.14)", border: "rgba(6, 182, 212, 0.3)" },
   "Discord": { label: "Discord", color: "#6366f1", bg: "rgba(99, 102, 241, 0.14)", border: "rgba(99, 102, 241, 0.3)" },
   "Direct Audio": { label: "Direct Audio", color: "#ec4899", bg: "rgba(236, 72, 153, 0.14)", border: "rgba(236, 72, 153, 0.3)" },
+  "In person": { label: "In person", color: "#14b8a6", bg: "rgba(20, 184, 166, 0.14)", border: "rgba(20, 184, 166, 0.3)" },
 };
 
 // Meetings are saved under the detector's platform keys ("meet", "zoom", …).
@@ -86,6 +91,8 @@ export function MeetingsPanel({
   onStartDualRecording,
   onStopRecording,
   onOpenModelSettings,
+  onRecordInPerson,
+  inPerson,
 }: MeetingsPanelProps) {
   // Meetings Catalog
   const [meetings, setMeetings] = useState<MeetingSummaryRecord[]>([]);
@@ -582,6 +589,7 @@ export function MeetingsPanel({
 
   return (
     <div className="meetings-panel" data-testid="meetings-panel">
+      {inPerson}
       {/* ── Active Live Call Banner (If call is detected or recording) ─ */}
       {activeMeeting && (
         <div className={`meeting-live-banner ${isRecordingCall ? "recording" : ""} ${selectedMeetingId ? "meeting-live-banner--has-selection" : ""}`}>
@@ -722,6 +730,20 @@ export function MeetingsPanel({
               Platform
             </button>
           </div>
+
+          {onRecordInPerson && !inPerson && !isRecording && (
+            <button
+              id="meetings-record-in-person-btn"
+              data-testid="meetings-record-in-person-btn"
+              type="button"
+              className="meeting-vault-btn meeting-record-in-person-btn"
+              onClick={onRecordInPerson}
+              title="Record a meeting in the room on this computer's microphone"
+            >
+              <IconRecord size={12} />
+              <span className="vault-btn-text">Record in person</span>
+            </button>
+          )}
 
           <button
             id="meetings-vault-btn"

@@ -94,7 +94,7 @@ fn save_config(cfg: &StorageConfig) -> Result<(), String> {
 }
 
 /// Replaces `path` whole or not at all: an interrupted write leaves the old file.
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     let mut f = std::fs::File::create(&tmp)?;
     f.write_all(bytes)?;
@@ -1078,7 +1078,7 @@ mod tests {
 
     #[test]
     fn a_failed_settings_save_puts_the_recording_paths_back() {
-        let mut conn = db_with_paths(&["/data/meetings/a.webm"], "[]");
+        let mut conn = db_with_paths(&[&native("/data/meetings", "a.webm")], "[]");
         let journal = journal_in("save-fails");
         let entry = MoveJournal { old: "/data/meetings".into(), new: "/ext/rec".into() };
         let err = publish_recordings_move(
@@ -1089,18 +1089,18 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, "disk full");
-        assert_eq!(audio_paths(&conn), ["/data/meetings/a.webm"]);
+        assert_eq!(audio_paths(&conn), [native("/data/meetings", "a.webm")]);
         assert!(!journal.exists());
     }
 
     #[test]
     fn a_published_move_leaves_no_journal() {
-        let mut conn = db_with_paths(&["/data/meetings/a.webm"], "[]");
+        let mut conn = db_with_paths(&[&native("/data/meetings", "a.webm")], "[]");
         let journal = journal_in("saved");
         let entry = MoveJournal { old: "/data/meetings".into(), new: "/ext/rec".into() };
         publish_recordings_move(&journal, &entry, &mut |from, to| rewrite_recording_paths_in_db(&mut conn, from, to), || Ok(()))
             .unwrap();
-        assert_eq!(audio_paths(&conn), ["/ext/rec/a.webm"]);
+        assert_eq!(audio_paths(&conn), [native("/ext/rec", "a.webm")]);
         assert!(!journal.exists());
     }
 
@@ -1108,24 +1108,24 @@ mod tests {
     fn a_move_interrupted_before_the_switch_was_saved_is_undone_at_start() {
         // The app stopped after the paths were rewritten, before storage.json
         // (still naming the old folder) was saved.
-        let mut conn = db_with_paths(&["/ext/rec/a.webm"], "[]");
+        let mut conn = db_with_paths(&[&native("/ext/rec", "a.webm")], "[]");
         let journal = journal_in("interrupted");
         std::fs::write(&journal, serde_json::to_vec(&MoveJournal { old: "/data/meetings".into(), new: "/ext/rec".into() }).unwrap()).unwrap();
 
         recover_recordings_move(&journal, Path::new("/data/meetings"), &mut |from, to| rewrite_recording_paths_in_db(&mut conn, from, to))
             .unwrap();
-        assert_eq!(audio_paths(&conn), ["/data/meetings/a.webm"]);
+        assert_eq!(audio_paths(&conn), [native("/data/meetings", "a.webm")]);
         assert!(!journal.exists());
     }
 
     #[test]
     fn a_move_that_finished_is_left_alone_at_start() {
-        let mut conn = db_with_paths(&["/ext/rec/a.webm"], "[]");
+        let mut conn = db_with_paths(&[&native("/ext/rec", "a.webm")], "[]");
         let journal = journal_in("finished");
         std::fs::write(&journal, serde_json::to_vec(&MoveJournal { old: "/data/meetings".into(), new: "/ext/rec".into() }).unwrap()).unwrap();
         recover_recordings_move(&journal, Path::new("/ext/rec"), &mut |from, to| rewrite_recording_paths_in_db(&mut conn, from, to))
             .unwrap();
-        assert_eq!(audio_paths(&conn), ["/ext/rec/a.webm"]);
+        assert_eq!(audio_paths(&conn), [native("/ext/rec", "a.webm")]);
         assert!(!journal.exists());
         // No journal: nothing to do.
         recover_recordings_move(&journal, Path::new("/ext/rec"), &mut |_, _| panic!("rewrote without a journal")).unwrap();
@@ -1265,8 +1265,8 @@ mod tests {
         assert_eq!(
             paths,
             [
-                "/tmp/meetings2/audio/one.wav",
-                "/tmp/meetings-old/audio/two.wav"
+                native("/tmp/meetings2", "audio/one.wav"),
+                "/tmp/meetings-old/audio/two.wav".into()
             ]
         );
         let (snippet, candidates): (String, String) = conn
@@ -1276,12 +1276,12 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(snippet, "/tmp/meetings2/snippets/a.wav");
+        assert_eq!(snippet, native("/tmp/meetings2", "snippets/a.wav"));
         assert_eq!(
             serde_json::from_str::<Vec<String>>(&candidates).unwrap(),
             [
-                "/tmp/meetings2/snippets/a.wav",
-                "/tmp/meetings-old/snippets/b.wav"
+                native("/tmp/meetings2", "snippets/a.wav"),
+                "/tmp/meetings-old/snippets/b.wav".into()
             ]
         );
     }

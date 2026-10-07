@@ -80,6 +80,15 @@ pub fn ensure_meetings_schema(conn: &Connection) -> Result<(), String> {
             embedding_json      TEXT,
             candidate_snippets  TEXT
         );
+
+        -- The user's own voiceprint, for telling "You" apart in in-person
+        -- meetings (one microphone). Never part of the speaker vault.
+        CREATE TABLE IF NOT EXISTS my_voice (
+            id                  INTEGER PRIMARY KEY CHECK (id = 1),
+            embedding_json      TEXT NOT NULL,
+            speech_seconds      REAL NOT NULL,
+            created_at          TEXT NOT NULL
+        );
         "#,
     )
     .map_err(|e| format!("Failed to initialize meetings schema: {}", e))?;

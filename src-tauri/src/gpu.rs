@@ -7,7 +7,7 @@
 //! | flavor   | whisper.cpp | transcribe.cpp | llama.cpp | who gets it                     |
 //! |----------|-------------|----------------|-----------|---------------------------------|
 //! | apple    | Metal (+CoreML encoder) | Metal | Metal | every Mac                      |
-//! | nvidia   | CUDA        | CUDA           | CUDA      | NVIDIA, Windows / Linux x64     |
+//! | nvidia   | CUDA+Vulkan | CUDA+Vulkan    | CUDA+Vulkan | NVIDIA, Windows / Linux x64   |
 //! | amd      | HIP (ROCm)  | ROCm           | ROCm      | Radeon RX / Pro cards, Linux    |
 //! | vulkan   | Vulkan      | Vulkan         | Vulkan    | AMD on Windows, AMD APUs, Intel |
 //! | adreno   | CPU         | CPU            | OpenCL    | Snapdragon (Windows / Linux)    |
@@ -19,8 +19,12 @@
 //! there, without shipping ~1 GB of rocBLAS. Intel is Vulkan for the same reason:
 //! only whisper.cpp has SYCL.
 //!
-//! ONNX Runtime (CAM++ voiceprints) uses CoreML on Apple Silicon and DirectML on
-//! Windows in every flavor; elsewhere its tiny model runs on the CPU.
+//! Releases build the NVIDIA flavor with `gpu-nvidia,gpu-vulkan`: the user can
+//! then pick an integrated GPU, or Vulkan instead of CUDA, in Settings → Models
+//! (`compute_devices`). CUDA stays the default ("auto": ggml lists it first).
+//!
+//! ONNX Runtime (CAM++ voiceprints) uses CoreML on Apple Silicon; elsewhere its
+//! tiny model runs on the CPU (DirectML fails it for many input lengths).
 
 use serde::Serialize;
 
@@ -386,6 +390,224 @@ pub const CPU_DEVICE: &str = "cpu";
 /// Settings key of the chosen device.
 pub const DEVICE_SETTING: &str = "compute_device";
 
+fn backend_label(kind: &str) -> String {
+    match kind {
+        "cuda" => "CUDA".into(),
+        "vulkan" => "Vulkan".into(),
+        "metal" => "Metal".into(),
+        "rocm" => "ROCm".into(),
+        "sycl" => "SYCL".into(),
+        other => other.to_uppercase(),
+    }
+}
+
+fn device_id(kind: &str, description: &str) -> String {
+    format!("{}:{}", kind.to_lowercase(), description.trim())
+}
+
+/// GPUs in ggml's registry, in registry order (whisper.cpp's `gpu_device`
+/// counts in this order).
+fn registry_gpus() -> Vec<transcribe_cpp::Device> {
+    use transcribe_cpp::DeviceType;
+    transcribe_cpp::devices()
+        .into_iter()
+        .filter(|d| matches!(d.device_type, DeviceType::Gpu | DeviceType::Igpu))
+        .collect()
+}
+
+/// GPUs best first: separate cards before integrated ones, otherwise in
+/// registry order. The first is what "auto" runs on. ggml's Vulkan backend
+/// lists integrated GPUs too, in the driver's order, which can put an APU
+/// ahead of the Radeon card in the same PC.
+fn ranked_gpus() -> Vec<transcribe_cpp::Device> {
+    let mut gpus = registry_gpus();
+    gpus.sort_by_key(|d| d.device_type == transcribe_cpp::DeviceType::Igpu);
+    gpus
+}
+
+/// Every device the user can pick: GPUs best first, then the CPU, then NPUs.
+pub fn compute_devices() -> Vec<ComputeDevice> {
+    let mut out: Vec<ComputeDevice> = if gpu_worth_using() {
+        ranked_gpus()
+            .into_iter()
+            .map(|d| ComputeDevice {
+                id: device_id(&d.kind, &d.description),
+                name: d.description.trim().to_string(),
+                backend: backend_label(&d.kind),
+                kind: if d.device_type == transcribe_cpp::DeviceType::Igpu { "igpu" } else { "gpu" },
+                memory_gb: (d.memory_total > 0).then(|| d.memory_total as f32 / 1_073_741_824.0),
+                usable: true,
+                note: None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    out.push(ComputeDevice {
+        id: CPU_DEVICE.into(),
+        name: "CPU".into(),
+        backend: "CPU".into(),
+        kind: "cpu",
+        memory_gb: None,
+        usable: true,
+        note: None,
+    });
+    out.extend(npus().into_iter().map(|name| ComputeDevice {
+        id: format!("npu:{name}"),
+        name,
+        backend: "NPU".into(),
+        kind: "npu",
+        memory_gb: None,
+        usable: false,
+        note: Some(NPU_NOTE.into()),
+    }));
+    out
+}
+
+const NPU_NOTE: &str = "Whisper, Granite, Qwen3 and FlowScribe run on ggml, which has no backend for this NPU yet";
+
+/// The saved choice: "auto", "cpu" or a device id.
+static PREFERRED: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+pub fn preferred_device() -> String {
+    PREFERRED.read().unwrap().clone().unwrap_or_else(|| AUTO_DEVICE.into())
+}
+
+pub fn set_preferred_device(id: &str) {
+    *PREFERRED.write().unwrap() = Some(id.to_string());
+}
+
+/// Reads the saved choice from settings.json; called once at startup.
+pub fn load_preferred_device() {
+    let saved = crate::mcp_server::settings_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get(DEVICE_SETTING)?.as_str().map(str::to_string));
+    if let Some(id) = saved {
+        set_preferred_device(&id);
+    }
+}
+
+/// What an engine should load on. `force_cpu` is the engine's own GPU/CPU
+/// switch (file jobs and the LLM pass it); otherwise the saved device applies.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Target {
+    Cpu,
+    /// The best GPU (ggml's first).
+    Auto,
+    Gpu(String),
+}
+
+impl Target {
+    pub fn resolve(force_cpu: bool) -> Self {
+        if force_cpu || !gpu_worth_using() {
+            return Target::Cpu;
+        }
+        Self::from_id(&preferred_device())
+    }
+
+    fn from_id(id: &str) -> Self {
+        match id {
+            CPU_DEVICE => Target::Cpu,
+            AUTO_DEVICE | "" => Target::Auto,
+            other => Target::Gpu(other.to_string()),
+        }
+    }
+
+    /// The id stored with a loaded model, so a reload is skipped only when
+    /// the device would not change.
+    pub fn key(&self) -> String {
+        match self {
+            Target::Cpu => CPU_DEVICE.into(),
+            Target::Auto => AUTO_DEVICE.into(),
+            Target::Gpu(id) => id.clone(),
+        }
+    }
+
+    /// The id of the GPU this target runs on: the chosen one if present,
+    /// else the best one. None on the CPU or without a GPU.
+    fn gpu_id(&self) -> Option<String> {
+        let best = || ranked_gpus().first().map(|d| device_id(&d.kind, &d.description));
+        match self {
+            Target::Cpu => None,
+            Target::Auto => best(),
+            Target::Gpu(id) => {
+                if registry_gpus().iter().any(|d| &device_id(&d.kind, &d.description) == id) {
+                    Some(id.clone())
+                } else {
+                    // An eGPU unplugged or a driver gone since it was chosen.
+                    println!("[GPU] Chosen device '{id}' not found; using the best GPU");
+                    best()
+                }
+            }
+        }
+    }
+
+    /// The registry device to load transcribe.cpp models on.
+    pub fn transcribe_device(&self) -> Option<transcribe_cpp::Device> {
+        let id = self.gpu_id()?;
+        registry_gpus().into_iter().find(|d| device_id(&d.kind, &d.description) == id)
+    }
+
+    /// whisper.cpp's `gpu_device`: the position among GPUs in the registry.
+    pub fn whisper_gpu_index(&self) -> i32 {
+        let Some(id) = self.gpu_id() else { return 0 };
+        registry_gpus()
+            .iter()
+            .position(|d| device_id(&d.kind, &d.description) == id)
+            .map_or(0, |i| i as i32)
+    }
+
+    /// The matching llama.cpp device index (its own registry), if any.
+    pub fn llama_device(&self) -> Option<usize> {
+        let id = self.gpu_id()?;
+        llama_cpp_2::list_llama_ggml_backend_devices()
+            .into_iter()
+            .find(|d| device_id(&d.backend, &d.description) == id)
+            .map(|d| d.index)
+    }
+}
+
+// NPUs, from the OS. None of the engines can use them; they are listed so the
+// choice is visible rather than silently missing. (Apple's Neural Engine is not
+// listed: Core ML already uses it for the Whisper encoder when the .mlmodelc
+// companion is downloaded.)
+#[cfg(windows)]
+fn npus() -> Vec<String> {
+    let Ok(out) = quiet(std::process::Command::new("powershell").args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Get-PnpDevice -Class ComputeAccelerator -PresentOnly -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FriendlyName",
+    ]))
+    .output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout).lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
+}
+
+#[cfg(target_os = "linux")]
+fn npus() -> Vec<String> {
+    // amdxdna (AMD Ryzen AI), intel_vpu (Intel AI Boost), qaic …
+    let Ok(dir) = std::fs::read_dir("/sys/class/accel") else { return Vec::new() };
+    dir.flatten()
+        .filter_map(|e| {
+            let driver = std::fs::read_link(e.path().join("device/driver")).ok()?;
+            let driver = driver.file_name()?.to_string_lossy().to_string();
+            Some(match driver.as_str() {
+                "amdxdna" => "AMD Ryzen AI NPU".to_string(),
+                "intel_vpu" => "Intel AI Boost NPU".to_string(),
+                other => format!("NPU ({other})"),
+            })
+        })
+        .collect()
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn npus() -> Vec<String> {
+    Vec::new()
+}
+
 // ── Tauri command ────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -398,6 +620,10 @@ pub struct GpuReport {
     pub recommended_label: &'static str,
     /// True when another build would be faster on this machine.
     pub better_build_available: bool,
+    /// Devices to choose from (see `compute_devices`).
+    pub compute_devices: Vec<ComputeDevice>,
+    /// The saved choice: "auto", "cpu" or a device id.
+    pub preferred_device: String,
 }
 
 pub fn report() -> GpuReport {
@@ -410,7 +636,17 @@ pub fn report() -> GpuReport {
         recommended_flavor: rec,
         recommended_label: flavor_label(rec),
         better_build_available: rec != build_flavor() && rec != "cpu",
+        compute_devices: compute_devices(),
+        preferred_device: preferred_device(),
     }
+}
+
+/// Saves the device choice for the next model load (the frontend reloads the
+/// model and persists the setting itself).
+#[tauri::command]
+pub fn set_compute_device(id: String) {
+    println!("[GPU] Compute device set to '{id}'");
+    set_preferred_device(&id);
 }
 
 #[tauri::command]
@@ -458,6 +694,28 @@ mod tests {
         assert!(intel_is_discrete("Intel(R) Arc(TM) B580 Graphics"));
         assert!(!intel_is_discrete("Intel(R) UHD Graphics 630"));
         assert!(!intel_is_discrete("Intel(R) Iris(R) Xe Graphics"));
+    }
+
+    #[test]
+    fn device_choice_maps_to_targets() {
+        assert_eq!(Target::from_id("auto"), Target::Auto);
+        assert_eq!(Target::from_id(""), Target::Auto);
+        assert_eq!(Target::from_id("cpu"), Target::Cpu);
+        assert_eq!(Target::from_id("vulkan:AMD Radeon(TM) Graphics"), Target::Gpu("vulkan:AMD Radeon(TM) Graphics".into()));
+        assert_eq!(Target::Gpu("cuda:X".into()).key(), "cuda:X");
+        assert_eq!(device_id("Vulkan", " NVIDIA GeForce RTX 5070 "), "vulkan:NVIDIA GeForce RTX 5070");
+        // A device that isn't present falls back to the best GPU, as Auto does.
+        let missing = Target::Gpu("cuda:no such card".into());
+        assert_eq!(missing.whisper_gpu_index(), Target::Auto.whisper_gpu_index());
+        assert_eq!(missing.transcribe_device(), Target::Auto.transcribe_device());
+        assert!(Target::Cpu.transcribe_device().is_none());
+    }
+
+    #[test]
+    fn the_cpu_is_always_a_choice() {
+        let devices = compute_devices();
+        assert!(devices.iter().any(|d| d.id == CPU_DEVICE && d.usable));
+        assert!(devices.iter().filter(|d| d.kind == "npu").all(|d| !d.usable));
     }
 
     #[test]

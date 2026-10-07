@@ -484,8 +484,44 @@ pub fn preprocess_assembled_speech_16k(speech: &mut Vec<f32>) {
     preprocess_16k_in_place(speech, true);
 }
 
+/// Brings one speaker's turn to a common loudness, for in-person meetings
+/// where someone across the table is far quieter than whoever is near the mic.
+/// The gain is capped (quiet hiss is not blown up) and peaks stay below
+/// clipping. Speech already at the target level is returned unchanged.
+pub fn balance_turn_level(samples: &[f32]) -> Vec<f32> {
+    const TARGET_RMS: f32 = 0.08;
+    const MAX_GAIN: f32 = 10.0;
+    const PEAK_LIMIT: f32 = 0.95;
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+    let peak = samples.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+    if rms <= 1e-6 || peak <= 1e-6 {
+        return samples.to_vec();
+    }
+    let gain = (TARGET_RMS / rms).min(MAX_GAIN).min(PEAK_LIMIT / peak).max(1.0);
+    samples.iter().map(|s| s * gain).collect()
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_quiet_turn_is_brought_up_without_clipping() {
+        let tone = |amp: f32| (0..16_000).map(|i| amp * (i as f32 * 0.05).sin()).collect::<Vec<f32>>();
+        let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+        let quiet = balance_turn_level(&tone(0.02));
+        assert!((rms(&quiet) - 0.08).abs() < 0.01, "{}", rms(&quiet));
+        // Very quiet audio is raised at most 10x.
+        let faint = balance_turn_level(&tone(0.001));
+        assert!((rms(&faint) / rms(&tone(0.001)) - 10.0).abs() < 0.01);
+        // Loud speech is never turned down, and peaks never clip.
+        let loud = tone(0.5);
+        assert_eq!(balance_turn_level(&loud), loud);
+        let spiky: Vec<f32> = tone(0.01).into_iter().enumerate().map(|(i, s)| if i == 100 { 0.6 } else { s }).collect();
+        assert!(balance_turn_level(&spiky).iter().all(|s| s.abs() <= 0.951));
+    }
     use super::*;
 
     fn sine(freq: f32, rate: u32, secs: f32) -> Vec<f32> {

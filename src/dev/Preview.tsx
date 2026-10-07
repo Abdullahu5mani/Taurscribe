@@ -64,6 +64,8 @@ const DemoApp = lazy(() => import("./demoBackend").then(({ installDemoBackend })
 
 export function Preview({ view }: { view: string }) {
   const [open, setOpen] = useState(true);
+  const [asrBackend, setAsrBackend] = useState<"gpu" | "cpu">("gpu");
+  const [computeDevice, setComputeDevice] = useState("auto");
   if (view === "app") return <Suspense fallback={null}><DemoApp /></Suspense>;
   installFakeTauri();
   const noop = () => {};
@@ -99,6 +101,8 @@ export function Preview({ view }: { view: string }) {
         muteBackgroundAudio={false} setMuteBackgroundAudio={noop}
         enableOverlay={true} setEnableOverlay={noop}
         llmBackend="gpu" setLlmBackend={noop}
+        asrBackend={asrBackend} computeDevice={computeDevice}
+        onSelectComputeDevice={async (backend, device) => { setAsrBackend(backend); if (device) setComputeDevice(device); }}
         transcriptionStyle="Casual" setTranscriptionStyle={noop}
         soundVolume={0.6} soundMuted={false} setSoundVolume={noop} setSoundMuted={noop}
         dictionary={[]} addDictEntry={noop} updateDictEntry={noop} removeDictEntry={noop}

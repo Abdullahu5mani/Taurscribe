@@ -30,6 +30,7 @@ Files:
 
 Status:
   status [--json]          is the app running, recording, which model is loaded
+  benchmark [--json]       time the loaded model on each GPU and the CPU
 
 History (reads your transcripts; works with the app closed):
   history [--limit N] [--kind dictation|file|meeting]

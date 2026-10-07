@@ -661,12 +661,31 @@ pub fn align_transcript_to_turns(
     sample_rate: u32,
     transcriber: Option<TurnTranscriber<'_>>,
 ) -> Result<Vec<DiarizedTurn>, String> {
+    align_turns(mic_turns, remote_turns, remote_profiles, raw_transcript, snippets_dir, meeting_id, mic_samples, sys_samples, sample_rate, transcriber, true)
+}
+
+/// `two_channels`: false for a one-track (in-person) recording, where both
+/// sample slices are the same track and there is no crosstalk to avoid.
+#[allow(clippy::too_many_arguments)]
+fn align_turns(
+    mic_turns: &[AudioTurnSegment],
+    remote_turns: &[AudioTurnSegment],
+    remote_profiles: &[SpeakerProfile],
+    raw_transcript: &str,
+    snippets_dir: &Path,
+    meeting_id: i64,
+    mic_samples: &[f32],
+    sys_samples: &[f32],
+    sample_rate: u32,
+    transcriber: Option<TurnTranscriber<'_>>,
+    two_channels: bool,
+) -> Result<Vec<DiarizedTurn>, String> {
     let mut all_turns: Vec<(u64, u64, u8, String, String, Option<String>, Vec<String>)> = Vec::new();
 
     // 1. Process local mic turns (Channel 0 = You)
     let you_candidates = extract_candidate_snippets(
         mic_samples,
-        sys_samples,
+        if two_channels { sys_samples } else { &[] },
         mic_turns,
         sample_rate,
         snippets_dir,
@@ -763,7 +782,15 @@ pub fn align_transcript_to_turns(
             if end <= start || end - start < min_len {
                 continue;
             }
-            let text = transcribe(&source[start..end], sample_rate).map_err(|e| {
+            // One microphone in a room: bring quieter, further-away speakers up.
+            let balanced;
+            let audio = if two_channels {
+                &source[start..end]
+            } else {
+                balanced = crate::audio_preprocess::balance_turn_level(&source[start..end]);
+                &balanced[..]
+            };
+            let text = transcribe(audio, sample_rate).map_err(|e| {
                 format!("Could not transcribe {} at {}–{} ms: {e}", t.4, t.0, t.1)
             })?;
             {
@@ -908,6 +935,32 @@ fn split_remote_speakers(sys_samples: &[f32], sample_rate: u32) -> (Vec<AudioTur
     (turns, profiles)
 }
 
+/// Splits a room recording into speakers: like [`split_remote_speakers`], but
+/// with the voiceprint check ([`crate::neural_diarizer::split_mixed_speakers`])
+/// that separates similar voices the separator heard as one person.
+fn split_room_speakers(samples: &[f32], sample_rate: u32) -> (Vec<AudioTurnSegment>, Vec<SpeakerProfile>) {
+    if samples.is_empty() || crate::neural_diarizer::model_path().is_none() {
+        return split_remote_speakers(samples, sample_rate);
+    }
+    let pcm = match crate::audio_preprocess::resample_mono_to_16k(samples, sample_rate) {
+        Ok(pcm) => pcm,
+        Err(_) => return split_remote_speakers(samples, sample_rate),
+    };
+    match crate::neural_diarizer::diarize_16k(&pcm) {
+        Ok(turns) if !turns.is_empty() => {
+            let engine = crate::speaker_embedding::get_speaker_engine();
+            let turns = if engine.lock().map(|e| e.uses_neural_model()).unwrap_or(false) {
+                let mut voiceprint = |audio: &[f32]| engine.lock().ok()?.compute_embedding(audio, 16_000).ok();
+                crate::neural_diarizer::split_mixed_speakers(turns, &pcm, &mut voiceprint)
+            } else {
+                turns
+            };
+            turns_to_segments(&turns, samples, sample_rate)
+        }
+        _ => split_remote_speakers(samples, sample_rate),
+    }
+}
+
 /// Builds channel-1 turn segments and one profile per speaker from neural turns.
 fn turns_to_segments(
     turns: &[crate::neural_diarizer::SpeakerTurn],
@@ -963,7 +1016,7 @@ pub fn diarize_meeting_recording(
     snippets_dir: &Path,
     meeting_id: i64,
 ) -> Result<Vec<DiarizedTurn>, String> {
-    diarize_meeting_recording_with(wav_path, raw_transcript, snippets_dir, meeting_id, None)
+    diarize_meeting_recording_with(wav_path, raw_transcript, snippets_dir, meeting_id, None, false)
 }
 
 /// Decode directly into microphone/call channels without a third full buffer.
@@ -1008,18 +1061,116 @@ fn read_meeting_channels(wav_path: &Path) -> Result<(Vec<f32>, Vec<f32>, u32), S
 
 /// Like [`diarize_meeting_recording`], but transcribes each detected turn from its
 /// own channel with `transcriber` instead of distributing `raw_transcript`.
+/// `in_person`: a one-microphone room recording, where everyone (the user
+/// included) is on the one track.
 pub fn diarize_meeting_recording_with(
     wav_path: &Path,
     raw_transcript: &str,
     snippets_dir: &Path,
     meeting_id: i64,
     transcriber: Option<TurnTranscriber<'_>>,
+    in_person: bool,
 ) -> Result<Vec<DiarizedTurn>, String> {
+    if in_person {
+        let me = crate::commands::meetings::open_connection()
+            .ok()
+            .and_then(|conn| crate::commands::my_voice_embedding(&conn));
+        return diarize_in_person_recording(wav_path, raw_transcript, snippets_dir, meeting_id, transcriber, me.as_deref());
+    }
     let (mic_samples, sys_samples, sample_rate) = read_meeting_channels(wav_path)?;
 
     let mic_turns = detect_channel_speech_segments(&mic_samples, sample_rate, 0, 0.015);
     let (remote_turns, mut remote_profiles) = split_remote_speakers(&sys_samples, sample_rate);
+    identify_speakers(&mut remote_profiles, &remote_turns, &sys_samples, &mic_samples, sample_rate, snippets_dir, meeting_id);
 
+    align_transcript_to_turns(
+        &mic_turns,
+        &remote_turns,
+        &remote_profiles,
+        raw_transcript,
+        snippets_dir,
+        meeting_id,
+        &mic_samples,
+        &sys_samples,
+        sample_rate,
+        transcriber,
+    )
+}
+
+/// A room recording: the separator splits the one track into speakers, the
+/// one matching `me` (the user's voiceprint from "Your voice") becomes "You"
+/// and the rest are vault names or Speaker 1, 2, …
+pub fn diarize_in_person_recording(
+    wav_path: &Path,
+    raw_transcript: &str,
+    snippets_dir: &Path,
+    meeting_id: i64,
+    transcriber: Option<TurnTranscriber<'_>>,
+    me: Option<&[f32]>,
+) -> Result<Vec<DiarizedTurn>, String> {
+    let (samples, _, sample_rate) = read_meeting_channels(wav_path)?;
+    let samples = &samples[..];
+    let (turns, mut profiles) = split_room_speakers(samples, sample_rate);
+    // One track: no other channel to check clips against for crosstalk.
+    identify_speakers(&mut profiles, &turns, samples, &[], sample_rate, snippets_dir, meeting_id);
+
+    let you = me.and_then(|me| find_you(&profiles, me, crate::speaker_embedding::match_threshold()));
+    if let Some(idx) = you {
+        println!("[DIARIZE] In person: {} is you (voiceprint match)", profiles[idx].speaker_id);
+    }
+    name_room_speakers(&mut profiles, you);
+
+    // The user's turns go on channel 0, as on a call: the UI shows them as
+    // "You", and they are never offered for the speaker vault.
+    let (mut you_turns, others): (Vec<AudioTurnSegment>, Vec<AudioTurnSegment>) =
+        turns.into_iter().partition(|t| Some(t.cluster_id) == you);
+    for t in &mut you_turns {
+        t.channel = 0;
+    }
+    align_turns(&you_turns, &others, &profiles, raw_transcript, snippets_dir, meeting_id, samples, samples, sample_rate, transcriber, false)
+}
+
+/// The speaker whose voiceprint is closest to the user's, if close enough.
+fn find_you(profiles: &[SpeakerProfile], me: &[f32], threshold: f32) -> Option<usize> {
+    profiles
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !p.embedding.is_empty())
+        .map(|(i, p)| (i, crate::speaker_embedding::cosine_similarity(&p.embedding, me)))
+        .filter(|(_, sim)| *sim >= threshold)
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)
+}
+
+/// Names in-person speakers: the user "You", vault matches keep their names,
+/// everyone else is Speaker 1, 2, … in order of who spoke first (there is no
+/// "remote participant" in a room).
+fn name_room_speakers(profiles: &mut [SpeakerProfile], you: Option<usize>) {
+    let mut n = 0;
+    for (idx, p) in profiles.iter_mut().enumerate() {
+        if Some(idx) == you {
+            p.speaker_id = "speaker_you".to_string();
+            p.speaker_name = "You".to_string();
+        } else if p.speaker_id.starts_with("speaker_remote_") {
+            n += 1;
+            p.speaker_id = format!("speaker_remote_{n}");
+            p.speaker_name = format!("Speaker {n}");
+        }
+    }
+}
+
+/// Picks voice clips for each speaker, builds their voiceprints, and gives
+/// speakers in the speaker vault their names. `crosstalk_samples` is the other
+/// channel of a call (clips where it also has speech are avoided), or empty.
+fn identify_speakers(
+    remote_profiles: &mut [SpeakerProfile],
+    remote_turns: &[AudioTurnSegment],
+    sys_samples: &[f32],
+    mic_samples: &[f32],
+    sample_rate: u32,
+    snippets_dir: &Path,
+    meeting_id: i64,
+) {
     // Query enrolled vault speaker profiles for cross-meeting recognition
     let vault_speakers = crate::commands::meetings::open_connection()
         .ok()
@@ -1107,24 +1258,62 @@ pub fn diarize_meeting_recording_with(
             }
         }
     }
-
-    align_transcript_to_turns(
-        &mic_turns,
-        &remote_turns,
-        &remote_profiles,
-        raw_transcript,
-        snippets_dir,
-        meeting_id,
-        &mic_samples,
-        &sys_samples,
-        sample_rate,
-        transcriber,
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn profile(id: &str, embedding: Vec<f32>) -> SpeakerProfile {
+        SpeakerProfile {
+            speaker_id: id.to_string(),
+            speaker_name: id.to_string(),
+            channel: 1,
+            features: AcousticFeatures::default(),
+            embedding,
+            turn_count: 1,
+            total_duration_ms: 1000,
+            snippet_path: None,
+            candidate_snippets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn in_person_the_closest_voice_above_the_threshold_is_you() {
+        let me = vec![1.0, 0.0, 0.0];
+        let profiles = vec![
+            profile("speaker_remote_1", vec![0.0, 1.0, 0.0]),
+            profile("speaker_remote_2", vec![0.9, 0.3, 0.0]),
+            profile("speaker_remote_3", vec![0.7, 0.7, 0.0]),
+            profile("speaker_remote_4", Vec::new()),
+        ];
+        assert_eq!(find_you(&profiles, &me, 0.6), Some(1));
+        // Nobody close enough: no one is labelled "You".
+        assert_eq!(find_you(&profiles, &me, 0.99), None);
+        assert_eq!(find_you(&profiles[..1], &me, 0.6), None);
+    }
+
+    #[test]
+    fn in_person_speakers_are_you_vault_names_and_speaker_1_to_n() {
+        let mut profiles = vec![
+            profile("speaker_remote_1", Vec::new()),
+            profile("speaker_remote_2", Vec::new()),
+            profile("vault_sarah", Vec::new()),
+            profile("speaker_remote_4", Vec::new()),
+        ];
+        profiles[2].speaker_name = "Sarah".into();
+        name_room_speakers(&mut profiles, Some(1));
+        let names: Vec<(&str, &str)> = profiles.iter().map(|p| (p.speaker_id.as_str(), p.speaker_name.as_str())).collect();
+        assert_eq!(
+            names,
+            [("speaker_remote_1", "Speaker 1"), ("speaker_you", "You"), ("vault_sarah", "Sarah"), ("speaker_remote_2", "Speaker 2")]
+        );
+        // Without a voiceprint everyone is numbered, even a single speaker.
+        let mut solo = vec![profile("speaker_remote_1", Vec::new())];
+        solo[0].speaker_name = "Remote Participant".into();
+        name_room_speakers(&mut solo, None);
+        assert_eq!(solo[0].speaker_name, "Speaker 1");
+    }
 
     #[test]
     fn direct_channel_reader_preserves_samples_and_reports_corruption() {

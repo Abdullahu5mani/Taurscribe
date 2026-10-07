@@ -136,6 +136,8 @@ pub struct AudioState {
 
     // Tracks if the most recent recording was in dual-channel mode
     pub last_recording_is_dual_channel: Arc<AtomicBool>,
+    // Tracks if the most recent recording was an in-person meeting (one mic)
+    pub last_recording_is_in_person: Arc<AtomicBool>,
 
     // The meeting detected when the current recording started. Stopping saves
     // the recording under this meeting even if the call has ended (or another
@@ -223,6 +225,7 @@ impl AudioState {
             audio_source_mode: Arc::new(Mutex::new("mic".to_string())),
             auto_record_meetings: Arc::new(AtomicBool::new(false)),
             last_recording_is_dual_channel: Arc::new(AtomicBool::new(false)),
+            last_recording_is_in_person: Arc::new(AtomicBool::new(false)),
             recording_meeting: Arc::new(Mutex::new(None)),
         }
     }

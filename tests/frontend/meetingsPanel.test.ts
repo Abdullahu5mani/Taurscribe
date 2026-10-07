@@ -362,3 +362,16 @@ test("no-speech completion explains that nothing was saved", async () => {
     expect(byTest(view.handle.current, "meetings-processing-status")).toBeUndefined();
     expect(textOf(view.handle.current)).toContain("Nothing was saved: no speech");
 });
+
+test("Record in person opens the in-person section, which replaces the button", async () => {
+    let opened = 0;
+    const withButton = renderHook(() => MeetingsPanel({ ...props, onRecordInPerson: () => { opened += 1; } }));
+    await withButton.settle();
+    byTest(withButton.handle.current, "meetings-record-in-person-btn").props.onClick();
+    expect(opened).toBe(1);
+    const section = { type: "div", props: { "data-testid": "in-person-section" }, key: null };
+    const withSection = renderHook(() => MeetingsPanel({ ...props, onRecordInPerson: () => {}, inPerson: section as any }));
+    await withSection.settle();
+    expect(byTest(withSection.handle.current, "in-person-section")).toBeDefined();
+    expect(byTest(withSection.handle.current, "meetings-record-in-person-btn")).toBeUndefined();
+});

@@ -32,6 +32,7 @@ import {
 } from "fs";
 import { join } from "path";
 import { spawnSync } from "child_process";
+import { ggmlStackEnv } from "./ggml-stack";
 
 const root = join(import.meta.dir, "..");
 const srcTauri = join(root, "src-tauri");
@@ -170,6 +171,13 @@ writeFileSync(windowsConfPath, JSON.stringify(bootstrapWindowsConf, null, 2) + "
 // rebuild llama.cpp without it. build.rs does the same for the exe itself.
 if (features && /\b(gpu-nvidia|windows-nvidia)\b/.test(features)) {
   process.env.CMAKE_SHARED_LINKER_FLAGS = "/DELAYLOAD:nvcuda.dll delayimp.lib";
+}
+
+// One ggml for whisper.cpp and transcribe.cpp (scripts/ggml-stack.ts): two
+// static copies of different versions otherwise end up mixed in the exe.
+// x64 only: the ARM64 builds are cross-compiled with their own toolchain setup.
+if (!targetTriple || targetTriple.startsWith("x86_64")) {
+  Object.assign(process.env, ggmlStackEnv(features, targetTriple));
 }
 
 // ── Step 1: Build Rust binary ────────────────────────────────

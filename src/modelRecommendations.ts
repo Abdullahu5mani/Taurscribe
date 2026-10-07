@@ -23,6 +23,33 @@ export interface HardwareVerdict {
   text: string;
 }
 
+/** What this download can use, not only what the machine has: a CPU build
+ *  runs on the CPU even when CUDA is installed. */
+export function hardwareVerdict(sys: SystemInfo | null, gpu: GpuReport | null, isMac: boolean): HardwareVerdict | null {
+  if (!sys) return null;
+  const gpuName = gpu?.primary?.name ?? "your GPU";
+  if (gpu?.better_build_available && gpu.build_flavor === "cpu") {
+    return {
+      title: "This download doesn't use your GPU.",
+      warn: true,
+      text: `Transcription runs on the CPU; the ${gpu.recommended_label} build of Taurscribe runs it on ${gpuName}.`,
+    };
+  }
+  if (gpu?.better_build_available) {
+    return { title: "GPU acceleration ready.", text: `The ${gpu.recommended_label} build of Taurscribe is faster on ${gpuName}.` };
+  }
+  if (sys.cuda_available) {
+    return { title: "GPU acceleration ready.", text: "Whisper and Granite both run at full speed." };
+  }
+  if (isMac && sys.backend_hint === "Metal") {
+    return { title: "GPU acceleration ready.", text: "Models run on the GPU through Metal." };
+  }
+  if (sys.gpu_name && sys.gpu_name !== "Unknown") {
+    return { title: "GPU detected (no CUDA).", warn: true, text: "Whisper via CPU — consider downloading a smaller model." };
+  }
+  return { text: "No GPU detected. Transcription will use the CPU — choose a small Whisper model for best performance." };
+}
+
 export type WhisperTier = "Tiny" | "Base" | "Small" | "Medium" | "Large";
 export type RecommendationEngine = "whisper" | "granite";
 export type OnboardingUseCase = "quick_notes" | "coding" | "meetings" | "multilingual";

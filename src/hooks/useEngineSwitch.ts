@@ -53,6 +53,8 @@ export function useEngineSwitch({
     setTrayState,
     asrBackend,
     setAsrBackend,
+    computeDevice = "auto",
+    setComputeDevice,
     isRecordingRef,
     downloadProgressRef,
     setSessionPhase,
@@ -285,15 +287,29 @@ export function useEngineSwitch({
     };
 
     // ── CPU / GPU hot-swap ────────────────────────────────────────────────
-    const handleToggleAsrBackend = async (newBackend: "gpu" | "cpu") => {
-        if (newBackend === asrBackend) return;
+    /**
+     * Runs the speech engine on the GPU or CPU and reloads the loaded model.
+     * `device` picks a GPU ("cpu" or an id from get_gpu_report) where there is
+     * more than one; `deviceLabel` names it in status messages.
+     */
+    const handleToggleAsrBackend = async (newBackend: "gpu" | "cpu", device?: string, deviceLabel?: string) => {
+        const deviceChanges = newBackend === "gpu" && device !== undefined && device !== computeDevice;
+        if (newBackend === asrBackend && !deviceChanges) return;
         if (isLoading || isLoadingRef.current) return;
         if (isRecordingRef.current) return;
 
+        if (deviceChanges && device) {
+            try {
+                await setComputeDevice?.(device);
+            } catch (e) {
+                setHeaderStatus(`Couldn't switch device: ${e}`, 5000);
+                return;
+            }
+        }
         setAsrBackend(newBackend);
 
         const useGpu = newBackend === "gpu";
-        const label = useGpu ? "GPU" : "CPU";
+        const label = deviceLabel ?? (useGpu ? "GPU" : "CPU");
         const engine = activeEngineRef.current;
 
         // Fast-path: no model loaded — just update preference
