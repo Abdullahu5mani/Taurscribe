@@ -98,6 +98,31 @@ pub fn settings_path() -> Option<std::path::PathBuf> {
     Some(dirs::data_dir()?.join("taurscribe").join("settings.json"))
 }
 
+/// Removes a UTF-8 byte-order mark from settings.json, which Notepad and
+/// PowerShell 5 write. The store plugin can't parse a file that starts with
+/// one: the app then starts on default settings and saves `{}` over the file.
+/// Runs at startup, before the frontend loads the store.
+pub fn strip_settings_bom() {
+    if let Some(path) = settings_path() {
+        match strip_bom(&path) {
+            Ok(true) => println!("[SETTINGS] Removed a byte-order mark from {}", path.display()),
+            Ok(false) => {}
+            Err(e) => eprintln!("[SETTINGS] Could not check {} for a byte-order mark: {e}", path.display()),
+        }
+    }
+}
+
+fn strip_bom(path: &std::path::Path) -> std::io::Result<bool> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let Some(rest) = bytes.strip_prefix(b"\xEF\xBB\xBF") else { return Ok(false) };
+    crate::storage::write_atomic(path, rest)?;
+    Ok(true)
+}
+
 fn enabled() -> bool {
     settings_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
@@ -481,6 +506,20 @@ fn list_people(db: &Connection) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_byte_order_mark_is_removed_from_settings() {
+        let dir = std::env::temp_dir().join(format!("ts-bom-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"\xEF\xBB\xBF{\"active_engine\": \"granite\"}").unwrap();
+        assert!(strip_bom(&path).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"{\"active_engine\": \"granite\"}");
+        // Already clean, or missing: left alone.
+        assert!(!strip_bom(&path).unwrap());
+        assert!(!strip_bom(&dir.join("missing.json")).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use super::*;
 
     fn db() -> Connection {

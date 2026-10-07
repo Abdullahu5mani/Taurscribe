@@ -53,7 +53,7 @@ const EXIT_NOT_RUNNING: i32 = 3;
 pub fn is_cli_command(arg: &str) -> bool {
     matches!(
         arg,
-        "start" | "stop" | "toggle" | "transcribe" | "status" | "history" | "search" | "show" | "meeting"
+        "start" | "stop" | "toggle" | "transcribe" | "status" | "benchmark" | "history" | "search" | "show" | "meeting"
             | "install-cli" | "uninstall-cli" | "help" | "--help" | "-h" | "--version" | "-V"
     )
 }
@@ -76,6 +76,7 @@ pub fn run(args: Vec<String>) -> i32 {
             Ok(())
         }
         "status" => cmd_status(&o),
+        "benchmark" => cmd_benchmark(&o),
         "start" | "stop" | "toggle" => cmd_dictate(cmd, &o),
         "transcribe" => cmd_transcribe(&o),
         "history" => cmd_history(&o),
@@ -263,6 +264,36 @@ fn launch_app() -> Result<(), String> {
 }
 
 // ── commands ────────────────────────────────────────────────────────────────
+
+fn cmd_benchmark(o: &Opts) -> Result<(), Fail> {
+    o.check()?;
+    if try_status()?.is_none() {
+        return Err(Fail::NotRunning);
+    }
+    if !o.json {
+        eprintln!("Timing the loaded model on each device (30 s of test audio each)…");
+    }
+    // Loading a large model on each device can take minutes.
+    let report = request("benchmark", Value::Null, Some(Duration::from_secs(1800)))?;
+    if o.json {
+        println!("{report}");
+        return Ok(());
+    }
+    println!("{} · {}", report["engine"].as_str().unwrap_or("?"), report["model"].as_str().unwrap_or("?"));
+    for r in report["results"].as_array().into_iter().flatten() {
+        let device = format!("{} ({})", r["name"].as_str().unwrap_or("?"), r["backend"].as_str().unwrap_or("?"));
+        match r["error"].as_str() {
+            Some(e) => println!("  {device:<44} failed: {e}"),
+            None => println!(
+                "  {device:<44} {:>6.1}x real time  (transcribe {:.2}s, load {:.2}s)",
+                r["realtime"].as_f64().unwrap_or(0.0),
+                r["transcribe_s"].as_f64().unwrap_or(0.0),
+                r["load_s"].as_f64().unwrap_or(0.0)
+            ),
+        }
+    }
+    Ok(())
+}
 
 fn cmd_status(o: &Opts) -> Result<(), Fail> {
     o.check()?;
@@ -749,7 +780,7 @@ mod tests {
 
     #[test]
     fn only_known_subcommands_run_the_cli() {
-        for c in ["start", "stop", "toggle", "transcribe", "status", "history", "search", "show", "meeting", "install-cli", "help", "--version"] {
+        for c in ["start", "stop", "toggle", "transcribe", "status", "benchmark", "history", "search", "show", "meeting", "install-cli", "help", "--version"] {
             assert!(is_cli_command(c), "{c}");
         }
         // Anything else (no args, macOS -psn_ args, stray paths) still opens the app.

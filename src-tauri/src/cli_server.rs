@@ -263,8 +263,10 @@ fn status(app: &AppHandle) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "pid": std::process::id(),
         "recording": is_recording(&state),
-        // A two-channel meeting recording (saved to Meetings, not dictation history).
-        "meeting": is_recording(&state) && state.last_recording_is_dual_channel.load(Ordering::SeqCst),
+        // A meeting recording, call or in person (saved to Meetings, not dictation history).
+        "meeting": is_recording(&state)
+            && (state.last_recording_is_dual_channel.load(Ordering::SeqCst)
+                || state.last_recording_is_in_person.load(Ordering::SeqCst)),
         "paused": state.recording_paused.load(Ordering::Relaxed),
         "engine": engine_name(&engine),
         "model": model,

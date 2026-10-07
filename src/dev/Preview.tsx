@@ -8,8 +8,10 @@ import { lazy, Suspense, useState } from "react";
 import { SettingsModal } from "../components/SettingsModal";
 import { SetupWizard } from "../components/SetupWizard";
 import { MODELS } from "../components/settings/types";
+import { DEMO_DEVICES, DEMO_SPEEDS } from "./deviceFixtures";
 
 const FAKE: Record<string, unknown> = {
+  benchmark_compute_devices: { ok: true, data: DEMO_SPEEDS },
   get_meeting_detection_status: { is_watching: true, active_meetings_count: 0, active_meetings: [] },
   get_audio_source_mode: "mic",
   get_auto_record_meetings: false,
@@ -26,7 +28,7 @@ const FAKE: Record<string, unknown> = {
     granite_framework: "transcribe.cpp · Vulkan GPU", grammar_framework: "llama.cpp · Vulkan GPU",
     active_engine: "whisper", active_model_id: "base.en-q5_1", active_backend: "Vulkan",
   },
-  get_gpu_report: { primary: { name: "AMD Radeon RX 7800 XT", vendor: "amd" }, build_flavor: "vulkan", build_label: "Vulkan (Intel and other GPUs)", recommended_flavor: "amd", recommended_label: "AMD (ROCm)", better_build_available: true },
+  get_gpu_report: { primary: { name: "AMD Radeon RX 7800 XT", vendor: "amd" }, build_flavor: "vulkan", build_label: "Vulkan (Intel and other GPUs)", recommended_flavor: "amd", recommended_label: "AMD (ROCm)", better_build_available: true, preferred_device: "auto", compute_devices: DEMO_DEVICES },
   cli_install_status: { installed: false, location: "/usr/local/bin/taurscribe", note: null },
   get_hotkey: { keys: ["ControlLeft", "AltLeft"], mode: "hold" },
   list_input_devices: ["MacBook Pro Microphone", "AirPods Pro"],

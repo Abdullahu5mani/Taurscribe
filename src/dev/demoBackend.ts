@@ -8,6 +8,7 @@
  * and the feed picks it up from history.
  */
 
+import { DEMO_DEVICES, DEMO_SPEEDS } from "./deviceFixtures";
 import type { FileHistoryRecord } from "../types/fileHistory";
 
 type Callback = (msg: { event: string; id: number; payload: unknown }) => void;
@@ -273,7 +274,13 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "get_speaker_match_threshold": return 0.6;
         case "get_meeting_continue_minutes": return 10;
         case "get_mcp_setup": return { command: "/Applications/Taurscribe.app/Contents/MacOS/taurscribe", args: ["mcp"] };
-        case "get_gpu_report": return { primary: { name: "AMD Radeon RX 7800 XT", vendor: "amd" }, build_flavor: "vulkan", build_label: "Vulkan (Intel and other GPUs)", recommended_flavor: "amd", recommended_label: "AMD (ROCm)", better_build_available: true };
+        case "get_gpu_report": return { primary: { name: "AMD Radeon RX 7800 XT", vendor: "amd" }, build_flavor: "vulkan", build_label: "Vulkan (Intel and other GPUs)", recommended_flavor: "amd", recommended_label: "AMD (ROCm)", better_build_available: true,
+            preferred_device: "auto",
+            compute_devices: DEMO_DEVICES };
+        case "set_compute_device": return null;
+        case "get_my_voice": return { enrolled: false, speech_seconds: null, created_at: null, speaker_model_installed: true };
+        case "benchmark_compute_devices":
+            return new Promise((r) => setTimeout(r, 1200)).then(() => ({ ok: true, data: DEMO_SPEEDS }));
         case "cli_install_status": return { installed: false, location: "/usr/local/bin/taurscribe", note: null, managed: false };
         case "cli_ui_ready": return null;
         case "get_storage_locations": return [

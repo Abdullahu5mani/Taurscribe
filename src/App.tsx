@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
 import { SettingsModal } from "./components/SettingsModal";
-import { SetupWizard } from "./components/SetupWizard";
+import { SetupWizard, type SetupResult } from "./components/SetupWizard";
 import { TitleBar } from "./components/TitleBar";
 import { useState } from "react";
 import { useHeaderStatus } from "./hooks/useHeaderStatus";
@@ -29,13 +29,13 @@ import { useInitialLoad } from "./hooks/useInitialLoad";
 import { useHotkeyListeners } from "./hooks/useHotkeyListeners";
 import { useModelsWatcher } from "./hooks/useModelsWatcher";
 import { useSyncedRef } from "./utils/useSyncedRef";
-import { MODELS } from "./components/settings/types";
+import { DIARIZATION_MODEL_ID, MODELS } from "./components/settings/types";
 import type { DownloadableModel } from "./components/settings/types";
 import { beautifyModelName } from "./utils/modelDisplay";
-import type { OnboardingUseCase } from "./modelRecommendations";
 import "./components/TitleBar.css";
 import "./App.css";
 import { IconFileText, IconBolt, IconEject, IconDownload, IconMic, IconVideo, IconLightbulb, IconSettings } from "./components/Icons";
+import { InPersonPanel } from "./components/InPersonPanel";
 import { getEngineForModelId } from "./utils/engineUtils";
 import { useAutoUnload, AUTO_UNLOAD_OPTIONS, formatTimeoutLabel, formatRemaining } from "./hooks/useAutoUnload";
 import { useSlidingIndicator } from "./hooks/useSlidingIndicator";
@@ -138,6 +138,8 @@ function App() {
   type NavMode = "mic" | "meetings" | "files";
   /** Whether the output area is in mic, meetings, or file-transcription mode */
   const [navMode, setNavMode] = useState<NavMode>("mic");
+  /** The in-person recording section is open in the Meetings tab. */
+  const [inPersonOpen, setInPersonOpen] = useState(false);
   const modeIndicator = useSlidingIndicator(modeToggleRef, ".mode-toggle-btn--active", navMode);
   // Scroll state of the main area as data attributes on it (edge fades,
   // hover pause while scrolling); see utils/scrollState.ts.
@@ -346,6 +348,7 @@ function App() {
     transcriptionStyle, setTranscriptionStyle, transcriptionStyleRef,
     llmBackend, setLlmBackend,
     asrBackend, setAsrBackend,
+    computeDevice, setComputeDevice,
   } = usePostProcessing(setHeaderStatus, () => setIsSettingsOpen(true), storeRef);
 
 
@@ -369,8 +372,9 @@ function App() {
   const {
     isRecording, isRecordingRef, isPaused, isProcessingTranscript,
     latestLatency,
-    isDualChannelRecording, dualLevels,
+    isDualChannelRecording, isInPersonRecording, dualLevels, getRecordingMs, getLiveTranscript,
     handleStartRecording, handleStopRecording, handleTranscriptionChunk,
+    handlePauseRecording, handleResumeRecording,
   } = useRecording({
     activeEngineRef: activeEngineForwarded,
     models, graniteModels, qwen3Models, currentModel, currentGraniteModel, currentQwen3Model,
@@ -398,7 +402,7 @@ function App() {
     currentModel, currentGraniteModel, currentQwen3Model,
     setCurrentModel, setCurrentGraniteModel, setCurrentQwen3Model,
     setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
-    setAsrBackend,
+    setAsrBackend, computeDevice, setComputeDevice,
     isRecordingRef,
     downloadProgressRef,
     setSessionPhase,
@@ -1008,11 +1012,19 @@ function App() {
     });
   }, [headerStatusMessage]);
 
-  const handleSetupComplete = useCallback(({ openSettings, useCase }: { openSettings: boolean; useCase: OnboardingUseCase }) => {
+  const handleSetupComplete = useCallback(({ openSettings, useCase, modelId }: SetupResult) => {
     storeRef.current?.set("setup_complete", true);
     storeRef.current?.set("onboarding_use_case", useCase);
     storeRef.current?.save().catch(console.error);
     setShowSetupWizard(false);
+    // Start on the model the wizard recommended and showed as ready; switching
+    // to it also saves it as the active engine.
+    if (modelId) {
+      const engine = getEngineForModelId(modelId);
+      if (engine === "whisper") void handleModelChange(modelId);
+      else if (engine === "granite") void handleSwitchToGranite(modelId);
+      else if (engine === "qwen3") void handleSwitchToQwen3(modelId);
+    }
     if (openSettings) {
       setSettingsInitialTab("models");
       setIsSettingsOpen(true);
@@ -1377,6 +1389,31 @@ function App() {
                 onStopRecording={handleStopRecording}
                 onOpenSettings={() => handleOpenSettingsTab("meetings")}
                 onOpenModelSettings={() => handleOpenSettingsTab("models")}
+                onRecordInPerson={() => setInPersonOpen(true)}
+                inPerson={(inPersonOpen || isInPersonRecording) ? (
+                  <InPersonPanel
+                    isRecording={isRecording}
+                    isInPersonRecording={isInPersonRecording}
+                    isPaused={isPaused}
+                    isProcessing={isProcessingTranscript}
+                    separatorInstalled={settingsModels.some((m) => m.id === DIARIZATION_MODEL_ID && m.downloaded)}
+                    onStart={() => handleStartRecording(false, "in_person")}
+                    onStop={handleStopRecording}
+                    onPause={handlePauseRecording}
+                    onResume={handleResumeRecording}
+                    onOpenModelSettings={() => handleOpenSettingsTab("models")}
+                    onClose={() => setInPersonOpen(false)}
+                    getRecordingMs={getRecordingMs}
+                    getLiveTranscript={getLiveTranscript}
+                    getSetting={async (key) => (await storeRef.current?.get(key)) ?? null}
+                    setSetting={async (key, value) => {
+                      const store = storeRef.current;
+                      if (!store) return;
+                      await store.set(key, value);
+                      await store.save();
+                    }}
+                  />
+                ) : null}
               />
             )}
             {navMode === "mic" && (activeEngineHasNoModel ? (
@@ -1716,6 +1753,10 @@ function App() {
             setTranscriptionStyle={setTranscriptionStyle}
             llmBackend={llmBackend}
             setLlmBackend={setLlmBackend}
+            asrBackend={asrBackend}
+            computeDevice={computeDevice}
+            onSelectComputeDevice={handleToggleAsrBackend}
+            deviceSwitchBlocked={isLoading || isRecording}
             soundVolume={volume}
             soundMuted={muted}
             setSoundVolume={setVolume}
@@ -1761,6 +1802,7 @@ function App() {
           setTranscriptionStyle={setTranscriptionStyle}
           backendInfo={backendInfo}
           asrBackend={asrBackend}
+          computeDevice={computeDevice}
           onToggleAsrBackend={handleToggleAsrBackend}
           asrBackendLoading={isLoading}
           activeEngine={activeEngine}

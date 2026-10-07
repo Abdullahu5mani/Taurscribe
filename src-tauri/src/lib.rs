@@ -56,6 +56,40 @@ fn saved_setting(key: &str) -> Option<bool> {
     serde_json::from_str::<serde_json::Value>(&text).ok()?.get(key)?.as_bool()
 }
 
+/// The window opens at its configured 780×730. Where the screen has less room
+/// (a 1366×768 laptop, or 1440p at 200% scaling, both ~720 px tall above the
+/// taskbar) its bottom would sit under the taskbar, so shrink it to fit.
+fn fit_window_to_screen(window: &tauri::WebviewWindow) {
+    let (Ok(Some(monitor)), Ok(outer), Ok(inner), Ok(pos)) = (
+        window.current_monitor(),
+        window.outer_size(),
+        window.inner_size(),
+        window.outer_position(),
+    ) else {
+        return;
+    };
+    let area = monitor.work_area();
+    let (width, height) = fitted_size((outer.width, outer.height), (area.size.width, area.size.height));
+    if (width, height) == (outer.width, outer.height) {
+        return;
+    }
+    let frame = (outer.width - inner.width, outer.height - inner.height);
+    let _ = window.set_size(tauri::PhysicalSize::new(width - frame.0, height - frame.1));
+    let max = (
+        area.position.x + (area.size.width - width) as i32,
+        area.position.y + (area.size.height - height) as i32,
+    );
+    let _ = window.set_position(tauri::PhysicalPosition::new(
+        pos.x.clamp(area.position.x, max.0),
+        pos.y.clamp(area.position.y, max.1),
+    ));
+}
+
+/// `window` shrunk on each side that doesn't fit in `area` (both physical px).
+fn fitted_size(window: (u32, u32), area: (u32, u32)) -> (u32, u32) {
+    (window.0.min(area.0), window.1.min(area.1))
+}
+
 fn focus_main_window(app_handle: &tauri::AppHandle) {
     let windows = app_handle.webview_windows();
     // Prefer "main": on Windows/Linux the overlay is a webview window too.
@@ -171,6 +205,10 @@ pub fn run() {
             #[cfg(debug_assertions)]
             overlay::debug_demo(app.handle());
 
+            if let Some(window) = app.get_webview_window("main") {
+                fit_window_to_screen(&window);
+            }
+
             // Setup System Tray
             // The window starts invisible; the frontend shows it once loaded unless
             // "start hidden" is on. If the frontend never gets that far (a crash
@@ -219,6 +257,8 @@ pub fn run() {
 
             // Before recordings are used: undo a move the app stopped in the middle of.
             storage::recover_interrupted_move();
+            mcp_server::strip_settings_bom();
+            gpu::load_preferred_device();
             storage::allow_recordings_in_asset_scope(app.handle());
 
             // A kept recording for continuing a meeting outlives its window if the
@@ -455,4 +495,19 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+#[cfg(test)]
+mod window_fit_tests {
+    use super::fitted_size;
+
+    #[test]
+    fn the_window_shrinks_only_where_the_screen_is_smaller() {
+        // 780×730 logical at 200% on 2560×1440 with a 48 px taskbar.
+        assert_eq!(fitted_size((1560, 1460), (2560, 1344)), (1560, 1344));
+        // A roomy screen leaves it alone.
+        assert_eq!(fitted_size((780, 730), (1920, 1040)), (780, 730));
+        // A narrow and short one shrinks both ways.
+        assert_eq!(fitted_size((780, 730), (700, 600)), (700, 600));
+    }
 }

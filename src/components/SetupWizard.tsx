@@ -6,6 +6,8 @@ import {
   computeModelRecommendation,
   type OnboardingUseCase,
   type SystemInfo,
+  type GpuReport,
+  hardwareVerdict,
 } from '../modelRecommendations';
 import type { DownloadableModel, DownloadProgress } from './settings/types';
 import './SetupWizard.css';
@@ -20,7 +22,7 @@ export interface SetupResult {
 
 
 interface Props {
-  onComplete: (result: { openSettings: boolean; useCase: OnboardingUseCase }) => void;
+  onComplete: (result: SetupResult) => void;
   handleDownload: (id: string, name: string) => void;
   handleCancelDownload: (id: string) => void;
   downloadProgress: Record<string, DownloadProgress>;
@@ -284,25 +286,17 @@ function StepHardware({
   totalSteps: number;
 }) {
   const loading = sysInfo === null;
+  const [gpuReport, setGpuReport] = useState<GpuReport | null>(null);
+  useEffect(() => {
+    invoke<GpuReport>('get_gpu_report').then(setGpuReport).catch(() => setGpuReport(null));
+  }, []);
   // macOS fix: On Apple Silicon, memory is unified (shared between CPU and GPU).
   // Show "Unified Memory" instead of a separate VRAM row.
   const isMac = platform === 'macos';
   const ramOk = (sysInfo?.ram_total_gb ?? 0) >= 8;
   const hasGpu = sysInfo?.gpu_name && sysInfo.gpu_name !== 'Unknown';
 
-  const verdict = () => {
-    if (!sysInfo) return null;
-    if (sysInfo.cuda_available) {
-      return <p className="hw-verdict"><strong>GPU acceleration ready.</strong> Whisper and Granite both run at full speed.</p>;
-    }
-    if (isMac && sysInfo.backend_hint === 'Metal') {
-      return <p className="hw-verdict"><strong>GPU acceleration ready.</strong> Models run on the GPU through Metal.</p>;
-    }
-    if (hasGpu) {
-      return <p className="hw-verdict"><strong className="amber">GPU detected (no CUDA).</strong> Whisper via CPU — consider downloading a smaller model.</p>;
-    }
-    return <p className="hw-verdict">No GPU detected. Transcription will use the CPU — choose a small Whisper model for best performance.</p>;
-  };
+  const verdict = hardwareVerdict(sysInfo, gpuReport, isMac);
 
   return (
     <>
@@ -352,7 +346,12 @@ function StepHardware({
         </div>
       )}
 
-      {verdict()}
+      {verdict && (
+        <p className="hw-verdict">
+          {verdict.title && <><strong className={verdict.warn ? 'amber' : undefined}>{verdict.title}</strong>{' '}</>}
+          {verdict.text}
+        </p>
+      )}
 
       <div className="setup-nav setup-nav--spread">
         <button
@@ -1178,7 +1177,7 @@ function StepReady({
   downloadProgress,
   settingsModels,
 }: {
-  onComplete: (result: { openSettings: boolean; useCase: OnboardingUseCase }) => void;
+  onComplete: (result: SetupResult) => void;
   platform: string;
   recommendation: ReturnType<typeof computeModelRecommendation>;
   useCase: OnboardingUseCase;
@@ -1317,7 +1316,7 @@ function StepReady({
           className="setup-btn setup-btn--primary setup-btn--full"
           disabled={!canLaunch}
           style={!canLaunch ? { opacity: 0.35, cursor: 'not-allowed' } : undefined}
-          onClick={() => canLaunch && onComplete({ openSettings: false, useCase })}
+          onClick={() => canLaunch && onComplete({ openSettings: false, useCase, modelId })}
           aria-label="Launch Taurscribe Application"
         >
           Launch App →
@@ -1327,7 +1326,7 @@ function StepReady({
           id="wizard-ready-skip-btn"
           data-testid="wizard-ready-skip-btn"
           className="ready-skip-btn"
-          onClick={() => onComplete({ openSettings: !alreadyDownloaded, useCase })}
+          onClick={() => onComplete({ openSettings: true, useCase, modelId: alreadyDownloaded ? modelId : undefined })}
           aria-label={alreadyDownloaded ? 'Open Models tab instead' : 'Skip and set up models manually'}
         >
           {alreadyDownloaded ? 'Open Models tab instead' : 'Skip — set up models manually'}

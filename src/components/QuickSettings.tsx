@@ -2,6 +2,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconBolt, IconCpu, IconVolumeHigh, IconVolumeLow, IconVolumeMuted, InfoTooltip } from "./Icons";
+import { deviceChoices, deviceLabel, loadDeviceReport, selectedDeviceId, type DeviceReport } from "../utils/computeDevices";
 
 const STYLES: { value: string; label: string }[] = [
     { value: 'Casual', label: 'Casual' },
@@ -28,7 +29,9 @@ interface QuickSettingsProps {
     // ASR hardware backend (Whisper/Granite/Qwen3 — GPU or CPU)
     backendInfo: string;
     asrBackend: "gpu" | "cpu";
-    onToggleAsrBackend: (backend: "gpu" | "cpu") => void;
+    /** The chosen GPU ("auto" or an id); matters only with more than one GPU. */
+    computeDevice?: string;
+    onToggleAsrBackend: (backend: "gpu" | "cpu", device?: string, label?: string) => void;
     asrBackendLoading: boolean;
     activeEngine: string;
     // LLM backend
@@ -103,7 +106,7 @@ function QuickSettingsComponent({
     enableOverlay, setEnableOverlay,
     muteBackgroundAudio, setMuteBackgroundAudio,
     transcriptionStyle, setTranscriptionStyle,
-    backendInfo, asrBackend, onToggleAsrBackend, asrBackendLoading,
+    backendInfo, asrBackend, computeDevice = "auto", onToggleAsrBackend, asrBackendLoading,
     llmBackend, setLlmBackend,
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
     dictionaryCount, snippetsCount,
@@ -114,6 +117,12 @@ function QuickSettingsComponent({
     const [platform, setPlatform] = useState('');
     useEffect(() => { invoke<string>('get_platform').then(setPlatform).catch(() => {}); }, []);
     const isMac = platform === 'macos';
+    // With more than one GPU (CUDA and Vulkan, or an iGPU beside a card) each
+    // gets a button; otherwise the plain GPU / CPU pair.
+    const [deviceReport, setDeviceReport] = useState<DeviceReport | null>(null);
+    useEffect(() => { if (!isMac && platform) loadDeviceReport().then(setDeviceReport); }, [isMac, platform]);
+    const { gpus, showPicker } = deviceChoices(deviceReport);
+    const selectedDevice = selectedDeviceId(asrBackend, computeDevice, gpus);
 
     const llmHint =
         llmStatus === "Not Downloaded" ? "not downloaded" :
@@ -247,6 +256,33 @@ function QuickSettingsComponent({
                         role="group"
                         aria-label="Speech Engine Backend"
                     >
+                        {showPicker ? (
+                          <>
+                            {gpus.map((d) => (
+                                <button
+                                    key={d.id}
+                                    type="button"
+                                    data-testid={`qs-asr-device-${d.id}`}
+                                    className={`qs-backend-btn${selectedDevice === d.id ? " qs-backend-btn--active" : ""}`}
+                                    onClick={() => onToggleAsrBackend("gpu", d.id, deviceLabel(d))}
+                                    disabled={asrBackendLoading}
+                                    aria-pressed={selectedDevice === d.id}
+                                    title={`Run the active speech engine on ${d.name} with ${d.backend}`}
+                                ><IconBolt size={11} style={{ color: '#facc15' }} /> {deviceLabel(d)}</button>
+                            ))}
+                            <button
+                                type="button"
+                                id="qs-asr-backend-cpu"
+                                data-testid="qs-asr-backend-cpu"
+                                className={`qs-backend-btn${selectedDevice === "cpu" ? " qs-backend-btn--active" : ""}`}
+                                onClick={() => onToggleAsrBackend("cpu")}
+                                disabled={asrBackendLoading}
+                                aria-pressed={selectedDevice === "cpu"}
+                                title="Run the active speech engine on CPU (universal, slower)"
+                            ><IconCpu size={11} /> CPU</button>
+                          </>
+                        ) : (
+                          <>
                             <button
                                 type="button"
                                 id="qs-asr-backend-gpu"
@@ -269,6 +305,8 @@ function QuickSettingsComponent({
                                 aria-label="Run speech engine on CPU"
                                 title="Run the active speech engine on CPU (universal, slower)"
                             ><IconCpu size={11} /> CPU</button>
+                          </>
+                        )}
                         </div>
                   </>
                 )}

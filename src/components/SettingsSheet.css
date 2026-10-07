@@ -656,6 +656,41 @@
   .settings-sheet .storage-bar-row { grid-template-columns: 90px 1fr 64px; }
 }
 
+/* ── Speech device (Models tab) ──────────────────────────────────────── */
+.settings-sheet .device-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.settings-sheet .device-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) minmax(0, 210px);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--s-border);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--s-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.settings-sheet .device-row:hover:not(:disabled):not(.device-row--active) { background: rgba(255, 255, 255, 0.045); }
+.settings-sheet .device-row:disabled { cursor: default; }
+.settings-sheet .device-row--active { border-color: color-mix(in srgb, var(--s-accent) 55%, transparent); background: color-mix(in srgb, var(--s-accent) 7%, transparent); }
+.settings-sheet .device-row--unavailable { opacity: 0.5; cursor: default; }
+.settings-sheet .device-radio { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--s-text-3); }
+.settings-sheet .device-row--active .device-radio { border-color: var(--s-accent); background: radial-gradient(circle, var(--s-accent) 45%, transparent 50%); }
+.settings-sheet .device-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.settings-sheet .device-meta { font-size: 11.5px; font-weight: 400; color: var(--s-text-3); }
+.settings-sheet .device-speed { display: grid; grid-template-columns: 1fr 44px; align-items: center; gap: 8px; animation: storageIn 0.25s ease-out both; }
+.settings-sheet .device-speed--error { display: block; text-align: right; font-size: 12px; color: #fca5a5; }
+.settings-sheet .device-best { grid-column: 1 / -1; justify-self: end; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #6ee7a8; }
+.settings-sheet .device-error { color: #fca5a5; }
+@media (max-width: 560px) {
+  .settings-sheet .device-row { grid-template-columns: 14px 1fr; }
+  .settings-sheet .device-speed { grid-column: 2; }
+}
+
 /* ── Models tab rhythm: same spacing as the other pages ─────────────── */
 .settings-sheet .models-tab { gap: 22px; }
 .settings-sheet .model-memory-card { margin-bottom: 0; }

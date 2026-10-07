@@ -2595,10 +2595,12 @@ button.auto-unload-timer-btn--active {
 }
 
 .qs-backend-btn {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: max-content;
   font-size: var(--font-sm);
   font-weight: 600;
-  padding: 4px 0;
+  padding: 4px 8px;
+  white-space: nowrap;
   border-radius: 6px;
   border: 1px solid var(--border-color);
   background: transparent;
