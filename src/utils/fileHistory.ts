@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { FileImportMethod } from "../types/fileHistory";
 
 interface CompletedFile {
+    id?: string;
     path: string;
     transcript: string;
     engine: string;
@@ -26,6 +27,7 @@ export async function saveFileHistory(item: CompletedFile): Promise<void> {
         sourcePath: item.path,
         importMethod: item.importMethod,
         completedAt: item.completedAt ?? null,
+        ...(item.id ? { jobId: item.id } : {}),
     });
 }
 

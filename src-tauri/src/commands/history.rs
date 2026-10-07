@@ -53,7 +53,8 @@ fn init_history_schema(conn: &Connection) -> Result<(), String> {
             audio_source        TEXT,
             kind                TEXT,
             source_path         TEXT,
-            import_method       TEXT
+            import_method       TEXT,
+            job_id              TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_transcriptions_created_at
             ON transcriptions(created_at DESC);
@@ -79,7 +80,7 @@ fn init_history_schema(conn: &Connection) -> Result<(), String> {
     let _ = conn.execute("ALTER TABLE transcriptions ADD COLUMN kind TEXT", []);
     // Check first so repeat initialization is harmless, while real migration
     // failures are reported instead of silently disabling file history.
-    for column in ["source_path", "import_method"] {
+    for column in ["source_path", "import_method", "job_id"] {
         let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('transcriptions') WHERE name = ?1)",
             [column], |row| row.get(0),
@@ -89,6 +90,10 @@ fn init_history_schema(conn: &Connection) -> Result<(), String> {
                 .map_err(|e| format!("Failed to migrate history {column}: {e}"))?;
         }
     }
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_transcriptions_job_id ON transcriptions(job_id)",
+        [],
+    ).map_err(|e| format!("Failed to index history job identity: {e}"))?;
     let _ = conn.execute(
         &format!("UPDATE transcriptions SET kind = {KIND_FROM_SOURCE_SQL} WHERE kind IS NULL"),
         [],
@@ -144,6 +149,7 @@ pub async fn save_transcript_history(
     source_path: Option<String>,
     import_method: Option<FileImportMethod>,
     completed_at: Option<String>,
+    job_id: Option<String>,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         save_transcript_history_blocking(
@@ -157,6 +163,7 @@ pub async fn save_transcript_history(
             source_path,
             import_method,
             completed_at,
+            job_id,
         )
     })
     .await
@@ -174,6 +181,7 @@ fn save_transcript_history_blocking(
     source_path: Option<String>,
     import_method: Option<FileImportMethod>,
     completed_at: Option<String>,
+    job_id: Option<String>,
 ) -> Result<(), String> {
     // Don't persist empty transcripts.
     if transcript.trim().is_empty() {
@@ -187,7 +195,7 @@ fn save_transcript_history_blocking(
         None => Utc::now().to_rfc3339(),
     };
     let conn = ensure_history_db()?;
-    insert_history_row_with_source(&conn, &created_at, &transcript, &engine, duration_ms, grammar_llm_used, processing_time_ms, model_id.as_deref(), audio_source.as_deref(), source_path.as_deref(), import_method.map(FileImportMethod::as_str))
+    insert_history_row_with_job(&conn, &created_at, &transcript, &engine, duration_ms, grammar_llm_used, processing_time_ms, model_id.as_deref(), audio_source.as_deref(), source_path.as_deref(), import_method.map(FileImportMethod::as_str), job_id.as_deref())
         .map(|_| ())
 }
 
@@ -270,6 +278,29 @@ fn insert_history_row_with_source(
     source_path: Option<&str>,
     import_method: Option<&str>,
 ) -> Result<i64, String> {
+    insert_history_row_with_job(conn, created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, source_path, import_method, None)
+}
+
+/// Retrying a completed file after a lost IPC reply must return its existing row.
+/// Different runs of the same file have different job IDs and remain separate.
+#[allow(clippy::too_many_arguments)]
+fn insert_history_row_with_job(
+    conn: &Connection,
+    created_at: &str,
+    transcript: &str,
+    engine: &str,
+    duration_ms: Option<i64>,
+    grammar_llm_used: bool,
+    processing_time_ms: Option<i64>,
+    model_id: Option<&str>,
+    audio_source: Option<&str>,
+    source_path: Option<&str>,
+    import_method: Option<&str>,
+    job_id: Option<&str>,
+) -> Result<i64, String> {
+    if job_id.is_some_and(|id| id.trim().is_empty()) {
+        return Err("History job ID must not be empty".into());
+    }
     let grammar_flag: i64 = if grammar_llm_used { 1 } else { 0 };
 
     println!(
@@ -282,16 +313,21 @@ fn insert_history_row_with_source(
         processing_time_ms
     );
 
-    conn.execute(
-        "INSERT INTO transcriptions (created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind, source_path, import_method)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        params![created_at, transcript, engine, duration_ms, grammar_flag, processing_time_ms, model_id, audio_source, if source_path.is_some() { "file" } else { kind_for_source(audio_source) }, source_path, import_method],
+    let changed = conn.execute(
+        "INSERT INTO transcriptions (created_at, transcript, engine, duration_ms, grammar_llm_used, processing_time_ms, model_id, audio_source, kind, source_path, import_method, job_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         ON CONFLICT(job_id) DO NOTHING",
+        params![created_at, transcript, engine, duration_ms, grammar_flag, processing_time_ms, model_id, audio_source, if source_path.is_some() { "file" } else { kind_for_source(audio_source) }, source_path, import_method, job_id],
     )
     .map_err(|e| {
         eprintln!("[HISTORY] Failed to insert history row: {}", e);
         format!("Failed to insert history row: {}", e)
     })?;
 
+    if changed == 0 {
+        return conn.query_row("SELECT id FROM transcriptions WHERE job_id = ?1", [job_id], |row| row.get(0))
+            .map_err(|e| format!("Failed to find previously saved history job: {e}"));
+    }
     Ok(conn.last_insert_rowid())
 }
 
@@ -409,6 +445,110 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_history_schema(&conn).unwrap();
         conn
+    }
+
+    fn save_file_job(conn: &Connection, job_id: Option<&str>) -> Result<i64, String> {
+        insert_history_row_with_job(conn, "2026-10-07T12:00:00.500+00:00", "synthetic transcript", "granite", Some(1000), false, Some(250), Some("granite-test"), Some("file"), Some("/synthetic/memo.wav"), Some("picker"), job_id)
+    }
+
+    #[test]
+    fn retry_after_a_lost_save_reply_keeps_one_history_row_and_original_metadata() {
+        let conn = mem_db();
+        let first = save_file_job(&conn, Some("same-run")).unwrap();
+        let retry = insert_history_row_with_job(&conn, "2026-10-07T13:00:00+00:00", "changed retry", "whisper", None, false, None, None, None, Some("/other.wav"), Some("drop"), Some("same-run")).unwrap();
+        assert_eq!(retry, first);
+        let rows = query_history(&conn, 10, 0, Some("file")).unwrap();
+        println!("[HISTORY_TEST] lost reply retry: {} row(s), id={first}", rows.len());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].transcript, "synthetic transcript");
+        assert_eq!(rows[0].engine, "granite");
+        assert_eq!(rows[0].created_at, "2026-10-07T12:00:00.500+00:00");
+        assert_eq!(rows[0].source_path.as_deref(), Some("/synthetic/memo.wav"));
+    }
+
+    #[test]
+    fn reruns_and_legacy_saves_remain_distinct_history_entries() {
+        let conn = mem_db();
+        let ids = [save_file_job(&conn, Some("first-run")).unwrap(), save_file_job(&conn, Some("second-run")).unwrap(), save_file_job(&conn, None).unwrap(), save_file_job(&conn, None).unwrap()];
+        let distinct: std::collections::HashSet<_> = ids.into_iter().collect();
+        assert_eq!(distinct.len(), 4);
+        assert_eq!(query_history(&conn, 10, 0, Some("file")).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn failed_history_writes_do_not_consume_a_job_identity() {
+        let conn = mem_db();
+        conn.execute_batch("CREATE TRIGGER reject_save BEFORE INSERT ON transcriptions BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END;").unwrap();
+        assert!(save_file_job(&conn, Some("retry-after-failure")).is_err());
+        assert_eq!(query_history(&conn, 10, 0, None).unwrap().len(), 0);
+        conn.execute_batch("DROP TRIGGER reject_save;").unwrap();
+        save_file_job(&conn, Some("retry-after-failure")).unwrap();
+        assert_eq!(query_history(&conn, 10, 0, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn empty_history_job_ids_are_rejected_without_writing() {
+        let conn = mem_db();
+        for id in ["", " ", "\n"] {
+            assert!(save_file_job(&conn, Some(id)).is_err());
+        }
+        assert_eq!(query_history(&conn, 10, 0, None).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn job_identity_survives_reopening_and_concurrent_retries() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir().join(format!("taurscribe-history-retries-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("history.db");
+        let first = {
+            let conn = Connection::open(&path).unwrap();
+            init_history_schema(&conn).unwrap();
+            save_file_job(&conn, Some("persistent-run")).unwrap()
+        };
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let workers: Vec<_> = (0..4).map(|_| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let conn = Connection::open(path).unwrap();
+                init_history_schema(&conn).unwrap();
+                barrier.wait();
+                let original = save_file_job(&conn, Some("persistent-run")).unwrap();
+                barrier.wait();
+                (original, save_file_job(&conn, Some("concurrent-new-run")).unwrap())
+            })
+        }).collect();
+        let mut concurrent_id = None;
+        for worker in workers {
+            let (original, inserted) = worker.join().unwrap();
+            assert_eq!(original, first);
+            assert_ne!(inserted, first);
+            assert_eq!(*concurrent_id.get_or_insert(inserted), inserted);
+        }
+        {
+            let conn = Connection::open(&path).unwrap();
+            assert_eq!(query_history(&conn, 10, 0, None).unwrap().len(), 2);
+            assert_ne!(save_file_job(&conn, Some("new-run")).unwrap(), first);
+            assert_eq!(query_history(&conn, 10, 0, None).unwrap().len(), 3);
+            println!("[HISTORY_TEST] reopen plus concurrent retries and first inserts retained one row per run");
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn legacy_history_migration_preserves_old_rows_and_supports_retry_identity() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE transcriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, transcript TEXT NOT NULL, engine TEXT NOT NULL, duration_ms INTEGER, grammar_llm_used INTEGER NOT NULL);
+            INSERT INTO transcriptions VALUES (1, '2026-01-01T12:00:00+00:00', 'old dictation', 'whisper', 100, 0);").unwrap();
+        init_history_schema(&conn).unwrap();
+        init_history_schema(&conn).unwrap();
+        let first = save_file_job(&conn, Some("migrated-run")).unwrap();
+        assert_eq!(save_file_job(&conn, Some("migrated-run")).unwrap(), first);
+        let rows = query_history(&conn, 10, 0, None).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].transcript, "old dictation");
+        assert_eq!(rows[1].kind, "dictation");
     }
 
     #[test]

@@ -25,6 +25,7 @@ interface FileItem {
     error?: string;
     historyError?: string;
     historySaving?: boolean;
+    cancelError?: string;
 }
 
 interface FileTranscriptionResult {
@@ -71,6 +72,11 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
     const [files, setFiles] = useState<FileItem[]>([]);
     const [isDragOver, setIsDragOver] = useState(false);
     const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+    const [copyError, setCopyError] = useState<string | null>(null);
+    const [importError, setImportError] = useState<string | null>(null);
+    const copyRequestRef = useRef(0);
+    const importRequestRef = useRef(0);
+    const cancelRequestsRef = useRef(new Map<string, number>());
     const processingRef = useRef(false);
     const batchOpenRef = useRef(false);
     const activeFileRef = useRef<{ id: string; path: string } | null>(null);
@@ -299,6 +305,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                 )
             );
         } finally {
+            cancelRequestsRef.current.delete(queued.id);
             activeFileRef.current = null;
             pendingProgressRef.current.delete(queued.id);
             processingRef.current = false;
@@ -334,6 +341,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                         error: undefined,
                         historyError: undefined,
                         historySaving: false,
+                        cancelError: undefined,
                         engine: activeEngineRef.current,
                         modelId: activeModelIdRef.current,
                     }
@@ -385,22 +393,49 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
         }).finally(() => { historyWritesRef.current.delete(item.id); });
     };
 
-    const copyText = (text: string) => {
-        navigator.clipboard.writeText(text).catch(() => {});
+    const copyText = async (text: string) => {
+        const request = ++copyRequestRef.current;
+        setCopyError(null);
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch (error) {
+            if (mountedRef.current && copyRequestRef.current === request) {
+                setCopyError(`Could not copy transcript: ${String(error)}`);
+            }
+        }
     };
 
-    const cancelTranscription = (item: FileItem) => {
-        invoke("cancel_file_transcription", { path: item.path, jobId: item.id }).catch(() => {});
+    const cancelTranscription = async (item: FileItem) => {
+        const request = (cancelRequestsRef.current.get(item.id) ?? 0) + 1;
+        cancelRequestsRef.current.set(item.id, request);
+        setFiles(prev => prev.map(f => f.id === item.id ? { ...f, cancelError: undefined } : f));
+        try {
+            await invoke("cancel_file_transcription", { path: item.path, jobId: item.id });
+        } catch (error) {
+            if (mountedRef.current && cancelRequestsRef.current.get(item.id) === request) {
+                setFiles(prev => prev.map(f => f.id === item.id && f.status === "processing"
+                    ? { ...f, cancelError: `Could not cancel transcription: ${String(error)}` } : f));
+            }
+        }
     };
 
     const handleBrowse = async () => {
-        const selected = await open({
-            multiple: true,
-            filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "mp4", "mov"] }],
-        });
-        if (selected) {
-            const paths = Array.isArray(selected) ? selected : [selected];
-            addPaths(paths, "picker");
+        if (inputBlockedRef.current) return;
+        const request = ++importRequestRef.current;
+        setImportError(null);
+        try {
+            const selected = await open({
+                multiple: true,
+                filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "mp4", "mov"] }],
+            });
+            if (mountedRef.current && selected) {
+                const paths = Array.isArray(selected) ? selected : [selected];
+                addPaths(paths, "picker");
+            }
+        } catch (error) {
+            if (mountedRef.current && importRequestRef.current === request) {
+                setImportError(`Could not open audio files: ${String(error)}`);
+            }
         }
     };
 
@@ -441,6 +476,8 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
 
     return (
         <div className="file-panel">
+            {importError && <p className="file-card-error" role="alert">{importError}</p>}
+            {copyError && <p className="file-card-error" role="alert">{copyError}</p>}
             {/* Drop zone */}
             <div
                 className={dropZoneClass}
@@ -667,6 +704,9 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                             )}
 
                             {/* Error */}
+                            {item.status === "processing" && item.cancelError && (
+                                <p className="file-card-error" role="alert">{item.cancelError}</p>
+                            )}
                             {item.status === "done" && item.historySaving && (
                                 <p id={`file-history-saving-${item.id}`} data-testid={`file-history-saving-${item.id}`} className="file-card-queued" role="status">Saving transcript to history…</p>
                             )}
