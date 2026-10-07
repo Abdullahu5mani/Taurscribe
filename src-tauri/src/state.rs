@@ -23,6 +23,19 @@ pub struct ModelOperationGuard {
 /// Serializes recording setup and teardown, including the final transcription.
 pub struct RecordingTransitionGuard(Arc<AtomicBool>);
 
+/// Owned by the blocking enrollment worker, even if its caller disconnects.
+pub struct VoiceEnrollmentGuard {
+    _transition: RecordingTransitionGuard,
+    _models: ModelOperationGuard,
+    active: Arc<AtomicBool>,
+}
+
+impl Drop for VoiceEnrollmentGuard {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
+
 impl Drop for RecordingTransitionGuard {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
@@ -54,6 +67,7 @@ pub struct AudioState {
     // in start_recording / stop_recording async commands.
     pub recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
     recording_transition: Arc<AtomicBool>,
+    pub voice_enrollment_active: Arc<AtomicBool>,
 
     // The Whisper AI engine. Wrapped in Arc<Mutex<>> so it can be shared and used by multiple threads.
     pub whisper: Arc<Mutex<WhisperManager>>,
@@ -146,6 +160,17 @@ pub struct AudioState {
 }
 
 impl AudioState {
+    pub fn begin_voice_enrollment(&self) -> Result<VoiceEnrollmentGuard, String> {
+        let transition = self.begin_recording_transition()?;
+        let models = self.begin_exclusive_model_operation()?;
+        self.voice_enrollment_active.store(true, Ordering::Release);
+        Ok(VoiceEnrollmentGuard {
+            _transition: transition,
+            _models: models,
+            active: self.voice_enrollment_active.clone(),
+        })
+    }
+
     pub fn begin_recording_transition(&self) -> Result<RecordingTransitionGuard, String> {
         self.recording_transition
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -200,6 +225,7 @@ impl AudioState {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
             recording_transition: Arc::new(AtomicBool::new(false)),
+            voice_enrollment_active: Arc::new(AtomicBool::new(false)),
             whisper_status: whisper.status_handle(),
             granite_status: granite.status_handle(),
             qwen3_status: qwen3.status_handle(),
@@ -355,6 +381,44 @@ impl AudioState {
 #[cfg(test)]
 mod model_activity_tests {
     use super::*;
+
+    #[test]
+    fn enrollment_reserves_capture_and_models_until_the_worker_finishes() {
+        let state = AudioState::new(WhisperManager::new(), GgufAsrManager::granite(),
+            VADManager::new().unwrap(), GgufAsrManager::qwen3());
+        let guard = state.begin_voice_enrollment().unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _guard = guard;
+            wait.recv().unwrap();
+            drop(_guard);
+            done.send(()).unwrap();
+        });
+        drop(worker); // Caller going away must not release the worker's guards.
+        assert!(state.voice_enrollment_active.load(Ordering::Acquire));
+        assert!(state.begin_voice_enrollment().is_err());
+        assert!(state.begin_recording_transition().is_err());
+        assert!(state.begin_model_operation().is_err());
+        assert!(state.begin_exclusive_model_operation().is_err());
+        release.send(()).unwrap();
+        finished.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert!(!state.voice_enrollment_active.load(Ordering::Acquire));
+        assert!(state.begin_recording_transition().is_ok());
+        assert!(state.begin_exclusive_model_operation().is_ok());
+    }
+
+    #[test]
+    fn denied_enrollment_releases_its_capture_reservation() {
+        let state = AudioState::new(WhisperManager::new(), GgufAsrManager::granite(),
+            VADManager::new().unwrap(), GgufAsrManager::qwen3());
+        let busy = state.begin_model_operation().unwrap();
+        assert!(state.begin_voice_enrollment().is_err());
+        assert!(!state.recording_transition_active());
+        assert!(!state.voice_enrollment_active.load(Ordering::Acquire));
+        drop(busy);
+        assert!(state.begin_voice_enrollment().is_ok());
+    }
 
     #[test]
     fn detached_blocking_worker_keeps_models_excluded_until_it_finishes() {

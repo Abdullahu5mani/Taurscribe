@@ -737,11 +737,11 @@ fn align_turns(
     // If no acoustic turns were found, create a fallback single turn
     if all_turns.is_empty() {
         return Ok(vec![DiarizedTurn {
-            speaker_id: "speaker_you".to_string(),
-            speaker_name: "You".to_string(),
+            speaker_id: if two_channels { "speaker_you" } else { "speaker_room_1" }.to_string(),
+            speaker_name: if two_channels { "You" } else { "Speaker 1" }.to_string(),
             start_ms: 0,
             end_ms: 1000,
-            channel: 0,
+            channel: if two_channels { 0 } else { 1 },
             text: raw_transcript.trim().to_string(),
             snippet_path: None,
             candidate_snippets: Vec::new(),
@@ -772,22 +772,42 @@ fn align_turns(
     // is transcribed on both sides), and nothing the live transcriber dropped is
     // lost. The duration-weighted distribution below is only the fallback.
     if let Some(transcribe) = transcriber {
-        let pad = (sample_rate as usize) / 4; // 250 ms of context either side
-        let min_len = (sample_rate as usize) * 2 / 5; // skip < 400 ms blips (hallucination-prone)
+        let min_len = (sample_rate as usize) * 2 / 5; // 400 ms minimum ASR input
         let mut per_turn = Vec::new();
         for t in &consolidated {
             let source = if t.2 == 0 { mic_samples } else { sys_samples };
-            let start = ((t.0 as usize) * sample_rate as usize / 1000).saturating_sub(pad);
-            let end = (((t.1 as usize) * sample_rate as usize / 1000) + pad).min(source.len());
-            if end <= start || end - start < min_len {
+            let mut start_ms = t.0.saturating_sub(250);
+            let mut end_ms = t.1.saturating_add(250);
+            if !two_channels {
+                for other in &consolidated {
+                    if other.3 == t.3 { continue; }
+                    if other.1 <= t.0 {
+                        start_ms = start_ms.max(other.1);
+                    } else if other.0 >= t.1 {
+                        end_ms = end_ms.min(other.0);
+                    } else {
+                        // Shared-mic overlap cannot be isolated by padding.
+                        // Keep the assigned interval without adding more speech.
+                        start_ms = start_ms.max(t.0);
+                        end_ms = end_ms.min(t.1);
+                    }
+                }
+            }
+            let start = (start_ms as usize * sample_rate as usize / 1000).min(source.len());
+            let end = (end_ms as usize * sample_rate as usize / 1000).min(source.len());
+            if end <= start || (two_channels && end - start < min_len) {
                 continue;
             }
             // One microphone in a room: bring quieter, further-away speakers up.
-            let balanced;
+            let mut balanced;
             let audio = if two_channels {
                 &source[start..end]
             } else {
                 balanced = crate::audio_preprocess::balance_turn_level(&source[start..end]);
+                // A brief reply between speakers must not disappear when safe
+                // context is shorter than the recognizer's minimum input.
+                // Add silence rather than borrowing another person's speech.
+                if balanced.len() < min_len { balanced.resize(min_len, 0.0); }
                 &balanced[..]
             };
             let text = transcribe(audio, sample_rate).map_err(|e| {
@@ -900,11 +920,11 @@ fn align_turns(
 
     if result_turns.is_empty() {
         result_turns.push(DiarizedTurn {
-            speaker_id: "speaker_you".to_string(),
-            speaker_name: "You".to_string(),
+            speaker_id: if two_channels { "speaker_you" } else { "speaker_room_1" }.to_string(),
+            speaker_name: if two_channels { "You" } else { "Speaker 1" }.to_string(),
             start_ms: 0,
             end_ms: 1000,
-            channel: 0,
+            channel: if two_channels { 0 } else { 1 },
             text: raw_transcript.trim().to_string(),
             snippet_path: None,
             candidate_snippets: Vec::new(),
@@ -1021,6 +1041,10 @@ pub fn diarize_meeting_recording(
 
 /// Decode directly into microphone/call channels without a third full buffer.
 fn read_meeting_channels(wav_path: &Path) -> Result<(Vec<f32>, Vec<f32>, u32), String> {
+    read_capture_channels(wav_path, false)
+}
+
+fn read_capture_channels(wav_path: &Path, room: bool) -> Result<(Vec<f32>, Vec<f32>, u32), String> {
     let mut reader = hound::WavReader::open(wav_path)
         .map_err(|e| format!("Could not open meeting audio {}: {e}", wav_path.display()))?;
     let spec = reader.spec();
@@ -1033,10 +1057,23 @@ fn read_meeting_channels(wav_path: &Path) -> Result<(Vec<f32>, Vec<f32>, u32), S
     // and never silently skip corrupt samples and shift the channels' alignment.
     let mut mic_samples = Vec::new();
     let mut sys_samples = Vec::new();
-    let mut push = |idx: usize, sample: f32| match idx % channels as usize {
-        0 => mic_samples.push(sample),
-        1 => sys_samples.push(sample),
-        _ => {}
+    let mut frame_sum = 0.0;
+    let mut sample_count = 0;
+    let mut push = |idx: usize, sample: f32| {
+        sample_count += 1;
+        if room {
+            frame_sum += sample / channels as f32;
+            if (idx + 1) % channels as usize == 0 {
+                mic_samples.push(frame_sum);
+                frame_sum = 0.0;
+            }
+        } else {
+            match idx % channels as usize {
+                0 => mic_samples.push(sample),
+                1 => sys_samples.push(sample),
+                _ => {}
+            }
+        }
     };
     match spec.sample_format {
         hound::SampleFormat::Float => {
@@ -1056,6 +1093,9 @@ fn read_meeting_channels(wav_path: &Path) -> Result<(Vec<f32>, Vec<f32>, u32), S
         }
     }
 
+    if sample_count % channels as usize != 0 {
+        return Err("Meeting audio ends with an incomplete sample frame".into());
+    }
     Ok((mic_samples, sys_samples, sample_rate))
 }
 
@@ -1108,7 +1148,7 @@ pub fn diarize_in_person_recording(
     transcriber: Option<TurnTranscriber<'_>>,
     me: Option<&[f32]>,
 ) -> Result<Vec<DiarizedTurn>, String> {
-    let (samples, _, sample_rate) = read_meeting_channels(wav_path)?;
+    let (samples, _, sample_rate) = read_capture_channels(wav_path, true)?;
     let samples = &samples[..];
     let (turns, mut profiles) = split_room_speakers(samples, sample_rate);
     // One track: no other channel to check clips against for crosstalk.
@@ -1279,6 +1319,36 @@ mod tests {
     }
 
     #[test]
+    fn room_padding_never_adds_a_neighboring_speaker() {
+        let segment = |start_ms, end_ms, cluster_id| AudioTurnSegment {
+            channel: 1, start_sample: start_ms as usize, end_sample: end_ms as usize,
+            start_ms, end_ms, features: AcousticFeatures::default(), cluster_id,
+        };
+        let dir = std::env::temp_dir().join(format!("room-padding-{}", rand::random::<u64>()));
+        let profiles = vec![profile("Alice", vec![]), profile("Bob", vec![])];
+        let mut recognized = |audio: &[f32], _: u32| {
+            let alice = audio.iter().any(|x| *x > 0.0);
+            let bob = audio.iter().any(|x| *x < 0.0);
+            Ok(match (alice, bob) { (true, false) => "Alice", (false, true) => "Bob", _ => "Alice Bob" }.into())
+        };
+        for duration in [800, 100] {
+            let samples = [vec![0.2; duration], vec![-0.2; duration]].concat();
+            let turns = align_turns(&[], &[segment(0, duration as u64, 0), segment(duration as u64, duration as u64 * 2, 1)], &profiles,
+                "", &dir, 1, &samples, &samples, 1000, Some(&mut recognized), false).unwrap();
+            assert_eq!(turns.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(), vec!["Alice", "Bob"]);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn room_without_acoustic_turns_does_not_assume_the_user_spoke() {
+        let turns = align_turns(&[], &[], &[], "unattributed speech", Path::new("unused"), 1,
+            &[], &[], 16_000, None, false).unwrap();
+        assert_eq!(turns[0].speaker_name, "Speaker 1");
+        assert_eq!(turns[0].channel, 1);
+    }
+
+    #[test]
     fn in_person_the_closest_voice_above_the_threshold_is_you() {
         let me = vec![1.0, 0.0, 0.0];
         let profiles = vec![
@@ -1365,6 +1435,13 @@ mod tests {
                             .collect::<Vec<_>>()
                     );
                 }
+                let (room, unused, _) = read_capture_channels(&path, true).unwrap();
+                assert!(unused.is_empty());
+                assert_eq!(room.len(), 101);
+                for (n, sample) in room.iter().enumerate() {
+                    let expected = (n as f32 * 10.0 + (channels - 1) as f32 / 2.0) / 32768.0;
+                    assert!((sample - expected).abs() < 1e-7, "every native mic channel contributes");
+                }
                 let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
                 let len = file.metadata().unwrap().len();
                 file.set_len(len - 1).unwrap();
@@ -1372,6 +1449,7 @@ mod tests {
                     read_meeting_channels(&path).is_err(),
                     "corrupt sample cannot shift channel alignment"
                 );
+                assert!(read_capture_channels(&path, true).is_err());
                 let _ = std::fs::remove_file(path);
             }
         }

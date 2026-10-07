@@ -370,7 +370,7 @@ function App() {
   const setLoadedEngineForwarded = useRef<(e: ASREngine | null) => void>(() => {});
 
   const {
-    isRecording, isRecordingRef, isPaused, isProcessingTranscript,
+    isRecording, isRecordingRef, isPaused, isProcessingTranscript, isVoiceEnrolling,
     latestLatency,
     isDualChannelRecording, isInPersonRecording, dualLevels, getRecordingMs, getLiveTranscript,
     handleStartRecording, handleStopRecording, handleTranscriptionChunk,
@@ -390,6 +390,7 @@ function App() {
     setSessionLatency,
   });
 
+  const captureBusyRef = useSyncedRef(isRecording || isVoiceEnrolling);
   const {
     activeEngine, setActiveEngine, activeEngineRef,
     loadedEngine, setLoadedEngine,
@@ -403,7 +404,7 @@ function App() {
     setCurrentModel, setCurrentGraniteModel, setCurrentQwen3Model,
     setBackendInfo, storeRef, setHeaderStatus, setTrayState, asrBackend,
     setAsrBackend, computeDevice, setComputeDevice,
-    isRecordingRef,
+    isRecordingRef: captureBusyRef,
     downloadProgressRef,
     setSessionPhase,
     setSessionNotice,
@@ -461,8 +462,8 @@ function App() {
   // the hotkey handler ignores while a model is loading (including at startup)
   // or the last dictation is still being transcribed, cleaned up and pasted.
   useEffect(() => {
-    invoke("cli_ui_busy", { busy: isLoading || isInitialLoading || isProcessingTranscript }).catch(() => {});
-  }, [isLoading, isInitialLoading, isProcessingTranscript]);
+    invoke("cli_ui_busy", { busy: isLoading || isInitialLoading || isProcessingTranscript || isVoiceEnrolling }).catch(() => {});
+  }, [isLoading, isInitialLoading, isProcessingTranscript, isVoiceEnrolling]);
 
   // File transcription shows in the tray too (recording is blocked meanwhile).
   const fileTrayActiveRef = useRef(false);
@@ -730,7 +731,7 @@ function App() {
 
   // ── Small helpers (local, use hook outputs) ──
   const handleEjectModel = async () => {
-    if (isLoading || isLoadingRef.current || isRecording) return;
+    if (isLoading || isLoadingRef.current || isRecording || isVoiceEnrolling) return;
     try {
       setHeaderStatus("Unloading model…", 10_000);
       const result = await invoke<CommandResult<string>>("unload_current_model");
@@ -858,7 +859,7 @@ function App() {
     () => downloadProgressKeys.some((key) => key.startsWith("qwen3")),
     [downloadProgressKeys],
   );
-  const recordBtnBusy = isLoading || isProcessingTranscript;
+  const recordBtnBusy = isLoading || isProcessingTranscript || isVoiceEnrolling;
   const recordBtnClass =
     noModel ? "record-btn disabled" :
       isFileTranscribing ? "record-btn disabled" :
@@ -876,7 +877,7 @@ function App() {
         isRecording ? "Stop recording" :
           recordBtnBusy ? "Please wait…" :
             "Start recording (REC)";
-  const recordBtnDisabled = isFileTranscribing || (isLoading && !isRecording) || isProcessingTranscript;
+  const recordBtnDisabled = isVoiceEnrolling || isFileTranscribing || (isLoading && !isRecording) || isProcessingTranscript;
 
   const onRecordClick = () => {
     if (noModel) { setIsSettingsOpen(true); return; }
@@ -1376,6 +1377,7 @@ function App() {
                 currentGraniteModel={currentGraniteModel}
                 currentQwen3Model={currentQwen3Model}
                 isModelLoading={isLoading}
+                isVoiceEnrolling={isVoiceEnrolling}
                 onFileProcessingChange={setIsFileTranscribing}
               />
             </div>
@@ -1395,7 +1397,7 @@ function App() {
                     isRecording={isRecording}
                     isInPersonRecording={isInPersonRecording}
                     isPaused={isPaused}
-                    isProcessing={isProcessingTranscript}
+                    isProcessing={isProcessingTranscript || isVoiceEnrolling}
                     separatorInstalled={settingsModels.some((m) => m.id === DIARIZATION_MODEL_ID && m.downloaded)}
                     onStart={() => handleStartRecording(false, "in_person")}
                     onStop={handleStopRecording}
@@ -1756,7 +1758,7 @@ function App() {
             asrBackend={asrBackend}
             computeDevice={computeDevice}
             onSelectComputeDevice={handleToggleAsrBackend}
-            deviceSwitchBlocked={isLoading || isRecording}
+            deviceSwitchBlocked={isLoading || isRecording || isVoiceEnrolling}
             soundVolume={volume}
             soundMuted={muted}
             setSoundVolume={setVolume}

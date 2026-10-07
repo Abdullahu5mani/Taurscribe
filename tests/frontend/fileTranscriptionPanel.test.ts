@@ -201,3 +201,15 @@ test("unmount cancels a scheduled progress frame and prevents queued inference a
     h.unmount(); await h.settle(); expect(frames.size).toBe(0);
     jobs[0].resolve(result()); await h.settle(); expect(jobs).toHaveLength(1);
 });
+
+
+test("voice setup blocks file drops and gives a truthful busy message", async () => {
+    const h = fixture(); h.setProps({ isVoiceEnrolling: true });
+    drop("/blocked.wav"); await h.settle();
+    expect(jobs).toHaveLength(0);
+    expect(text(h.handle.current)).toContain("Voice setup in progress");
+    expect(text(h.handle.current)).not.toContain("Loading model");
+    h.setProps({ isVoiceEnrolling: false }); drop("/ready.wav"); await h.settle();
+    expect(jobs).toHaveLength(1);
+    jobs[0].resolve(result()); await h.settle();
+});

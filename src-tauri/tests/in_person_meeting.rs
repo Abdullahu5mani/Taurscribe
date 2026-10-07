@@ -20,6 +20,7 @@ struct Truth {
     speaker: String,
     start_s: f64,
     end_s: f64,
+    text: String,
 }
 
 fn env(name: &str) -> String {
@@ -59,37 +60,87 @@ fn a_room_meeting_is_split_into_its_speakers_and_finds_you() {
         println!("{:>6.1}-{:>6.1}s  ch{} {:<12} {}", t.start_ms as f64 / 1000.0, t.end_ms as f64 / 1000.0, t.channel, t.speaker_name, t.text);
     }
 
-    // Each found speaker stands for the real speaker it overlaps most.
-    let mut votes: HashMap<&str, HashMap<&str, u64>> = HashMap::new();
-    for t in &turns {
-        for r in &truth {
-            *votes.entry(t.speaker_name.as_str()).or_default().entry(r.speaker.as_str()).or_default() += overlap_ms(t, r);
-        }
-    }
-    let label_of: HashMap<&str, &str> = votes
-        .iter()
-        .map(|(found, v)| (*found, v.iter().max_by_key(|(_, ms)| **ms).map(|(s, _)| *s).unwrap_or("?")))
-        .collect();
-    let (mut right, mut total) = (0u64, 0u64);
-    for t in &turns {
-        for r in &truth {
-            let ms = overlap_ms(t, r);
-            total += ms;
-            if label_of[t.speaker_name.as_str()] == r.speaker {
-                right += ms;
-            }
-        }
-    }
-    let accuracy = right as f64 / total.max(1) as f64;
-    let speakers: Vec<&&str> = label_of.keys().collect();
-    println!("speakers found: {speakers:?} → {label_of:?}; speech attributed correctly: {:.0}%", accuracy * 100.0);
-
-    let real = truth.iter().map(|r| r.speaker.as_str()).collect::<std::collections::HashSet<_>>().len();
-    assert_eq!(label_of.len(), real, "found {} speakers, the meeting has {real}", label_of.len());
-    assert_eq!(label_of.get("You").copied(), Some(you.as_str()), "\"You\" must be {you}");
+    let labels = check_meeting(&turns, &truth).expect("meeting accuracy and coverage");
+    assert_eq!(labels.get("You").copied(), Some(you.as_str()), "\"You\" must be {you}");
     assert!(turns.iter().filter(|t| t.speaker_name == "You").all(|t| t.channel == 0), "the user's turns are on channel 0");
-    assert!(accuracy >= 0.85, "only {:.0}% of the speech went to the right speaker", accuracy * 100.0);
-    assert!(turns.iter().all(|t| !t.text.trim().is_empty()));
+}
+
+/// Measure against ALL reference speech. Union intersections so repeated or
+/// overlapping hypothesis turns cannot inflate coverage.
+fn covered_ms(turns: &[DiarizedTurn], truth: &Truth, label: Option<&str>) -> u64 {
+    let a = (truth.start_s * 1000.0) as u64;
+    let b = (truth.end_s * 1000.0) as u64;
+    let mut intervals: Vec<_> = turns.iter()
+        .filter(|t| label.is_none_or(|label| t.speaker_name == label))
+        .map(|t| (t.start_ms.max(a), t.end_ms.min(b)))
+        .filter(|(a, b)| b > a).collect();
+    intervals.sort_unstable();
+    let (mut covered, mut end) = (0, a);
+    for (a, b) in intervals {
+        covered += b.saturating_sub(a.max(end));
+        end = end.max(b);
+    }
+    covered
+}
+
+fn check_meeting<'a>(turns: &'a [DiarizedTurn], truth: &'a [Truth]) -> Result<HashMap<&'a str, &'a str>, String> {
+    use taurscribe_lib::librispeech_wer::{normalize_for_wer, word_error_rate};
+    if truth.is_empty() || truth.iter().any(|r| !r.start_s.is_finite() || !r.end_s.is_finite()
+        || r.start_s < 0.0 || r.end_s <= r.start_s || r.text.trim().is_empty()) {
+        return Err("reference needs timed speech and text".into());
+    }
+    let mut votes: HashMap<&str, HashMap<&str, u64>> = HashMap::new();
+    for t in turns {
+        if t.text.trim().is_empty() { return Err("empty hypothesis turn".into()); }
+        for r in truth {
+            *votes.entry(&t.speaker_name).or_default().entry(&r.speaker).or_default() += overlap_ms(t, r);
+        }
+    }
+    let labels: HashMap<_, _> = votes.iter().map(|(found, votes)| {
+        (*found, votes.iter().max_by_key(|(name, ms)| (**ms, **name)).map(|(s, _)| *s).unwrap_or("?"))
+    }).collect();
+    let real: std::collections::HashSet<_> = truth.iter().map(|r| r.speaker.as_str()).collect();
+    let mapped: std::collections::HashSet<_> = labels.values().copied().collect();
+    if labels.len() != real.len() || mapped != real { return Err("speaker mapping must be one to one".into()); }
+    let total: u64 = truth.iter().map(|r| (r.end_s * 1000.0) as u64 - (r.start_s * 1000.0) as u64).sum();
+    let coverage = truth.iter().map(|r| covered_ms(turns, r, None)).sum::<u64>() as f64 / total.max(1) as f64;
+    let correct = truth.iter().map(|r| {
+        let found = labels.iter().find(|(_, real)| **real == r.speaker).unwrap().0;
+        covered_ms(turns, r, Some(found))
+    }).sum::<u64>() as f64 / total.max(1) as f64;
+    println!("labels: {labels:?}; coverage={coverage:.3}; correctly attributed reference speech={correct:.3}");
+    if coverage < 0.95 { return Err(format!("speech coverage {coverage:.3} below 0.95")); }
+    if correct < 0.85 { return Err(format!("correct attribution {correct:.3} below 0.85")); }
+    for speaker in real {
+        let mut reference: Vec<_> = truth.iter().filter(|r| r.speaker == speaker).collect();
+        reference.sort_by(|a, b| a.start_s.total_cmp(&b.start_s));
+        let expected = reference.iter().map(|r| r.text.as_str()).collect::<Vec<_>>().join(" ");
+        let mut hypothesis: Vec<_> = turns.iter().filter(|t| labels[t.speaker_name.as_str()] == speaker).collect();
+        hypothesis.sort_by_key(|t| t.start_ms);
+        let actual = hypothesis.iter().map(|t| t.text.as_str()).collect::<Vec<_>>().join(" ");
+        let wer = word_error_rate(&normalize_for_wer(&expected), &normalize_for_wer(&actual));
+        println!("{speaker}: WER={wer:.3}");
+        if wer > 0.25 { return Err(format!("{speaker}: WER {wer:.3} exceeds 0.25")); }
+    }
+    Ok(labels)
+}
+
+#[test]
+fn acceptance_rejects_wrong_words_missing_speech_and_duplicate_coverage() {
+    let truth = vec![Truth { speaker: "Alice".into(), start_s: 0.0, end_s: 10.0, text: "one two three four".into() }];
+    let mut turns = vec![DiarizedTurn {
+        speaker_id: "a".into(), speaker_name: "Speaker 1".into(), start_ms: 0, end_ms: 10_000,
+        channel: 1, text: "One, two three four!".into(), snippet_path: None,
+        candidate_snippets: Vec::new(), current_snippet_idx: 0,
+    }];
+    assert!(check_meeting(&turns, &truth).is_ok());
+    turns[0].text = "completely unrelated arbitrary output".into();
+    assert!(check_meeting(&turns, &truth).unwrap_err().contains("WER"));
+    turns[0].text = truth[0].text.clone();
+    turns[0].end_ms = 2000;
+    assert!(check_meeting(&turns, &truth).unwrap_err().contains("coverage"));
+    turns.push(turns[0].clone());
+    assert!(check_meeting(&turns, &truth).unwrap_err().contains("coverage"));
 }
 
 /// Prints how alike the voiceprints of the truth's turns are (a diagnostic).

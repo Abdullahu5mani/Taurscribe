@@ -135,22 +135,46 @@ struct CaptureRig {
     session: Arc<meeting_record::CaptureSession>,
     mic_rx: crossbeam_channel::Receiver<Vec<f32>>,
     sys_rx: crossbeam_channel::Receiver<Vec<f32>>,
-    mic_thread: std::thread::JoinHandle<()>,
-    sys_thread: std::thread::JoinHandle<()>,
+    mic_thread: Option<std::thread::JoinHandle<()>>,
+    sys_thread: Option<std::thread::JoinHandle<()>>,
     /// Stops a microphone opened through cpal (a mic other than the default).
     mic_stop: Arc<AtomicBool>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl CaptureRig {
-    /// Stops the session (which unblocks the readers) and joins them.
-    fn shutdown(self) -> (crossbeam_channel::Receiver<Vec<f32>>, crossbeam_channel::Receiver<Vec<f32>>) {
+    /// Drain while joining: stopping the native tracks does not unblock a
+    /// reader already sending to one of our full bounded queues.
+    fn shutdown(&mut self) -> (crossbeam_channel::Receiver<Vec<f32>>, crossbeam_channel::Receiver<Vec<f32>>) {
         self.session.stop();
         self.mic_stop.store(true, Ordering::Relaxed);
-        let _ = self.mic_thread.join();
-        let _ = self.sys_thread.join();
-        (self.mic_rx, self.sys_rx)
+        drain_capture_readers(&self.mic_rx, &self.sys_rx, self.mic_thread.take(), self.sys_thread.take())
     }
+}
+
+#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+fn drain_capture_readers(
+    mic: &crossbeam_channel::Receiver<Vec<f32>>,
+    sys: &crossbeam_channel::Receiver<Vec<f32>>,
+    mic_thread: Option<std::thread::JoinHandle<()>>,
+    sys_thread: Option<std::thread::JoinHandle<()>>,
+) -> (crossbeam_channel::Receiver<Vec<f32>>, crossbeam_channel::Receiver<Vec<f32>>) {
+    let (mic_tx, mic_tail) = crossbeam_channel::unbounded();
+    let (sys_tx, sys_tail) = crossbeam_channel::unbounded();
+    let drain = || {
+        for frames in mic.try_iter() { let _ = mic_tx.send(frames); }
+        for frames in sys.try_iter() { let _ = sys_tx.send(frames); }
+    };
+    while mic_thread.as_ref().is_some_and(|t| !t.is_finished())
+        || sys_thread.as_ref().is_some_and(|t| !t.is_finished())
+    {
+        drain();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    if let Some(thread) = mic_thread { let _ = thread.join(); }
+    if let Some(thread) = sys_thread { let _ = thread.join(); }
+    drain();
+    (mic_tail, sys_tail)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -257,7 +281,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
         println!("[CAPTURE] callers delivered {:.2}s of 48k samples over {:.2}s wall", sys_frames as f64 / 48_000.0, sys_started.elapsed().as_secs_f64());
     });
 
-    Ok(CaptureRig { session, mic_rx, sys_rx, mic_thread, sys_thread, mic_stop })
+    Ok(CaptureRig { session, mic_rx, sys_rx, mic_thread: Some(mic_thread), sys_thread: Some(sys_thread), mic_stop })
 }
 
 /// (pid, owning app bundle path) of every process currently doing audio IO.
@@ -532,15 +556,14 @@ fn restart_rig(
 ) -> (crossbeam_channel::Receiver<Vec<f32>>, crossbeam_channel::Receiver<Vec<f32>>) {
     // The crate allows one capture session at a time: stop before starting anew.
     // A cpal microphone has to be released too before the new rig reopens it.
-    rig.session.stop();
-    rig.mic_stop.store(true, Ordering::Relaxed);
+    let tail = rig.shutdown();
     let fresh = start_rig(target, stop_signal, mic_device, loss.clone()).or_else(|e| {
         eprintln!("[WARN] Restarting the meeting tap failed ({}); falling back to system audio", e);
         update_diagnostics(|d| d.fell_back_to_system = true);
         start_rig(DualChannelTarget::System, stop_signal, mic_device, loss.clone())
     });
     match fresh {
-        Ok(new_rig) => std::mem::replace(rig, new_rig).shutdown(),
+        Ok(new_rig) => { *rig = new_rig; tail },
         Err(e) => {
             // Both tracks are stopped now, and the recording would silently write
             // nothing for the rest of the call. Tell the UI, which stops the
@@ -553,9 +576,7 @@ fn restart_rig(
                     "message": format!("meeting audio capture stopped and could not restart ({e})"),
                 }),
             );
-            let (_, empty_mic) = bounded::<Vec<f32>>(1);
-            let (_, empty_sys) = bounded::<Vec<f32>>(1);
-            (empty_mic, empty_sys)
+            tail
         }
     }
 }
@@ -749,6 +770,26 @@ mod tests {
     use super::{app_bundle_path, untapped_meeting_audio_pids};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn shutdown_drains_full_queues_before_join_and_preserves_the_tail() {
+        let (mic_tx, mic_rx) = crossbeam_channel::bounded(2);
+        let (sys_tx, sys_rx) = crossbeam_channel::bounded(2);
+        for n in 0..2 {
+            mic_tx.send(vec![n as f32]).unwrap();
+            sys_tx.send(vec![10.0 + n as f32]).unwrap();
+        }
+        let mic = std::thread::spawn(move || mic_tx.send(vec![2.0]).unwrap());
+        let sys = std::thread::spawn(move || sys_tx.send(vec![12.0]).unwrap());
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mic, sys) = super::drain_capture_readers(&mic_rx, &sys_rx, Some(mic), Some(sys));
+            done.send((mic.iter().flatten().collect::<Vec<_>>(), sys.iter().flatten().collect::<Vec<_>>())).unwrap();
+        });
+        let (mic, sys) = result.recv_timeout(std::time::Duration::from_secs(2)).expect("full queues must not deadlock shutdown");
+        assert_eq!(mic, vec![0.0, 1.0, 2.0]);
+        assert_eq!(sys, vec![10.0, 11.0, 12.0]);
+    }
 
     #[test]
     fn app_bundle_path_groups_an_app_with_its_helpers() {

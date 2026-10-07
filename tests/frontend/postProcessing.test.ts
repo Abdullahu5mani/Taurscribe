@@ -85,3 +85,34 @@ test("a storage move unloading FlowScribe triggers reload on the selected backen
     expect(llmCalls()).toEqual(["init:cpu", "init:cpu"]);
     expect(handle.current.llmStatus).toBe("Loaded");
 });
+
+
+test("changing the GPU reloads FlowScribe after the backend applies the device", async () => {
+    const { handle, settle } = start({ enable_grammar_lm: true, llm_backend: "gpu", compute_device: "gpu:0" });
+    await settle();
+    await handle.current.setComputeDevice("gpu:1"); await settle();
+    expect(handle.current.computeDevice).toBe("gpu:1");
+    expect(llmCalls()).toEqual(["init:gpu", "unload", "init:gpu"]);
+    const selected = calls.findIndex(c => c.cmd === "set_compute_device");
+    expect(selected).toBeLessThan(calls.findIndex(c => c.cmd === "unload_llm"));
+    await handle.current.setComputeDevice("gpu:1"); await settle();
+    expect(llmCalls()).toEqual(["init:gpu", "unload", "init:gpu"]);
+});
+
+test("a GPU change leaves CPU FlowScribe resident until GPU mode is selected", async () => {
+    const { handle, settle } = start({ enable_grammar_lm: true, llm_backend: "cpu" });
+    await settle(); await handle.current.setComputeDevice("gpu:1"); await settle();
+    expect(llmCalls()).toEqual(["init:cpu"]);
+    handle.current.setLlmBackend("gpu"); await settle();
+    expect(llmCalls()).toEqual(["init:cpu", "unload", "init:gpu"]);
+});
+
+test("a GPU change during FlowScribe loading is applied after that load completes", async () => {
+    let release!: () => void;
+    initGate = new Promise(r => { release = r; });
+    const { handle, settle } = start({ enable_grammar_lm: true, llm_backend: "gpu" });
+    await settle(); await handle.current.setComputeDevice("gpu:1"); await settle();
+    expect(llmCalls()).toEqual(["init:gpu"]);
+    initGate = Promise.resolve(); release(); await settle();
+    expect(llmCalls()).toEqual(["init:gpu", "unload", "init:gpu"]);
+});

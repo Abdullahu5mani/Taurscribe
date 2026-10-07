@@ -451,7 +451,8 @@ jobs:
           # Linux: one ggml for whisper.cpp and transcribe.cpp (scripts/ggml-stack.ts).
           # --github-env keeps it for the bundle step's cargo run too.
           if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then
-            while IFS='=' read -r key value; do export "$key=$value"; done < <(bun scripts/ggml-stack.ts --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} --github-env)
+            ggml_stack_env=$(bun scripts/ggml-stack.ts --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} --github-env) || exit $?
+            while IFS='=' read -r key value; do export "$key=$value"; done <<< "$ggml_stack_env"
           fi
           cd src-tauri
           cargo build --release --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }}

@@ -110,6 +110,7 @@ export function useEngineSwitch({
 
     // ── Whisper ───────────────────────────────────────────────────────────
     const handleModelChange = async (modelId: string) => {
+        if (isRecordingRef.current) return;
         // Same UI selection can be "unloaded" in VRAM — only skip if Whisper already holds this id.
         if (modelId === currentModel && activeEngine === "whisper") {
             try {
@@ -163,6 +164,7 @@ export function useEngineSwitch({
     };
 
     const handleSwitchToWhisper = async () => {
+        if (isRecordingRef.current) return;
         if (isLoading || isLoadingRef.current) {
             console.log("[LOADING] Skipping handleSwitchToWhisper — already loading");
             return;
@@ -189,6 +191,7 @@ export function useEngineSwitch({
 
     // ── Granite ──────────────────────────────────────────────────────────
     const handleSwitchToGranite = async (targetModelOverride?: string) => {
+        if (isRecordingRef.current) return;
         const progress = downloadProgressRef.current ?? {};
         const graniteDownloading = graniteModels.some(m => progress[m.id]) ||
             Object.keys(progress).some(k => k.startsWith("granite"));
@@ -250,6 +253,7 @@ export function useEngineSwitch({
     };
 
     const handleSwitchToQwen3 = async (targetModelOverride?: string) => {
+        if (isRecordingRef.current) return;
         const progress = downloadProgressRef.current ?? {};
         if (Object.keys(progress).some(key => key.startsWith("qwen3"))) {
             setHeaderStatus("Qwen3-ASR is still downloading — please wait", 3000);

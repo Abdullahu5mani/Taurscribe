@@ -18,6 +18,7 @@ const MIN_SPEECH_SECONDS: f32 = 8.0;
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct MyVoiceStatus {
     pub enrolled: bool,
+    pub active: bool,
     /// Seconds of speech the voiceprint was made from.
     pub speech_seconds: Option<f32>,
     pub created_at: Option<String>,
@@ -32,6 +33,7 @@ fn status(conn: &Connection) -> Result<MyVoiceStatus, String> {
         .map_err(|e| e.to_string())?;
     Ok(MyVoiceStatus {
         enrolled: row.is_some(),
+        active: false,
         speech_seconds: row.as_ref().map(|r| r.0),
         created_at: row.map(|r| r.1),
         speaker_model_installed: super::meetings::speaker_model_installed(),
@@ -66,8 +68,13 @@ fn speech_only(samples: &[f32], sample_rate: u32) -> (Vec<f32>, f32) {
 }
 
 #[tauri::command]
-pub async fn get_my_voice() -> Result<MyVoiceStatus, String> {
-    tauri::async_runtime::spawn_blocking(|| status(&super::meetings::open_connection()?))
+pub async fn get_my_voice(state: State<'_, AudioState>) -> Result<MyVoiceStatus, String> {
+    let active = state.voice_enrollment_active.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut status = status(&super::meetings::open_connection()?)?;
+        status.active = active.load(std::sync::atomic::Ordering::Acquire);
+        Ok(status)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
@@ -96,8 +103,29 @@ pub async fn record_my_voice(app: AppHandle, state: State<'_, AudioState>) -> Re
             "Download the speaker recognition model in Settings → Models first",
         ));
     }
+    // Reserve after validating the request; acquisition rechecks capture and
+    // model activity atomically before any microphone or weights are opened.
+    let guards = match state.begin_voice_enrollment() {
+        Ok(guards) => guards,
+        Err(e) => return Ok(CommandResult::err("audio_busy", &e)),
+    };
     let state = (*state).clone();
-    let result = tauri::async_runtime::spawn_blocking(move || record_blocking(&app, &state))
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // Drop also publishes idle on errors or unwinding. These guards belong
+        // to the worker, not the cancellable command future.
+        struct EnrollmentEvents(AppHandle);
+        impl Drop for EnrollmentEvents {
+            fn drop(&mut self) {
+                let _ = self.0.emit("voice-enrollment-state", serde_json::json!({ "active": false }));
+            }
+        }
+        let events = EnrollmentEvents(app.clone());
+        let _ = app.emit("voice-enrollment-state", serde_json::json!({ "active": true }));
+        let result = record_blocking(&app, &state);
+        drop(guards);
+        drop(events);
+        result
+    })
         .await
         .map_err(|e| e.to_string())?;
     Ok(match result {

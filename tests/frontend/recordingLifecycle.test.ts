@@ -134,11 +134,11 @@ test("pause rejects chunks; failed resume remains paused; successful resume acce
 
 test("tail chunks are accepted during Stop and stale chunks rejected after completion", async () => {
     const h = fixture(); await h.handle.current.handleStartRecording();
-    h.handle.current.handleTranscriptionChunk(" nest"); h.handle.current.handleTranscriptionChunk("ed");
-    expect(h.transcripts.at(-1)).toBe("nested");
+    h.handle.current.handleTranscriptionChunk("First sentence."); h.handle.current.handleTranscriptionChunk("Second sentence.");
+    expect(h.transcripts.at(-1)).toBe("First sentence. Second sentence.");
     const pending = deferred<any>(); responses.set("stop_recording", () => pending.promise);
     const stop = h.handle.current.handleStopRecording(); await h.settle();
-    h.handle.current.handleTranscriptionChunk(" tail"); expect(h.transcripts.at(-1)).toBe("nested tail");
+    h.handle.current.handleTranscriptionChunk(" tail"); expect(h.transcripts.at(-1)).toBe("First sentence. Second sentence. tail");
     pending.resolve(stopped()); await stop;
     h.handle.current.handleTranscriptionChunk(" stale"); expect(h.transcripts.at(-1)).toBe("final text");
 });
@@ -211,4 +211,59 @@ test("a pending resume cannot change the phase of a newer recording", async () =
     await h.handle.current.handlePauseRecording();
     pending.resolve({ ok: true, data: "resumed" }); await resume; await h.settle();
     expect(h.handle.current.isPaused).toBe(true); expect(h.phases.at(-1)).toBe("paused");
+});
+
+
+test("external starts initialize the timer and reset prior pause and transcript state", async () => {
+    const originalNow = Date.now;
+    let now = 100_000;
+    Date.now = () => now;
+    try {
+        const h = fixture(); await h.settle();
+        fire("recording-state", { is_recording: true, is_dual_channel: false });
+        expect(h.handle.current.getRecordingMs()).toBe(0);
+        now += 2000;
+        await h.handle.current.handlePauseRecording();
+        now += 5000;
+        fire("recording-state", { is_recording: false, is_dual_channel: false });
+        now += 3000;
+        fire("recording-state", { is_recording: true, is_dual_channel: false, is_in_person: true });
+        await h.settle();
+        expect(h.handle.current.isPaused).toBe(false);
+        expect(h.handle.current.getRecordingMs()).toBe(0);
+        expect(h.handle.current.getLiveTranscript()).toBe("");
+        now += 1500;
+        expect(h.handle.current.getRecordingMs()).toBe(1500);
+        fire("recording-state", { is_recording: true, is_dual_channel: false, is_in_person: true });
+        expect(h.handle.current.getRecordingMs()).toBe(1500); // Duplicate event must not reset it.
+    } finally { Date.now = originalNow; }
+});
+
+test("voice setup blocks button and hotkey starts before loading or opening audio", async () => {
+    const h = fixture(); await h.settle();
+    fire("voice-enrollment-state", { active: true }); await h.settle();
+    expect(h.handle.current.isVoiceEnrolling).toBe(true);
+    await h.handle.current.handleStartRecording();
+    await h.handle.current.handleStartRecording(true);
+    expect(calls).not.toContain("get_granite_status");
+    expect(calls).not.toContain("start_recording");
+    fire("voice-enrollment-state", { active: false }); await h.settle();
+    await h.handle.current.handleStartRecording();
+    expect(calls).toContain("start_recording");
+});
+
+test("an old voice status response cannot overwrite a newer enrollment event", async () => {
+    const pending = deferred<any>(); responses.set("get_my_voice", () => pending.promise);
+    const h = fixture(); await h.settle();
+    fire("voice-enrollment-state", { active: true });
+    pending.resolve({ active: false }); await h.settle();
+    expect(h.handle.current.isVoiceEnrolling).toBe(true);
+});
+
+test("mounting during voice enrollment hydrates the busy state", async () => {
+    responses.set("get_my_voice", () => ({ active: true }));
+    const h = fixture(); await h.settle();
+    expect(h.handle.current.isVoiceEnrolling).toBe(true);
+    await h.handle.current.handleStartRecording();
+    expect(calls).not.toContain("start_recording");
 });

@@ -46,7 +46,7 @@ export function usePostProcessing(
     const transcriptionStyleRef = useSyncedRef(transcriptionStyle);
     // The backend the loaded FlowScribe engine was started with (null: none).
     // Compared with the setting to decide when a reload is due.
-    const appliedLlmBackendRef = useRef<"gpu" | "cpu" | null>(null);
+    const appliedLlmBackendRef = useRef<{ backend: "gpu" | "cpu"; device: string } | null>(null);
 
     // ── Load persisted settings on mount ──────────────────────────────────
     // Uses the shared storeRef if provided; falls back to a local load so the
@@ -152,9 +152,10 @@ export function usePostProcessing(
 
     /** The GPU to run on; the backend applies it from the next model load. */
     const setComputeDevice = useCallback(async (id: string) => {
+        // Publish the setting only after the backend can use it for a reload.
+        await invoke("set_compute_device", { id });
         setComputeDeviceState(id);
         persist("compute_device", id);
-        await invoke("set_compute_device", { id });
     }, [persist]);
 
     // ── Auto-load / unload LLM ────────────────────────────────────────────
@@ -172,7 +173,7 @@ export function usePostProcessing(
                 }
                 setHeaderStatus("Auto-loading FlowScribe LLM...", 60_000);
                 setLlmStatus("Loading...");
-                appliedLlmBackendRef.current = llmBackend;
+                appliedLlmBackendRef.current = { backend: llmBackend, device: computeDevice };
                 invoke("init_llm", { useGpu: llmBackend === "gpu" }).then((res) => {
                     setLlmStatus("Loaded");
                     setHeaderStatus(res as string);
@@ -197,15 +198,17 @@ export function usePostProcessing(
                 });
             }
         }
-    }, [enableGrammarLM, llmStatus, llmBackend, settingsLoaded, setEnableGrammarLM]);
+    }, [enableGrammarLM, llmStatus, llmBackend, computeDevice, settingsLoaded, setEnableGrammarLM]);
 
     // ── Hot-reload LLM when backend (GPU ↔ CPU) differs from the loaded one ──
     // Also runs when a load finishes, so a switch made while it was loading
     // still takes effect.
     useEffect(() => {
         if (llmStatus !== "Loaded") return;
-        if (appliedLlmBackendRef.current === null || appliedLlmBackendRef.current === llmBackend) return;
-        appliedLlmBackendRef.current = llmBackend;
+        const applied = appliedLlmBackendRef.current;
+        if (!enableGrammarLM || applied === null) return;
+        if (applied.backend === llmBackend && (llmBackend === "cpu" || applied.device === computeDevice)) return;
+        appliedLlmBackendRef.current = { backend: llmBackend, device: computeDevice };
 
         const label = llmBackend === "gpu" ? "GPU" : "CPU";
         setHeaderStatus(`Switching LLM to ${label}…`, 60_000);
@@ -221,7 +224,7 @@ export function usePostProcessing(
                 setLlmStatus("Error");
                 setHeaderStatus(`LLM backend switch failed: ${err}`, 5000);
             });
-    }, [llmBackend, llmStatus, setHeaderStatus]);
+    }, [llmBackend, computeDevice, enableGrammarLM, llmStatus, setHeaderStatus]);
 
     // Storage moves release mapped weights. Reload only once the backend has
     // finished the move (including rollback after a failed copy).

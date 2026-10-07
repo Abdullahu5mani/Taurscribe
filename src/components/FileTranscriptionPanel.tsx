@@ -48,12 +48,13 @@ interface FileTranscriptionPanelProps {
     currentGraniteModel?: string | null;
     currentQwen3Model?: string | null;
     isModelLoading?: boolean;
+    isVoiceEnrolling?: boolean;
     onFileProcessingChange?: (processing: boolean) => void;
 }
 
-function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGraniteModel, currentQwen3Model, asrBackend = "gpu", isModelLoading = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
-    const isModelLoadingRef = useRef(isModelLoading);
-    useEffect(() => { isModelLoadingRef.current = isModelLoading; }, [isModelLoading]);
+function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGraniteModel, currentQwen3Model, asrBackend = "gpu", isModelLoading = false, isVoiceEnrolling = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
+    const inputBlockedRef = useRef(isModelLoading || isVoiceEnrolling);
+    useEffect(() => { inputBlockedRef.current = isModelLoading || isVoiceEnrolling; }, [isModelLoading, isVoiceEnrolling]);
 
     // Keep a ref to the active model ID so addPaths (a stable callback) can read it.
     const activeModelIdRef = useRef<string | null>(null);
@@ -94,7 +95,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
     }, [isFileProcessing, onFileProcessingChange]);
 
     const addPaths = useCallback((paths: string[], importMethod: FileImportMethod) => {
-        if (isModelLoadingRef.current) return;
+        if (inputBlockedRef.current) return;
         const audio = paths.filter(p => AUDIO_EXTS.includes(getExt(p)));
         if (audio.length === 0) return;
         const model = activeModelIdRef.current;
@@ -173,7 +174,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
         getCurrentWebview()
             .onDragDropEvent(event => {
                 if (!active) return;
-                const blocked = isModelLoadingRef.current;
+                const blocked = inputBlockedRef.current;
                 if (event.payload.type === "over") {
                     if (!blocked) setIsDragOver(true);
                 } else if (event.payload.type === "drop") {
@@ -391,7 +392,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
     };
 
     // HTML5 drag events (visual feedback for webview drags)
-    const isDisabled = isModelLoading;
+    const isDisabled = isModelLoading || isVoiceEnrolling;
     const onDragOver = (e: React.DragEvent) => { e.preventDefault(); if (!isDisabled) setIsDragOver(true); };
     const onDragLeave = () => setIsDragOver(false);
     const onDrop = (e: React.DragEvent) => {
@@ -438,7 +439,12 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                 onDragLeave={isDisabled ? undefined : onDragLeave}
                 onDrop={isDisabled ? undefined : onDrop}
             >
-                {isModelLoading ? (
+                {isVoiceEnrolling ? (
+                    <>
+                        <p className="file-drop-title">Voice setup in progress</p>
+                        <p className="file-drop-hint">Finish setting up your voice before adding files</p>
+                    </>
+                ) : isModelLoading ? (
                     <>
                         <div className="file-drop-icon file-drop-icon--loading" aria-hidden="true">
                             <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

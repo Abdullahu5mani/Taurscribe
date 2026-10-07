@@ -97,6 +97,8 @@ export function useRecording({
     setSessionLatency,
 }: UseRecordingParams) {
     const [isRecording, setIsRecording] = useState(false);
+    const [isVoiceEnrolling, setIsVoiceEnrolling] = useState(false);
+    const isVoiceEnrollingRef = useRef(false);
     const [isPaused, setIsPaused] = useState(false);
     const [isProcessingTranscript, setIsProcessingTranscript] = useState(false);
     const [latestLatency, setLatestLatency] = useState<number | null>(null);
@@ -207,6 +209,25 @@ export function useRecording({
     const [isInPersonRecording, setIsInPersonRecording] = useState(false);
     const [dualLevels, setDualLevels] = useState<{ mic: number; system: number }>({ mic: 0, system: 0 });
 
+    useEffect(() => {
+        let disposed = false;
+        let receivedEvent = false;
+        const update = (active: boolean) => {
+            isVoiceEnrollingRef.current = active;
+            setIsVoiceEnrolling(active);
+        };
+        const subscription = listen<{ active: boolean }>("voice-enrollment-state", ({ payload }) => {
+            receivedEvent = true;
+            if (!disposed) update(payload.active);
+        });
+        // Subscribe before hydrating so an old status response cannot overwrite
+        // a newer transition from a setup running in another window.
+        subscription.then(() => invoke<{ active?: boolean }>("get_my_voice"))
+            .then(status => { if (!disposed && !receivedEvent) update(status?.active === true); })
+            .catch(() => {});
+        return () => { disposed = true; subscription.then(unlisten => unlisten()); };
+    }, []);
+
     // Recordings can start or stop outside the UI (control server, tray). Follow
     // the backend so the UI never keeps showing RECORDING for a stopped session.
     useEffect(() => {
@@ -214,6 +235,9 @@ export function useRecording({
             const { is_recording, is_dual_channel, is_in_person = false } = event.payload;
             if (is_recording && !isRecordingRef.current) {
                 recordingGenerationRef.current += 1;
+                resetRecordingSession();
+                recordingStartTimeRef.current = Date.now();
+                showNotice(null);
                 setIsRecording(true);
                 isRecordingRef.current = true;
                 setIsDualChannelRecording(is_dual_channel);
@@ -342,7 +366,8 @@ export function useRecording({
             if (!result.ok) throw result.error ?? new Error("Failed to start recording");
             // The command reports the temp file path; users only need to know it started.
             setHeaderStatus("Recording started");
-            recordingStartTimeRef.current = Date.now();
+            // A backend event may already have established this session's clock.
+            if (!isRecordingRef.current) recordingStartTimeRef.current = Date.now();
             setIsRecording(true);
             isRecordingRef.current = true;
             setIsDualChannelRecording(isDual);
@@ -394,6 +419,10 @@ export function useRecording({
     // to start overlapping recordings.
     const startingRef = useRef(false);
     const handleStartRecording = async (fromHotkey = false, audioSource?: string) => {
+        if (isVoiceEnrollingRef.current) {
+            setHeaderStatus("Finish setting up your voice before recording", 4000);
+            return;
+        }
         if (startingRef.current || isRecordingRef.current || isProcessingTranscriptRef.current) return;
         startingRef.current = true;
         recordingGenerationRef.current += 1;
@@ -797,13 +826,8 @@ export function useRecording({
         const cleanChunk = chunkText.trim();
         if (!cleanChunk) return;
 
-        // Leading space in chunkText = SentencePiece word boundary marker.
-        // Only join with a space when the chunk starts a new word; a chunk that
-        // continues the previous word (e.g. "ed" after "nest") has no leading space
-        // and must be concatenated directly so "nested" doesn't become "nest ed".
-        const startsNewWord = !liveTranscriptRef.current || chunkText.startsWith(" ");
-        const sep = startsNewWord ? " " : "";
-        const nextTranscript = `${liveTranscriptRef.current}${sep}${cleanChunk}`.replace(/\s+/g, " ").trim();
+        // Each backend event contains a complete ASR chunk, not a token fragment.
+        const nextTranscript = `${liveTranscriptRef.current} ${cleanChunk}`.replace(/\s+/g, " ").trim();
         liveTranscriptRef.current = nextTranscript;
         setSessionTranscript?.(nextTranscript);
 
@@ -814,6 +838,7 @@ export function useRecording({
     };
 
     return {
+        isVoiceEnrolling,
         isRecording,
         isRecordingRef,
         isPaused,

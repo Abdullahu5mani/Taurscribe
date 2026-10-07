@@ -392,6 +392,10 @@ jobs:
 
       - name: Frontend unit tests
         run: bun run test
+
+      - name: Verify native builder failure propagation
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: python3 scripts/tests/test_ggml_workflow_failure.py
       
       # Enable Long File Paths in Registry: 
       # Even with git config, Windows OS limits paths to 260 chars unless this Registry key is set.
@@ -480,7 +484,8 @@ jobs:
           # Linux: one ggml for whisper.cpp and transcribe.cpp (scripts/ggml-stack.ts).
           # --github-env keeps it for the bundle step's cargo run too.
           if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then
-            while IFS='=' read -r key value; do export "$key=$value"; done < <(bun scripts/ggml-stack.ts --target ${{ matrix.target }} --github-env)
+            ggml_stack_env=$(bun scripts/ggml-stack.ts --target ${{ matrix.target }} --github-env) || exit $?
+            while IFS='=' read -r key value; do export "$key=$value"; done <<< "$ggml_stack_env"
           fi
           cd src-tauri
           cargo build --release --target ${{ matrix.target }}

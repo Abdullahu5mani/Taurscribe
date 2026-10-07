@@ -15,6 +15,10 @@
  *   TRANSCRIBE_DIR           transcribe-cpp-sys links that prefix instead of building
  *   WHISPER_USE_SYSTEM_GGML  whisper-rs builds whisper.cpp against the prefix's ggml
  *   CMAKE_PREFIX_PATH        where whisper.cpp's find_package(ggml) finds it
+ *   CARGO_TARGET_<TRIPLE>_RUSTFLAGS  "-L native=<prefix>/lib": whisper-rs-sys bundles
+ *                            the static ggml into its rlib when it compiles, so it
+ *                            must find the libraries itself (Cargo merges this with
+ *                            .cargo/config.toml's rustflags)
  * so one ggml serves both. (llama.cpp keeps its own ggml inside its DLLs.)
  *
  *   bun scripts/ggml-stack.ts --features gpu-nvidia,gpu-vulkan [--target <triple>]
@@ -92,10 +96,15 @@ function cmakeDefines(features: string[]): string[] {
   return d;
 }
 
-export interface GgmlStackEnv {
-  TRANSCRIBE_DIR: string;
-  WHISPER_USE_SYSTEM_GGML: string;
-  CMAKE_PREFIX_PATH: string;
+export type GgmlStackEnv = Record<string, string>;
+
+/** The triple cargo builds for: --target, else the host's. */
+function buildTriple(target: string | null): string {
+  if (target) return target;
+  const r = spawnSync("rustc", ["-vV"], { encoding: "utf8", shell: process.platform === "win32" });
+  const host = /^host: (\S+)/m.exec(r.stdout ?? "")?.[1];
+  if (!host) throw new Error("could not read the host triple from rustc -vV");
+  return host;
 }
 
 /** Builds (or reuses) the shared prefix and returns the environment to build with. */
@@ -133,10 +142,14 @@ export function ggmlStackEnv(featureList: string | null, target: string | null):
   // CMake takes ';'-separated lists on every platform; keep what is already
   // there (CI puts SPIRV-Headers on it for transcribe.cpp's Vulkan build).
   const existing = process.env.CMAKE_PREFIX_PATH;
+  const flagsVar = `CARGO_TARGET_${buildTriple(target).toUpperCase().replace(/-/g, "_")}_RUSTFLAGS`;
+  const libFlag = `-L native=${join(prefix, "lib")}`;
+  const flags = process.env[flagsVar];
   return {
     TRANSCRIBE_DIR: prefix,
     WHISPER_USE_SYSTEM_GGML: "ON",
     CMAKE_PREFIX_PATH: existing && !existing.split(";").includes(prefix) ? `${prefix};${existing}` : prefix,
+    [flagsVar]: flags && !flags.includes(libFlag) ? `${flags} ${libFlag}` : flags ?? libFlag,
   };
 }
 
