@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
 import type { DownloadableModel, DownloadProgress } from './types';
 import { ModelRow } from './ModelRow';
+import { MEETING_SPEAKERS_ID, cancelMeetingSpeakers, deleteMeetingSpeakers, downloadMeetingSpeakers, meetingSpeakersModel, meetingSpeakersProgress } from '../../utils/meetingSpeakers';
 import { ComputeDeviceCard } from './ComputeDeviceCard';
 import { AUTO_UNLOAD_OPTIONS } from '../../hooks/useAutoUnload';
 import {
@@ -183,7 +184,9 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const graniteModels = models.filter(m => m.type === 'Granite');
     const qwen3Models = models.filter(m => m.type === 'Qwen3');
     const llmModels = models.filter(m => m.type === 'LLM');
-    const speakerModels = models.filter(m => m.type === 'Speaker');
+    // The two speaker models are one "Meeting speakers" download.
+    const speakerBundle = meetingSpeakersModel(models);
+    const speakerBundleProgress = meetingSpeakersProgress(models, downloadProgress);
     const coremlModels = models.filter(m => m.type === 'CoreML');
 
     useEffect(() => {
@@ -517,14 +520,20 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                 </div>
             </div>
 
-            {/* ── Speaker Recognition (Speaker Vault) ───────────────── */}
+            {/* ── Meeting speakers (separation + recognition) ──────── */}
             <div className="model-group" id="models-group-speaker" data-testid="models-group-speaker">
                 <div className="model-group-header">
-                    <h3 className="settings-section-title">Speaker recognition</h3>
-                    <span className="model-group-sub">required for the Speaker Vault · recognises people by voice</span>
+                    <h3 className="settings-section-title">Meeting speakers</h3>
+                    <span className="model-group-sub">who spoke when · recognises people by voice · Speaker Vault</span>
                 </div>
                 <div className="model-list">
-                    {speakerModels.map(m => <ModelRow key={m.id} model={m} {...rowProps} />)}
+                    <ModelRow
+                        model={speakerBundle}
+                        downloadProgress={speakerBundleProgress ? { [MEETING_SPEAKERS_ID]: speakerBundleProgress } : {}}
+                        onDownload={() => downloadMeetingSpeakers(models, onDownload)}
+                        onDelete={() => deleteMeetingSpeakers(models, onDelete)}
+                        onCancelDownload={() => cancelMeetingSpeakers(onCancelDownload, downloadProgress)}
+                    />
                 </div>
             </div>
 

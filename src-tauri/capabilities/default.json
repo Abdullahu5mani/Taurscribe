@@ -15,6 +15,7 @@
     "opener:default",
     "store:default",
     "autostart:default",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "dialog:allow-save"
   ]
 }

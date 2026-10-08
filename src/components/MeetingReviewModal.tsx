@@ -257,7 +257,7 @@ export const MeetingReviewModal: React.FC<MeetingReviewModalProps> = ({
                             </span>
                             {speakerModelInstalled === false && (
                                 <p id="meeting-review-speaker-model-note" data-testid="meeting-review-speaker-model-note" className="review-speaker-model-note" role="note">
-                                    Names apply to this meeting only. Download Speaker Recognition in
+                                    Names apply to this meeting only. Download Meeting speakers in
                                     Settings → Models to recognise people by voice in future meetings.
                                 </p>
                             )}
@@ -298,7 +298,7 @@ export const MeetingReviewModal: React.FC<MeetingReviewModalProps> = ({
                                                     title="Listen to 3-second sample to verify who spoke"
                                                 >
                                                     {isPlaying ? <IconStop size={12} /> : <IconPlay size={12} />}
-                                                    <span>{isPlaying ? "Playing..." : "▶ 3s Clip"}</span>
+                                                    <span>{isPlaying ? "Playing..." : "3s Clip"}</span>
                                                 </button>
                                             )}
                                         </div>

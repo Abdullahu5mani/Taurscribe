@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { SpeakerVaultRecord } from "../types/meetings";
-import { IconX, IconPlay, IconStop, IconTrash, IconEdit, IconCheck, IconUsers, IconRefresh } from "./Icons";
+import { IconX, IconPlay, IconStop, IconTrash, IconEdit, IconCheck, IconUsers, IconRefresh, IconSearch } from "./Icons";
 import { useSpeakerModelInstalled } from "../hooks/useSpeakerModelInstalled";
+import { VoiceBankPanel } from "./VoiceBankPanel";
 import "./SpeakerVaultModal.css";
 
 interface SpeakerVaultModalProps {
@@ -27,6 +28,11 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
     const [editingSpeakerId, setEditingSpeakerId] = useState<string | null>(null);
     const [newName, setNewName] = useState("");
     const [playingSnippetId, setPlayingSnippetId] = useState<string | null>(null);
+    /** The person whose Delete was clicked once and now awaits confirmation. */
+    const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+    const [actionError, setActionError] = useState("");
+    /** The person whose voice-bank panel is open: find more samples, or their samples. */
+    const [voiceBank, setVoiceBank] = useState<{ personId: string; mode: "find" | "samples" } | null>(null);
 
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -108,20 +114,31 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
                 newName: newName.trim(),
             });
             setEditingSpeakerId(null);
+            setActionError("");
             loadVault();
             onSpeakerUpdated?.();
         } catch (err) {
             console.error("Failed to rename speaker:", err);
+            setActionError(`Couldn't rename ${speaker.name}: ${err}`);
         }
     };
 
-    const handleDeleteSpeaker = async (speakerId: string) => {
+    /** First click asks for confirmation; the second deletes. */
+    const handleDeleteSpeaker = async (speaker: SpeakerVaultRecord) => {
+        if (confirmDeleteId !== speaker.id) {
+            setConfirmDeleteId(speaker.id);
+            return;
+        }
+        setConfirmDeleteId(null);
+        if (playingSnippetId === speaker.id) stopAudio();
         try {
-            await invoke("delete_speaker_from_vault", { speakerId });
+            await invoke("delete_speaker_from_vault", { speakerId: speaker.id });
+            setActionError("");
             loadVault();
             onSpeakerUpdated?.();
         } catch (err) {
             console.error("Failed to delete speaker from vault:", err);
+            setActionError(`Couldn't delete ${speaker.name}: ${err}`);
         }
     };
 
@@ -145,9 +162,11 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
                 stopAudio();
                 handlePlaySnippet({ ...speaker, snippet_path: nextPath });
             }
+            setActionError("");
             onSpeakerUpdated?.();
         } catch (err) {
             console.error("Failed to cycle vault speaker snippet:", err);
+            setActionError(String(err));
         }
     };
 
@@ -175,10 +194,10 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
                     {speakerModelInstalled === false ? (
                         <div id="speaker-vault-empty" data-testid="speaker-vault-empty" className="vault-empty vault-locked" role="status" aria-label="Speaker recognition model required">
                             <IconUsers size={32} style={{ opacity: 0.3 }} />
-                            <p>Speaker recognition model required</p>
+                            <p>Meeting speakers download required</p>
                             <span>
                                 The Speaker Vault recognises people by their voice across meetings. It needs the
-                                Speaker Recognition model (28 MB), which runs on this computer. Until it is
+                                Meeting speakers download (227 MB), which runs on this computer. Until it is
                                 downloaded, speaker names apply to a single meeting only.
                             </span>
                             {onOpenModelSettings && (
@@ -210,8 +229,10 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
                             const isPlaying = playingSnippetId === s.id;
                             const initials = (s.name || "S").slice(0, 2).toUpperCase();
 
+                            const panel = voiceBank?.personId === s.id ? voiceBank.mode : null;
                             return (
-                                <div key={s.id} className="vault-item">
+                                <React.Fragment key={s.id}>
+                                <div className="vault-item">
                                     <div className="vault-item-left">
                                         <div className="vault-avatar">{initials}</div>
                                         <div className="vault-speaker-info">
@@ -239,6 +260,17 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
                                                 <span>{s.meeting_count} {s.meeting_count === 1 ? "call" : "calls"}</span>
                                                 <span>•</span>
                                                 <span>Last seen {new Date(s.last_seen).toLocaleDateString()}</span>
+                                                <span>•</span>
+                                                <button
+                                                    type="button"
+                                                    className="vault-samples-link"
+                                                    id={`speaker-vault-samples-${s.id}`}
+                                                    data-testid={`speaker-vault-samples-${s.id}`}
+                                                    onClick={() => setVoiceBank(panel === "samples" ? null : { personId: s.id, mode: "samples" })}
+                                                    aria-expanded={panel === "samples"}
+                                                >
+                                                    {`${s.sample_count} voice ${s.sample_count === 1 ? "sample" : "samples"}`}
+                                                </button>
                                             </div>
                                         </div>
                                     </div>
@@ -277,6 +309,19 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
                                             </button>
                                         )}
 
+                                        <button
+                                            type="button"
+                                            id={`speaker-vault-find-more-${s.id}`}
+                                            data-testid={`speaker-vault-find-more-${s.id}`}
+                                            className={`vault-action-btn ${panel === "find" ? "active" : ""}`}
+                                            onClick={() => setVoiceBank(panel === "find" ? null : { personId: s.id, mode: "find" })}
+                                            title={`Find more voice samples of ${s.name} in past meetings`}
+                                            aria-expanded={panel === "find"}
+                                        >
+                                            <IconSearch size={13} />
+                                            <span>Find more</span>
+                                        </button>
+
                                         {isEditing ? (
                                             <button
                                                 type="button"
@@ -303,22 +348,63 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
                                             </button>
                                         )}
 
-                                        <button
-                                            type="button"
-                                            id={`speaker-vault-delete-${s.id}`}
-                                            data-testid={`speaker-vault-delete-${s.id}`}
-                                            className="vault-action-btn danger"
-                                            onClick={() => handleDeleteSpeaker(s.id)}
-                                            title="Delete from vault"
-                                        >
-                                            <IconTrash size={13} />
-                                        </button>
+                                        {confirmDeleteId === s.id ? (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    id={`speaker-vault-delete-confirm-${s.id}`}
+                                                    data-testid={`speaker-vault-delete-confirm-${s.id}`}
+                                                    className="vault-action-btn danger active"
+                                                    onClick={() => handleDeleteSpeaker(s)}
+                                                    title={`Forget ${s.name}'s voice`}
+                                                >
+                                                    <IconTrash size={13} />
+                                                    <span>Delete {s.name}?</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    id={`speaker-vault-delete-cancel-${s.id}`}
+                                                    data-testid={`speaker-vault-delete-cancel-${s.id}`}
+                                                    className="vault-action-btn"
+                                                    onClick={() => setConfirmDeleteId(null)}
+                                                >
+                                                    <span>Cancel</span>
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                id={`speaker-vault-delete-${s.id}`}
+                                                data-testid={`speaker-vault-delete-${s.id}`}
+                                                className="vault-action-btn danger"
+                                                onClick={() => handleDeleteSpeaker(s)}
+                                                title="Delete from vault"
+                                            >
+                                                <IconTrash size={13} />
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
+                                {panel && (
+                                    <VoiceBankPanel
+                                        personId={s.id}
+                                        personName={s.name}
+                                        mode={panel}
+                                        onChanged={() => { loadVault(); onSpeakerUpdated?.(); }}
+                                        onClose={() => setVoiceBank(null)}
+                                    />
+                                )}
+                                </React.Fragment>
                             );
                         })
                     )}
                 </div>
+
+                {actionError && (
+                    <p id="speaker-vault-error" data-testid="speaker-vault-error" className="vault-error" role="alert">
+                        {actionError}
+                    </p>
+                )}
 
                 <div className="vault-footer">
                     <button type="button" id="speaker-vault-done-btn" data-testid="speaker-vault-done-btn" className="vault-done-btn" onClick={onClose}>

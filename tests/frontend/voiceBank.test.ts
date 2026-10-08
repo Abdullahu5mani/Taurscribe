@@ -28,6 +28,44 @@ const played: string[] = [];
 const { VoiceBankPanel, SUGGESTION_PAGE } = await import("../../src/components/VoiceBankPanel");
 const { SpeakerSuggestions } = await import("../../src/components/SpeakerSuggestions");
 
+const nodes = (root: any): any[] => {
+    if (root == null || typeof root !== "object") return [];
+    if (Array.isArray(root)) return root.flatMap(nodes);
+    return [root, ...nodes(root.props?.children)];
+};
+const byTest = (root: any, id: string) => nodes(root).find((n) => n.props?.["data-testid"] === id);
+const textOf = (root: any): string => {
+    if (root == null || typeof root === "boolean") return "";
+    if (typeof root !== "object") return String(root);
+    if (Array.isArray(root)) return root.map(textOf).join(" ");
+    return textOf(root.props?.children);
+};
+const flat = (root: any) => textOf(root).replace(/\s+/g, " ").replace(/ ([%”?.]|’)/g, "$1").replace(/“ /g, "“").trim();
+
+const suggestion = (meeting: number, speaker: string, similarity: number) => ({
+    meeting_id: meeting, meeting_title: `Meeting ${meeting}`, created_at: "2026-10-01T12:00:00Z",
+    speaker_id: speaker, speaker_name: "Speaker 2", clip_path: `/clips/${meeting}_${speaker}.wav`,
+    speech_ms: 14_000, preview: "The budget is fine", similarity,
+});
+let changed: number;
+beforeEach(() => {
+    calls.length = 0;
+    played.length = 0;
+    failures = {};
+    changed = 0;
+    suggestions = Array.from({ length: 13 }, (_, i) => suggestion(i + 1, "speaker_remote_2", 0.9 - i * 0.03));
+    samples = [
+        { id: 2, clip_path: "/clips/b.wav", meeting_id: 7, meeting_title: "Planning", created_at: "2026-10-05T00:00:00Z" },
+        { id: 1, clip_path: null, meeting_id: null, meeting_title: null, created_at: "2026-09-01T00:00:00Z" },
+    ];
+    asks = [];
+});
+const panel = async (mode: "find" | "samples") => {
+    const view = renderHook(() => VoiceBankPanel({ personId: "p_dana", personName: "Dana", mode, onChanged: () => changed++, onClose: () => {} }));
+    await view.settle();
+    return view;
+};
+
 test("Find more lists the closest speakers first with their match, meeting and line", async () => {
     const { handle } = await panel("find");
     expect(calls[0]).toEqual({ cmd: "find_voice_samples", args: { personId: "p_dana", limit: SUGGESTION_PAGE } });
@@ -96,3 +134,21 @@ test("samples: remove asks first, and the last sample cannot be removed", async 
     expect(changed).toBe(1);
 });
 
+test("on a meeting: 'Speaker 2 sounds like Dana' — yes labels and reloads, no is remembered", async () => {
+    asks = [
+        { speaker_id: "speaker_remote_2", speaker_name: "Speaker 2", person_id: "p_dana", person_name: "Dana", similarity: 0.54, clip_path: "/c.wav" },
+        { speaker_id: "speaker_remote_3", speaker_name: "Speaker 3", person_id: "p_sam", person_name: "Sam", similarity: 0.49, clip_path: null },
+    ];
+    let labelled = 0;
+    const { handle, settle } = renderHook(() => SpeakerSuggestions({ meetingId: 9, onLabelled: () => labelled++ }));
+    await settle();
+    expect(flat(byTest(handle.current, "speaker-suggestion-speaker_remote_2"))).toContain("Speaker 2 sounds like Dana · 54% match");
+    await byTest(handle.current, "speaker-suggestion-yes-speaker_remote_2").props.onClick();
+    await settle();
+    expect(calls.at(-1)).toEqual({ cmd: "accept_voice_sample", args: { personId: "p_dana", meetingId: 9, speakerId: "speaker_remote_2" } });
+    expect(labelled).toBe(1);
+    await byTest(handle.current, "speaker-suggestion-no-speaker_remote_3").props.onClick();
+    await settle();
+    expect(calls.at(-1)).toEqual({ cmd: "reject_voice_sample", args: { personId: "p_sam", meetingId: 9, speakerId: "speaker_remote_3" } });
+    expect(handle.current).toBeNull();
+});

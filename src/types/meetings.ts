@@ -91,6 +91,15 @@ export interface VoiceSampleSuggestion {
     similarity: number;
 }
 
+/** One stored voice sample of a vault person (`list_voiceprints`). */
+export interface Voiceprint {
+    id: number;
+    clip_path: string | null;
+    meeting_id: number | null;
+    meeting_title: string | null;
+    created_at: string;
+}
+
 /** "Is this Dana?" after a meeting (`suggest_speaker_names`). */
 export interface SpeakerNameSuggestion {
     speaker_id: string;

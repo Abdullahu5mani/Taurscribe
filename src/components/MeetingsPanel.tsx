@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { SpeakerSuggestions } from "./SpeakerSuggestions";
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -83,6 +85,12 @@ function getPlatformMeta(plat: string) {
   );
 }
 
+/** A safe download name for a meeting's notes ("Budget: Q3/Q4" → "Budget_Q3_Q4_transcript.md"). */
+export function exportFileName(title: string, format: "markdown" | "text" | "json"): string {
+  const base = title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim().replace(/\s+/g, "_") || "meeting";
+  return `${base}_transcript.${format === "markdown" ? "md" : format === "json" ? "json" : "txt"}`;
+}
+
 export function MeetingsPanel({
   activeMeeting,
   isRecording,
@@ -143,6 +151,11 @@ export function MeetingsPanel({
   }, [selectedMeetingId]);
   const [speakerNewName, setSpeakerNewName] = useState("");
   const [copiedTranscript, setCopiedTranscript] = useState(false);
+  const [exportedNotes, setExportedNotes] = useState(false);
+  /** Delete was clicked once for this meeting and awaits confirmation. */
+  const [confirmDeleteMeetingId, setConfirmDeleteMeetingId] = useState<number | null>(null);
+  /** A failed copy / export / delete, shown under the toolbar. */
+  const [toolbarError, setToolbarError] = useState("");
 
   const selectMeeting = (id: number | null) => {
     if (selectedMeetingIdRef.current !== id) {
@@ -151,6 +164,8 @@ export function MeetingsPanel({
       setSelectedMeeting(null);
       setEditingTitle("");
       setLoadingDetail(false);
+      setConfirmDeleteMeetingId(null);
+      setToolbarError("");
       stopFullAudio();
       stopSnippetAudio();
       setAudioCurrentTime(0);
@@ -520,39 +535,45 @@ export function MeetingsPanel({
   const handleDeleteMeeting = async () => {
     if (!selectedMeeting || selectedMeeting.id !== selectedMeetingIdRef.current) return;
     const meetingId = selectedMeeting.id;
+    if (confirmDeleteMeetingId !== meetingId) {
+      setConfirmDeleteMeetingId(meetingId);
+      return;
+    }
+    setConfirmDeleteMeetingId(null);
     try {
       await invoke("delete_meeting", { meetingId });
+      setToolbarError("");
       if (selectedMeetingIdRef.current === meetingId) selectMeeting(null);
       loadMeetings();
     } catch (err) {
       console.error("Failed to delete meeting:", err);
+      setToolbarError(`Couldn't delete this meeting: ${err}`);
     }
   };
 
+  /** Saves the notes to a file the user picks (Markdown, text or JSON). */
   const handleExport = async (format: "markdown" | "text" | "json") => {
     if (!selectedMeeting) return;
+    const meetingId = selectedMeeting.id;
+    const fileName = exportFileName(selectedMeeting.title, format);
+    const extension = fileName.slice(fileName.lastIndexOf(".") + 1);
     try {
-      const content = await invoke<string>("export_meeting_notes", {
-        meetingId: selectedMeeting.id,
-        format,
+      const path = await saveDialog({
+        defaultPath: fileName,
+        filters: [{ name: format === "markdown" ? "Markdown" : format === "json" ? "JSON" : "Text", extensions: [extension] }],
       });
-      const blob = new Blob([content], {
-        type: format === "json" ? "application/json" : "text/plain",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${selectedMeeting.title.replace(/\s+/g, "_")}_transcript.${
-        format === "markdown" ? "md" : format === "json" ? "json" : "txt"
-      }`;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (!path) return; // cancelled
+      await invoke("save_meeting_notes", { meetingId, format, path });
+      setToolbarError("");
+      setExportedNotes(true);
+      setTimeout(() => setExportedNotes(false), 2000);
     } catch (err) {
       console.error("Failed to export meeting notes:", err);
+      setToolbarError(`Couldn't export the notes: ${err}`);
     }
   };
 
-  const handleCopyTranscript = () => {
+  const handleCopyTranscript = async () => {
     if (!selectedMeeting) return;
     const text =
       selectedMeeting.turns && selectedMeeting.turns.length > 0
@@ -563,7 +584,13 @@ export function MeetingsPanel({
             )
             .join("\n\n")
         : selectedMeeting.transcript_raw;
-    navigator.clipboard.writeText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      setToolbarError(`Couldn't copy the transcript: ${err}`);
+      return;
+    }
+    setToolbarError("");
     setCopiedTranscript(true);
     setTimeout(() => setCopiedTranscript(false), 2000);
   };
@@ -1055,22 +1082,52 @@ export function MeetingsPanel({
                       onClick={() => handleExport("markdown")}
                       title="Export transcript as Markdown"
                     >
-                      <IconDownloadFile size={13} />
-                      <span>Export</span>
+                      {exportedNotes ? <IconCheck size={12} /> : <IconDownloadFile size={13} />}
+                      <span>{exportedNotes ? "Exported" : "Export"}</span>
                     </button>
 
-                    <button
-                      id="meetings-delete-btn"
-                      data-testid="meetings-delete-btn"
-                      type="button"
-                      className="detail-tool-btn danger"
-                      onClick={handleDeleteMeeting}
-                      title="Delete this meeting recording"
-                    >
-                      <IconTrash size={13} />
-                    </button>
+                    {confirmDeleteMeetingId === selectedMeeting.id ? (
+                      <>
+                        <button
+                          id="meetings-delete-confirm-btn"
+                          data-testid="meetings-delete-confirm-btn"
+                          type="button"
+                          className="detail-tool-btn danger detail-tool-btn--confirm"
+                          onClick={handleDeleteMeeting}
+                          title="Delete this meeting and its recording permanently"
+                        >
+                          <IconTrash size={13} />
+                          <span>Delete meeting?</span>
+                        </button>
+                        <button
+                          id="meetings-delete-cancel-btn"
+                          data-testid="meetings-delete-cancel-btn"
+                          type="button"
+                          className="detail-tool-btn"
+                          onClick={() => setConfirmDeleteMeetingId(null)}
+                        >
+                          <span>Cancel</span>
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        id="meetings-delete-btn"
+                        data-testid="meetings-delete-btn"
+                        type="button"
+                        className="detail-tool-btn danger"
+                        onClick={handleDeleteMeeting}
+                        title="Delete this meeting recording"
+                      >
+                        <IconTrash size={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
+                {toolbarError && (
+                  <p id="meetings-toolbar-error" data-testid="meetings-toolbar-error" className="detail-toolbar-error" role="alert">
+                    {toolbarError}
+                  </p>
+                )}
 
                 <input
                   aria-label="Meeting title"
@@ -1124,6 +1181,12 @@ export function MeetingsPanel({
                   </div>
                 </div>
               </div>
+
+              {/* "Speaker 2 sounds like Dana — is it?" */}
+              <SpeakerSuggestions
+                meetingId={selectedMeeting.id}
+                onLabelled={() => { loadMeetingDetail(selectedMeeting.id); loadMeetings(); }}
+              />
 
               {/* Recording file gone: say so; the transcript below is complete. */}
               {(selectedMeeting.audio_missing || audioFailed || (selectedMeeting.clips_missing ?? 0) > 0) && (

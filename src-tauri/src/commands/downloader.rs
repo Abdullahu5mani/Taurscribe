@@ -1155,6 +1155,20 @@ pub async fn delete_model(
             ))
         }
     };
+    // A meeting being recorded or processed uses the speaker models when it
+    // finishes; deleting one halfway would quietly switch it to the fallback.
+    if meeting_needs_model(&model_id) {
+        use tauri::Manager;
+        let state = app.state::<crate::state::AudioState>();
+        let busy = state.recording_transition_active()
+            || state.recording_handle.lock().map(|h| h.is_some()).unwrap_or(false);
+        if busy {
+            return Ok(CommandResult::err(
+                "model_in_use",
+                "A recording is in progress or being processed. Delete this once it has finished.",
+            ));
+        }
+    }
     let models_dir =
         crate::utils::get_models_dir().map_err(|e| format!("Failed to get models dir: {}", e))?;
 

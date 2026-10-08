@@ -476,6 +476,13 @@ pub fn run() {
             commands::cycle_speaker_turn_snippet,
             commands::cycle_vault_speaker_snippet,
             commands::export_meeting_notes,
+            commands::save_meeting_notes,
+            commands::find_voice_samples,
+            commands::accept_voice_sample,
+            commands::reject_voice_sample,
+            commands::list_voiceprints,
+            commands::delete_voiceprint,
+            commands::suggest_speaker_names,
             crate::context::get_active_context_preview
         ])
         .build(tauri::generate_context!())

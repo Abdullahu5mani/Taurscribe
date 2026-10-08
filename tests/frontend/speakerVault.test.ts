@@ -25,6 +25,21 @@ mock.module("@tauri-apps/api/core", () => ({
 }));
 const { SpeakerVaultModal } = await import("../../src/components/SpeakerVaultModal");
 
+const nodes = (root: any): any[] => {
+    if (root == null || typeof root !== "object") return [];
+    if (Array.isArray(root)) return root.flatMap(nodes);
+    return [root, ...nodes(root.props?.children)];
+};
+const byTest = (root: any, id: string) => nodes(root).find((n) => n.props?.["data-testid"] === id);
+const textOf = (root: any): string => {
+    if (root == null || typeof root === "boolean") return "";
+    if (typeof root !== "object") return String(root);
+    if (Array.isArray(root)) return root.map(textOf).join(" ");
+    return textOf(root.props?.children);
+};
+/** Text with JSX expression gaps removed: "Delete Alice?" not " Delete  Alice ?". */
+const flat = (root: any) => textOf(root).replace(/\s+/g, " ").replace(/ ([?/])/g, "$1").replace(/([/]) /g, "$1").trim();
+
 let updates: number;
 beforeEach(() => {
     calls.length = 0;

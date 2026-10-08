@@ -334,6 +334,9 @@ function TranscriptFeedComponent({
         >
             {copyError && <p className="file-card-error" role="alert">{copyError}</p>}
             {showLive && (
+                // Expands into place (like new transcripts) instead of pushing
+                // the list down in one frame.
+                <div className="feed-live-wrap">
                 <div
                     className={`feed-live-row ${liveClass}`}
                     id="feed-live-status"
@@ -350,6 +353,7 @@ function TranscriptFeedComponent({
                         </div>
                     )}
                     <span className="feed-live-label">{liveLabel}…</span>
+                </div>
                 </div>
             )}
 

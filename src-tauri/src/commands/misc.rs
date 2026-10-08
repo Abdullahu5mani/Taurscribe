@@ -943,44 +943,55 @@ fn clear_app_data_root_runtime_safe(base: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn perform_pending_factory_reset_on_startup() -> Result<(), String> {
-    let marker_path = factory_reset_marker_path()?;
-    if !marker_path.exists() {
-        return Ok(());
+/// Deletes CoreML encoder bundles (.mlmodelc) in the app's own models folder.
+/// The bundles can hold locked sub-files on macOS that make deleting the
+/// parent fail. A custom models folder (Storage) is left alone: the reset
+/// promises not to touch it, and a symlinked default folder points at one.
+fn remove_app_coreml_bundles(models_dir: &Path) {
+    let is_real_dir = fs::symlink_metadata(models_dir).map(|m| m.is_dir()).unwrap_or(false);
+    if !is_real_dir {
+        return;
     }
-
-    let app_data =
-        data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
-    println!("[RESET] Pending factory reset detected. Clearing app data before startup...");
-
-    // Delete CoreML encoder directories first — .mlmodelc bundles can contain
-    // locked sub-files on macOS that cause remove_dir_all to fail on the parent.
-    if let Ok(models_dir) = crate::utils::get_models_dir() {
-        if let Ok(entries) = std::fs::read_dir(&models_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
-                if path.is_dir() && entry.file_name().to_string_lossy().ends_with(".mlmodelc") {
-                    let _ = std::fs::remove_dir_all(&path);
-                }
+    if let Ok(entries) = fs::read_dir(models_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let is_bundle = entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                && entry.file_name().to_string_lossy().ends_with(".mlmodelc");
+            if is_bundle {
+                let _ = fs::remove_dir_all(&path);
+                println!("[RESET] Removed CoreML encoder: {}", path.display());
             }
         }
     }
+}
 
-    for name in ["Taurscribe", "taurscribe"] {
-        clear_app_data_root(&app_data.join(name))?;
+/// Runs a pending factory reset: clears the app's folders under `local` (and
+/// `roaming`, where settings.json lives on Windows), then removes `marker`.
+/// On failure the marker stays, so the reset retries on the next launch.
+fn run_pending_factory_reset(marker: &Path, local: &Path, roaming: Option<&Path>) -> Result<bool, String> {
+    if !marker.exists() {
+        return Ok(false);
     }
-
-    // Also clear the Tauri-managed app data dir (Roaming AppData on Windows),
-    // which is where tauri-plugin-store saves settings.json.
-    if let Some(roaming) = dirs::data_dir() {
+    println!("[RESET] Pending factory reset detected. Clearing app data before startup...");
+    for name in ["Taurscribe", "taurscribe"] {
+        remove_app_coreml_bundles(&local.join(name).join("models"));
+        clear_app_data_root(&local.join(name))?;
+    }
+    if let Some(roaming) = roaming {
         for name in ["taurscribe", "Taurscribe"] {
             let _ = clear_app_data_root(&roaming.join(name));
         }
     }
-
-    remove_path_with_retries(&marker_path)?;
+    remove_path_with_retries(marker)?;
     println!("[RESET] Factory reset completed successfully.");
-    Ok(())
+    Ok(true)
+}
+
+pub fn perform_pending_factory_reset_on_startup() -> Result<(), String> {
+    let marker_path = factory_reset_marker_path()?;
+    let app_data =
+        data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
+    run_pending_factory_reset(&marker_path, &app_data, dirs::data_dir().as_deref()).map(|_| ())
 }
 
 /// Deletes all persisted app data (models, settings, history, temp) and relaunches.
@@ -1044,20 +1055,10 @@ pub async fn factory_reset_app_data(
     crate::tray::update_tray_model_item(&app, false);
     crate::overlay::hide(&app);
 
-    // Explicitly delete CoreML encoder directories (.mlmodelc) from the models
-    // directory before restarting. The full app-data wipe on next launch should
-    // handle these too, but .mlmodelc bundles can have locked sub-files on macOS
-    // that survive a directory delete, so we nuke them now while engines are unloaded.
-    if let Ok(models_dir) = crate::utils::get_models_dir() {
-        if let Ok(entries) = std::fs::read_dir(&models_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
-                if path.is_dir() && entry.file_name().to_string_lossy().ends_with(".mlmodelc") {
-                    let _ = std::fs::remove_dir_all(&path);
-                    println!("[RESET] Removed CoreML encoder: {}", path.display());
-                }
-            }
-        }
+    // Delete CoreML encoder bundles now, while the engines are unloaded: they
+    // can have locked sub-files on macOS that survive the full wipe.
+    if let Ok(models_dir) = crate::storage::default_dir(crate::storage::Area::Models) {
+        remove_app_coreml_bundles(&models_dir);
     }
 
     if cfg!(debug_assertions) {
@@ -1512,4 +1513,115 @@ pub struct McpSetup {
 pub fn get_mcp_setup() -> Result<McpSetup, String> {
     let exe = std::env::current_exe().map_err(|e| format!("could not find the Taurscribe executable: {e}"))?;
     Ok(McpSetup { command: exe.to_string_lossy().into_owned(), args: vec!["mcp".into()] })
+}
+
+#[cfg(test)]
+mod factory_reset_tests {
+    use super::*;
+
+    /// A fresh folder, deleted when dropped.
+    struct Scratch(std::path::PathBuf);
+    impl Scratch {
+        fn path(&self) -> &Path { &self.0 }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+    fn tempdir() -> Scratch {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("taurscribe-reset-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+
+    fn tree(root: &Path) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let local = root.join("local");
+        let roaming = root.join("roaming");
+        let marker = local.join("taurscribe-factory-reset-pending");
+        for dir in [
+            local.join("Taurscribe/models/ggml-base.en-encoder.mlmodelc/weights"),
+            local.join("Taurscribe/meetings"),
+            local.join("OtherApp"),
+            roaming.join("taurscribe"),
+        ] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        fs::write(local.join("Taurscribe/history.db"), b"rows").unwrap();
+        fs::write(local.join("OtherApp/keep.txt"), b"keep").unwrap();
+        fs::write(roaming.join("taurscribe/settings.json"), b"{}").unwrap();
+        (local, roaming, marker)
+    }
+
+    #[test]
+    fn a_pending_reset_clears_only_the_apps_folders_then_the_marker() {
+        let tmp = tempdir();
+        let (local, roaming, marker) = tree(tmp.path());
+        fs::write(&marker, b"pending").unwrap();
+
+        assert!(run_pending_factory_reset(&marker, &local, Some(&roaming)).unwrap());
+        assert!(!local.join("Taurscribe").exists(), "app data deleted");
+        assert!(!roaming.join("taurscribe").exists(), "settings deleted");
+        assert!(!marker.exists(), "marker removed");
+        assert_eq!(fs::read(local.join("OtherApp/keep.txt")).unwrap(), b"keep", "other apps untouched");
+    }
+
+    #[test]
+    fn without_a_marker_nothing_is_deleted() {
+        let tmp = tempdir();
+        let (local, roaming, marker) = tree(tmp.path());
+        assert!(!run_pending_factory_reset(&marker, &local, Some(&roaming)).unwrap());
+        assert!(local.join("Taurscribe/history.db").exists());
+        assert!(roaming.join("taurscribe/settings.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_reset_never_reaches_through_a_symlinked_models_folder() {
+        // The user's setup: Taurscribe/models is a symlink to a folder on
+        // another drive. The reset removes the link, never what it points to.
+        let tmp = tempdir();
+        let (local, roaming, marker) = tree(tmp.path());
+        let ssd = tmp.path().join("ssd-models");
+        fs::create_dir_all(ssd.join("ggml-large-encoder.mlmodelc")).unwrap();
+        fs::write(ssd.join("ggml-large.bin"), b"model").unwrap();
+        fs::remove_dir_all(local.join("Taurscribe/models")).unwrap();
+        std::os::unix::fs::symlink(&ssd, local.join("Taurscribe/models")).unwrap();
+        fs::write(&marker, b"pending").unwrap();
+
+        run_pending_factory_reset(&marker, &local, Some(&roaming)).unwrap();
+        assert!(!local.join("Taurscribe").exists());
+        assert!(ssd.join("ggml-large.bin").exists(), "model on the other drive kept");
+        assert!(ssd.join("ggml-large-encoder.mlmodelc").exists(), "CoreML bundle on the other drive kept");
+    }
+
+    #[test]
+    fn coreml_bundles_are_removed_only_from_a_real_app_folder() {
+        let tmp = tempdir();
+        let models = tmp.path().join("models");
+        fs::create_dir_all(models.join("a-encoder.mlmodelc")).unwrap();
+        fs::write(models.join("a.bin"), b"model").unwrap();
+        remove_app_coreml_bundles(&models);
+        assert!(!models.join("a-encoder.mlmodelc").exists());
+        assert!(models.join("a.bin").exists());
+        remove_app_coreml_bundles(&tmp.path().join("missing")); // no panic
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_reset_keeps_the_marker_so_it_retries() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempdir();
+        let (local, roaming, marker) = tree(tmp.path());
+        fs::write(&marker, b"pending").unwrap();
+        let locked = local.join("Taurscribe/meetings");
+        fs::write(locked.join("m.db"), b"x").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o500)).unwrap();
+
+        let result = run_pending_factory_reset(&marker, &local, Some(&roaming));
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err(), "an undeletable folder is reported");
+        assert!(marker.exists(), "marker kept for the next launch");
+    }
 }

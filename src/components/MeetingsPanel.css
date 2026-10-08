@@ -1256,3 +1256,32 @@
   color: #fca5a5;
 }
 
+/* ── "Speaker 2 sounds like Dana — is it?" ── */
+.speaker-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+.speaker-suggestion {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.25);
+  background: rgba(96, 165, 250, 0.06);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+.speaker-suggestion-text { flex: 1; min-width: 12rem; }
+.speaker-suggestion-text strong { color: var(--text-primary); font-weight: 600; }
+.speaker-suggestion-pct { color: var(--text-muted); }
+.speaker-suggestion-play {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 6px;
+  border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); cursor: pointer;
+}
+.speaker-suggestion-play:disabled { opacity: 0.4; cursor: default; }
+.speaker-suggestion-yes { border-color: rgba(52, 211, 153, 0.4); color: #6ee7b7; }

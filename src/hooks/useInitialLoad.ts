@@ -222,7 +222,7 @@ export function useInitialLoad({
                             setHeaderStatus("Granite model loaded");
                         } catch (e) {
                             if (cancelled) return;
-                            setHeaderStatus(`Failed to auto-load Granite: ${e}`, 5000);
+                            setHeaderStatus(`Failed to auto-load Granite: ${e instanceof Error ? e.message : e}`, 5000);
                         } finally {
                             if (!cancelled) {
                                 isLoadingRef.current = false;
@@ -245,7 +245,7 @@ export function useInitialLoad({
                             setLoadedEngine("qwen3");
                             setHeaderStatus("Qwen3-ASR model loaded");
                         } catch (e) {
-                            if (!cancelled) setHeaderStatus(`Failed to auto-load Qwen3-ASR: ${e}`, 5000);
+                            if (!cancelled) setHeaderStatus(`Failed to auto-load Qwen3-ASR: ${e instanceof Error ? e.message : e}`, 5000);
                         } finally {
                             if (!cancelled) {
                                 isLoadingRef.current = false;

@@ -1,3 +1,37 @@
+import { beforeEach, expect, mock, setDefaultTimeout, test } from "bun:test";
+
+// Each step waits out the wizard's 400 ms slide transition.
+setDefaultTimeout(20_000);
+import { renderHook } from "./hookHarness";
+
+// First-run setup: every step forwards and back on Windows/Linux (8 steps)
+// and macOS (9, with permissions), the model download on the last step,
+// Launch / Skip, and the permission states (granted, denied, restricted,
+// granted later → restart).
+let platform = "windows";
+let perms: { mic: string; acc: boolean; input: boolean };
+const calls: string[] = [];
+const realCore = { ...(await import("@tauri-apps/api/core")) };
+mock.module("@tauri-apps/api/core", () => ({
+    ...realCore,
+    invoke: async (cmd: string) => {
+        calls.push(cmd);
+        switch (cmd) {
+            case "get_system_info": return { cpu_name: "Ryzen 7 8845HS", cpu_cores: 16, ram_total_gb: 15.3, gpu_name: "NVIDIA GeForce RTX 4070 Laptop GPU", cuda_available: true, vram_gb: 8, backend_hint: "CUDA" };
+            case "get_platform": return platform;
+            case "is_apple_silicon": return platform === "macos";
+            case "get_gpu_report": return null;
+            case "check_microphone_permission": return perms.mic;
+            case "check_accessibility_permission": return perms.acc;
+            case "check_input_monitoring_permission": return perms.input;
+            case "request_microphone_permission": perms.mic = "granted"; return null;
+            case "request_accessibility_permission": return false;
+            default: return null;
+        }
+    },
+}));
+const { SetupWizard } = await import("../../src/components/SetupWizard");
+
 const nodes = (root: any): any[] => {
     if (root == null || typeof root !== "object") return [];
     if (Array.isArray(root)) return root.flatMap(nodes);
@@ -62,6 +96,30 @@ const stepNames = async (view: any, forward: boolean, count: number) => {
     return names;
 };
 
+test("Windows / Linux: eight steps, no permissions step, and Back returns through all of them", async () => {
+    const view = await openWizard();
+    expect(nodes(view.handle.current).filter((n) => String(n.props?.className).startsWith("setup-dot "))).toHaveLength(8);
+    expect(await stepNames(view, true, 7)).toEqual([
+        "StepWelcome", "StepHardware", "StepEngines", "StepFeatures", "StepFlowScribe",
+        "StepHotkey", "StepRecordingSettings", "StepReady",
+    ]);
+    // StepReady has no Back; go back from the step before it.
+    const view2 = await openWizard();
+    await stepNames(view2, true, 6);
+    expect(await stepNames(view2, false, 5)).toEqual([
+        "StepRecordingSettings", "StepHotkey", "StepFlowScribe", "StepFeatures", "StepEngines", "StepHardware",
+    ]);
+});
+
+test("macOS: nine steps with permissions before the last", async () => {
+    platform = "macos";
+    perms = { mic: "denied", acc: false, input: false };
+    const view = await openWizard();
+    expect(nodes(view.handle.current).filter((n) => String(n.props?.className).startsWith("setup-dot "))).toHaveLength(9);
+    const names = await stepNames(view, true, 7);
+    expect(names.at(-1)).toBe("StepPermissions");
+});
+
 test("a fast double click moves one step, not two", async () => {
     const view = await openWizard();
     const step = currentStep(view.handle.current);
@@ -70,6 +128,34 @@ test("a fast double click moves one step, not two", async () => {
     currentStep(view.handle.current).props.onNext(); // during the 400 ms transition
     await view.settle();
     expect(currentStep(view.handle.current).type.name).toBe("StepHardware");
+});
+
+test("the last step downloads the recommended model, can cancel, and launches only once it is ready", async () => {
+    const view = await openWizard();
+    await stepNames(view, true, 7);
+    let ready = await renderStep(currentStep(view.handle.current));
+    const download = byTest(ready.handle.current, "wizard-ready-download-model-btn");
+    expect(byTest(ready.handle.current, "wizard-ready-launch-btn").props.disabled).toBe(true);
+    download.props.onClick();
+    const modelId = downloads[0];
+    expect(modelId).toBeTruthy();
+
+    props = { ...props, downloadProgress: { [modelId]: { status: "downloading", bytes: 50, total: 200, current_file: 2, total_files: 2 } } };
+    view.rerender();
+    ready = await renderStep(currentStep(view.handle.current));
+    expect(textOf(ready.handle.current)).toContain("63%"); // file 2 of 2 at 25% → monotonic overall
+    expect(textOf(byTest(ready.handle.current, "wizard-ready-bundle-indicator")).replace(/\s+/g, " ")).toContain("File 2 / 2");
+    byTest(ready.handle.current, "wizard-ready-cancel-download-btn").props.onClick();
+    expect(cancels).toEqual([modelId]);
+    byTest(ready.handle.current, "wizard-ready-launch-btn").props.onClick();
+    expect(results).toEqual([]);
+
+    props = { ...props, downloadProgress: {}, settingsModels: [{ id: modelId, downloaded: true }] };
+    view.rerender();
+    ready = await renderStep(currentStep(view.handle.current));
+    expect(byTest(ready.handle.current, "wizard-ready-launch-btn").props.disabled).toBe(false);
+    byTest(ready.handle.current, "wizard-ready-launch-btn").props.onClick();
+    expect(results).toEqual([{ openSettings: false, useCase: "quick_notes", modelId }]);
 });
 
 test("Skip finishes setup and opens the Models tab without a model", async () => {

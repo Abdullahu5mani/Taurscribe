@@ -114,8 +114,11 @@ function stageGpuRuntimeDlls() {
   if (!nvidia) return;
   const cudaPath = process.env.CUDA_PATH;
   if (!cudaPath) failAndExit("❌ gpu-nvidia build: CUDA_PATH is not set, so the CUDA runtime DLLs can't be bundled");
-  const binDir = join(cudaPath, "bin");
+  // CUDA 13 moved the runtime DLLs from bin\ to bin\x64\ (CUDA 12: bin\).
   const wanted = [/^cudart64_\d+\.dll$/i, /^cublas64_\d+\.dll$/i, /^cublasLt64_\d+\.dll$/i];
+  const binDir = [join(cudaPath, "bin", "x64"), join(cudaPath, "bin")].find(
+    (dir) => existsSync(dir) && readdirSync(dir).some((f) => wanted[0].test(f))
+  ) ?? join(cudaPath, "bin");
   const found = readdirSync(binDir).filter((f) => wanted.some((w) => w.test(f)));
   for (const w of wanted) {
     if (!found.some((f) => w.test(f))) failAndExit(`❌ gpu-nvidia build: no ${w} in ${binDir}`);

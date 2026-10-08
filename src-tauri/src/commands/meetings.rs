@@ -6,7 +6,7 @@ use chrono::Utc;
 use dirs::data_local_dir;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, State};
 
@@ -106,7 +106,8 @@ pub fn ensure_meetings_schema(conn: &Connection) -> Result<(), String> {
     // than risking loss of edits that cannot be distinguished from generated notes.
     let _ = conn.execute("ALTER TABLE meetings ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 1", []);
 
-    Ok(())
+    super::voice_bank::ensure_voice_bank_schema(conn)
+
 }
 
 // ── Speaker vault helpers ───────────────────────────────────────────────────
@@ -154,7 +155,7 @@ fn new_vault_id() -> String {
 }
 
 /// Adds one meeting's voice sample to an existing vault person.
-fn record_vault_appearance(conn: &Connection, vault_id: &str, snippet: Option<&str>, candidates_json: Option<&str>) {
+fn record_vault_appearance(conn: &Connection, vault_id: &str, snippet: Option<&str>, candidates_json: Option<&str>, meeting_id: Option<i64>) {
     let now = Utc::now().to_rfc3339();
     let existing: Option<(Option<String>, i64)> = conn
         .query_row(
@@ -165,6 +166,9 @@ fn record_vault_appearance(conn: &Connection, vault_id: &str, snippet: Option<&s
         .ok();
     let Some((emb_json, samples)) = existing else { return };
     let new_emb = snippet.and_then(embedding_from_wav);
+    if let Some(new) = &new_emb {
+        super::voice_bank::add_voiceprint(conn, vault_id, new, snippet, meeting_id);
+    }
     let (emb_json, samples) = match (new_emb, emb_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok())) {
         (Some(new), Some(cur)) => (Some(average_embedding(&cur, samples, &new)), samples + 1),
         (Some(new), None) => (Some(new), 1),
@@ -403,7 +407,7 @@ fn insert_turns(tx: &Connection, meeting_id: i64, turns: &[DiarizedTurn]) -> Res
 /// Vault: only callers the diarizer linked to an enrolled person (their turns
 /// carry that person's vault id) update the vault, once per meeting. People in
 /// `already_counted` were counted for this meeting before (a continued call).
-fn record_vault_appearances(tx: &Connection, turns: &[DiarizedTurn], already_counted: &std::collections::HashSet<String>) {
+fn record_vault_appearances(tx: &Connection, meeting_id: i64, turns: &[DiarizedTurn], already_counted: &std::collections::HashSet<String>) {
     let mut seen = std::collections::HashSet::new();
     for t in turns.iter().filter(|t| t.channel == 1 && speaker_model_installed()) {
         if already_counted.contains(&t.speaker_id) || !seen.insert(t.speaker_id.clone()) {
@@ -414,7 +418,7 @@ fn record_vault_appearances(tx: &Connection, turns: &[DiarizedTurn], already_cou
             .unwrap_or(false);
         if enrolled {
             let cand_json = serde_json::to_string(&t.candidate_snippets).ok();
-            record_vault_appearance(tx, &t.speaker_id, t.snippet_path.as_deref(), cand_json.as_deref());
+            record_vault_appearance(tx, &t.speaker_id, t.snippet_path.as_deref(), cand_json.as_deref(), Some(meeting_id));
         }
     }
 }
@@ -516,7 +520,7 @@ pub fn replace_meeting_content(
         .map_err(|e| format!("Failed to clear meeting turns: {}", e))?;
     insert_turns(&tx, meeting_id, turns)?;
     let counted: std::collections::HashSet<String> = old_turns.iter().map(|t| t.0.clone()).collect();
-    record_vault_appearances(&tx, turns, &counted);
+    record_vault_appearances(&tx, meeting_id, turns, &counted);
     tx.commit().map_err(|e| format!("Failed to commit meeting: {}", e))?;
 
     // Files the old version used and neither the new one nor the vault uses.
@@ -605,7 +609,7 @@ pub fn insert_completed_meeting(
     let meeting_id = tx.last_insert_rowid();
 
     insert_turns(&tx, meeting_id, turns)?;
-    record_vault_appearances(&tx, turns, &std::collections::HashSet::new());
+    record_vault_appearances(&tx, meeting_id, turns, &std::collections::HashSet::new());
 
     tx.commit().map_err(|e| format!("Failed to commit meeting: {}", e))?;
     Ok(meeting_id)
@@ -1148,15 +1152,13 @@ pub(crate) fn rename_speaker_internal(
         .ok();
     let person_id = match existing {
         Some(id) => {
-            record_vault_appearance(conn, &id, snippet.as_deref(), candidates.as_deref());
+            record_vault_appearance(conn, &id, snippet.as_deref(), candidates.as_deref(), Some(meeting_id));
             id
         }
         None => {
             let id = new_vault_id();
-            let emb_json = snippet
-                .as_deref()
-                .and_then(embedding_from_wav)
-                .map(|e| serde_json::to_string(&e).unwrap_or_default());
+            let emb = snippet.as_deref().and_then(embedding_from_wav);
+            let emb_json = emb.as_ref().map(|e| serde_json::to_string(e).unwrap_or_default());
             conn.execute(
                 r#"
                 INSERT INTO speaker_vault
@@ -1166,6 +1168,9 @@ pub(crate) fn rename_speaker_internal(
                 params![id, new_name, now, if emb_json.is_some() { 1 } else { 0 }, snippet, candidates, emb_json],
             )
             .map_err(|e| format!("Failed to enroll speaker: {}", e))?;
+            if let Some(emb) = &emb {
+                super::voice_bank::add_voiceprint(conn, &id, emb, snippet.as_deref(), Some(meeting_id));
+            }
             id
         }
     };
@@ -1269,12 +1274,9 @@ pub async fn cycle_speaker_turn_snippet(
         let candidates: Vec<String> = serde_json::from_str(&cand_str)
             .map_err(|e| format!("Failed to parse candidate snippets: {}", e))?;
 
-        if candidates.is_empty() {
-            return Err("No candidate snippets available".to_string());
-        }
-
-        let next_idx = (cur_idx as usize + 1) % candidates.len();
-        let next_path = candidates[next_idx].clone();
+        let current = candidates.get(cur_idx.max(0) as usize).map(String::as_str);
+        let (next_path, next_idx) = next_existing_snippet(&candidates, current)
+            .ok_or_else(|| "No other voice samples are available for this speaker".to_string())?;
 
         // Update all turns for this speaker in this meeting
         conn.execute(
@@ -1300,63 +1302,87 @@ pub async fn cycle_speaker_turn_snippet(
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// The next voice sample after `current` in `candidates` whose file still
+/// exists (clips can be deleted from disk). None when no other one is left.
+fn next_existing_snippet(candidates: &[String], current: Option<&str>) -> Option<(String, usize)> {
+    let start = current
+        .and_then(|path| candidates.iter().position(|c| c == path))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    (0..candidates.len())
+        .map(|step| (start + step) % candidates.len())
+        .find(|&i| Some(candidates[i].as_str()) != current && Path::new(&candidates[i]).exists())
+        .map(|i| (candidates[i].clone(), i))
+}
+
+/// Shows the next stored voice sample for a Speaker Vault person.
+fn cycle_vault_snippet_in(conn: &Connection, speaker_id: &str) -> Result<(String, usize), String> {
+    let (cand_str, cur_snippet): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT candidate_snippets, snippet_path FROM speaker_vault WHERE id = ?1",
+            params![speaker_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| format!("Speaker not found in vault: {}", e))?;
+
+    let candidates: Vec<String> = cand_str
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let (next_path, next_idx) = next_existing_snippet(&candidates, cur_snippet.as_deref())
+        .ok_or_else(|| "No other voice samples are available for this person".to_string())?;
+
+    // Display/playback clip only; the voiceprint stays the averaged embedding.
+    conn.execute(
+        "UPDATE speaker_vault SET snippet_path = ?1 WHERE id = ?2",
+        params![next_path, speaker_id],
+    )
+    .map_err(|e| format!("Failed to update vault snippet: {}", e))?;
+    Ok((next_path, next_idx))
+}
+
 #[tauri::command]
 pub async fn cycle_vault_speaker_snippet(
     speaker_id: String,
 ) -> Result<(String, usize), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_connection()?;
-
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT candidate_snippets, snippet_path
-                FROM speaker_vault
-                WHERE id = ?1
-                "#,
-            )
-            .map_err(|e| e.to_string())?;
-
-        let (cand_str, cur_snippet): (Option<String>, Option<String>) = stmt
-            .query_row(params![speaker_id], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|e| format!("Speaker not found in vault: {}", e))?;
-
-        let candidates: Vec<String> = cand_str
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-
-        if candidates.is_empty() {
-            return Err("No candidate snippets available for this vault speaker".to_string());
-        }
-
-        let cur_idx = cur_snippet
-            .as_ref()
-            .and_then(|path| candidates.iter().position(|c| c == path))
-            .unwrap_or(0);
-
-        let next_idx = (cur_idx + 1) % candidates.len();
-        let next_path = candidates[next_idx].clone();
-
-        // Display/playback clip only; the voiceprint stays the averaged embedding.
-        conn.execute(
-            "UPDATE speaker_vault SET snippet_path = ?1 WHERE id = ?2",
-            params![next_path, speaker_id],
-        )
-        .map_err(|e| format!("Failed to update vault snippet: {}", e))?;
-
-        Ok((next_path, next_idx))
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?
+    tauri::async_runtime::spawn_blocking(move || cycle_vault_snippet_in(&open_connection()?, &speaker_id))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
 }
 
 
 #[tauri::command]
 pub async fn export_meeting_notes(meeting_id: i64, format: String) -> Result<String, String> {
     let detail = get_meeting_detail(meeting_id).await?;
+    render_meeting_notes(&detail, &format)
+}
 
+/// Writes a meeting's notes to `path`, the file chosen in the Save dialog.
+/// (The webview cannot download a generated file itself on macOS.)
+#[tauri::command]
+pub async fn save_meeting_notes(meeting_id: i64, format: String, path: String) -> Result<(), String> {
+    let detail = get_meeting_detail(meeting_id).await?;
+    let notes = render_meeting_notes(&detail, &format)?;
+    write_notes(Path::new(&path), &notes)
+}
+
+fn write_notes(path: &Path, notes: &str) -> Result<(), String> {
+    std::fs::write(path, notes).map_err(|e| format!("Couldn't write {}: {}", path.display(), e))
+}
+
+/// " (@name)" for an action item's assignee, nothing when it has none.
+fn assignee_suffix(assignee: &str, markdown: bool) -> String {
+    match assignee.trim() {
+        "" => String::new(),
+        name if markdown => format!(" — *Assignee: @{name}*"),
+        name => format!(" (@{name})"),
+    }
+}
+
+/// A meeting's notes as JSON, plain text or Markdown (the default).
+fn render_meeting_notes(detail: &MeetingDetailRecord, format: &str) -> Result<String, String> {
+    let stamp = |ms: u64| format!("{:02}:{:02}", ms / 60000, (ms % 60000) / 1000);
     match format.to_lowercase().as_str() {
-        "json" => serde_json::to_string_pretty(&detail).map_err(|e| e.to_string()),
+        "json" => serde_json::to_string_pretty(detail).map_err(|e| e.to_string()),
         "txt" | "text" => {
             let mut out = format!("TITLE: {}\nCATEGORY: {}\nDATE: {}\n\n", detail.title, detail.category, detail.created_at);
             out.push_str("SUMMARY:\n");
@@ -1365,16 +1391,15 @@ pub async fn export_meeting_notes(meeting_id: i64, format: String) -> Result<Str
             }
             out.push_str("\nACTION ITEMS:\n");
             for a in &detail.action_items {
-                out.push_str(&format!("[{}] {} (@{})\n", if a.status == "done" { "X" } else { " " }, a.task, a.assignee));
+                out.push_str(&format!("[{}] {}{}\n", if a.status == "done" { "X" } else { " " }, a.task, assignee_suffix(&a.assignee, false)));
             }
             out.push_str("\nTRANSCRIPT:\n");
             for t in &detail.turns {
-                out.push_str(&format!("[{:02}:{:02}] {}: {}\n", t.start_ms / 60000, (t.start_ms % 60000) / 1000, t.speaker_name, t.text));
+                out.push_str(&format!("[{}] {}: {}\n", stamp(t.start_ms), t.speaker_name, t.text));
             }
             Ok(out)
         }
         _ => {
-            // Markdown default
             let mut md = format!("# {}\n\n**Category**: `{}` • **Date**: {}\n\n", detail.title, detail.category, detail.created_at);
             md.push_str("## 📋 Executive Summary\n\n");
             for s in &detail.summary {
@@ -1382,11 +1407,11 @@ pub async fn export_meeting_notes(meeting_id: i64, format: String) -> Result<Str
             }
             md.push_str("\n## ✅ Action Items\n\n");
             for a in &detail.action_items {
-                md.push_str(&format!("- [{}] **{}** — *Assignee: @{}*\n", if a.status == "done" { "x" } else { " " }, a.task, a.assignee));
+                md.push_str(&format!("- [{}] **{}**{}\n", if a.status == "done" { "x" } else { " " }, a.task, assignee_suffix(&a.assignee, true)));
             }
             md.push_str("\n## 🎙️ Diarized Transcript\n\n");
             for t in &detail.turns {
-                md.push_str(&format!("**{:02}:{:02} {}**: {}\n\n", t.start_ms / 60000, (t.start_ms % 60000) / 1000, t.speaker_name, t.text));
+                md.push_str(&format!("**{} {}**: {}\n\n", stamp(t.start_ms), t.speaker_name, t.text));
             }
             Ok(md)
         }
@@ -1916,5 +1941,151 @@ mod tests {
         assert!((mean[0] - mean[1]).abs() < 1e-6, "one old + one new sample weigh equally");
         let mean3 = average_embedding(&a, 3, &b);
         assert!(mean3[0] > mean3[1], "three earlier samples outweigh one new one");
+    }
+}
+
+#[cfg(test)]
+mod vault_and_export_tests {
+    use super::*;
+    use crate::meeting_summary::ActionItem;
+
+    fn scratch(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ts_vault_{label}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn vault_with(conn: &Connection, current: Option<&str>, candidates: &[&str]) {
+        conn.execute(
+            "INSERT INTO speaker_vault (id, name, created_at, last_seen, snippet_path, candidate_snippets) VALUES ('p1', 'Alice', '', '', ?1, ?2)",
+            params![current, serde_json::to_string(candidates).unwrap()],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn cycling_a_vault_sample_moves_to_the_next_clip_and_wraps() {
+        let dir = scratch("cycle");
+        let clips: Vec<String> = (0..3).map(|i| {
+            let p = dir.join(format!("c{i}.wav"));
+            std::fs::write(&p, b"RIFF").unwrap();
+            p.to_string_lossy().into_owned()
+        }).collect();
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        vault_with(&conn, Some(&clips[0]), &clips.iter().map(String::as_str).collect::<Vec<_>>());
+
+        assert_eq!(cycle_vault_snippet_in(&conn, "p1").unwrap(), (clips[1].clone(), 1));
+        assert_eq!(cycle_vault_snippet_in(&conn, "p1").unwrap(), (clips[2].clone(), 2));
+        assert_eq!(cycle_vault_snippet_in(&conn, "p1").unwrap(), (clips[0].clone(), 0), "wraps around");
+        let saved: String = conn.query_row("SELECT snippet_path FROM speaker_vault WHERE id='p1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(saved, clips[0], "the choice is saved");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deleted_clips_are_skipped_and_a_lone_clip_says_there_is_nothing_else() {
+        let dir = scratch("skip");
+        let keep = dir.join("keep.wav");
+        let other = dir.join("other.wav");
+        std::fs::write(&keep, b"RIFF").unwrap();
+        std::fs::write(&other, b"RIFF").unwrap();
+        let gone = dir.join("deleted.wav");
+        let (keep, other, gone) = (keep.to_string_lossy().into_owned(), other.to_string_lossy().into_owned(), gone.to_string_lossy().into_owned());
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        vault_with(&conn, Some(&keep), &[&keep, &gone, &other]);
+        assert_eq!(cycle_vault_snippet_in(&conn, "p1").unwrap().0, other, "the deleted clip is skipped");
+
+        std::fs::remove_file(&keep).unwrap();
+        assert!(cycle_vault_snippet_in(&conn, "p1").unwrap_err().contains("No other voice samples"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cycling_with_no_samples_or_an_unknown_person_is_an_error_not_a_panic() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        assert!(cycle_vault_snippet_in(&conn, "nobody").unwrap_err().contains("not found"));
+        vault_with(&conn, None, &[]);
+        assert!(cycle_vault_snippet_in(&conn, "p1").is_err());
+        conn.execute("UPDATE speaker_vault SET candidate_snippets = 'not json' WHERE id = 'p1'", []).unwrap();
+        assert!(cycle_vault_snippet_in(&conn, "p1").is_err());
+    }
+
+    #[test]
+    fn the_current_clip_missing_from_the_list_starts_at_the_first_existing_one() {
+        let dir = scratch("first");
+        let a = dir.join("a.wav");
+        std::fs::write(&a, b"RIFF").unwrap();
+        let a = a.to_string_lossy().into_owned();
+        assert_eq!(next_existing_snippet(&[a.clone()], Some("/elsewhere/old.wav")), Some((a.clone(), 0)));
+        assert_eq!(next_existing_snippet(&[a.clone()], None), Some((a, 0)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn sample_meeting() -> MeetingDetailRecord {
+        let turn = |name: &str, start_ms: u64, text: &str| crate::diarization::DiarizedTurn {
+            speaker_id: name.to_lowercase(), speaker_name: name.into(), start_ms, end_ms: start_ms + 1000,
+            channel: 0, text: text.into(), snippet_path: None, candidate_snippets: Vec::new(), current_snippet_idx: 0,
+        };
+        MeetingDetailRecord {
+            id: 7, session_id: "s".into(), title: "Budget review".into(), platform: "In person".into(),
+            app_name: "".into(), url: "".into(), created_at: "2026-10-07T12:00:00Z".into(), duration_ms: 3_725_000,
+            audio_path: None, transcript_raw: "".into(), summary: vec!["Budget approved".into()],
+            action_items: vec![
+                ActionItem { id: "a1".into(), task: "Send numbers".into(), assignee: "Sam".into(), status: "done".into() },
+                ActionItem { id: "a2".into(), task: "Book room".into(), assignee: "  ".into(), status: "todo".into() },
+            ],
+            category: "Planning".into(), speaker_count: 2,
+            turns: vec![turn("You", 5_000, "Let's start."), turn("Sam", 3_723_000, "Done, an hour later.")],
+            audio_missing: false, clips_missing: 0,
+        }
+    }
+
+    #[test]
+    fn notes_export_as_text_markdown_and_json() {
+        let m = sample_meeting();
+        let text = render_meeting_notes(&m, "TXT").unwrap();
+        assert!(text.starts_with("TITLE: Budget review\nCATEGORY: Planning\n"));
+        assert!(text.contains("[X] Send numbers (@Sam)\n"));
+        assert!(text.contains("[ ] Book room\n"), "no empty (@) for an unassigned item: {text}");
+        assert!(text.contains("[00:05] You: Let's start.\n"));
+        assert!(text.contains("[62:03] Sam: Done, an hour later.\n"));
+
+        let md = render_meeting_notes(&m, "markdown").unwrap();
+        assert!(md.starts_with("# Budget review\n"));
+        assert!(md.contains("- [x] **Send numbers** — *Assignee: @Sam*\n"));
+        assert!(md.contains("- [ ] **Book room**\n"));
+        assert!(md.contains("**00:05 You**: Let's start."));
+        assert_eq!(render_meeting_notes(&m, "anything-else").unwrap(), md, "Markdown is the default");
+
+        let json: serde_json::Value = serde_json::from_str(&render_meeting_notes(&m, "json").unwrap()).unwrap();
+        assert_eq!(json["title"], "Budget review");
+        assert_eq!(json["turns"].as_array().unwrap().len(), 2);
+        assert_eq!(json["action_items"][1]["status"], "todo");
+    }
+
+    #[test]
+    fn notes_are_written_to_the_chosen_file_and_a_bad_folder_is_reported() {
+        let dir = scratch("notes");
+        let file = dir.join("Budget_review_transcript.md");
+        write_notes(&file, "# Budget review\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "# Budget review\n");
+        let err = write_notes(&dir.join("missing-folder").join("x.md"), "x").unwrap_err();
+        assert!(err.starts_with("Couldn't write"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_meeting_still_exports() {
+        let mut m = sample_meeting();
+        m.summary.clear();
+        m.action_items.clear();
+        m.turns.clear();
+        for format in ["txt", "md", "json"] {
+            assert!(!render_meeting_notes(&m, format).unwrap().is_empty(), "{format}");
+        }
     }
 }

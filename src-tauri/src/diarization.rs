@@ -1212,9 +1212,10 @@ fn identify_speakers(
     meeting_id: i64,
 ) {
     // Query enrolled vault speaker profiles for cross-meeting recognition
-    let vault_speakers = crate::commands::meetings::open_connection()
-        .ok()
-        .and_then(|conn| crate::commands::meetings::load_vault_embeddings_internal(&conn).ok())
+    // Every voiceprint of every person (a person matches by their closest one),
+    // and the samples the user said were not them.
+    let (vault_speakers, rejected) = crate::commands::meetings::open_connection()
+        .map(|conn| (crate::commands::voice_bank::load_voiceprints(&conn), crate::commands::voice_bank::load_rejections(&conn)))
         .unwrap_or_default();
 
     // Vault person id -> (profile index, similarity): one person per meeting cluster.
@@ -1268,9 +1269,10 @@ fn identify_speakers(
             .map(|e| e.uses_neural_model())
             .unwrap_or(false);
         if neural && !profile.embedding.is_empty() && !vault_speakers.is_empty() {
-            if let Some((v_id, v_name, sim)) = crate::speaker_embedding::match_speaker_against_vault(
+            if let Some((v_id, v_name, sim)) = crate::commands::voice_bank::best_person(
                 &profile.embedding,
                 &vault_speakers,
+                &rejected,
                 crate::speaker_embedding::match_threshold(),
             ) {
                 println!(

@@ -860,6 +860,7 @@ function App() {
     [downloadProgressKeys],
   );
   const recordBtnBusy = isLoading || isProcessingTranscript || isVoiceEnrolling;
+  const loadControlsBusy = isLoading || isRecording || isProcessingTranscript || isFileTranscribing;
   const recordBtnClass =
     noModel ? "record-btn disabled" :
       isFileTranscribing ? "record-btn disabled" :
@@ -1563,9 +1564,14 @@ function App() {
                 <span className="eng-chip-caret" aria-hidden="true">▾</span>
               </button>
 
-              {/* Load / unload toggle — hidden while busy, or while the active
-                  engine has no installed model to load. */}
-              {!isLoading && !isRecording && !isProcessingTranscript && !isFileTranscribing && (
+              {/* Load / unload toggle — hidden while busy (its space kept, so the
+                  bar doesn't jump when recording starts or a model loads), and
+                  absent while the active engine has no installed model to load. */}
+              <div
+                className={`load-eject-slot${loadControlsBusy ? " load-eject-slot--busy" : ""}`}
+                inert={loadControlsBusy}
+              >
+              {(
                 loadedEngine === activeEngine ? (
                   <div className="load-eject-group">
                     <button
@@ -1602,7 +1608,7 @@ function App() {
                       <span className="auto-unload-pill-caret" aria-hidden="true">▾</span>
                     </button>
 
-                    {isAutoUnloadMenuOpen && (
+                    {isAutoUnloadMenuOpen && !loadControlsBusy && (
                       <>
                         <div
                           className="auto-unload-backdrop"
@@ -1685,6 +1691,7 @@ function App() {
                   )
                 )
               )}
+              </div>
 
               {isEnginePickerOpen && (
                 <EnginePicker

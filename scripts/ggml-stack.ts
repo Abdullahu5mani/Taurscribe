@@ -148,7 +148,8 @@ export function ggmlStackEnv(featureList: string | null, target: string | null):
   return {
     TRANSCRIBE_DIR: prefix,
     WHISPER_USE_SYSTEM_GGML: "ON",
-    CMAKE_PREFIX_PATH: existing && !existing.split(";").includes(prefix) ? `${prefix};${existing}` : prefix,
+    // Keep what is already there; running twice must not drop other entries.
+    CMAKE_PREFIX_PATH: !existing ? prefix : existing.split(";").includes(prefix) ? existing : `${prefix};${existing}`,
     [flagsVar]: flags && !flags.includes(libFlag) ? `${flags} ${libFlag}` : flags ?? libFlag,
   };
 }

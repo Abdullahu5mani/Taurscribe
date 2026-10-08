@@ -98,6 +98,8 @@
 
 .vault-item {
     display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
     align-items: center;
     justify-content: space-between;
     padding: 12px 14px;
@@ -116,7 +118,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    flex: 1;
+    flex: 1 1 14rem;
     min-width: 0;
 }
 
@@ -174,7 +176,11 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 2px 8px;
+}
+
+.vault-speaker-meta > * {
+    white-space: nowrap;
 }
 
 .vault-item-actions {
@@ -323,3 +329,65 @@
   font-size: 11px;
   opacity: 0.6;
 }
+
+.vault-error {
+  margin: 0;
+  padding: 10px 22px;
+  font-size: 12px;
+  color: #fca5a5;
+  border-top: 1px solid rgba(239, 68, 68, 0.2);
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.vault-action-btn.danger.active {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+}
+
+/* ── Voice bank: find more samples / a person's samples ── */
+.vault-samples-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.vault-samples-link:hover { color: #e5e7eb; }
+
+.voicebank-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: -4px 0 4px 48px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.voicebank-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.voicebank-title { font-size: 13px; font-weight: 600; color: #e5e7eb; }
+.voicebank-hint, .voicebank-empty { margin: 0; font-size: 12px; line-height: 1.5; color: #9ca3af; }
+.voicebank-error { margin: 0; font-size: 12px; color: #fca5a5; }
+.voicebank-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.voicebank-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.voicebank-line { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.voicebank-meeting { font-size: 12.5px; color: #e5e7eb; font-weight: 500; }
+.voicebank-meta { font-size: 11px; color: #9ca3af; }
+.voicebank-preview { font-size: 12px; color: #d1d5db; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voicebank-match { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #9ca3af; }
+.voicebank-match-track { width: 80px; height: 4px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.voicebank-match-fill { display: block; height: 100%; background: #60a5fa; }
+.voicebank-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.voicebank-add { border-color: rgba(52, 211, 153, 0.4); color: #6ee7b7; }
+.voicebank-more { align-self: flex-start; }
+.vault-action-btn:disabled { opacity: 0.45; cursor: default; }

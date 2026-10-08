@@ -1680,6 +1680,27 @@ button.auto-unload-timer-btn--active {
 }
 
 /* Live status row (recording / processing) */
+.feed-live-wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  overflow: hidden;
+  animation: feedExpand 0.32s cubic-bezier(0.33, 1, 0.68, 1) both;
+}
+
+/* Padding and border can't shrink below their size, so they open too. */
+.feed-live-wrap > .feed-live-row {
+  min-height: 0;
+  overflow: hidden;
+  animation: feedLiveOpen 0.32s cubic-bezier(0.33, 1, 0.68, 1) both;
+}
+
+@keyframes feedLiveOpen {
+  from {
+    padding-block: 0;
+    border-bottom-width: 0;
+  }
+}
+
 .feed-live-row {
   display: flex;
   align-items: center;

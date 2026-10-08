@@ -110,6 +110,50 @@ pub(crate) fn load_rejections(conn: &Connection) -> Vec<(String, Vec<f32>)> {
     rows.flatten().filter_map(|(p, json)| parse(&json).map(|e| (p, e))).collect()
 }
 
+/// How many of a person's closest samples are averaged into their match
+/// score. With few samples the closest one decides (a laptop and a phone
+/// sample are both "them", so they must not be averaged together); with more,
+/// one odd sample (a wrong add, crosstalk) can't produce a match on its own.
+pub fn samples_averaged(sample_count: usize) -> usize {
+    match sample_count {
+        0..=3 => 1,
+        4..=7 => 2,
+        _ => 3,
+    }
+}
+
+/// Mean of the `samples_averaged` highest similarities.
+fn person_score(mut sims: Vec<f32>) -> f32 {
+    sims.sort_by(|a, b| b.total_cmp(a));
+    let k = samples_averaged(sims.len()).min(sims.len()).max(1);
+    sims.iter().take(k).sum::<f32>() / k as f32
+}
+
+/// How alike `embedding` is to each person: the average similarity of their
+/// closest samples (see [`samples_averaged`]). People whose rejected samples
+/// are at least as close are left out. Best first.
+pub fn rank_people(embedding: &[f32], prints: &[VaultSpeakerEmbedding], rejected: &[(String, Vec<f32>)]) -> Vec<(String, String, f32)> {
+    let mut people: Vec<(String, String, Vec<f32>)> = Vec::new();
+    for p in prints {
+        let sim = cosine_similarity(embedding, &p.embedding);
+        match people.iter_mut().find(|(id, _, _)| *id == p.speaker_id) {
+            Some(entry) => entry.2.push(sim),
+            None => people.push((p.speaker_id.clone(), p.display_name.clone(), vec![sim])),
+        }
+    }
+    let mut best: Vec<(String, String, f32)> = people.into_iter().map(|(id, name, sims)| (id, name, person_score(sims))).collect();
+    best.retain(|(id, _, sim)| {
+        !rejected.iter().any(|(person, rej)| person == id && cosine_similarity(embedding, rej) >= *sim)
+    });
+    best.sort_by(|a, b| b.2.total_cmp(&a.2));
+    best
+}
+
+/// The person `embedding` belongs to, when their closest voiceprint reaches `threshold`.
+pub fn best_person(embedding: &[f32], prints: &[VaultSpeakerEmbedding], rejected: &[(String, Vec<f32>)], threshold: f32) -> Option<(String, String, f32)> {
+    rank_people(embedding, prints, rejected).into_iter().next().filter(|(_, _, sim)| *sim >= threshold)
+}
+
 /// The voiceprint of a meeting speaker's voice file, computed once and cached.
 fn voice_file_print(conn: &Connection, voice_file: &Path) -> Option<Vec<f32>> {
     let key = voice_file.to_string_lossy().to_string();
@@ -209,6 +253,40 @@ pub struct VoiceSampleSuggestion {
     /// Their longest line in that meeting.
     pub preview: String,
     pub similarity: f32,
+}
+
+pub(crate) fn find_voice_samples_in(conn: &Connection, person_id: &str, limit: usize) -> Result<Vec<VoiceSampleSuggestion>, String> {
+    let prints: Vec<VaultSpeakerEmbedding> = load_voiceprints(conn).into_iter().filter(|p| p.speaker_id == person_id).collect();
+    if prints.is_empty() {
+        return Err("This person has no voice sample yet.".into());
+    }
+    let own_rejections: Vec<(String, Vec<f32>)> = load_rejections(conn).into_iter().filter(|(p, _)| p == person_id).collect();
+    let mut out = Vec::new();
+    for s in unnamed_speakers(conn, None)? {
+        if rejected(conn, person_id, s.meeting_id, &s.speaker_id) {
+            continue;
+        }
+        let Some(clip) = s.clip.as_deref() else { continue };
+        let Some(emb) = voice_file_print(conn, &crate::diarization::voice_sample_path(clip)) else { continue };
+        let Some((_, _, similarity)) = rank_people(&emb, &prints, &own_rejections).into_iter().next() else { continue };
+        if similarity < SUGGEST_FLOOR {
+            continue;
+        }
+        out.push(VoiceSampleSuggestion {
+            meeting_id: s.meeting_id,
+            meeting_title: s.meeting_title,
+            created_at: s.created_at,
+            speaker_id: s.speaker_id,
+            speaker_name: s.speaker_name,
+            clip_path: Path::new(clip).exists().then(|| clip.to_string()),
+            speech_ms: s.speech_ms,
+            preview: s.preview.chars().take(160).collect(),
+            similarity,
+        });
+    }
+    out.sort_by(|a, b| b.similarity.total_cmp(&a.similarity));
+    out.truncate(limit);
+    Ok(out)
 }
 
 /// Links a meeting speaker to a vault person: their turns get the person's
@@ -358,3 +436,271 @@ pub struct SpeakerNameSuggestion {
     pub clip_path: Option<String>,
 }
 
+pub(crate) fn suggest_speaker_names_in(conn: &Connection, meeting_id: i64) -> Result<Vec<SpeakerNameSuggestion>, String> {
+    let prints = load_voiceprints(conn);
+    if prints.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rejections = load_rejections(conn);
+    let mut out: Vec<SpeakerNameSuggestion> = Vec::new();
+    for s in unnamed_speakers(conn, Some(meeting_id))? {
+        let Some(clip) = s.clip.as_deref() else { continue };
+        let Some(emb) = voice_file_print(conn, &crate::diarization::voice_sample_path(clip)) else { continue };
+        let candidate = rank_people(&emb, &prints, &rejections)
+            .into_iter()
+            .find(|(person, _, _)| !rejected(conn, person, meeting_id, &s.speaker_id));
+        if let Some((person_id, person_name, similarity)) = candidate {
+            if similarity >= ASK_FLOOR {
+                out.push(SpeakerNameSuggestion {
+                    speaker_id: s.speaker_id,
+                    speaker_name: s.speaker_name,
+                    person_id,
+                    person_name,
+                    similarity,
+                    clip_path: Path::new(clip).exists().then(|| clip.to_string()),
+                });
+            }
+        }
+    }
+    // One question per person: the speaker who sounds most like them.
+    out.sort_by(|a, b| b.similarity.total_cmp(&a.similarity));
+    let mut asked = std::collections::HashSet::new();
+    out.retain(|s| asked.insert(s.person_id.clone()));
+    Ok(out)
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce(&Connection) -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || f(&open_connection()?))
+        .await
+        .map_err(|e| format!("Task failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn find_voice_samples(person_id: String, limit: Option<usize>) -> Result<Vec<VoiceSampleSuggestion>, String> {
+    require_speaker_model()?;
+    blocking(move |c| find_voice_samples_in(c, &person_id, limit.unwrap_or(10).clamp(1, 100))).await
+}
+
+#[tauri::command]
+pub async fn accept_voice_sample(person_id: String, meeting_id: i64, speaker_id: String) -> Result<(), String> {
+    require_speaker_model()?;
+    blocking(move |c| accept_voice_sample_in(c, &person_id, meeting_id, &speaker_id)).await
+}
+
+#[tauri::command]
+pub async fn reject_voice_sample(person_id: String, meeting_id: i64, speaker_id: String) -> Result<(), String> {
+    blocking(move |c| reject_voice_sample_in(c, &person_id, meeting_id, &speaker_id)).await
+}
+
+#[tauri::command]
+pub async fn list_voiceprints(person_id: String) -> Result<Vec<Voiceprint>, String> {
+    blocking(move |c| list_voiceprints_in(c, &person_id)).await
+}
+
+#[tauri::command]
+pub async fn delete_voiceprint(person_id: String, voiceprint_id: i64) -> Result<(), String> {
+    blocking(move |c| delete_voiceprint_in(c, &person_id, voiceprint_id)).await
+}
+
+#[tauri::command]
+pub async fn suggest_speaker_names(meeting_id: i64) -> Result<Vec<SpeakerNameSuggestion>, String> {
+    if !speaker_model_installed() {
+        return Ok(Vec::new());
+    }
+    blocking(move |c| suggest_speaker_names_in(c, meeting_id)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::meetings::ensure_meetings_schema;
+
+    fn db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        conn
+    }
+    fn json(v: &[f32]) -> String { serde_json::to_string(v).unwrap() }
+    fn person(conn: &Connection, id: &str, name: &str, print: &[f32]) {
+        conn.execute(
+            "INSERT INTO speaker_vault (id, name, created_at, sample_count, last_seen, embedding_json) VALUES (?1, ?2, '2026-10-01', 1, '2026-10-01', ?3)",
+            params![id, name, json(print)],
+        ).unwrap();
+        ensure_voice_bank_schema(conn).unwrap(); // seeds their first voiceprint
+    }
+    fn meeting(conn: &Connection, id: i64, title: &str) {
+        conn.execute(
+            "INSERT INTO meetings (id, session_id, title, platform, app_name, url, created_at, duration_ms, transcript_raw, category) VALUES (?1, ?2, ?3, 'meet', '', '', ?4, 60000, '', 'General')",
+            params![id, format!("s{id}"), title, format!("2026-10-0{id}T12:00:00Z")],
+        ).unwrap();
+    }
+    /// A meeting speaker with a voice file whose voiceprint is `print` (cached,
+    /// so no speaker model is needed).
+    fn speaker(conn: &Connection, meeting_id: i64, speaker_id: &str, channel: i64, print: &[f32], text: &str) {
+        let clip = format!("/clips/snippet_{meeting_id}_{speaker_id}.wav");
+        conn.execute(
+            "INSERT INTO meeting_turns (meeting_id, speaker_id, speaker_name, start_ms, end_ms, channel, text, snippet_path) VALUES (?1, ?2, ?3, 0, 4000, ?4, ?5, ?6)",
+            params![meeting_id, speaker_id, speaker_id.replace("speaker_remote_", "Speaker "), channel, text, clip],
+        ).unwrap();
+        let voice = crate::diarization::voice_sample_path(&clip);
+        conn.execute("INSERT OR REPLACE INTO voice_file_prints (path, embedding_json) VALUES (?1, ?2)", params![voice.to_string_lossy(), json(print)]).unwrap();
+    }
+    fn prints_of(conn: &Connection, id: &str) -> usize {
+        load_voiceprints(conn).iter().filter(|p| p.speaker_id == id).count()
+    }
+
+    const DANA: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
+    const DANA_PHONE: [f32; 4] = [0.0, 0.0, 1.0, 0.0];
+    const SAM: [f32; 4] = [0.0, 1.0, 0.0, 0.0];
+
+    #[test]
+    fn people_enrolled_before_the_voice_bank_get_their_voiceprint_as_a_first_sample() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        assert_eq!(prints_of(&conn, "p_dana"), 1);
+        ensure_voice_bank_schema(&conn).unwrap();
+        assert_eq!(prints_of(&conn, "p_dana"), 1, "seeding happens once");
+    }
+
+    #[test]
+    fn a_person_matches_by_their_closest_sample_not_a_blurred_average() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        add_voiceprint(&conn, "p_dana", &DANA_PHONE, Some("/clips/phone.wav"), None);
+        let prints = load_voiceprints(&conn);
+        // Her phone voice matches her exactly; the average of laptop + phone would score ~0.71.
+        let (id, _, sim) = best_person(&DANA_PHONE, &prints, &[], 0.6).unwrap();
+        assert_eq!(id, "p_dana");
+        assert!((sim - 1.0).abs() < 1e-5);
+        assert!(best_person(&SAM, &prints, &[], 0.6).is_none());
+    }
+
+    #[test]
+    fn with_many_samples_one_odd_sample_cannot_match_a_stranger_alone() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        for (i, v) in [[0.98, 0.0, 0.2, 0.0], [0.97, 0.0, 0.0, 0.24], [0.96, 0.0, 0.14, 0.24]].iter().enumerate() {
+            add_voiceprint(&conn, "p_dana", v, Some(&format!("/clips/d{i}.wav")), None);
+        }
+        // A wrongly added sample that is really Sam.
+        add_voiceprint(&conn, "p_dana", &SAM, Some("/clips/oops.wav"), None);
+        let prints = load_voiceprints(&conn);
+        assert_eq!(samples_averaged(5), 2);
+        assert!(best_person(&SAM, &prints, &[], 0.6).is_none(), "the odd sample alone scores ~0.5 with two averaged");
+        let (id, _, sim) = best_person(&[0.99, 0.05, 0.1, 0.0], &prints, &[], 0.6).unwrap();
+        assert_eq!(id, "p_dana");
+        assert!(sim > 0.95, "Dana still matches strongly: {sim}");
+    }
+
+    #[test]
+    fn averaging_grows_with_the_number_of_samples() {
+        assert_eq!((samples_averaged(1), samples_averaged(3), samples_averaged(4), samples_averaged(7), samples_averaged(8), samples_averaged(500)), (1, 1, 2, 2, 3, 3));
+        assert_eq!(person_score(vec![0.2, 0.9, 0.5]), 0.9, "few samples: the closest decides");
+        assert!((person_score(vec![0.9, 0.1, 0.8, 0.2, 0.0]) - 0.85).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_rejected_sound_alike_is_not_labelled_as_the_person() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        let prints = load_voiceprints(&conn);
+        let sound_alike = [0.9, 0.3, 0.0, 0.0];
+        assert!(best_person(&sound_alike, &prints, &[], 0.6).is_some());
+        let rejected = vec![("p_dana".to_string(), vec![0.88, 0.32, 0.0, 0.0])];
+        assert!(best_person(&sound_alike, &prints, &rejected, 0.6).is_none(), "closer to the rejected sample than to Dana");
+        assert!(best_person(&DANA, &prints, &rejected, 0.6).is_some(), "Dana herself still matches");
+    }
+
+    #[test]
+    fn find_more_samples_lists_unnamed_speakers_closest_first() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        person(&conn, "p_sam", "Sam", &SAM);
+        meeting(&conn, 1, "Standup");
+        meeting(&conn, 2, "Planning");
+        speaker(&conn, 1, "speaker_remote_1", 1, &[0.8, 0.6, 0.0, 0.0], "Morning all");    // 0.80
+        speaker(&conn, 2, "speaker_remote_2", 1, &[0.95, 0.31, 0.0, 0.0], "Budget is fine"); // ~0.95
+        speaker(&conn, 2, "speaker_remote_3", 1, &[0.1, 0.99, 0.0, 0.0], "Nope");          // ~0.10, under the floor
+        speaker(&conn, 2, "speaker_you", 0, &DANA, "Me");                                   // the user
+        speaker(&conn, 1, "p_sam", 1, &DANA, "Already Sam");                                // already a vault person
+        let found = find_voice_samples_in(&conn, "p_dana", 10).unwrap();
+        let keys: Vec<_> = found.iter().map(|f| (f.meeting_id, f.speaker_id.as_str())).collect();
+        assert_eq!(keys, [(2, "speaker_remote_2"), (1, "speaker_remote_1")]);
+        assert_eq!(found[0].meeting_title, "Planning");
+        assert_eq!(found[0].preview, "Budget is fine");
+        assert!(found[0].similarity > found[1].similarity);
+        assert_eq!(find_voice_samples_in(&conn, "p_dana", 1).unwrap().len(), 1, "limit");
+    }
+
+    #[test]
+    fn adding_a_sample_labels_that_speaker_and_keeps_another_voiceprint() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        meeting(&conn, 2, "Planning");
+        speaker(&conn, 2, "speaker_remote_2", 1, &[0.95, 0.31, 0.0, 0.0], "Budget is fine");
+        accept_voice_sample_in(&conn, "p_dana", 2, "speaker_remote_2").unwrap();
+
+        let (id, name): (String, String) = conn.query_row("SELECT speaker_id, speaker_name FROM meeting_turns WHERE meeting_id = 2", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((id.as_str(), name.as_str()), ("p_dana", "Dana"));
+        assert_eq!(prints_of(&conn, "p_dana"), 2);
+        let (samples, meetings): (i64, i64) = conn.query_row("SELECT sample_count, meeting_count FROM speaker_vault WHERE id = 'p_dana'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((samples, meetings), (2, 1));
+        assert!(find_voice_samples_in(&conn, "p_dana", 10).unwrap().is_empty(), "no longer a suggestion");
+        assert!(accept_voice_sample_in(&conn, "p_dana", 2, "speaker_remote_2").unwrap_err().contains("no longer in the meeting"));
+        assert!(accept_voice_sample_in(&conn, "p_gone", 2, "speaker_remote_9").unwrap_err().contains("no longer in the Speaker Vault"));
+    }
+
+    #[test]
+    fn not_them_is_remembered() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        meeting(&conn, 1, "Standup");
+        speaker(&conn, 1, "speaker_remote_1", 1, &[0.8, 0.6, 0.0, 0.0], "Morning all");
+        assert_eq!(find_voice_samples_in(&conn, "p_dana", 10).unwrap().len(), 1);
+        reject_voice_sample_in(&conn, "p_dana", 1, "speaker_remote_1").unwrap();
+        assert!(find_voice_samples_in(&conn, "p_dana", 10).unwrap().is_empty());
+        assert!(suggest_speaker_names_in(&conn, 1).unwrap().is_empty(), "not asked again after the meeting either");
+        assert_eq!(load_rejections(&conn).len(), 1, "kept with its voiceprint for later matching");
+    }
+
+    #[test]
+    fn after_a_meeting_each_person_is_asked_about_one_close_speaker() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        person(&conn, "p_sam", "Sam", &SAM);
+        meeting(&conn, 3, "Review");
+        speaker(&conn, 3, "speaker_remote_1", 1, &[0.7, 0.71, 0.0, 0.0], "a");   // ~0.70 Dana, ~0.71 Sam
+        speaker(&conn, 3, "speaker_remote_2", 1, &[0.9, 0.0, 0.43, 0.0], "b");   // ~0.90 Dana
+        speaker(&conn, 3, "speaker_remote_3", 1, &[0.0, 0.0, 0.0, 1.0], "c");    // nobody
+        let asks = suggest_speaker_names_in(&conn, 3).unwrap();
+        let pairs: Vec<_> = asks.iter().map(|a| (a.speaker_id.as_str(), a.person_name.as_str())).collect();
+        assert_eq!(pairs, [("speaker_remote_2", "Dana"), ("speaker_remote_1", "Sam")]);
+    }
+
+    #[test]
+    fn samples_can_be_removed_but_never_the_last_one() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        add_voiceprint(&conn, "p_dana", &DANA_PHONE, Some("/clips/phone.wav"), Some(4));
+        let list = list_voiceprints_in(&conn, "p_dana").unwrap();
+        assert_eq!(list.len(), 2);
+        let phone = list.iter().find(|v| v.meeting_id == Some(4)).unwrap().id;
+        delete_voiceprint_in(&conn, "p_dana", phone).unwrap();
+        let avg: String = conn.query_row("SELECT embedding_json FROM speaker_vault WHERE id = 'p_dana'", [], |r| r.get(0)).unwrap();
+        assert!(cosine_similarity(&parse(&avg).unwrap(), &DANA) > 0.999, "overall voiceprint recomputed");
+        let last = list_voiceprints_in(&conn, "p_dana").unwrap()[0].id;
+        assert!(delete_voiceprint_in(&conn, "p_dana", last).unwrap_err().contains("only voice sample"));
+    }
+
+    #[test]
+    fn forgetting_a_person_removes_their_samples_and_answers() {
+        let conn = db();
+        person(&conn, "p_dana", "Dana", &DANA);
+        meeting(&conn, 1, "Standup");
+        speaker(&conn, 1, "speaker_remote_1", 1, &SAM, "x");
+        reject_voice_sample_in(&conn, "p_dana", 1, "speaker_remote_1").unwrap();
+        forget_person_in(&conn, "p_dana");
+        assert_eq!(prints_of(&conn, "p_dana"), 0);
+        assert!(load_rejections(&conn).is_empty());
+    }
+}
