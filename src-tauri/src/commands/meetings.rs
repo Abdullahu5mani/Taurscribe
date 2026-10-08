@@ -1233,6 +1233,7 @@ pub async fn delete_speaker_from_vault(speaker_id: String) -> Result<(), String>
         let conn = open_connection()?;
         conn.execute("DELETE FROM speaker_vault WHERE id = ?1", params![speaker_id])
             .map_err(|e| format!("Failed to delete speaker: {}", e))?;
+        super::voice_bank::forget_person_in(&conn, &speaker_id);
         Ok(())
     })
     .await

@@ -77,3 +77,26 @@ export interface PlatformCount {
     count: number;
 }
 
+
+/** A past-meeting speaker who may be a vault person (`find_voice_samples`). */
+export interface VoiceSampleSuggestion {
+    meeting_id: number;
+    meeting_title: string;
+    created_at: string;
+    speaker_id: string;
+    speaker_name: string;
+    clip_path: string | null;
+    speech_ms: number;
+    preview: string;
+    similarity: number;
+}
+
+/** "Is this Dana?" after a meeting (`suggest_speaker_names`). */
+export interface SpeakerNameSuggestion {
+    speaker_id: string;
+    speaker_name: string;
+    person_id: string;
+    person_name: string;
+    similarity: number;
+    clip_path: string | null;
+}

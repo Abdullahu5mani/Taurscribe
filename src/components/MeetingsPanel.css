@@ -1243,3 +1243,16 @@
   .meeting-catalog-layout .meeting-detail-card { animation: none !important; }
   .meeting-list-card, .meeting-list-card:hover, .meeting-list-card:active { transform: none; }
 }
+
+.detail-tool-btn--confirm {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+}
+
+.detail-toolbar-error {
+  margin: 6px 0 0;
+  font-size: var(--font-sm);
+  color: #fca5a5;
+}
+

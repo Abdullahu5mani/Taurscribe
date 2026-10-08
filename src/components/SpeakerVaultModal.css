@@ -172,14 +172,18 @@
     font-size: 11px;
     color: #9ca3af;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
 }
 
 .vault-item-actions {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     align-items: center;
     gap: 6px;
+    margin-left: auto;
 }
 
 .vault-action-btn {

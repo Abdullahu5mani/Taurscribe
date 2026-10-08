@@ -23,3 +23,5 @@ pub mod downloader;
 pub use downloader::*;
 pub mod meetings;
 pub use meetings::*;
+pub mod voice_bank;
+pub use voice_bank::*;

@@ -1129,6 +1129,12 @@ fn encoder_has_standalone_owner(encoder_name: &str, deleting_id: &str) -> bool {
     })
 }
 
+/// Models a finishing recording reads (speaker separation and recognition).
+fn meeting_needs_model(model_id: &str) -> bool {
+    use crate::commands::model_registry::{DIARIZATION_MODEL_ID, SPEAKER_MODEL_ID};
+    model_id == DIARIZATION_MODEL_ID || model_id == SPEAKER_MODEL_ID
+}
+
 #[tauri::command]
 pub async fn delete_model(
     app: AppHandle,

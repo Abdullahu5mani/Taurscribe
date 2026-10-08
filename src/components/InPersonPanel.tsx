@@ -145,7 +145,7 @@ export function InPersonPanel({
             {!separatorInstalled && (
                 <div className="inperson-note inperson-note--warn" data-testid="inperson-separator-missing">
                     <IconWarning size={14} />
-                    <span>Telling speakers apart needs the speaker separation model. Without it, voices are grouped roughly.</span>
+                    <span>Telling speakers apart needs the Meeting speakers download. Without it, voices are grouped roughly.</span>
                     <button type="button" className="inperson-link" onClick={onOpenModelSettings}>Download</button>
                 </div>
             )}
