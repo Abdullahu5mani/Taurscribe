@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "component": "NVIDIA cuBLAS 13.6.0.2",
+  "sourceManifest": "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.3.1.json",
+  "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-13.6.0.2-archive.zip",
+  "archiveSha256": "62e9fa30560c8f0a28e0cdcf9d6fc1fed347bcfab8847239b9ae1fdc1d86408a",
+  "files": [
+    {
+      "name": "cublas64_13.dll",
+      "bytes": 52697712,
+      "sha256": "8c6bac24474af29627ec96500025a5d410a1b7e8ffa00e1fe13b1781fc6b3ddc"
+    },
+    {
+      "name": "cublasLt64_13.dll",
+      "bytes": 463655536,
+      "sha256": "e323abd89e0f03c1db91a09d7aeb1928de08e1f86192cc713b335fefe3e368a9"
+    }
+  ]
+}

@@ -19,6 +19,7 @@
     "build:macos": "bun scripts/build-macos.ts",
     "build:windows": "bun scripts/build-windows.ts --bundles nsis",
     "build:windows:nvidia": "bun scripts/build-windows.ts --bundles nsis --features gpu-nvidia",
+    "build:windows:online": "bun scripts/build-windows.ts --bundles nsis --features gpu-nvidia,gpu-vulkan --online-cuda",
     "build:windows:vulkan": "bun scripts/build-windows.ts --bundles nsis --features gpu-vulkan",
     "build:windows-portable": "npm run tauri build -- --target x86_64-pc-windows-msvc --config '{\"bundle\":{\"targets\":[\"nsis\"],\"windows\":{\"nsis\":{\"installMode\":\"portable\"}}}}'",
     "check": "cd src-tauri && cargo check",

@@ -28,6 +28,11 @@
     ]
   },
   "bundle": {
-    "resources": []
+    "resources": [],
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/install-hooks.nsh"
+      }
+    }
   }
 }

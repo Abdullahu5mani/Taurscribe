@@ -30,7 +30,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
+import { createHash } from "crypto";
 import { spawnSync } from "child_process";
 import { ggmlStackEnv } from "./ggml-stack";
 
@@ -43,6 +44,12 @@ const targetIdx = args.indexOf("--target");
 const targetTriple = targetIdx !== -1 && args[targetIdx + 1] ? args[targetIdx + 1] : null;
 const featuresIdx = args.indexOf("--features");
 const features = featuresIdx !== -1 ? args[featuresIdx + 1] : null;
+const onlineCuda = args.includes("--online-cuda");
+const bundleOnly = args.includes("--bundle-only");
+const redistIdx = args.indexOf("--cuda-redist");
+const redistPath = resolve(root, redistIdx !== -1
+  ? args[redistIdx + 1] ?? ""
+  : "src-tauri/windows/cuda-redist-13.3.json");
 
 // Determine release directory based on --target and CARGO_TARGET_DIR
 const targetDir = process.env.CARGO_TARGET_DIR || join(srcTauri, "target");
@@ -134,6 +141,8 @@ const copiedDlls: string[] = [];
 
 // Save original config before any changes
 const originalWindowsConf = readFileSync(windowsConfPath, "utf8");
+const runtimeConfigPath = join(srcTauri, "windows", "runtime-config.nsh");
+const originalRuntimeConfig = readFileSync(runtimeConfigPath, "utf8");
 
 function cleanup() {
   // Remove copied DLLs from src-tauri/
@@ -146,6 +155,7 @@ function cleanup() {
   // Restore original config
   try {
     writeFileSync(windowsConfPath, originalWindowsConf);
+    writeFileSync(runtimeConfigPath, originalRuntimeConfig);
   } catch {}
 }
 
@@ -179,12 +189,12 @@ if (features && /\b(gpu-nvidia|windows-nvidia)\b/.test(features)) {
 // One ggml for whisper.cpp and transcribe.cpp (scripts/ggml-stack.ts): two
 // static copies of different versions otherwise end up mixed in the exe.
 // x64 only: the ARM64 builds are cross-compiled with their own toolchain setup.
-if (!targetTriple || targetTriple.startsWith("x86_64")) {
+if (!bundleOnly && (!targetTriple || targetTriple.startsWith("x86_64"))) {
   Object.assign(process.env, ggmlStackEnv(features, targetTriple));
 }
 
 // ── Step 1: Build Rust binary ────────────────────────────────
-console.log("\n🔨 Step 1: Building Rust binary...\n");
+console.log(bundleOnly ? "\n📦 Step 1: Using the prebuilt Rust binary...\n" : "\n🔨 Step 1: Building Rust binary...\n");
 const cargoArgs = ["build", "--release"];
 if (targetTriple) {
   cargoArgs.push("--target", targetTriple);
@@ -193,13 +203,20 @@ if (targetTriple) {
 if (features) {
   cargoArgs.push("--features", features);
 }
-const cargoBuild = spawnSync("cargo", cargoArgs, {
-  stdio: "inherit",
-  cwd: srcTauri,
-  shell: true,
-});
-if (cargoBuild.status !== 0) {
-  failAndExit("❌ Cargo build failed");
+if (bundleOnly) {
+  const binary = join(releaseDir, "taurscribe.exe");
+  if (!existsSync(binary) || statSync(binary).size === 0) {
+    failAndExit(`--bundle-only requires an already built executable: ${binary}`);
+  }
+} else {
+  const cargoBuild = spawnSync("cargo", cargoArgs, {
+    stdio: "inherit",
+    cwd: srcTauri,
+    shell: true,
+  });
+  if (cargoBuild.status !== 0) {
+    failAndExit("❌ Cargo build failed");
+  }
 }
 
 // ── Step 2: Detect DLLs ──────────────────────────────────────
@@ -211,9 +228,22 @@ stageLlamaDlls();
 
 stageGpuRuntimeDlls();
 
+// An online installer must fetch byte-identical libraries to those this app
+// linked against. A toolkit upgrade cannot silently use an older manifest.
+if (cudaRedist) {
+  for (const file of cudaRedist.files) {
+    const path = join(releaseDir, file.name);
+    if (!existsSync(path) || statSync(path).size !== file.bytes ||
+        createHash("sha256").update(readFileSync(path)).digest("hex") !== file.sha256.toLowerCase()) {
+      failAndExit(`CUDA manifest does not match ${file.name}. Supply a matching --cuda-redist manifest or build offline.`);
+    }
+  }
+}
+
 const allFiles = readdirSync(releaseDir);
 const foundDlls = allFiles.filter((file: string) =>
-  dllPatterns.some((pattern) => pattern.test(file))
+  dllPatterns.some((pattern) => pattern.test(file)) &&
+  !(cudaRedist && /^cublas(Lt)?64_.*\.dll$/i.test(file))
 );
 
 if (foundDlls.length === 0) {
@@ -248,12 +278,15 @@ writeFileSync(windowsConfPath, JSON.stringify(windowsConf, null, 2) + "\n");
 console.log(`Updated with ${foundDlls.length} resource(s)`);
 
 // ── Step 5: Run tauri build ──────────────────────────────────
-console.log("\n🚀 Step 5: Running tauri build...\n");
+console.log(`\n🚀 Step 5: Running tauri ${bundleOnly ? "bundle" : "build"}...\n`);
 
 // Get CLI args passed to this script (e.g. --bundles nsis)
-const extraArgs = process.argv.slice(2);
+const extraArgs = args.filter((arg, index) =>
+  arg !== "--online-cuda" && arg !== "--bundle-only" &&
+  index !== redistIdx && (redistIdx === -1 || index !== redistIdx + 1)
+);
 // shell:false — on Windows, shell:true mangles --config JSON (quotes stripped → invalid JSON).
-const tauriBuild = spawnSync("bunx", ["tauri", "build", ...extraArgs], {
+const tauriBuild = spawnSync("bunx", ["tauri", bundleOnly ? "bundle" : "build", ...extraArgs], {
   stdio: "inherit",
   cwd: root,
   shell: false,
