@@ -24,8 +24,11 @@
 import {
   copyFileSync,
   existsSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -138,6 +141,8 @@ function stageGpuRuntimeDlls() {
 
 // Track copied DLLs for cleanup
 const copiedDlls: string[] = [];
+let launcherBuildDir: string | null = null;
+let originalBinaryBackup: string | null = null;
 
 // Save original config before any changes
 const originalWindowsConf = readFileSync(windowsConfPath, "utf8");
@@ -145,6 +150,20 @@ const runtimeConfigPath = join(srcTauri, "windows", "runtime-config.nsh");
 const originalRuntimeConfig = readFileSync(runtimeConfigPath, "utf8");
 
 function cleanup() {
+  if (originalBinaryBackup) {
+    try {
+      const binary = join(releaseDir, "taurscribe.exe");
+      if (existsSync(binary)) unlinkSync(binary);
+      renameSync(originalBinaryBackup, binary);
+      originalBinaryBackup = null;
+    } catch (error) {
+      // Keep the backup if restoration fails; never delete the original app.
+      console.error(`Restore the original executable from ${originalBinaryBackup}: ${error}`);
+    }
+  }
+  if (launcherBuildDir && !originalBinaryBackup) {
+    try { rmSync(launcherBuildDir, { recursive: true, force: true }); } catch {}
+  }
   // Remove copied DLLs from src-tauri/
   for (const dll of copiedDlls) {
     const dest = join(srcTauri, dll);
@@ -182,6 +201,10 @@ type CudaRedist = {
 let cudaRedist: CudaRedist | null = null;
 const nsisString = (value: string) => value.replace(/\$/g, () => "$$").replace(/"/g, '$\\"');
 if (onlineCuda) {
+  const bundlesIdx = args.indexOf("--bundles");
+  if (bundlesIdx !== -1 && args[bundlesIdx + 1] !== "nsis") {
+    failAndExit("--online-cuda supports only --bundles nsis");
+  }
   if (!features || !/\b(gpu-nvidia|windows-nvidia)\b/.test(features)) {
     failAndExit("--online-cuda requires the NVIDIA flavor");
   }
@@ -320,8 +343,62 @@ const extraArgs = args.filter((arg, index) =>
   arg !== "--online-cuda" && arg !== "--bundle-only" &&
   index !== redistIdx && (redistIdx === -1 || index !== redistIdx + 1)
 );
+if (onlineCuda && !extraArgs.includes("--bundles")) extraArgs.push("--bundles", "nsis");
 // shell:false — on Windows, shell:true mangles --config JSON (quotes stripped → invalid JSON).
-const tauriBuild = spawnSync("bunx", ["tauri", bundleOnly ? "bundle" : "build", ...extraArgs], {
+// Finish embedding the current frontend before substituting the public entry
+// point for packaging. A subsequent Cargo build must never overwrite it.
+let tauriCommand = bundleOnly ? "bundle" : "build";
+if (onlineCuda) {
+  if (!bundleOnly) {
+    const compile = spawnSync("bunx", ["tauri", "build", "--no-bundle", ...extraArgs], {
+      stdio: "inherit", cwd: root, shell: false,
+    });
+    if (compile.status !== 0) failAndExit("Tauri app compilation failed");
+  }
+
+  if (process.platform !== "win32") failAndExit("The Windows repair launcher requires a native Windows build");
+  launcherBuildDir = mkdtempSync(join(releaseDir, "repair-launcher-"));
+  const coreBinary = join(srcTauri, "taurscribe-core.exe");
+  if (existsSync(coreBinary)) failAndExit(`Refusing to overwrite ${coreBinary}`);
+  copyFileSync(join(releaseDir, "taurscribe.exe"), coreBinary);
+  copiedDlls.push("taurscribe-core.exe");
+  // Bundler now stamps the launcher. Preserve the same NSIS format metadata
+  // in the actual Tauri app that it previously stamped in the main executable.
+  const coreBytes = readFileSync(coreBinary);
+  const unmarkedBundle = Buffer.from("__TAURI_BUNDLE_TYPE_VAR_UNK");
+  const bundleOffset = coreBytes.indexOf(unmarkedBundle);
+  if (bundleOffset !== -1) {
+    if (coreBytes.indexOf(unmarkedBundle, bundleOffset + 1) !== -1) {
+      failAndExit("Unexpected duplicate Tauri bundle-format markers in the app");
+    }
+    Buffer.from("__TAURI_BUNDLE_TYPE_VAR_NSS").copy(coreBytes, bundleOffset);
+    writeFileSync(coreBinary, coreBytes);
+  }
+  copyFileSync(join(srcTauri, "windows", "launcher.c"), join(launcherBuildDir, "launcher.c"));
+  copyFileSync(join(srcTauri, "icons", "icon.ico"), join(launcherBuildDir, "icon.ico"));
+  writeFileSync(join(launcherBuildDir, "launcher.rc"), '1 ICON "icon.ico"\n');
+  const runtimeFiles = [...foundDlls, ...(cudaRedist?.files.map((file) => file.name) ?? [])];
+  const requiredFiles = [{ name: "taurscribe-core.exe", bytes: statSync(coreBinary).size },
+    ...runtimeFiles.map((name) => ({ name, bytes: statSync(join(releaseDir, name)).size }))];
+  writeFileSync(join(launcherBuildDir, "launcher-files.h"),
+    "static const struct { const wchar_t *name; ULONGLONG bytes; } required_files[] = {\n" +
+    requiredFiles.map((file) => `    { L${JSON.stringify(file.name)}, ${file.bytes}ULL },`).join("\n") + "\n};\n");
+  const launcherCompile = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+    "-File", join(srcTauri, "windows", "build-launcher.ps1"), "-BuildDirectory", launcherBuildDir,
+    "-Architecture", targetTriple?.startsWith("aarch64") ? "arm64" : "x64"], { stdio: "inherit", shell: false });
+  if (launcherCompile.status !== 0) failAndExit("Repair launcher compilation failed");
+  windowsConf.bundle.resources.push("taurscribe-core.exe");
+  writeFileSync(windowsConfPath, JSON.stringify(windowsConf, null, 2) + "\n");
+  // Tauri signs and bundles the launcher as the main executable. Keep the exact
+  // original executable as a resource and restore the Cargo output after bundling.
+  const backupPath = join(launcherBuildDir, "original-taurscribe.exe");
+  renameSync(join(releaseDir, "taurscribe.exe"), backupPath);
+  originalBinaryBackup = backupPath;
+  copyFileSync(join(launcherBuildDir, "taurscribe.exe"), join(releaseDir, "taurscribe.exe"));
+  writeFileSync(runtimeConfigPath, readFileSync(runtimeConfigPath, "utf8") + "\n!define TAURSCRIBE_REPAIR_LAUNCHER\n");
+  tauriCommand = "bundle";
+}
+const tauriBuild = spawnSync("bunx", ["tauri", tauriCommand, ...extraArgs], {
   stdio: "inherit",
   cwd: root,
   shell: false,
@@ -330,6 +407,7 @@ const tauriBuild = spawnSync("bunx", ["tauri", bundleOnly ? "bundle" : "build", 
 // ── Step 6: Clean up ─────────────────────────────────────────
 console.log("\n🧹 Step 6: Cleaning up...\n");
 cleanup();
+if (originalBinaryBackup) process.exit(1);
 console.log("Removed copied DLLs and restored config");
 
 if (tauriBuild.status !== 0) {

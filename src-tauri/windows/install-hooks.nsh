@@ -3,6 +3,11 @@
 !include "${TAURSCRIBE_HOOK_DIR}\runtime-config.nsh"
 
 !macro NSIS_HOOK_PREINSTALL
+  !ifdef TAURSCRIBE_REPAIR_LAUNCHER
+    ; The public launcher waits for the app; closing it alone would leave the
+    ; actual app's files locked during upgrades.
+    !insertmacro CheckIfAppIsRunning "$INSTDIR\taurscribe-core.exe" "${PRODUCTNAME}"
+  !endif
   !ifdef TAURSCRIBE_ONLINE_CUDA
     !ifdef TAURSCRIBE_CUDA_RUNTIME_KIB
       ; Include downloaded files in NSIS's required installed-space estimate.
@@ -48,6 +53,12 @@
   ${If} $0 != 0
     DetailPrint "File compression unavailable; the app remains installed."
   ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  !ifdef TAURSCRIBE_REPAIR_LAUNCHER
+    !insertmacro CheckIfAppIsRunning "$INSTDIR\taurscribe-core.exe" "${PRODUCTNAME}"
+  !endif
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
