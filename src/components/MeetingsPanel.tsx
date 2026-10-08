@@ -516,6 +516,7 @@ export function MeetingsPanel({
     }
   };
 
+  /** First click asks for confirmation; the second deletes. */
   const handleDeleteMeeting = async () => {
     if (!selectedMeeting || selectedMeeting.id !== selectedMeetingIdRef.current) return;
     const meetingId = selectedMeeting.id;

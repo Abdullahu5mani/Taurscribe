@@ -58,6 +58,13 @@ mock.module("@tauri-apps/api/event", () => ({
         return unlisten;
     },
 }));
+let savePath: string | null = null;
+const saveRequests: any[] = [];
+const realDialog = { ...(await import("@tauri-apps/plugin-dialog")) };
+mock.module("@tauri-apps/plugin-dialog", () => ({
+    ...realDialog,
+    save: async (options: any) => { saveRequests.push(options); return savePath; },
+}));
 (globalThis as any).window = { innerWidth: 1000 };
 
 const audios: FakeAudio[] = [];
@@ -374,4 +381,106 @@ test("Record in person opens the in-person section, which replaces the button", 
     await withSection.settle();
     expect(byTest(withSection.handle.current, "in-person-section")).toBeDefined();
     expect(byTest(withSection.handle.current, "meetings-record-in-person-btn")).toBeUndefined();
+});
+
+// ── Toolbar: delete needs confirming, copy / export report failures ──────────
+const { exportFileName } = await import("../../src/components/MeetingsPanel");
+let clipboardFails = false;
+const copied: string[] = [];
+Object.defineProperty(globalThis.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (t: string) => { if (clipboardFails) throw new Error("Document is not focused"); copied.push(t); } },
+});
+
+test("Delete asks first; only the confirming click deletes the meeting", async () => {
+    const { handle, settle } = render();
+    await settle();
+    await byTest(handle.current, "meetings-delete-btn").props.onClick();
+    await settle();
+    expect(calls.filter(c => c.cmd === "delete_meeting")).toHaveLength(0);
+    expect(textOf(byTest(handle.current, "meetings-delete-confirm-btn"))).toContain("Delete meeting?");
+    byTest(handle.current, "meetings-delete-cancel-btn").props.onClick();
+    await settle();
+    expect(byTest(handle.current, "meetings-delete-confirm-btn")).toBeUndefined();
+
+    invokeOverride = (cmd) => cmd === "delete_meeting" ? Promise.resolve(null) : undefined;
+    await byTest(handle.current, "meetings-delete-btn").props.onClick();
+    await settle();
+    await byTest(handle.current, "meetings-delete-confirm-btn").props.onClick();
+    await settle();
+    expect(calls.filter(c => c.cmd === "delete_meeting").map(c => c.args)).toEqual([{ meetingId: 1 }]);
+});
+
+test("a pending delete question does not carry over to another meeting", async () => {
+    const { handle, settle } = render();
+    await settle();
+    await byTest(handle.current, "meetings-delete-btn").props.onClick();
+    await settle();
+    select(handle.current, 2);
+    await settle();
+    select(handle.current, 1);
+    await settle();
+    expect(byTest(handle.current, "meetings-delete-confirm-btn")).toBeUndefined();
+});
+
+test("a failed delete is shown and the meeting stays", async () => {
+    invokeOverride = (cmd) => cmd === "delete_meeting" ? Promise.reject("database is locked") : undefined;
+    const { handle, settle } = render();
+    await settle();
+    await byTest(handle.current, "meetings-delete-btn").props.onClick();
+    await settle();
+    await byTest(handle.current, "meetings-delete-confirm-btn").props.onClick();
+    await settle();
+    expect(textOf(byTest(handle.current, "meetings-toolbar-error"))).toContain("Couldn't delete this meeting: database is locked");
+    expect(textOf(handle.current)).toContain("Original transcript");
+});
+
+test("Copy Transcript copies speaker-labelled turns; a refused clipboard says so instead of 'Copied'", async () => {
+    copied.length = 0;
+    clipboardFails = false;
+    const { handle, settle } = render();
+    await settle();
+    await byTest(handle.current, "meetings-copy-transcript-btn").props.onClick();
+    await settle();
+    expect(copied).toEqual(["[0:00] You:\nOriginal transcript"]);
+    expect(textOf(byTest(handle.current, "meetings-copy-transcript-btn"))).toContain("Copied");
+
+    clipboardFails = true;
+    const second = render();
+    await second.settle();
+    await byTest(second.handle.current, "meetings-copy-transcript-btn").props.onClick();
+    await second.settle();
+    expect(textOf(byTest(second.handle.current, "meetings-copy-transcript-btn"))).toContain("Copy Transcript");
+    expect(textOf(byTest(second.handle.current, "meetings-toolbar-error"))).toContain("Couldn't copy the transcript");
+    clipboardFails = false;
+});
+
+test("Export saves the Markdown notes where the user chooses; Cancel writes nothing; a failure is shown", async () => {
+    saveRequests.length = 0;
+    invokeOverride = (cmd) => cmd === "save_meeting_notes" ? Promise.resolve(null) : undefined;
+    const { handle, settle } = render();
+    await settle();
+
+    savePath = null; // the user cancels the dialog
+    await byTest(handle.current, "meetings-export-markdown-btn").props.onClick();
+    await settle();
+    expect(saveRequests[0]).toEqual({ defaultPath: "Meeting_1_transcript.md", filters: [{ name: "Markdown", extensions: ["md"] }] });
+    expect(calls.filter(c => c.cmd === "save_meeting_notes")).toHaveLength(0);
+
+    savePath = "/Users/me/Documents/Meeting_1_transcript.md";
+    await byTest(handle.current, "meetings-export-markdown-btn").props.onClick();
+    await settle();
+    expect(calls.find(c => c.cmd === "save_meeting_notes")!.args).toEqual({ meetingId: 1, format: "markdown", path: savePath });
+    expect(textOf(byTest(handle.current, "meetings-export-markdown-btn"))).toContain("Exported");
+
+    invokeOverride = (cmd) => cmd === "save_meeting_notes" ? Promise.reject("Couldn't write /Volumes/USB/x.md: Read-only file system") : undefined;
+    await byTest(handle.current, "meetings-export-markdown-btn").props.onClick();
+    await settle();
+    expect(textOf(byTest(handle.current, "meetings-toolbar-error"))).toContain("Couldn't export the notes: Couldn't write /Volumes/USB/x.md: Read-only file system");
+});
+
+test("export file names drop characters no file system accepts", () => {
+    expect(exportFileName("In-person meeting on Oct 7, 2026", "markdown")).toBe("In-person_meeting_on_Oct_7,_2026_transcript.md");
+    expect(exportFileName("Budget: Q3/Q4 <draft>?", "text")).toBe("Budget_Q3_Q4_draft_transcript.txt");
+    expect(exportFileName("  ", "json")).toBe("meeting_transcript.json");
 });
