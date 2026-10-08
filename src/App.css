@@ -1183,6 +1183,16 @@ button.load-eject-btn.load-eject-btn--load:hover {
 }
 
 /* Load / unload group */
+/* Lays its controls out as if it weren't there; while busy they keep their
+   space but are hidden (and inert), so the bottom bar keeps its height. */
+.load-eject-slot {
+  display: contents;
+}
+
+.load-eject-slot--busy {
+  visibility: hidden;
+}
+
 .load-eject-group {
   position: relative;
   display: inline-flex;
@@ -2268,6 +2278,8 @@ button.auto-unload-timer-btn--active {
   /* Additional loops covered by Phase 10 */
   .feed-live-dot,
   .feed-item-wrapper--entering,
+  .feed-live-wrap,
+  .feed-live-wrap > .feed-live-row,
   .feed-item--entering,
   .feed-item--fading-in,
   .app-body--recording::before,
