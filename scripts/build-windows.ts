@@ -171,6 +171,41 @@ process.on("SIGINT", () => {
   cleanup();
   process.exit(1);
 });
+process.on("uncaughtException", (error) => failAndExit(error.message));
+
+type CudaRedist = {
+  schemaVersion: number;
+  url: string;
+  archiveSha256: string;
+  files: { name: string; bytes: number; sha256: string }[];
+};
+let cudaRedist: CudaRedist | null = null;
+const nsisString = (value: string) => value.replace(/\$/g, () => "$$").replace(/"/g, '$\\"');
+if (onlineCuda) {
+  if (!features || !/\b(gpu-nvidia|windows-nvidia)\b/.test(features)) {
+    failAndExit("--online-cuda requires the NVIDIA flavor");
+  }
+  if (!existsSync(redistPath)) failAndExit(`CUDA redistributable manifest not found: ${redistPath}`);
+  cudaRedist = JSON.parse(readFileSync(redistPath, "utf8"));
+  const names = cudaRedist!.files?.map((file) => file.name) ?? [];
+  if (cudaRedist!.schemaVersion !== 1 ||
+      !/^https:\/\/developer\.download\.nvidia\.com\//.test(cudaRedist!.url) ||
+      !/^[a-f\d]{64}$/i.test(cudaRedist!.archiveSha256) || names.length !== 2 ||
+      new Set(names).size !== 2 ||
+      !names.some((name) => /^cublas64_\d+\.dll$/.test(name)) ||
+      !names.some((name) => /^cublasLt64_\d+\.dll$/.test(name)) ||
+      cudaRedist!.files.some((file) => !Number.isSafeInteger(file.bytes) || file.bytes <= 0 || !/^[a-f\d]{64}$/i.test(file.sha256))) {
+    failAndExit("Invalid CUDA redistributable manifest");
+  }
+  const deletes = names.map((name) => `  Delete "$INSTDIR\\${nsisString(name)}"`).join("\n");
+  const runtimeKiB = Math.ceil(cudaRedist!.files.reduce((sum, file) => sum + file.bytes, 0) / 1024);
+  writeFileSync(runtimeConfigPath,
+    `!define TAURSCRIBE_ONLINE_CUDA\n!define TAURSCRIBE_CUDA_RUNTIME_KIB ${runtimeKiB}\n` +
+    `!define TAURSCRIBE_CUDA_MANIFEST "${nsisString(redistPath)}"\n` +
+    `!macro TAURSCRIBE_DELETE_CUDA_DLLS\n${deletes}\n!macroend\n`);
+} else {
+  writeFileSync(runtimeConfigPath, "; Offline installer: CUDA DLLs are bundled.\n");
+}
 
 // Bootstrap: first cargo build must not depend on preexisting DLL resource files.
 const bootstrapWindowsConf = JSON.parse(originalWindowsConf);
