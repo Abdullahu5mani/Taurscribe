@@ -111,6 +111,7 @@ export function MeetingsPanel({
 }: MeetingsPanelProps) {
   // Meetings Catalog
   const [meetings, setMeetings] = useState<MeetingSummaryRecord[]>([]);
+  const meetingDropTargetRef = useRef<HTMLDivElement>(null);
   const [selectedMeetingId, setSelectedMeetingId] = useState<number | null>(null);
   const [selectedMeeting, setSelectedMeeting] = useState<MeetingDetailRecord | null>(null);
   const [loadingList, setLoadingList] = useState(false);
@@ -623,7 +624,7 @@ export function MeetingsPanel({
   const sysPercent = levelToPercent(dualLevels.system);
 
   return (
-    <div className="meetings-panel" data-testid="meetings-panel">
+    <div ref={meetingDropTargetRef} className="meetings-panel" data-testid="meetings-panel">
       {inPerson}
       {/* ── Active Live Call Banner (If call is detected or recording) ─ */}
       {activeMeeting && (
@@ -836,7 +837,8 @@ export function MeetingsPanel({
       </div>
 
       <MeetingRecordingImport
-        blocked={isRecording || !!processing || importBlocked}
+        dropTargetRef={meetingDropTargetRef}
+        blocked={isRecording || !!processing || importBlocked || isVaultOpen || reviewMeetingId !== null}
         hasDiarizationModel={hasDiarizationModel}
         onProcessingChange={onImportProcessingChange}
         onComplete={id => { setReviewMeetingId(id); setSelectedPlatform("All"); setSearchQuery(""); selectMeeting(id); void loadMeetings(); }}

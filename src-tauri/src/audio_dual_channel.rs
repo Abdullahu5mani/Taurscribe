@@ -116,6 +116,29 @@ fn interleave_and_mix(mic: &mut VecDeque<f32>, sys: &mut VecDeque<f32>, frames: 
     (interleaved, mono_mix)
 }
 
+/// Takes `frames` of each track, removes the callers' echo from the mic, and
+/// pairs what comes out (see `interleave_and_mix`). The canceller holds back a
+/// short lead, so early calls can return nothing; `flush` empties it on stop.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn cancel_echo_and_mix(
+    aec: &mut crate::echo_cancel::EchoCanceller,
+    mic: &mut VecDeque<f32>,
+    sys: &mut VecDeque<f32>,
+    frames: usize,
+    flush: bool,
+) -> (Vec<f32>, Vec<f32>) {
+    let take = |q: &mut VecDeque<f32>| (0..frames).map(|_| q.pop_front().unwrap_or(0.0)).collect::<Vec<f32>>();
+    let (mic_in, sys_in) = (take(mic), take(sys));
+    let (mut mic_out, mut sys_out) = aec.push(&mic_in, &sys_in);
+    if flush {
+        let (m, s) = aec.flush();
+        mic_out.extend(m);
+        sys_out.extend(s);
+    }
+    let n = mic_out.len();
+    interleave_and_mix(&mut mic_out.into(), &mut sys_out.into(), n)
+}
+
 static DIAGNOSTICS: std::sync::Mutex<Option<CaptureDiagnostics>> = std::sync::Mutex::new(None);
 
 /// Snapshot of the current (or last) dual-channel capture's diagnostics.
@@ -372,6 +395,8 @@ pub fn start_dual_channel_capture(
         let mut level_samples = 0usize;
 
         const CHUNK_SIZE: usize = 960; // 20ms @ 48kHz
+        // Without headphones the mic hears the callers too; take them back out.
+        let mut aec = crate::echo_cancel::EchoCanceller::new();
 
         while !stop_combiner.load(Ordering::Relaxed) {
             let mut got_anything = false;
@@ -442,8 +467,12 @@ pub fn start_dual_channel_capture(
             if available >= CHUNK_SIZE {
                 let chunks_to_process = available / CHUNK_SIZE;
                 for _ in 0..chunks_to_process {
-                    let (interleaved, mono_mix) = interleave_and_mix(&mut mic_deque, &mut sys_deque, CHUNK_SIZE);
-                    level_samples += CHUNK_SIZE;
+                    let (interleaved, mono_mix) = cancel_echo_and_mix(&mut aec, &mut mic_deque, &mut sys_deque, CHUNK_SIZE, false);
+                    let frames = mono_mix.len();
+                    if frames == 0 {
+                        continue;
+                    }
+                    level_samples += frames;
 
                     let before = loss.file_frames.load(Ordering::Relaxed);
                     if loss.send_file(&file_tx, interleaved, 2) {
@@ -451,8 +480,8 @@ pub fn start_dual_channel_capture(
                     }
                     dropped_file_samples += loss.file_frames.load(Ordering::Relaxed) - before;
                     if whisper_tx.try_send(mono_mix).is_err() {
-                        loss.preview_frames.fetch_add(CHUNK_SIZE as u64, Ordering::Relaxed);
-                        dropped_transcriber_samples += CHUNK_SIZE as u64;
+                        loss.preview_frames.fetch_add(frames as u64, Ordering::Relaxed);
+                        dropped_transcriber_samples += frames as u64;
                     }
                     if !warned_drop && (dropped_file_samples > 0 || dropped_transcriber_samples > 0) {
                         warned_drop = true;
@@ -502,8 +531,9 @@ pub fn start_dual_channel_capture(
 
         // The tail goes to the live transcriber as well as the file.
         let remaining = mic_deque.len().max(sys_deque.len());
+        let (interleaved, mono_mix) = cancel_echo_and_mix(&mut aec, &mut mic_deque, &mut sys_deque, remaining, true);
+        let remaining = mono_mix.len();
         if remaining > 0 {
-            let (interleaved, mono_mix) = interleave_and_mix(&mut mic_deque, &mut sys_deque, remaining);
             let before = loss.file_frames.load(Ordering::Relaxed);
             if loss.send_file(&file_tx, interleaved, 2) {
                 let _ = app_handle.emit("recording-write-error", "Meeting recording tail could not be written; audio is incomplete and will be retained.");

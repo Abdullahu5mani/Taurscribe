@@ -24,11 +24,45 @@ fn is_browser_prejoin(pid: u32, app_name: &str, url: &str, platform: &str) -> bo
     // Meet's call controls are read over Accessibility, which every macOS browser
     // exposes (an unreadable page stays unknown and suppresses nothing).
     #[cfg(target_os = "macos")]
-    if platform == "meet" && app_name.to_lowercase().contains("chrome") {
+    if platform == "meet" && (scriptable_browser(app_name).is_some() || app_name.to_lowercase().starts_with("firefox")) {
         return browser_activity::state(pid, url) == Some(false);
     }
     let _ = (pid, app_name, url, platform);
     false
+}
+
+/// How a browser's tabs are listed over AppleScript.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TabScript {
+    /// Chrome and the browsers built on it: a tab has `title` and `URL`.
+    Chromium,
+    /// Safari: a tab has `name` and `URL`.
+    Safari,
+}
+
+/// The AppleScript application name of a browser whose tabs can be listed, from
+/// the app (or helper) process name. Longer names come first so Chrome Beta is
+/// not taken for Chrome.
+#[cfg(target_os = "macos")]
+fn scriptable_browser(app_name: &str) -> Option<(&'static str, TabScript)> {
+    const BROWSERS: &[(&str, &str, TabScript)] = &[
+        ("google chrome canary", "Google Chrome Canary", TabScript::Chromium),
+        ("google chrome beta", "Google Chrome Beta", TabScript::Chromium),
+        ("google chrome dev", "Google Chrome Dev", TabScript::Chromium),
+        ("google chrome", "Google Chrome", TabScript::Chromium),
+        ("microsoft edge", "Microsoft Edge", TabScript::Chromium),
+        ("brave browser", "Brave Browser", TabScript::Chromium),
+        ("vivaldi", "Vivaldi", TabScript::Chromium),
+        ("arc", "Arc", TabScript::Chromium),
+        ("safari", "Safari", TabScript::Safari),
+    ];
+    let name = app_name.trim().to_lowercase();
+    BROWSERS.iter().find_map(|(prefix, app, kind)| {
+        // "Arc" must not match "Archive Utility": the prefix ends at a word.
+        let rest = name.strip_prefix(prefix)?;
+        (rest.is_empty() || rest.starts_with(' ')).then_some((*app, *kind))
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +168,31 @@ fn is_catalogued_app(name: &str, bundle_id: &str) -> bool {
     (!bundle.is_empty() && BUNDLES.iter().any(|b| bundle.starts_with(b))) || EXES.contains(&exe.as_str())
 }
 
+/// The name to show for a call in an app outside the catalogue, or `None` when
+/// the process is part of the OS rather than an app the user runs: on macOS
+/// only `.app` bundles count (FaceTime and phone calls run in `avconferenced`),
+/// on Windows anything outside the Windows directory.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn other_call_app_name(process_name: &str, app: &std::path::Path, exe: &std::path::Path) -> Option<String> {
+    let stem = |p: &std::path::Path| p.file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
+    if process_name == "avconferenced" {
+        return Some("FaceTime".to_string());
+    }
+    if app.extension().is_some_and(|e| e.eq_ignore_ascii_case("app")) {
+        return stem(app);
+    }
+    if exe.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) {
+        let windir = std::env::var_os("SystemRoot").map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+        let lower = |p: &std::path::Path| p.to_string_lossy().to_lowercase();
+        if lower(exe).starts_with(&lower(&windir)) {
+            return None;
+        }
+        return stem(exe);
+    }
+    None
+}
+
 // ── macOS & Windows Implementation ──────────────────────────────────────────
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -141,27 +200,35 @@ mod platform_impl {
     use super::*;
     use meeting_record::{meetings, MeetingEvent};
 
-    /// meeting-record attributes Chrome's audio to a helper process and often
+    /// meeting-record attributes a browser's audio to a helper process and often
     /// cannot read a title or URL for it, so list every tab over AppleScript and
     /// pick the one that is a call.
     #[cfg(target_os = "macos")]
-    fn resolve_browser_tab_info(app_name: &str, pid: u32, detected_title: &str, detected_url: &str) -> Option<(String, String, String)> {
-        if !app_name.to_lowercase().contains("chrome") {
-            return None;
-        }
-        let script = r#"
-        tell application "Google Chrome"
+    fn resolve_browser_tab_info(app_name: &str, pid: u32, detected_title: &str, detected_url: &str) -> Option<(String, String, String, String)> {
+        let (browser, kind) = super::scriptable_browser(app_name)?;
+        let title_of = match kind {
+            super::TabScript::Chromium => "title",
+            super::TabScript::Safari => "name",
+        };
+        // `tell application` would launch a browser that is not running; this
+        // one is, since it is the process doing the call's audio.
+        let script = format!(
+            r#"
+        tell application "{browser}"
             set out to ""
             try
                 repeat with w in windows
                     repeat with t in tabs of w
-                        set out to out & (title of t) & "|||" & (URL of t) & linefeed
+                        try
+                            set out to out & ({title_of} of t) & "|||" & (URL of t) & linefeed
+                        end try
                     end repeat
                 end repeat
             end try
             return out
         end tell
-        "#;
+        "#
+        );
         let output = std::process::Command::new("osascript")
             .arg("-e")
             .arg(script)
@@ -176,8 +243,8 @@ mod platform_impl {
             let platform = super::classify_meeting_url(url.trim())?;
             Some((title.trim().to_string(), url.trim().to_string(), platform.to_string()))
         }).collect();
-        // A preview tab can precede a live call in Chrome's tab order. Prefer a
-        // page with actual call controls before an unknown or pre-join page.
+        // A preview tab can precede a live call in the tab order. Prefer a page
+        // with actual call controls before an unknown or pre-join page.
         candidates.sort_by_key(|(_, url, platform)| {
             let room = url.split('/').nth(3).unwrap_or("").split(['?', '#']).next().unwrap_or("");
             let matches_source = url == detected_url || (!room.is_empty() && detected_title.contains(room));
@@ -185,26 +252,26 @@ mod platform_impl {
                 match super::browser_activity::state(pid, url) { Some(true) => 0, _ if matches_source => 1, None => 2, Some(false) => 3 }
             } else if matches_source { 1 } else { 2 }
         });
-        candidates.into_iter().next()
+        candidates.into_iter().next().map(|(title, url, platform)| (title, url, platform, browser.to_string()))
     }
 
     pub fn scan_meetings() -> Vec<MeetingInfo> {
         let detected = meetings::scan();
         let mut results = Vec::new();
 
-        for m in detected {
+        for m in &detected {
             let mut title = m.title.clone();
             let mut url = m.url.clone();
             let mut platform = m.platform.as_str().to_string();
             let mut app_name = m.app_name.clone();
 
             #[cfg(target_os = "macos")]
-            if (title.trim().is_empty() || platform == "browser" || platform == "other" || platform == "meet") && app_name.to_lowercase().contains("chrome") {
-                if let Some((tab_title, tab_url, tab_platform)) = resolve_browser_tab_info(&app_name, m.pid, &title, &url) {
+            if title.trim().is_empty() || platform == "browser" || platform == "other" || platform == "meet" {
+                if let Some((tab_title, tab_url, tab_platform, browser)) = resolve_browser_tab_info(&app_name, m.pid, &title, &url) {
                     title = tab_title;
                     url = tab_url;
                     platform = tab_platform;
-                    app_name = "Google Chrome".to_string();
+                    app_name = browser;
                 }
             }
 
@@ -235,7 +302,78 @@ mod platform_impl {
             });
         }
 
+        results.extend(other_app_calls(&detected));
         results
+    }
+
+    /// First time each app outside meeting-record's catalogue was seen holding
+    /// the mic while playing audio, by app path.
+    static OTHER_APP_SEEN: std::sync::LazyLock<Mutex<std::collections::HashMap<std::path::PathBuf, std::time::Instant>>> =
+        std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+    /// Calls in apps meeting-record does not know (Signal, WhatsApp, FaceTime, a
+    /// niche video app): any app that keeps the microphone open while playing
+    /// audio for OTHER_APP_CALL_MIN. These are offered, never auto-recorded
+    /// (`should_record` is false), since a DAW or a voice tool can look the same.
+    fn other_app_calls(known: &[meeting_record::Meeting]) -> Vec<MeetingInfo> {
+        use crate::audio_dual_channel::app_bundle_path;
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+
+        let mut sys = sysinfo::System::new();
+        let mut app_of = |pid: u32| -> Option<(PathBuf, PathBuf)> {
+            let spid = sysinfo::Pid::from_u32(pid);
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[spid]), true);
+            let exe = sys.process(spid)?.exe()?.to_path_buf();
+            Some((app_bundle_path(&exe), exe))
+        };
+        let own_app = std::env::current_exe().ok().map(|e| app_bundle_path(&e));
+        // The crate's own detections, including ones filtered out above as a
+        // lobby or pre-join page: those must not come back as a generic call.
+        let known_apps: Vec<PathBuf> = known.iter().filter_map(|m| app_of(m.pid).map(|(app, _)| app)).collect();
+
+        // (pid, name, using mic, playing audio) per app.
+        let mut apps: HashMap<PathBuf, (u32, String, bool, bool)> = HashMap::new();
+        for p in meeting_record::meetings::audio_processes() {
+            if p.pid == std::process::id() || super::is_catalogued_app(&p.name, &p.bundle_id) {
+                continue;
+            }
+            let Some((app, exe)) = app_of(p.pid) else { continue };
+            if own_app.as_ref() == Some(&app) || known_apps.contains(&app) {
+                continue;
+            }
+            let Some(name) = super::other_call_app_name(&p.name, &app, &exe) else { continue };
+            let entry = apps.entry(app).or_insert((p.pid, name, false, false));
+            entry.2 |= p.is_using_mic;
+            entry.3 |= p.is_playing_audio;
+        }
+
+        let now = std::time::Instant::now();
+        let mut seen = OTHER_APP_SEEN.lock().unwrap();
+        seen.retain(|app, _| apps.get(app).is_some_and(|a| a.2 && a.3));
+        let mut calls = Vec::new();
+        for (app, (pid, name, mic, playing)) in apps {
+            if !(mic && playing) {
+                continue;
+            }
+            let since = *seen.entry(app).or_insert(now);
+            if now.duration_since(since) < super::OTHER_APP_CALL_MIN {
+                continue;
+            }
+            calls.push(MeetingInfo {
+                pid,
+                app_name: name.clone(),
+                title: String::new(),
+                url: String::new(),
+                // The app's own name: what the banner, tray and saved meeting show.
+                platform: name,
+                confidence: 70,
+                should_record: false,
+                is_using_mic: true,
+                is_playing_audio: true,
+            });
+        }
+        calls
     }
 
     /// Background watcher guard handle
@@ -257,12 +395,12 @@ mod platform_impl {
             let mut app_name = meeting.app_name.clone();
 
             #[cfg(target_os = "macos")]
-            if (title.trim().is_empty() || platform == "browser" || platform == "other" || platform == "meet") && app_name.to_lowercase().contains("chrome") {
-                if let Some((tab_title, tab_url, tab_platform)) = resolve_browser_tab_info(&app_name, meeting.pid, &title, &url) {
+            if title.trim().is_empty() || platform == "browser" || platform == "other" || platform == "meet" {
+                if let Some((tab_title, tab_url, tab_platform, browser)) = resolve_browser_tab_info(&app_name, meeting.pid, &title, &url) {
                     title = tab_title;
                     url = tab_url;
                     platform = tab_platform;
-                    app_name = "Google Chrome".to_string();
+                    app_name = browser;
                 }
             }
 
@@ -633,6 +771,54 @@ impl MeetingDetectorManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn catalogued_apps_are_left_to_meeting_record() {
+        assert!(is_catalogued_app("Google Chrome Helper", "com.google.Chrome.helper"));
+        assert!(is_catalogued_app("zoom.us", "us.zoom.xos"));
+        assert!(is_catalogued_app("com.apple.WebKit.GPU", "com.apple.WebKit.GPU"));
+        assert!(is_catalogued_app("ms-teams.exe", ""));
+        assert!(is_catalogued_app("Chrome.exe", ""));
+        assert!(!is_catalogued_app("Signal Helper (Renderer)", "org.whispersystems.signal-desktop.helper.Renderer"));
+        assert!(!is_catalogued_app("WhatsApp.exe", ""));
+    }
+
+    #[test]
+    fn other_apps_are_named_after_their_bundle_or_executable() {
+        let signal = Path::new("/Applications/Signal.app");
+        let helper = Path::new("/Applications/Signal.app/Contents/Frameworks/Signal Helper.app/Contents/MacOS/Signal Helper");
+        assert_eq!(other_call_app_name("Signal Helper", signal, helper).as_deref(), Some("Signal"));
+        let facetime = Path::new("/usr/libexec/avconferenced");
+        assert_eq!(other_call_app_name("avconferenced", facetime, facetime).as_deref(), Some("FaceTime"));
+        // OS daemons and bare executables on macOS are not apps the user runs.
+        let daemon = Path::new("/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd");
+        assert_eq!(other_call_app_name("corespeechd", daemon, daemon), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_system_processes_are_not_offered() {
+        let whatsapp = Path::new(r"C:\Program Files\WindowsApps\WhatsApp\WhatsApp.exe");
+        assert_eq!(other_call_app_name("WhatsApp.exe", whatsapp, whatsapp).as_deref(), Some("WhatsApp"));
+        let svchost = Path::new(r"C:\Windows\System32\svchost.exe");
+        assert_eq!(other_call_app_name("svchost.exe", svchost, svchost), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn browsers_are_matched_by_name_for_tab_listing() {
+        assert_eq!(scriptable_browser("Google Chrome"), Some(("Google Chrome", TabScript::Chromium)));
+        assert_eq!(scriptable_browser("Google Chrome Helper (Renderer)"), Some(("Google Chrome", TabScript::Chromium)));
+        assert_eq!(scriptable_browser("Google Chrome Beta"), Some(("Google Chrome Beta", TabScript::Chromium)));
+        assert_eq!(scriptable_browser("Arc"), Some(("Arc", TabScript::Chromium)));
+        assert_eq!(scriptable_browser("Microsoft Edge"), Some(("Microsoft Edge", TabScript::Chromium)));
+        assert_eq!(scriptable_browser("Brave Browser"), Some(("Brave Browser", TabScript::Chromium)));
+        assert_eq!(scriptable_browser("Safari"), Some(("Safari", TabScript::Safari)));
+        assert_eq!(scriptable_browser("Archive Utility"), None);
+        assert_eq!(scriptable_browser("firefox"), None);
+        assert_eq!(scriptable_browser("zoom.us"), None);
+    }
 
     #[test]
     fn test_is_prejoin_window_title() {

@@ -5,5 +5,8 @@
     <!-- macOS: Required for microphone access (cpal audio capture) -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <!-- macOS: lets the hardened runtime send Apple events (browser tab listing) -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
 </dict>
 </plist>

@@ -7,5 +7,9 @@
          silently denies microphone access and cpal gets no audio data. -->
     <key>NSMicrophoneUsageDescription</key>
     <string>Taurscribe needs microphone access to transcribe your speech into text.</string>
+    <!-- macOS: shown when Taurscribe first lists a browser's tabs (AppleScript) to
+         find which one holds a call. Without it the request is denied silently. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Taurscribe reads your browser's open tabs to recognize which one is a call, so it can name and record the meeting.</string>
 </dict>
 </plist>

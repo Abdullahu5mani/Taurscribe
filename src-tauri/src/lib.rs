@@ -8,6 +8,7 @@ pub mod commands;
 pub mod context;
 pub mod cpu_features;
 mod denoise;
+pub mod echo_cancel;
 pub mod diarization;
 pub mod neural_diarizer;
 pub mod meeting_continuation;

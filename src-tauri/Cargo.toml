@@ -96,6 +96,7 @@ enigo = "0.6.1"
 arboard = { version = "3", features = ["image-data"] }
 sysinfo = "0.32"
 libc = "0.2"
+sonora = "0.2"                                                               # WebRTC AEC3 (pure Rust) for meeting echo cancellation
 # llama-cpp-2: llama.cpp bindings for Rust (replaces Candle)
 # dynamic-link builds ggml/llama as shared libs (DLLs) to avoid LNK2005
 # diamond-dependency with whisper-rs which also statically links ggml.
