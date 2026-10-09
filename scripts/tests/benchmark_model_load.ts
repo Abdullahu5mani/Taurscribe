@@ -125,7 +125,7 @@ async function benchmark(config: any) {
         unloaded_total_ms: median(cold.map(r => r.wall_ms)),
         loaded_total_ms: median(warm.map(r => r.wall_ms)),
         load_interval_ms: median(cold.map(r => r.load_interval_ms)),
-        paired_extra_ms: median(cold.map((r, i) => r.wall_ms - warm[i].wall_ms)),
+        paired_extra_ms: median(cold.filter((_, i) => warm[i]).map((r, i) => r.wall_ms - warm[i].wall_ms)),
         transcripts_identical: sameText,
     } : null;
     return {

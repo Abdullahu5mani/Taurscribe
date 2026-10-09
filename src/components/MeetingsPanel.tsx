@@ -33,6 +33,7 @@ import {
 import { SpeakerVaultModal } from "./SpeakerVaultModal";
 import { MeetingReviewModal } from "./MeetingReviewModal";
 import { levelToPercent } from "../utils/audioLevel";
+import { MeetingRecordingImport, recordingDate } from "./MeetingRecordingImport";
 import "./MeetingsPanel.css";
 
 interface MeetingsPanelProps {
@@ -49,6 +50,9 @@ interface MeetingsPanelProps {
   onRecordInPerson?: () => void;
   /** The in-person recording section, shown at the top while open. */
   inPerson?: React.ReactNode;
+  importBlocked?: boolean;
+  hasDiarizationModel?: boolean;
+  onImportProcessingChange?: (busy: boolean) => void;
 }
 
 
@@ -101,6 +105,9 @@ export function MeetingsPanel({
   onOpenModelSettings,
   onRecordInPerson,
   inPerson,
+  importBlocked = false,
+  hasDiarizationModel = true,
+  onImportProcessingChange,
 }: MeetingsPanelProps) {
   // Meetings Catalog
   const [meetings, setMeetings] = useState<MeetingSummaryRecord[]>([]);
@@ -828,6 +835,13 @@ export function MeetingsPanel({
         </div>
       </div>
 
+      <MeetingRecordingImport
+        blocked={isRecording || !!processing || importBlocked}
+        hasDiarizationModel={hasDiarizationModel}
+        onProcessingChange={onImportProcessingChange}
+        onComplete={id => { setReviewMeetingId(id); setSelectedPlatform("All"); setSearchQuery(""); selectMeeting(id); void loadMeetings(); }}
+      />
+
       {/* ── 2-Column Master-Detail Catalog Layout ─────────────── */}
       <div className={`meeting-catalog-layout ${selectedMeetingId ? "has-selected-meeting" : ""}`}>
         {/* Left Column: Meeting Cards List */}
@@ -1195,6 +1209,21 @@ export function MeetingsPanel({
                     ? "Audio file missing — the recording was deleted or moved. The transcript is complete."
                     : `${selectedMeeting.clips_missing} speaker clip${selectedMeeting.clips_missing === 1 ? " is" : "s are"} missing — the transcript is complete.`}
                 </div>
+              )}
+
+              {!!selectedMeeting.recording_sources?.length && (
+                <details className="meeting-import-sources" data-testid="meeting-recording-sources">
+                  <summary>{selectedMeeting.recording_sources.length} imported recording{selectedMeeting.recording_sources.length === 1 ? "" : "s"} · original timeline</summary>
+                  <ol>{selectedMeeting.recording_sources.map((source, index) => <li key={`${source.path}-${index}`}>
+                    <button type="button" disabled={!selectedMeeting.audio_path || selectedMeeting.audio_missing || audioFailed}
+                      onClick={() => { if (!fullAudioRef.current) handleToggleFullAudio(); handleScrubAudio(source.offset_ms / 1000); }}>
+                      {formatDurationMs(source.offset_ms)} · {source.name} · {recordingDate(source.recorded_start)}
+                      {source.recorded_end ? ` → ${recordingDate(source.recorded_end)}` : ""}
+                    </button>
+                    {source.timestamp_source && <p>{source.timestamp_source}</p>}
+                  </li>)}</ol>
+                  <p>Playback joins the files in your chosen order. Original timestamps retain gaps and overlaps.</p>
+                </details>
               )}
 
               {/* Audio Scrubber Bar (if recording audio exists) */}

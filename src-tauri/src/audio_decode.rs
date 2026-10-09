@@ -45,12 +45,27 @@ pub fn decode_audio_mono_f32(path: &Path) -> Result<(Vec<f32>, u32), String> {
 /// The callback receives mono samples at the source sample rate. Returns the
 /// decoded frame count and sample rate for duration reporting. The callback
 /// also receives decoded frames so far and the optional duration from metadata.
-pub fn decode_audio_mono_stream<F>(path: &Path, mut on_samples: F) -> Result<(u64, u32), String>
+pub fn decode_audio_mono_stream<F>(path: &Path, on_samples: F) -> Result<(u64, u32), String>
+where
+    F: FnMut(&[f32], u32, u64, Option<u64>) -> Result<(), String>,
+{
+    decode_audio_mono_stream_with(path, on_samples, false)
+}
+
+/// Import must never silently save a partial recording as a complete meeting.
+pub fn decode_audio_mono_stream_strict<F>(path: &Path, on_samples: F) -> Result<(u64, u32), String>
+where
+    F: FnMut(&[f32], u32, u64, Option<u64>) -> Result<(), String>,
+{
+    decode_audio_mono_stream_with(path, on_samples, true)
+}
+
+fn decode_audio_mono_stream_with<F>(path: &Path, mut on_samples: F, strict: bool) -> Result<(u64, u32), String>
 where
     F: FnMut(&[f32], u32, u64, Option<u64>) -> Result<(), String>,
 {
     let (frames, rate, _) =
-        decode_audio_packets(path, |samples, channels, rate, decoded, expected| {
+        decode_audio_packets(path, strict, |samples, channels, rate, decoded, expected| {
             if channels <= 1 {
                 on_samples(samples, rate, decoded, expected)
             } else {
@@ -69,14 +84,14 @@ where
     F: FnMut(&mut Vec<f32>, &[f32], usize),
 {
     let mut all_samples = Vec::new();
-    let (_, sample_rate, channels) = decode_audio_packets(path, |samples, channels, _, _, _| {
+    let (_, sample_rate, channels) = decode_audio_packets(path, false, |samples, channels, _, _, _| {
         push_samples(&mut all_samples, samples, channels);
         Ok(())
     })?;
     Ok((all_samples, sample_rate, channels))
 }
 
-fn decode_audio_packets<F>(path: &Path, mut on_packet: F) -> Result<(u64, u32, u32), String>
+fn decode_audio_packets<F>(path: &Path, strict: bool, mut on_packet: F) -> Result<(u64, u32, u32), String>
 where
     F: FnMut(&[f32], usize, u32, u64, Option<u64>) -> Result<(), String>,
 {
@@ -145,6 +160,7 @@ where
                     path.display()
                 ))
             }
+            Err(e) if strict => return Err(format!("Audio read failed: {e}")),
             // A reset or a malformed tail ends the stream with what decoded so far.
             Err(_) => break,
         };
@@ -183,6 +199,7 @@ where
                     declared_frames,
                 )?;
             }
+            Err(e) if strict => return Err(format!("Audio packet could not be decoded: {e}")),
             // A damaged packet leaves a short gap instead of failing the whole file.
             Err(SymphError::DecodeError(_) | SymphError::IoError(_)) => continue,
             Err(_) => break,
@@ -198,6 +215,7 @@ where
         .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
         && declared_frames.is_some_and(|expected| total_frames < expected)
     {
+        if strict { return Err(format!("WAV ended early: decoded {total_frames} of {} frames", declared_frames.unwrap_or(0))); }
         // A crashed recorder, or a WAV streamed through a pipe, declares more
         // data than it holds. Keep what is there: a streaming caller has already
         // transcribed it by now.
@@ -359,7 +377,7 @@ mod tests {
                 .join(name);
             let mut interleaved = Vec::new();
             let (frames, rate, decoded_channels) =
-                decode_audio_packets(&path, |samples, count, sr, _, _| {
+                decode_audio_packets(&path, false, |samples, count, sr, _, _| {
                     assert_eq!(count, channels);
                     assert_eq!(sr, 48000);
                     interleaved.extend_from_slice(samples);

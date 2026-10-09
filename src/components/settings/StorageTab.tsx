@@ -27,11 +27,11 @@ interface Speed {
 const COPY: Record<Area, { title: string; desc: string }> = {
     models: {
         title: 'Models',
-        desc: 'Downloaded speech, speaker and writing models. These are the biggest files and are read every time a model loads.',
+        desc: 'The biggest files; read every time a model loads.',
     },
     recordings: {
         title: 'Recordings',
-        desc: 'Meeting audio, speaker voice clips and paused-call buffers. Transcripts and settings always stay on this computer.',
+        desc: 'Meeting audio and speaker voice clips.',
     },
 };
 

@@ -139,9 +139,7 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                     </div>
                     {toggle('meeting-detection-toggle', 'Auto-detect meetings', detectionEnabled, handleDetection)}
                 </div>
-                <p className="setting-card-desc">
-                    Watches meeting apps and browser calls on this machine. No bot joins the call.
-                </p>
+                <p className="setting-card-desc">Detects calls on this computer. No bot joins.</p>
                 <div className="info-row">
                     <span className="info-row-label">Active calls</span>
                     <span className="info-row-value">{activeMeetingCount > 0 ? `${activeMeetingCount} in progress` : 'None detected'}</span>
@@ -153,9 +151,6 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                     <span className="setting-card-label">Show meeting banner</span>
                     {toggle('meeting-banner-toggle', 'Show a banner when a meeting is detected', showBanner, handleShowBanner, !detectionEnabled)}
                 </div>
-                <p className="setting-card-desc">
-                    Shows a one-click “Record meeting” banner when a call starts.
-                </p>
             </div>
 
             <div className="setting-card" style={{ marginTop: '12px' }}>
@@ -166,9 +161,7 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                     </div>
                     {toggle('auto-record-meetings-toggle', 'Auto-record detected meetings', autoRecord, handleAutoRecord, !detectionEnabled)}
                 </div>
-                <p className="setting-card-desc">
-                    Starts a dual-channel recording when a call is detected. You can cancel during the countdown.
-                </p>
+                <p className="setting-card-desc">Records automatically when a call starts.</p>
                 <div
                     id="auto-record-delay-group"
                     data-testid="auto-record-delay-group"
@@ -197,11 +190,7 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                 <div className="setting-card-header">
                     <span className="setting-card-label">Continue a call after a restart</span>
                 </div>
-                <p className="setting-card-desc">
-                    When the app can identify the same call, stopping and restarting within this time adds the
-                    new part to the same meeting. Speakers, names, and reviewed notes carry over.
-                    Calls that cannot be reliably identified are saved separately.
-                </p>
+                <p className="setting-card-desc">Restarting the same call within this time continues the same meeting.</p>
                 <div
                     id="continue-window-group"
                     data-testid="continue-window-group"
@@ -231,9 +220,7 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                 <div className="setting-card-header">
                     <span className="setting-card-label">Hotkey recording source</span>
                 </div>
-                <p className="setting-card-desc">
-                    What the global hotkey records. Meeting recordings are always dual-channel.
-                </p>
+                <p className="setting-card-desc">Meetings always record both sides.</p>
                 <div
                     id="audio-source-mode-group"
                     data-testid="audio-source-mode-group"
@@ -292,7 +279,7 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                     )}
                 </div>
                 <p className="setting-card-desc">
-                    You are always the mic channel. The call audio is split into the other people on the call.
+                    Splits the call audio into speakers.
                     {diarizationModelDownloaded
                         ? ' Runs once when a meeting ends.'
                         : ' Without the Nemotron model, similar-sounding people can be merged into one speaker.'}
@@ -317,7 +304,7 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                     )}
                 </div>
                 <p className="setting-card-desc">
-                    Matches each speaker's voice against the Speaker Vault so people you have named are recognised in later meetings.
+                    Recognises people you have named in later meetings.
                     {!speakerModelDownloaded && ' Without this model, people are not recognised across meetings.'}
                 </p>
 
@@ -343,7 +330,7 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                     <span className="setting-card-meta">Stricter</span>
                 </div>
                 <p className="setting-card-desc" style={{ marginTop: '8px' }}>
-                    Looser recognises people more often but may confuse similar voices. Default 0.60.
+                    Looser finds more matches but may confuse similar voices.
                     {Math.abs(matchThreshold - DEFAULT_MATCH_THRESHOLD) > 0.001 && (
                         <>
                             {' '}
@@ -374,9 +361,6 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
                         aria-label="Open meetings storage folder"
                     >Open ↗</button>
                 </div>
-                <p className="setting-card-desc">
-                    Recordings are kept on this machine. Deleting a meeting in the Meetings view removes its audio.
-                </p>
             </div>
 
         </div>

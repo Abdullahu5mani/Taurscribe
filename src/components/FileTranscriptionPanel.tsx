@@ -50,10 +50,13 @@ interface FileTranscriptionPanelProps {
     currentQwen3Model?: string | null;
     isModelLoading?: boolean;
     isVoiceEnrolling?: boolean;
+    isVisible?: boolean;
     onFileProcessingChange?: (processing: boolean) => void;
 }
 
-function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGraniteModel, currentQwen3Model, asrBackend = "gpu", isModelLoading = false, isVoiceEnrolling = false, onFileProcessingChange }: FileTranscriptionPanelProps) {
+function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGraniteModel, currentQwen3Model, asrBackend = "gpu", isModelLoading = false, isVoiceEnrolling = false, isVisible = true, onFileProcessingChange }: FileTranscriptionPanelProps) {
+    const visibleRef = useRef(isVisible);
+    visibleRef.current = isVisible;
     const inputBlockedRef = useRef(isModelLoading || isVoiceEnrolling);
     inputBlockedRef.current = isModelLoading || isVoiceEnrolling;
 
@@ -180,7 +183,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
         let active = true;
         getCurrentWebview()
             .onDragDropEvent(event => {
-                if (!active) return;
+                if (!active || !visibleRef.current) return;
                 const blocked = inputBlockedRef.current;
                 if (event.payload.type === "over") {
                     if (!blocked) setIsDragOver(true);

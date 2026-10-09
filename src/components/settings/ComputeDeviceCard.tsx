@@ -47,8 +47,10 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
     useEffect(() => {
         let alive = true;
         loadDeviceReport().then((r) => alive && setReport(r));
-        invoke<boolean>('check_grammar_llm_available').then((available) => alive && setFlowAvailable(available)).catch(() => {});
-        return () => { alive = false; };
+        const refresh = () => { void invoke<boolean>('check_grammar_llm_available').then((available) => alive && setFlowAvailable(available)).catch(() => {}); };
+        refresh();
+        const off = listen('models-changed', refresh);
+        return () => { alive = false; off.then(f => f()).catch(() => {}); };
     }, []);
 
     useEffect(() => {
@@ -99,9 +101,6 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
             <div className="setting-card-header">
                 <span className="setting-card-label">Speech runs on</span>
             </div>
-            <p className="setting-card-desc">
-                Choose the device Whisper, Granite and Qwen3 use for speech recognition.
-            </p>
             <div className="device-list" role="radiogroup" aria-label="Speech model device">
                 {options.map((d) => {
                     const speed = speedFor(d.id);
@@ -152,7 +151,7 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
             {onSelectLlmDevice && (
                 <label className="device-cleanup-select">
                     <span>Word cleanup runs on</span>
-                    <select data-testid="flowscribe-compute-device" value={llmBackend === 'cpu' ? 'cpu' : llmComputeDevice === 'cpu' ? 'same' : llmComputeDevice} onChange={(e) => onSelectLlmDevice(e.target.value)} disabled={blocked || measuring !== null}>
+                    <select data-testid="flowscribe-compute-device" value={llmBackend === 'cpu' ? 'cpu' : llmComputeDevice === 'cpu' ? 'same' : llmComputeDevice} onChange={(e) => { onSelectLlmDevice(e.target.value); setSpeeds(null); }} disabled={blocked || measuring !== null}>
                         <option value="same">Follow speech GPU</option>
                         {gpus.map((d) => <option key={d.id} value={d.id}>{deviceLabel(d)}{d.kind === 'igpu' ? ' · integrated' : ''}</option>)}
                         <option value="cpu">CPU</option>
@@ -169,9 +168,6 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
                 <button type="button" className="ghost-btn" data-testid="device-measure-speed" onClick={measure} disabled={blocked || measuring !== null}>
                     {measuring !== null ? <><span className="storage-spinner" /> {measuring}</> : 'Measure speed'}
                 </button>
-                {!speeds && measuring === null && !error && (
-                    <span className="storage-hint">Tests the same speech with models unloaded, then already loaded, three times on each device.</span>
-                )}
                 {speeds && measuring === null && (
                     <span className="storage-hint">
                         {speeds.model} · {speeds.clip_seconds} s of speech · median of {speeds.rounds} runs · FlowScribe {speeds.include_flowscribe ? 'included' : 'off'}. Loaded totals include {speeds.include_flowscribe ? 'speech and cleanup' : 'speech recognition'}. Unloaded totals also include model loading. Disk caches are not cleared.

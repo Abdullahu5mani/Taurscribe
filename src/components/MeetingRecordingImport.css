@@ -1,0 +1,22 @@
+.meeting-import { margin: 12px 0; padding: 16px; border: 1px dashed var(--border-color, #3a3a40); border-radius: 12px; background: rgba(255, 255, 255, .025); font-size: 12px; flex-shrink: 0; min-height: 0; max-height: 55%; overflow-y: auto; }
+.meeting-import--dragging { border-color: #14b8a6; background: rgba(20, 184, 166, .1); }
+.meeting-import-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.meeting-import-heading strong { font-size: 13px; }
+.meeting-import p { margin: 5px 0; line-height: 1.5; }
+.meeting-import-formats, .meeting-import-notice { color: var(--text-secondary, #a1a1aa); }
+.meeting-import-title { display: grid; gap: 6px; margin: 14px 0; }
+.meeting-import-title input { min-width: 0; padding: 9px 10px; border: 1px solid #3a3a40; border-radius: 6px; background: rgba(0, 0, 0, .15); color: inherit; font: inherit; }
+.meeting-import-order { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.meeting-import-order button, .meeting-import-file-actions button { border: 1px solid #3a3a40; border-radius: 5px; background: transparent; color: inherit; cursor: pointer; font: inherit; padding: 5px 8px; }
+.meeting-import-files { margin: 10px 0; padding-left: 22px; }
+.meeting-import-files li { padding: 8px 0; border-bottom: 1px solid rgba(255, 255, 255, .06); }
+.meeting-import-files li > div:first-child { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.meeting-import-files span, .meeting-import-files small { color: var(--text-secondary, #a1a1aa); }
+.meeting-import-file-actions { display: flex; gap: 6px; margin-top: 7px; }
+.meeting-import button:disabled { opacity: .45; cursor: default; }
+.meeting-import-warning { color: #fbbf24; }
+.meeting-import-error { color: #f87171; white-space: pre-wrap; overflow-wrap: anywhere; }
+.meeting-import-submit { margin-top: 10px; }
+.meeting-import-sources { margin-top: 12px; color: var(--text-secondary, #a1a1aa); font-size: 12px; }
+.meeting-import-sources button { border: 0; padding: 4px 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
+@media (max-width: 520px) { .meeting-import-heading, .meeting-import-order { align-items: flex-start; flex-direction: column; } }

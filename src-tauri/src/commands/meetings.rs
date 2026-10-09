@@ -102,6 +102,7 @@ pub fn ensure_meetings_schema(conn: &Connection) -> Result<(), String> {
     let _ = conn.execute("ALTER TABLE speaker_vault ADD COLUMN meeting_count INTEGER NOT NULL DEFAULT 0", []);
     // Recordings joined into this meeting (restarting the same call continues it).
     let _ = conn.execute("ALTER TABLE meetings ADD COLUMN parts INTEGER NOT NULL DEFAULT 1", []);
+    let _ = conn.execute("ALTER TABLE meetings ADD COLUMN recording_sources TEXT", []);
     // Older versions did not track review saves. Preserve their metadata rather
     // than risking loss of edits that cannot be distinguished from generated notes.
     let _ = conn.execute("ALTER TABLE meetings ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 1", []);

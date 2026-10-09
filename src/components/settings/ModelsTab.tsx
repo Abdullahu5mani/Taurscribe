@@ -315,9 +315,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                 <div className="setting-card-header">
                     <span className="setting-card-label">Keep model loaded</span>
                 </div>
-                <p className="setting-card-desc">
-                    A loaded model starts transcribing instantly. After this much idle time it is unloaded to free memory.
-                </p>
+                <p className="setting-card-desc">Unload after this much idle time to free memory.</p>
                 <div id="model-memory-retention-options" data-testid="model-memory-retention-options" className="recording-mode-seg" role="radiogroup" aria-label="Model memory retention timeout">
                     {AUTO_UNLOAD_OPTIONS.map((opt) => (
                         <button
@@ -478,11 +476,7 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                             ))}
                         </select>
                     </div>
-                    <p className="setting-card-desc">
-                        For multilingual models; English models always use English. Pick the language you dictate in
-                        if it differs from your computer's. “Detect automatically” re-checks every few seconds and can
-                        misread short phrases.
-                    </p>
+                    <p className="setting-card-desc">For multilingual models. Auto-detect can misread short phrases.</p>
                 </div>
             </div>
 

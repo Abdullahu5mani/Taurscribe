@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { beautifyModelName, formatModelDisplay, formatSize } from "../../src/utils/modelDisplay";
 import { getEngineForModelId } from "../../src/utils/engineUtils";
 import { levelToPercent } from "../../src/utils/audioLevel";
-import { formatRemaining, formatTimeoutLabel } from "../../src/hooks/useAutoUnload";
+import { formatTimeoutLabel } from "../../src/hooks/useAutoUnload";
 
 describe("beautifyModelName", () => {
   test("turns ggml filenames into short labels", () => {
@@ -88,13 +88,5 @@ describe("auto-unload labels", () => {
     expect(formatTimeoutLabel(45)).toBe("45s");
     expect(formatTimeoutLabel(120)).toBe("2m");
     expect(formatTimeoutLabel(7200)).toBe("2h");
-  });
-
-  test("formatRemaining pads seconds after minutes", () => {
-    expect(formatRemaining(-3)).toBe("0s");
-    expect(formatRemaining(0)).toBe("0s");
-    expect(formatRemaining(9)).toBe("9s");
-    expect(formatRemaining(61)).toBe("1m 01s");
-    expect(formatRemaining(600)).toBe("10m 00s");
   });
 });

@@ -94,18 +94,11 @@ export function LlmAccessSection() {
                         <span className="slider round" />
                     </label>
                 </div>
-                <p className="setting-card-desc">
-                    Claude, ChatGPT, Cursor, LM Studio and other apps that support MCP can search and read your
-                    dictations, file transcripts, meetings and Speaker Vault names. They can't change or delete
-                    anything. Whatever an app reads may be sent to its model provider, the same as anything you
-                    paste into it.
-                </p>
+                <p className="setting-card-desc">Lets apps like Claude and Cursor search your transcripts. Read-only; what they read may reach their model provider.</p>
 
                 {enabled && setup && (
                     <>
-                        <p className="setting-card-desc" style={{ marginTop: '12px' }}>
-                            Copy this prompt into the LLM app you want to connect; it will add Taurscribe to its own settings.
-                        </p>
+                        <p className="setting-card-desc" style={{ marginTop: '12px' }}>Paste this prompt into the app to connect it.</p>
                         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
                             <button
                                 type="button"

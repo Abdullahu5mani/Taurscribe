@@ -74,6 +74,16 @@ beforeEach(() => {
     registrationPending = false; registrations.length = 0; progressListeners.clear(); dropListeners.clear(); frames.clear();
 });
 
+test("hidden Files panel does not consume meeting recording drops", async () => {
+    const view = fixture(); await view.settle();
+    view.setProps({ isVisible: false });
+    drop("/audio/meeting.wav"); await view.settle();
+    expect(jobs).toHaveLength(0);
+    view.setProps({ isVisible: true });
+    drop("/audio/dictation.wav"); await view.settle();
+    expect(jobs).toHaveLength(1);
+});
+
 test("picker preserves original path, chosen engine/model and timing in text-only history", async () => {
     const h = fixture(); pickerResult = ["/Users/test/Interview.WAV"];
     await byLabel(h.handle.current, "Browse audio files").props.onClick(); await h.settle();

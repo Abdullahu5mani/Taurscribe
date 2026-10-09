@@ -183,10 +183,6 @@ export function RecordingTab({
             <h3 className="settings-section-title">Global hotkey</h3>
 
             <div className="setting-card">
-                <p className="setting-card-desc">
-                    Press this combination from any application to start or stop recording.
-                    Works even when Taurscribe is minimised to the tray.
-                </p>
 
                 <div
                     id="hotkey-mode-group"
@@ -277,30 +273,6 @@ export function RecordingTab({
                 )}
             </div>
 
-            <div className="setting-card" style={{ marginTop: '12px' }}>
-                <h4 className="setting-card-label-plain">How it works</h4>
-                <div className="hotkey-steps">
-                    {(currentBinding.mode === 'hold' ? [
-                        'Focus any text field in any app',
-                        'Hold your hotkey combination',
-                        'Speak naturally while holding',
-                        'Release the hotkey to stop',
-                        'Transcribed text is typed at your cursor',
-                    ] : [
-                        'Focus any text field in any app',
-                        'Press your hotkey to start recording',
-                        'Speak naturally',
-                        'Press the hotkey again to stop',
-                        'Transcribed text is typed at your cursor',
-                    ]).map((text, i) => (
-                        <div className="hotkey-step" key={i}>
-                            <span className="hotkey-step-num">{String(i + 1).padStart(2, '0')}</span>
-                            <span>{text}</span>
-                        </div>
-                    ))}
-                </div>
-            </div>
-
             {/* ── Overlay ──────────────────────────────────────────── */}
             <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Overlay</h3>
 
@@ -324,9 +296,7 @@ export function RecordingTab({
                         <span className="slider round" />
                     </label>
                 </div>
-                <p className="setting-card-desc">
-                    Shows a small capsule with a live waveform and timer at the bottom of the screen while you dictate with the hotkey.
-                </p>
+                <p className="setting-card-desc">A small live waveform at the bottom of the screen while you dictate.</p>
             </div>
 
             {/* ── Audio ────────────────────────────────────────────── */}
@@ -355,9 +325,6 @@ export function RecordingTab({
                         </span>
                     )}
                 </div>
-                <p className="setting-card-desc">
-                    Choose which microphone Taurscribe records from. Takes effect on the next recording.
-                </p>
                 {loadingDevices ? (
                     <div className="audio-detecting">Detecting devices…</div>
                 ) : (
@@ -403,10 +370,7 @@ export function RecordingTab({
                         <span className="slider round" />
                     </label>
                 </div>
-                <p className="setting-card-desc">
-                    Removes background noise before it reaches the transcription engine.
-                    The saved WAV file always keeps the original audio.
-                </p>
+                <p className="setting-card-desc">Only affects transcription; the saved recording keeps the original audio.</p>
             </div>
 
             <div className="setting-card" style={{ marginTop: '12px' }}>
@@ -429,16 +393,10 @@ export function RecordingTab({
                         <span className="slider round" />
                     </label>
                 </div>
-                <p className="setting-card-desc">
-                    Silences system audio output while recording so it doesn't bleed into the microphone.
-                </p>
             </div>
 
             <div className="setting-card" style={{ marginTop: '12px' }}>
                 <h4 className="setting-card-label-plain">Voice activity detection</h4>
-                <p className="setting-card-desc">
-                    VAD filters silence before sending audio to the engine, reducing hallucinations.
-                </p>
                 <div className="info-row">
                     <span className="info-row-label">Method</span>
                     <span className="info-row-value">Energy-based (RMS threshold)</span>

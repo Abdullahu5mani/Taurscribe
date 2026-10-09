@@ -1699,7 +1699,7 @@ fn get_foreground_window_issue() -> Option<String> {
 /// Builds the per-turn transcriber for meeting diarization from the loaded engine.
 /// Each turn is transcribed on its own, without the streaming context of the live
 /// session, so earlier speech cannot bias it.
-fn meeting_turn_transcriber<'a>(
+pub(super) fn meeting_turn_transcriber<'a>(
     active_engine: ASREngine,
     whisper_arc: &'a Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
     gguf: Option<&'a Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,

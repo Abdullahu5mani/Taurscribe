@@ -70,9 +70,6 @@ export function PostProcessingTab({
                         <span className="slider round" />
                     </label>
                 </div>
-                <p className="setting-card-desc">
-                    Runs a local LLM after each recording to fix grammar, punctuation, and formatting.
-                </p>
 
                 {llmNotDownloaded && (
                     <p className="setting-card-desc" style={{ color: 'var(--error)', marginTop: '8px' }}>
@@ -141,9 +138,6 @@ export function PostProcessingTab({
                         <span className="setting-card-meta">requires Grammar LLM</span>
                     )}
                 </div>
-                <p className="setting-card-desc">
-                    Controls the tone the LLM applies when cleaning up the transcript.
-                </p>
                 <div
                     id="pp-style-grid"
                     data-testid="pp-style-grid"
@@ -170,10 +164,6 @@ export function PostProcessingTab({
                     ))}
                 </div>
             </div>
-
-            <p className="pp-tab-note">
-                Download the required models from the <strong>Models</strong> tab.
-            </p>
 
         </div>
     );

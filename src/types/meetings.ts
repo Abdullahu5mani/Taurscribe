@@ -36,6 +36,7 @@ export interface MeetingSummaryRecord {
 }
 
 export interface MeetingDetailRecord {
+    recording_sources?: import("../utils/meetingImport").RecordingSource[];
     id: number;
     session_id: string;
     title: string;
