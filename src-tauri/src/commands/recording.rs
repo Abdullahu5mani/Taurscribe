@@ -964,10 +964,10 @@ fn start_recording_blocking(
     // without limit; the capture side uses try_send and never blocks.
     //
     // A slow encode pass (Qwen3 on a 15-second chunk, Whisper on CPU) can take several
-    // seconds. At 48 kHz / 1024-sample callbacks (~21 ms each) a 32-message bound fills
-    // in ~672 ms and then try_send silently drops audio — the "whole last sentence
-    // disappeared" symptom. 512 messages ≈ 10.7 s of headroom.
-    let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5s headroom at 48kHz/1024
+    // seconds. At 48 kHz / 1024-sample callbacks (~21.3 ms each) a 32-message bound fills
+    // in ~683 ms and then try_send silently drops audio — the "whole last sentence
+    // disappeared" symptom. 512 messages ≈ 10.9 s of headroom.
+    let (file_tx, file_rx) = bounded::<Vec<f32>>(256); // ~5.5s headroom at 48kHz/1024
     let (whisper_tx, whisper_rx) = bounded::<Vec<f32>>(512);
     let capture_loss = Arc::new(CaptureLoss::default());
     let dropped_callbacks = Arc::new(AtomicU64::new(0));

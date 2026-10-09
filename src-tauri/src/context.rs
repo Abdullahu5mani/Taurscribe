@@ -7,7 +7,7 @@
 /// Platform coverage:
 ///   Windows → GetForegroundWindow + GetWindowTextW (Win32, zero deps)
 ///   macOS   → AXFocusedApplication + kAXTitleAttribute (Accessibility API)
-///   Linux   → not implemented (returns None)
+///   Linux   → xdotool (X11 / XWayland); None when xdotool is missing or on pure Wayland
 
 /// Return the title of the currently focused window, or `None` if it cannot
 /// be determined (unsupported platform, permission denied, empty title).
@@ -18,7 +18,10 @@ pub fn get_active_context() -> Option<String> {
     #[cfg(target_os = "macos")]
     return macos_context();
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    return linux_context();
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     return None;
 }
 
