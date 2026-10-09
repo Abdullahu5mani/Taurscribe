@@ -113,9 +113,14 @@ interface ModelsTabProps {
     computeDevice?: string;
     onSelectComputeDevice?: (backend: "gpu" | "cpu", device?: string, label?: string) => Promise<void>;
     deviceSwitchBlocked?: boolean;
+    llmBackend?: "gpu" | "cpu";
+    llmComputeDevice?: string;
+    onSelectLlmDevice?: (id: string) => void;
+    enableGrammarLM?: boolean;
+    transcriptionStyle?: string;
 }
 
-export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCancelDownload, scrollTarget, onScrollHandled, asrBackend = "gpu", computeDevice = "auto", onSelectComputeDevice, deviceSwitchBlocked = false }: ModelsTabProps) {
+export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCancelDownload, scrollTarget, onScrollHandled, asrBackend = "gpu", computeDevice = "auto", onSelectComputeDevice, deviceSwitchBlocked = false, llmBackend, llmComputeDevice, onSelectLlmDevice, enableGrammarLM, transcriptionStyle }: ModelsTabProps) {
     const [activeTier, setActiveTier] = useState<WhisperTier>('Small');
     const [whisperLanguage, setWhisperLanguage] = useState<WhisperLanguage>('english');
     const [whisperOptimization, setWhisperOptimization] = useState<WhisperOptimization>('quantized');
@@ -338,6 +343,11 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                     computeDevice={computeDevice}
                     onSelect={onSelectComputeDevice}
                     blocked={deviceSwitchBlocked}
+                    llmBackend={llmBackend}
+                    llmComputeDevice={llmComputeDevice}
+                    onSelectLlmDevice={onSelectLlmDevice}
+                    enableGrammarLM={enableGrammarLM}
+                    transcriptionStyle={transcriptionStyle}
                 />
             )}
 

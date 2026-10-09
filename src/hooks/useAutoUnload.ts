@@ -5,13 +5,6 @@ import { Store } from "@tauri-apps/plugin-store";
 import type { ASREngine } from "./useEngineSwitch";
 import { serialTasks } from "../utils/serialTasks";
 
-export interface AutoUnloadStatus {
-    timeout_seconds: number;
-    remaining_seconds: number | null;
-    is_loaded: boolean;
-    last_activity_epoch: number;
-}
-
 export interface AutoUnloadOption {
     label: string;
     shortLabel: string;
@@ -43,29 +36,16 @@ export function formatTimeoutLabel(seconds: number): string {
     }
 }
 
-export function formatRemaining(seconds: number): string {
-    if (seconds <= 0) return "0s";
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    if (mins > 0) {
-        return `${mins}m ${secs.toString().padStart(2, "0")}s`;
-    }
-    return `${secs}s`;
-}
-
 interface UseAutoUnloadParams {
-    loadedEngine: ASREngine | null;
     setLoadedEngine: (engine: ASREngine | null) => void;
     setHeaderStatus: (msg: string, dur?: number) => void;
 }
 
 export function useAutoUnload({
-    loadedEngine,
     setLoadedEngine,
     setHeaderStatus,
 }: UseAutoUnloadParams) {
     const [timeoutSeconds, setTimeoutSeconds] = useState<number>(1800); // 30 min default
-    const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const storeRef = useRef<Store | null>(null);
     const preferenceRevisionRef = useRef(0);
@@ -101,33 +81,6 @@ export function useAutoUnload({
             mountedRef.current = false;
         };
     }, []);
-
-    // ── Polling remaining time when model is loaded & timeout > 1 ──────────────
-    useEffect(() => {
-        if (!loadedEngine || timeoutSeconds <= 1) {
-            setRemainingSeconds(null);
-            return;
-        }
-
-        let isMounted = true;
-        const checkStatus = async () => {
-            try {
-                const status = await invoke<AutoUnloadStatus>("get_auto_unload_status");
-                if (isMounted) {
-                    setRemainingSeconds(status.remaining_seconds);
-                }
-            } catch {
-                // Ignore query errors
-            }
-        };
-
-        checkStatus();
-        const interval = setInterval(checkStatus, 1000);
-        return () => {
-            isMounted = false;
-            clearInterval(interval);
-        };
-    }, [loadedEngine, timeoutSeconds]);
 
     // ── Listen for auto-unload event from Rust background watchdog ─────────────
     useEffect(() => {
@@ -189,7 +142,6 @@ export function useAutoUnload({
 
     return {
         timeoutSeconds,
-        remainingSeconds,
         isMenuOpen,
         setIsMenuOpen,
         updateTimeout,

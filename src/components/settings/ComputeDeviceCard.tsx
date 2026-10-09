@@ -19,6 +19,11 @@ interface Props {
     onSelect: (backend: 'gpu' | 'cpu', device?: string, label?: string) => Promise<void>;
     /** Recording or a model loading: switching would be refused. */
     blocked: boolean;
+    llmBackend?: 'gpu' | 'cpu';
+    llmComputeDevice?: string;
+    onSelectLlmDevice?: (id: string) => void;
+    enableGrammarLM?: boolean;
+    transcriptionStyle?: string;
 }
 
 interface CommandResult<T> { ok: boolean; data?: T; error?: { code: string; message: string } }
@@ -31,15 +36,18 @@ function formatRealtime(x: number) {
  * Settings → Models: which device the speech models run on, and a speed test
  * across them. Hidden where there is nothing to choose (Macs, CPU builds).
  */
-export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked }: Props) {
+export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked, llmBackend = 'gpu', llmComputeDevice = 'same', onSelectLlmDevice, enableGrammarLM = false, transcriptionStyle = 'Clean' }: Props) {
     const [report, setReport] = useState<DeviceReport | null>(null);
     const [speeds, setSpeeds] = useState<SpeedReport | null>(null);
     const [measuring, setMeasuring] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [includeFlowScribe, setIncludeFlowScribe] = useState(enableGrammarLM);
+    const [flowAvailable, setFlowAvailable] = useState(false);
 
     useEffect(() => {
         let alive = true;
         loadDeviceReport().then((r) => alive && setReport(r));
+        invoke<boolean>('check_grammar_llm_available').then((available) => alive && setFlowAvailable(available)).catch(() => {});
         return () => { alive = false; };
     }, []);
 
@@ -71,8 +79,13 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
         setError(null);
         setMeasuring('Starting…');
         try {
-            const res = await invoke<CommandResult<SpeedReport>>('benchmark_compute_devices');
-            if (res.ok && res.data) setSpeeds(res.data);
+            const res = await invoke<CommandResult<SpeedReport>>('benchmark_compute_devices', {
+                includeFlowscribe: includeFlowScribe,
+                flowscribeDeviceId: llmComputeDevice,
+                flowscribeUseGpu: llmBackend === 'gpu',
+                style: transcriptionStyle,
+            });
+            if (res.ok && res.data) { setSpeeds(res.data); if (res.data.restore_error) setError(`Test finished, but the previous model could not be restored: ${res.data.restore_error}`); }
             else setError(res.error?.message ?? 'The speed test failed');
         } catch (e) {
             setError(String(e));
@@ -117,6 +130,9 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
                                     : <span className="device-speed">
                                         <span className="storage-bar-track"><span className="storage-bar-fill" style={{ width: `${Math.max(3, (speed.realtime / max) * 100)}%` }} /></span>
                                         <span className="storage-bar-value">{formatRealtime(speed.realtime)}</span>
+                                        <span className="device-timing">Unloaded {speed.unloaded_total_s.toFixed(2)} s · Loaded {speed.loaded_total_s.toFixed(2)} s</span>
+                                        <span className="device-timing">Speech load {speed.load_s.toFixed(2)} s · Transcribe {speed.transcribe_s.toFixed(2)} s</span>
+                                        {speeds?.include_flowscribe && <span className="device-timing">Cleanup load {speed.flowscribe_load_s.toFixed(2)} s · Clean up {speed.flowscribe_s.toFixed(2)} s</span>}
                                         {isBest && <span className="device-best">Fastest</span>}
                                     </span>
                             )}
@@ -133,7 +149,23 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
                     </div>
                 ))}
             </div>
+            {onSelectLlmDevice && (
+                <label className="device-cleanup-select">
+                    <span>Word cleanup runs on</span>
+                    <select data-testid="flowscribe-compute-device" value={llmBackend === 'cpu' ? 'cpu' : llmComputeDevice === 'cpu' ? 'same' : llmComputeDevice} onChange={(e) => onSelectLlmDevice(e.target.value)} disabled={blocked || measuring !== null}>
+                        <option value="same">Follow speech GPU</option>
+                        {gpus.map((d) => <option key={d.id} value={d.id}>{deviceLabel(d)}{d.kind === 'igpu' ? ' · integrated' : ''}</option>)}
+                        <option value="cpu">CPU</option>
+                    </select>
+                    <span className="storage-hint">FlowScribe V3 can use the same GPU, another GPU, or the CPU.</span>
+                </label>
+            )}
             <div className="storage-speed-block">
+                <label className="device-benchmark-toggle">
+                    <input type="checkbox" data-testid="benchmark-include-flowscribe" checked={includeFlowScribe} onChange={(e) => { setIncludeFlowScribe(e.target.checked); setSpeeds(null); }} disabled={blocked || measuring !== null || (!flowAvailable && !includeFlowScribe)} />
+                    Include FlowScribe V3 cleanup
+                </label>
+                {!flowAvailable && <span className="storage-hint">Download FlowScribe V3 in Models to include cleanup.</span>}
                 <button type="button" className="ghost-btn" data-testid="device-measure-speed" onClick={measure} disabled={blocked || measuring !== null}>
                     {measuring !== null ? <><span className="storage-spinner" /> {measuring}</> : 'Measure speed'}
                 </button>
@@ -142,7 +174,7 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
                 )}
                 {speeds && measuring === null && (
                     <span className="storage-hint">
-                        {speeds.model} on {speeds.clip_seconds} s of test audio. 10× means ten seconds of speech transcribed per second.
+                        {speeds.model} · {speeds.clip_seconds} s of speech · median of {speeds.rounds} runs · FlowScribe {speeds.include_flowscribe ? 'included' : 'off'}. Loaded totals include {speeds.include_flowscribe ? 'speech and cleanup' : 'speech recognition'}. Unloaded totals also include model loading. Disk caches are not cleared.
                     </span>
                 )}
                 {error && <span className="storage-hint device-error">{error}</span>}

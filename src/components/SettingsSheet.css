@@ -686,6 +686,11 @@
 .settings-sheet .device-speed--error { display: block; text-align: right; font-size: 12px; color: #fca5a5; }
 .settings-sheet .device-best { grid-column: 1 / -1; justify-self: end; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: #6ee7a8; }
 .settings-sheet .device-error { color: #fca5a5; }
+.settings-sheet .device-timing { grid-column: 1 / -1; font-size: 11px; color: var(--s-text-3); text-align: right; }
+.settings-sheet .device-cleanup-select { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 16px 0; font-size: 13px; }
+.settings-sheet .device-cleanup-select select { flex: 1; min-width: 170px; max-width: 100%; padding: 8px; border: 1px solid var(--s-border); border-radius: 8px; background: var(--s-card); color: var(--s-text); }
+.settings-sheet .device-cleanup-select .storage-hint { flex-basis: 100%; }
+.settings-sheet .device-benchmark-toggle { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 13px; }
 @media (max-width: 560px) {
   .settings-sheet .device-row { grid-template-columns: 14px 1fr; }
   .settings-sheet .device-speed { grid-column: 2; }

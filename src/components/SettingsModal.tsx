@@ -33,6 +33,8 @@ interface SettingsModalProps {
     setLlmBackend: (val: "gpu" | "cpu") => void;
     asrBackend?: "gpu" | "cpu";
     computeDevice?: string;
+    llmComputeDevice?: string;
+    onSelectLlmDevice?: (id: string) => void;
     onSelectComputeDevice?: (backend: "gpu" | "cpu", device?: string, label?: string) => Promise<void>;
     deviceSwitchBlocked?: boolean;
     transcriptionStyle: string;
@@ -100,7 +102,7 @@ export function SettingsModal({
     enableOverlay, setEnableOverlay,
     transcriptionStyle, setTranscriptionStyle,
     llmBackend, setLlmBackend,
-    asrBackend, computeDevice, onSelectComputeDevice, deviceSwitchBlocked,
+    asrBackend, computeDevice, onSelectComputeDevice, deviceSwitchBlocked, llmComputeDevice, onSelectLlmDevice,
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
     dictionary, addDictEntry, updateDictEntry, removeDictEntry,
     snippets, addSnippet, updateSnippet, removeSnippet,
@@ -204,6 +206,11 @@ export function SettingsModal({
                         computeDevice={computeDevice}
                         onSelectComputeDevice={onSelectComputeDevice}
                         deviceSwitchBlocked={deviceSwitchBlocked}
+                        llmBackend={llmBackend}
+                        llmComputeDevice={llmComputeDevice}
+                        onSelectLlmDevice={onSelectLlmDevice}
+                        enableGrammarLM={enableGrammarLM}
+                        transcriptionStyle={transcriptionStyle}
                     />
                 );
             case 'recording':

@@ -41,6 +41,9 @@ export interface SpeedReport {
     model: string;
     clip_seconds: number;
     results: DeviceSpeed[];
+    rounds: number;
+    include_flowscribe: boolean;
+    restore_error: string | null;
 }
 
 export const COMPUTE_DEVICE_CHANGED_EVENT = "taurscribe:compute-device-changed";

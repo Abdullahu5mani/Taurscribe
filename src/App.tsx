@@ -37,7 +37,7 @@ import "./App.css";
 import { IconFileText, IconBolt, IconEject, IconDownload, IconMic, IconVideo, IconLightbulb, IconSettings } from "./components/Icons";
 import { InPersonPanel } from "./components/InPersonPanel";
 import { getEngineForModelId } from "./utils/engineUtils";
-import { useAutoUnload, AUTO_UNLOAD_OPTIONS, formatTimeoutLabel, formatRemaining } from "./hooks/useAutoUnload";
+import { useAutoUnload, AUTO_UNLOAD_OPTIONS, formatTimeoutLabel } from "./hooks/useAutoUnload";
 import { useSlidingIndicator } from "./hooks/useSlidingIndicator";
 import { useDismissOnOutside } from "./hooks/useDismissOnOutside";
 import { OverlayScrollbarsComponent } from "overlayscrollbars-react";
@@ -349,6 +349,7 @@ function App() {
     llmBackend, setLlmBackend,
     asrBackend, setAsrBackend,
     computeDevice, setComputeDevice,
+    llmComputeDevice, setLlmComputeDevice,
   } = usePostProcessing(setHeaderStatus, () => setIsSettingsOpen(true), storeRef);
 
 
@@ -714,12 +715,10 @@ function App() {
 
   const {
     timeoutSeconds: autoUnloadTimeout,
-    remainingSeconds: autoUnloadRemaining,
     isMenuOpen: isAutoUnloadMenuOpen,
     setIsMenuOpen: setIsAutoUnloadMenuOpen,
     updateTimeout: handleUpdateAutoUnloadTimeout,
   } = useAutoUnload({
-    loadedEngine,
     setLoadedEngine,
     setHeaderStatus,
   });
@@ -1592,19 +1591,11 @@ function App() {
                       data-testid="auto-unload-timer-btn"
                       className={`auto-unload-timer-btn${isAutoUnloadMenuOpen ? " auto-unload-timer-btn--active" : ""}`}
                       onClick={() => setIsAutoUnloadMenuOpen(!isAutoUnloadMenuOpen)}
-                      title={
-                        autoUnloadRemaining !== null
-                          ? `Auto-unloads in ${formatRemaining(autoUnloadRemaining)} of inactivity (click to configure)`
-                          : `Model auto-unload: ${formatTimeoutLabel(autoUnloadTimeout)} (click to configure)`
-                      }
+                      title={`Unload the model after ${formatTimeoutLabel(autoUnloadTimeout)} idle (click to change)`}
                       aria-label="Configure model memory auto-unload"
                     >
                       <span className="auto-unload-pill-icon">⏱️</span>
-                      <span className="auto-unload-pill-text">
-                        {autoUnloadRemaining !== null
-                          ? formatRemaining(autoUnloadRemaining)
-                          : formatTimeoutLabel(autoUnloadTimeout)}
-                      </span>
+                      <span className="auto-unload-pill-text">{formatTimeoutLabel(autoUnloadTimeout)}</span>
                       <span className="auto-unload-pill-caret" aria-hidden="true">▾</span>
                     </button>
 
@@ -1624,11 +1615,6 @@ function App() {
                         >
                           <div className="auto-unload-menu-header">
                             <span className="auto-unload-menu-title">Model Memory & Auto-Unload</span>
-                            {autoUnloadRemaining !== null && (
-                              <span className="auto-unload-countdown">
-                                Freeing VRAM in {formatRemaining(autoUnloadRemaining)}
-                              </span>
-                            )}
                           </div>
 
                           <button
@@ -1765,7 +1751,9 @@ function App() {
             asrBackend={asrBackend}
             computeDevice={computeDevice}
             onSelectComputeDevice={handleToggleAsrBackend}
-            deviceSwitchBlocked={isLoading || isRecording || isVoiceEnrolling}
+            deviceSwitchBlocked={isLoading || isRecording || isVoiceEnrolling || llmStatus === "Loading..."}
+            llmComputeDevice={llmComputeDevice}
+            onSelectLlmDevice={setLlmComputeDevice}
             soundVolume={volume}
             soundMuted={muted}
             setSoundVolume={setVolume}
