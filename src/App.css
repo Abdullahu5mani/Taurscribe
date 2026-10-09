@@ -3104,6 +3104,12 @@ button#top-settings-btn:hover {
   color: var(--text-muted);
 }
 
+.file-card-live-speed {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .file-card-progress-bar {
   height: 3px;
   background: rgba(255,255,255,0.08);

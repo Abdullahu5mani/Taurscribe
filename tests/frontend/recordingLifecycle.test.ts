@@ -41,6 +41,7 @@ function fixture(options: { grammar?: boolean; mute?: boolean } = {}) {
     const noop = () => {};
     const hook = renderHook(() => useRecording({
         activeEngineRef: { current: "granite" }, models: [], graniteModels: [{ id: "granite-test" }], qwen3Models: [],
+        isFileTranscribingRef: { current: options.file ?? false },
         currentModel: null, currentGraniteModel: "granite-test", currentQwen3Model: null, asrBackend: "cpu",
         setCurrentModel: noop, setLoadedEngine: noop, enableGrammarLMRef: { current: options.grammar ?? false },
         enableDenoiseRef: { current: true }, enableOverlayRef: { current: false },

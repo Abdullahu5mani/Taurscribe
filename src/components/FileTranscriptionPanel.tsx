@@ -18,6 +18,9 @@ interface FileItem {
     modelId?: string | null;
     status: "queued" | "processing" | "done" | "error" | "cancelled";
     progress: number;
+    phase?: string;
+    transcribedAudioMs?: number;
+    transcriptionTimeMs?: number;
     transcript: string;
     audioDurationMs?: number;
     processingTimeMs?: number;
@@ -40,6 +43,8 @@ interface ProgressPayload {
     percent: number;
     status: string;
     error?: string;
+    transcribed_audio_ms?: number | null;
+    transcription_time_ms?: number | null;
 }
 
 interface FileTranscriptionPanelProps {
@@ -155,11 +160,18 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                 const nextError = payload.status === "cancelled"
                     ? payload.error ?? "Cancelled"
                     : payload.error;
+                const hasTiming = Number.isFinite(payload.transcribed_audio_ms) && Number.isFinite(payload.transcription_time_ms)
+                    && (payload.transcribed_audio_ms ?? 0) > 0 && (payload.transcription_time_ms ?? 0) > 0
+                    && payload.transcribed_audio_ms! >= (file.transcribedAudioMs ?? 0)
+                    && payload.transcription_time_ms! >= (file.transcriptionTimeMs ?? 0);
+                const audioMs = hasTiming ? payload.transcribed_audio_ms! : file.transcribedAudioMs;
+                const timeMs = hasTiming ? payload.transcription_time_ms! : file.transcriptionTimeMs;
 
                 if (
                     file.status === nextStatus &&
                     file.progress === nextProgress &&
-                    file.error === nextError
+                    file.error === nextError && file.phase === payload.status &&
+                    file.transcribedAudioMs === audioMs && file.transcriptionTimeMs === timeMs
                 ) {
                     return file;
                 }
@@ -170,6 +182,9 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                     progress: nextProgress,
                     status: nextStatus,
                     error: nextError,
+                    phase: payload.status,
+                    transcribedAudioMs: audioMs,
+                    transcriptionTimeMs: timeMs,
                 };
             });
 
@@ -207,7 +222,14 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
             const active = activeFileRef.current;
             if (!active || active.path !== event.payload.path || active.id !== event.payload.job_id) return;
             const previous = pendingProgressRef.current.get(active.id);
-            pendingProgressRef.current.set(active.id, { ...event.payload, percent: Math.max(previous?.percent ?? 0, event.payload.percent) });
+            const timing = (event.payload.transcribed_audio_ms ?? 0) >= (previous?.transcribed_audio_ms ?? 0)
+                && (event.payload.transcription_time_ms ?? 0) >= (previous?.transcription_time_ms ?? 0)
+                ? event.payload : previous;
+            pendingProgressRef.current.set(active.id, {
+                ...event.payload, percent: Math.max(previous?.percent ?? 0, event.payload.percent),
+                transcribed_audio_ms: timing?.transcribed_audio_ms,
+                transcription_time_ms: timing?.transcription_time_ms,
+            });
             if (progressRafRef.current !== null) return;
             progressRafRef.current = requestAnimationFrame(flushProgressUpdates);
         }).then(fn => { if (subscribed) unlisten = fn; else fn(); });
@@ -247,7 +269,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
         processingRef.current = true;
         activeFileRef.current = { id: queued.id, path: queued.path };
         setFiles(prev =>
-            prev.map(f => f.id === queued.id ? { ...f, status: "processing", progress: 5 } : f)
+            prev.map(f => f.id === queued.id ? { ...f, status: "processing", progress: 5, phase: undefined, transcribedAudioMs: undefined, transcriptionTimeMs: undefined } : f)
         );
 
         try {
@@ -375,9 +397,9 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
     };
 
     const formatRealtime = (audioDurationMs: number, processingTimeMs: number) => {
-        if (audioDurationMs <= 0 || processingTimeMs <= 0) return null;
+        if (!Number.isFinite(audioDurationMs) || !Number.isFinite(processingTimeMs) || audioDurationMs <= 0 || processingTimeMs <= 0) return null;
         const ratio = audioDurationMs / processingTimeMs;
-        return `${ratio.toFixed(1)}x`;
+        return ratio < 0.1 ? '<0.1×' : `${ratio.toFixed(1)}×`;
     };
 
     const removeFile = (id: string) => {
@@ -681,7 +703,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                             {(item.status === "processing") && (
                                 <div className="file-card-progress-wrap">
                                     <div className="file-card-progress-label">
-                                        <span>{item.progress < 25 ? "Decoding…" : "Transcribing…"}</span>
+                                        <span>{item.phase === "loading model" ? "Loading model…" : item.phase === "waiting" ? "Waiting…" : item.phase === "done" ? "Finishing…" : item.phase === "cancelled" ? "Cancelling…" : item.phase === "decoding" || (!item.phase && item.progress < 25) ? "Decoding…" : "Transcribing…"}</span>
                                         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                                             <span>{item.progress}%</span>
                                             <button
@@ -703,6 +725,11 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                             style={{ transform: `scaleX(${Math.min(1, Math.max(0, item.progress / 100))})` }}
                                         />
                                     </div>
+                                    <span className="file-card-live-speed" data-testid={`file-live-speed-${item.id}`} title="Average speech audio recognized per second of model inference. Updates after each completed chunk; excludes model loading, decoding, and silence removal.">
+                                        {item.transcribedAudioMs != null && item.transcriptionTimeMs != null && formatRealtime(item.transcribedAudioMs, item.transcriptionTimeMs)
+                                            ? `Speech speed: ${formatRealtime(item.transcribedAudioMs, item.transcriptionTimeMs)} realtime · ${formatDuration(item.transcribedAudioMs)} speech processed`
+                                            : "Measuring speech speed…"}
+                                    </span>
                                 </div>
                             )}
 
@@ -738,8 +765,8 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                         </span>
                                     )}
                                     {item.audioDurationMs != null && item.processingTimeMs != null && formatRealtime(item.audioDurationMs, item.processingTimeMs) && (
-                                        <span className="file-meta-badge file-meta-badge--speed" title="Transcription speed vs real-time">
-                                            {formatRealtime(item.audioDurationMs, item.processingTimeMs)} speed
+                                        <span className="file-meta-badge file-meta-badge--speed" title="Full file duration divided by total processing time, including model loading, decoding, and silence removal.">
+                                            {formatRealtime(item.audioDurationMs, item.processingTimeMs)} overall speed
                                         </span>
                                     )}
                                     <span className="file-meta-badge file-meta-badge--engine" title={item.modelId ?? undefined}>

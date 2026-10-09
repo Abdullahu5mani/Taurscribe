@@ -56,8 +56,8 @@ const text = (root: any): string => root == null || typeof root === "boolean" ? 
     : typeof root !== "object" ? String(root) : Array.isArray(root) ? root.map(text).join(" ").replace(/\s+%/g, "%") : text(root.props?.children);
 const byLabel = (root: any, label: string) => nodes(root).find(n => n.props?.["aria-label"] === label);
 const cards = (root: any) => nodes(root).filter(n => n.props?.role === "article");
-const progress = (job: number, percent: number, status = "transcribing", id = jobs[job].args.jobId) => {
-    for (const fn of progressListeners) fn({ payload: { path: jobs[job].args.path, job_id: id, percent, status } });
+const progress = (job: number, percent: number, status = "transcribing", id = jobs[job].args.jobId, timing: Record<string, number | null> = {}) => {
+    for (const fn of progressListeners) fn({ payload: { path: jobs[job].args.path, job_id: id, percent, status, ...timing } });
 };
 const flushFrames = () => { const pending = [...frames.values()]; frames.clear(); for (const fn of pending) fn(0); };
 const drop = (...paths: string[]) => { for (const fn of dropListeners) fn({ payload: { type: "drop", paths } }); };
@@ -141,6 +141,38 @@ test("done progress does not expose incomplete results or unlock removal before 
     expect(cards(h.handle.current)[0].props.className).toContain("--processing");
     expect(byLabel(h.handle.current, "Remove tail.wav").props.disabled).toBe(true);
     jobs[0].resolve(result()); await h.settle(); expect(cards(h.handle.current)[0].props.className).toContain("--done");
+});
+
+test("live speed uses measured chunks, survives stale events, and resets between queued files", async () => {
+    const h = fixture(); drop("/first.wav", "/second.wav"); await h.settle();
+    expect(text(cards(h.handle.current)[0])).toContain("Measuring speech speed");
+    progress(0, 53, "transcribing", jobs[0].args.jobId, { transcribed_audio_ms: 60000, transcription_time_ms: 4000 });
+    flushFrames(); await h.settle();
+    expect(text(cards(h.handle.current)[0])).toContain("15.0× realtime");
+    // Timing changes even while the pipeline's percent remains unchanged.
+    progress(0, 53, "transcribing", jobs[0].args.jobId, { transcribed_audio_ms: 90000, transcription_time_ms: 9000 });
+    progress(0, 53, "transcribing", jobs[0].args.jobId, { transcribed_audio_ms: 60000, transcription_time_ms: 4000 });
+    flushFrames(); await h.settle();
+    expect(text(cards(h.handle.current)[0])).toContain("10.0× realtime");
+    progress(0, 53, "transcribing", "stale-job", { transcribed_audio_ms: 900000, transcription_time_ms: 1 });
+    progress(0, 53, "transcribing", jobs[0].args.jobId, { transcribed_audio_ms: 90000, transcription_time_ms: 0 });
+    flushFrames(); await h.settle();
+    expect(text(cards(h.handle.current)[0])).toContain("10.0× realtime");
+    jobs[0].resolve(result()); await h.settle();
+    expect(text(cards(h.handle.current)[0])).toMatch(/40\.0×\s+overall speed/);
+    expect(text(cards(h.handle.current)[1])).toContain("Measuring speech speed");
+    expect(text(cards(h.handle.current)[1])).not.toContain("10.0×");
+    jobs[1].resolve(result()); await h.settle();
+});
+
+test("file phases do not claim a speed during model loading or decoding", async () => {
+    const h = fixture(); drop("/load.wav"); await h.settle();
+    progress(0, 0, "loading model"); flushFrames(); await h.settle();
+    expect(text(h.handle.current)).toContain("Loading model…");
+    expect(text(h.handle.current)).not.toContain("× realtime");
+    progress(0, 20, "decoding"); flushFrames(); await h.settle();
+    expect(text(h.handle.current)).toContain("Decoding…");
+    jobs[0].resolve(result()); await h.settle();
 });
 
 test("history failure preserves visible transcript and retry saves it without new inference", async () => {

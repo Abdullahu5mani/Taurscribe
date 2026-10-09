@@ -18,6 +18,7 @@ interface UseRecordingParams {
     currentGraniteModel: string | null;
     currentQwen3Model: string | null;
     asrBackend: "gpu" | "cpu";
+    isFileTranscribingRef?: React.RefObject<boolean>;
     setCurrentModel: (id: string) => void;
     setLoadedEngine: (engine: ASREngine) => void;
     enableGrammarLMRef: React.RefObject<boolean>;

@@ -38,6 +38,7 @@ beforeEach(() => {
         isLoadingRef: { current: false },
         activeEngineRef: { current: "whisper" },
         isFileTranscribingRef: { current: false },
+        isMeetingImportingRef: { current: false },
         enableOverlayRef: { current: true },
         asrModelCountsRef: { current: { whisper: 1, granite: 0, qwen3: 0 } },
         handleStartRecordingRef: { current: async () => { events.push("start"); if (startGate) await startGate; refs.isRecordingRef.current = true; } },

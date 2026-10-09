@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -12,6 +13,10 @@ interface Props {
   hasDiarizationModel?: boolean;
   onProcessingChange?: (busy: boolean) => void;
   onComplete: (meetingId: number) => void;
+}
+
+function ModalLayer({ children }: { children: React.ReactNode }) {
+  return typeof document !== "undefined" && document.body ? createPortal(children, document.body) : children;
 }
 
 export function recordingDate(value: string | null): string {
@@ -178,7 +183,7 @@ export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = 
       </div>
       <button type="button" className="meeting-vault-btn" onClick={openModal} disabled={disabled} data-testid="meeting-import-open">{sources.length ? "Review import" : "Import recordings"}</button>
     </div>
-    {modalOpen && <div className="meeting-import-overlay" data-testid="meeting-import-overlay" onClick={event => { if (event.target === event.currentTarget) closeModal(); }}>
+    <ModalLayer>{modalOpen && <div className="meeting-import-overlay" data-testid="meeting-import-overlay" onClick={event => { if (event.target === event.currentTarget) closeModal(); }}>
       <div ref={modal} className={`meeting-import-modal ${dragging ? "meeting-import--dragging" : ""}`} role="dialog" aria-modal="true" aria-labelledby="meeting-import-dialog-title" aria-describedby="meeting-import-dialog-description" tabIndex={-1} data-testid="meeting-import-modal" aria-busy={importing || inspecting} {...dropHandlers}>
         <header className="meeting-import-modal-header">
           <div className="meeting-import-modal-heading"><span className="meeting-import-launcher-icon"><IconFileText size={22} /></span><div>
@@ -198,6 +203,7 @@ export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = 
           {inspecting && <p className="meeting-import-reading" role="status">Reading recording metadata…</p>}
           {sources.length > 0 && <>
             <label className="meeting-import-title">Meeting title<input value={title} onChange={event => setTitle(event.target.value)} disabled={disabled} data-testid="meeting-import-title" /></label>
+            {warnings.map((warning, index) => <p className="meeting-import-warning" role="status" key={index}>{warning}</p>)}
             <div className="meeting-import-order"><span>Playback order · {sources.length} recording{sources.length === 1 ? "" : "s"}</span>
               <button type="button" onClick={() => { manualOrder.current = false; setSources(chronologicalRecordings); }} disabled={disabled || inspecting} data-testid="meeting-import-sort">Sort by recording time</button>
             </div>
@@ -212,7 +218,6 @@ export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = 
               </div>
             </li>)}</ol>
             {undated && <p className="meeting-import-notice">Some files have no recording timestamp. Those files keep their selected positions; use the arrows to set their order. File dates can change when copied.</p>}
-            {warnings.map((warning, index) => <p className="meeting-import-warning" role="status" key={index}>{warning}</p>)}
             <div className="meeting-import-processing-note"><strong>Transcription & speaker recognition</strong>
               <p>Uses your speech model and saved voices{hasDiarizationModel ? ", with Nemotron speaker separation." : ". Basic speaker separation will be used; install Nemotron in Settings → Models for better results."}</p>
             </div>
@@ -226,6 +231,6 @@ export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = 
           <button type="button" className="meeting-import-submit" onClick={importMeeting} disabled={disabled || inspecting || !sources.length || !title.trim()} data-testid="meeting-import-submit">{importing ? "Importing and processing…" : warnings.length ? "Import together anyway" : "Import and process meeting"}</button>
         </footer>
       </div>
-    </div>}
+    </div>}</ModalLayer>
   </>;
 }

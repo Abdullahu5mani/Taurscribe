@@ -24,6 +24,9 @@ pub struct FileTranscriptionProgress {
     pub percent: u8,
     pub status: String, // "decoding" | "transcribing" | "done" | "error" | "cancelled"
     pub error: Option<String>,
+    /// Completed speech chunks only; excludes loading, decoding, and VAD.
+    pub transcribed_audio_ms: Option<u64>,
+    pub transcription_time_ms: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -43,6 +46,27 @@ struct FileJobState {
     /// Highest percent sent so far: each window of a long file restarts its
     /// own steps, and the bar must not move backwards.
     last_percent: u8,
+    timing: FileTiming,
+}
+
+#[derive(Default)]
+struct FileTiming {
+    speech_samples: u64,
+    inference_time: std::time::Duration,
+}
+
+impl FileTiming {
+    fn record(&mut self, samples: usize, elapsed: std::time::Duration) {
+        self.speech_samples += samples as u64;
+        self.inference_time += elapsed;
+    }
+
+    fn snapshot(&self) -> (Option<u64>, Option<u64>) {
+        if self.speech_samples == 0 {
+            return (None, None);
+        }
+        (Some(self.speech_samples * 1000 / 16000), Some(self.inference_time.as_millis().max(1) as u64))
+    }
 }
 
 static FILE_TRANSCRIBE_CANCEL: OnceLock<Mutex<HashMap<String, FileJobState>>> = OnceLock::new();
@@ -68,6 +92,7 @@ fn register_cancel_flag(path: &str, job_id: Option<String>) -> Result<Arc<Atomic
             flag: Arc::clone(&flag),
             job_id,
             last_percent: 0,
+            timing: FileTiming::default(),
         },
     );
     Ok(flag)
@@ -216,7 +241,7 @@ pub async fn finish_file_transcription_batch(
 }
 
 fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: Option<String>) {
-    let (job_id, percent) = match cancel_flags().lock().unwrap().get_mut(path) {
+    let (job_id, percent, timing) = match cancel_flags().lock().unwrap().get_mut(path) {
         Some(job) => {
             let percent = if matches!(status, "decoding" | "transcribing") {
                 percent.max(job.last_percent)
@@ -224,9 +249,9 @@ fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: 
                 percent
             };
             job.last_percent = percent;
-            (job.job_id.clone(), percent)
+            (job.job_id.clone(), percent, job.timing.snapshot())
         }
-        None => (None, percent),
+        None => (None, percent, (None, None)),
     };
     let _ = app.emit(
         "file-transcription-progress",
@@ -236,8 +261,20 @@ fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: 
             percent,
             status: status.to_string(),
             error,
+            transcribed_audio_ms: timing.0,
+            transcription_time_ms: timing.1,
         },
     );
+}
+
+fn record_chunk_timing(app: &AppHandle, path: &str, samples: usize, elapsed: std::time::Duration) {
+    let percent = {
+        let mut jobs = cancel_flags().lock().unwrap();
+        let Some(job) = jobs.get_mut(path) else { return };
+        job.timing.record(samples, elapsed);
+        job.last_percent
+    };
+    emit_progress(app, path, percent, "transcribing", None);
 }
 
 static FILE_JOB_TURN: Mutex<()> = Mutex::new(());
@@ -752,7 +789,12 @@ fn transcribe_file_window(
                     "Whisper engine is busy loading or processing another request".to_string()
                 })?;
                 emit_progress(app, path, 53, "transcribing", None);
+                let started = std::time::Instant::now();
                 let t = w.transcribe_audio_data(raw_chunk, dynamic_prompt.as_deref())?;
+                let elapsed = started.elapsed();
+                drop(w);
+                ensure_not_cancelled(app, path, &cancel)?;
+                record_chunk_timing(app, path, raw_chunk.len(), elapsed);
                 if !t.trim().is_empty() {
                     parts.push(t.trim().to_string());
                 }
@@ -795,6 +837,7 @@ fn transcribe_file_window(
                     ],
                 );
 
+                let started = std::time::Instant::now();
                 let t = match active_engine {
                     ASREngine::Granite => {
                         let mut g = granite.try_lock().map_err(|_| {
@@ -811,6 +854,7 @@ fn transcribe_file_window(
                     }
                     _ => unreachable!(),
                 };
+                let elapsed = started.elapsed();
                 // A cancel that aborted the run mid-chunk reports "cancelled" like
                 // one caught between chunks.
                 let t = match t {
@@ -823,6 +867,8 @@ fn transcribe_file_window(
                 // A cancel that arrived during the run still wins: discard the chunk
                 // rather than finishing the file.
                 ensure_not_cancelled(app, path, &cancel)?;
+
+                record_chunk_timing(app, path, raw_chunk.len(), elapsed);
 
                 if !t.trim().is_empty() {
                     parts.push(t.trim().to_string());
@@ -839,6 +885,19 @@ fn transcribe_file_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speech_speed_accumulates_chunks_and_resets_for_each_job() {
+        let mut timing = FileTiming::default();
+        assert_eq!(timing.snapshot(), (None, None));
+        timing.record(16000 * 60, std::time::Duration::from_millis(4000));
+        timing.record(16000 * 30, std::time::Duration::from_millis(5000));
+        assert_eq!(timing.snapshot(), (Some(90000), Some(9000)));
+        assert_eq!(FileTiming::default().snapshot(), (None, None));
+        let mut fast = FileTiming::default();
+        fast.record(16000, std::time::Duration::from_micros(50));
+        assert_eq!(fast.snapshot(), (Some(1000), Some(1)));
+    }
 
     #[test]
     fn detached_file_worker_releases_its_registration() {

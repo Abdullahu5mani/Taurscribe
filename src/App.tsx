@@ -471,6 +471,7 @@ function App() {
   // File transcription shows in the tray too (recording is blocked meanwhile).
   const fileTrayActiveRef = useRef(false);
   useEffect(() => {
+    if (isRecording || isProcessingTranscript) return;
     if (isFileTranscribing) {
       fileTrayActiveRef.current = true;
       void setTrayState("processing_file");
