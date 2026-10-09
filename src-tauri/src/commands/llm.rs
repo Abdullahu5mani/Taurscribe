@@ -9,7 +9,7 @@ pub fn check_grammar_llm_available() -> bool {
 }
 
 #[tauri::command]
-pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<String, String> {
+pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool, device_id: Option<String>) -> Result<String, String> {
     println!("[COMMAND] init_llm requested. use_gpu: {}", use_gpu);
 
     // One load at a time: a second request waits for the first, then finds it
@@ -37,7 +37,7 @@ pub async fn init_llm(state: State<'_, AudioState>, use_gpu: bool) -> Result<Str
         if llm.is_some() {
             return Ok("LLM already initialized".to_string());
         }
-        let engine = LLMEngine::new(use_gpu).map_err(|e| format!("Failed to load LLM: {e}"))?;
+        let engine = LLMEngine::new_on(use_gpu, device_id.as_deref()).map_err(|e| format!("Failed to load LLM: {e}"))?;
         *llm = Some(engine);
         println!("[SUCCESS] Grammar LLM initialized!");
         Ok("Grammar LLM initialized successfully".to_string())

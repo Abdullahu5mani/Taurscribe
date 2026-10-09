@@ -1819,9 +1819,6 @@ function App() {
           soundMuted={muted}
           setSoundVolume={setVolume}
           setSoundMuted={setMuted}
-          dictionaryCount={dictionary.length}
-          snippetsCount={snippets.length}
-          onOpenSettingsTab={handleOpenSettingsTab}
         />
       </div>
     </>

@@ -500,10 +500,15 @@ pub enum Target {
 
 impl Target {
     pub fn resolve(force_cpu: bool) -> Self {
+        Self::resolve_for(force_cpu, None)
+    }
+
+    /// Resolve one model's device without changing the speech device preference.
+    pub fn resolve_for(force_cpu: bool, device_id: Option<&str>) -> Self {
         if force_cpu || !gpu_worth_using() {
             return Target::Cpu;
         }
-        Self::from_id(&preferred_device())
+        Self::from_id(device_id.unwrap_or(&preferred_device()))
     }
 
     fn from_id(id: &str) -> Self {
@@ -522,6 +527,10 @@ impl Target {
             Target::Auto => AUTO_DEVICE.into(),
             Target::Gpu(id) => id.clone(),
         }
+    }
+
+    pub fn effective_key(&self) -> String {
+        self.gpu_id().unwrap_or_else(|| CPU_DEVICE.into())
     }
 
     /// The id of the GPU this target runs on: the chosen one if present,

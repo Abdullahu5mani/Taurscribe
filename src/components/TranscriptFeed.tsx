@@ -1,4 +1,3 @@
-import { layout, prepare } from "@chenglou/pretext";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconCheck, IconCopy } from "./Icons";
@@ -67,8 +66,6 @@ function ReadyState() {
 }
 
 const TRANSCRIPT_PREVIEW_CHARS = 1_200;
-const TRANSCRIPT_FONT_FAMILY = '"IBM Plex Sans", sans-serif';
-const TRANSCRIPT_LINE_HEIGHT_RATIO = 1.55;
 
 interface TranscriptFeedProps {
     refreshKey: number;
@@ -123,102 +120,13 @@ const transcriptPreview = (text: string) => {
     return `${text.slice(0, TRANSCRIPT_PREVIEW_CHARS).trimEnd()}…`;
 };
 
-function fitTranscriptFontSize(text: string, width: number, isLatest: boolean) {
-    if (width <= 0 || text.trim().length === 0) return isLatest ? 18 : 15;
-
-    const maxHeight = isLatest ? 190 : 118;
-    const minSize = 12;
-    const maxSize = isLatest ? 22 : 17;
-    const maxLines = isLatest ? 7 : 5;
-    let lo = minSize;
-    let hi = maxSize;
-
-    try {
-        for (let i = 0; i < 7; i++) {
-            const mid = (lo + hi) / 2;
-            const lineHeight = mid * TRANSCRIPT_LINE_HEIGHT_RATIO;
-            const prepared = prepare(text, `${mid}px ${TRANSCRIPT_FONT_FAMILY}`, {
-                whiteSpace: "pre-wrap",
-            });
-            const result = layout(prepared, Math.max(48, width), lineHeight);
-            if (result.height <= maxHeight && result.lineCount <= maxLines) {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        return Math.round(lo * 10) / 10;
-    } catch {
-        return isLatest ? 16 : 14;
-    }
-}
-
-function AutoSizedTranscriptText({ text, isLatest }: { text: string; isLatest: boolean }) {
-    const ref = useRef<HTMLPreElement | null>(null);
-    const rafRef = useRef<number | null>(null);
-    const [width, setWidth] = useState(0);
+/** One transcript. Every row uses the same size (the newest a little larger),
+ *  so resizing the window only re-wraps the text; nothing grows or shrinks. */
+function TranscriptText({ text }: { text: string }) {
     const preview = useMemo(() => `"${transcriptPreview(text)}"`, [text]);
-
-    useEffect(() => {
-        const el = ref.current;
-        if (!el) return;
-
-        // Fitting runs several text layouts per row, so while the window is
-        // being dragged each row keeps its size (text still re-wraps) and refits
-        // once the drag pauses; the font-size change then eases in via CSS.
-        let settleTimer: ReturnType<typeof setTimeout> | undefined;
-        const updateWidth = () => {
-            if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-            clearTimeout(settleTimer);
-            if (document.documentElement.dataset.resizing !== undefined) {
-                settleTimer = setTimeout(updateWidth, 180);
-                return;
-            }
-            rafRef.current = requestAnimationFrame(() => {
-                rafRef.current = null;
-                setWidth(Math.floor(el.clientWidth));
-            });
-        };
-        updateWidth();
-
-        if (typeof ResizeObserver === "undefined") {
-            window.addEventListener("resize", updateWidth);
-            return () => {
-                window.removeEventListener("resize", updateWidth);
-                if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-                rafRef.current = null;
-            };
-        }
-
-        const observer = new ResizeObserver(updateWidth);
-        observer.observe(el);
-        return () => {
-            observer.disconnect();
-            clearTimeout(settleTimer);
-            if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-            rafRef.current = null;
-        };
-    }, []);
-
-    const fontSize = useMemo(
-        () => fitTranscriptFontSize(preview, width, isLatest),
-        [preview, width, isLatest],
-    );
-    const lineHeight = Math.round(fontSize * TRANSCRIPT_LINE_HEIGHT_RATIO * 10) / 10;
-
-    return (
-        <pre
-            ref={ref}
-            className="feed-text"
-            style={{
-                "--feed-text-size": `${fontSize}px`,
-                "--feed-text-line-height": `${lineHeight}px`,
-            } as React.CSSProperties}
-        >
-            {preview}
-        </pre>
-    );
+    return <pre className="feed-text">{preview}</pre>;
 }
+
 
 function TranscriptFeedComponent({
     refreshKey,
@@ -421,7 +329,7 @@ function TranscriptFeedComponent({
                                     </button>
                                 </div>
                             </div>
-                            <AutoSizedTranscriptText text={item.transcript} isLatest={isLatest} />
+                            <TranscriptText text={item.transcript} />
                         </div>
                     </div>
                 );

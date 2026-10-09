@@ -40,6 +40,41 @@ const llmCalls = () =>
         .filter((c) => c.cmd === "init_llm" || c.cmd === "unload_llm")
         .map((c) => (c.cmd === "unload_llm" ? "unload" : `init:${c.args?.useGpu ? "gpu" : "cpu"}`));
 
+test("FlowScribe can stay on an iGPU while speech changes GPUs", async () => {
+    const settings = { enable_grammar_lm: true, llm_backend: "gpu", compute_device: "cuda:RTX", llm_compute_device: "vulkan:iGPU" };
+    const { handle, settle } = start(settings);
+    await settle();
+    expect(calls.find(c => c.cmd === "init_llm")?.args?.deviceId).toBe("vulkan:iGPU");
+    await handle.current.setComputeDevice("cuda:other"); await settle();
+    expect(llmCalls()).toEqual(["init:gpu"]);
+    expect(handle.current.llmComputeDevice).toBe("vulkan:iGPU");
+});
+
+test("changing only cleanup hardware reloads FlowScribe without changing speech hardware", async () => {
+    const settings: Record<string, unknown> = { enable_grammar_lm: true, llm_backend: "gpu", compute_device: "cuda:RTX" };
+    const { handle, settle } = start(settings);
+    await settle();
+    handle.current.setLlmComputeDevice("vulkan:iGPU"); await settle();
+    expect(llmCalls()).toEqual(["init:gpu", "unload", "init:gpu"]);
+    expect(calls.filter(c => c.cmd === "init_llm").at(-1)?.args?.deviceId).toBe("vulkan:iGPU");
+    expect(calls.some(c => c.cmd === "set_compute_device")).toBe(false);
+    expect(handle.current.computeDevice).toBe("cuda:RTX");
+    expect(settings.llm_compute_device).toBe("vulkan:iGPU");
+    handle.current.setLlmComputeDevice("same"); await settle();
+    expect(calls.filter(c => c.cmd === "init_llm").at(-1)?.args?.deviceId).toBe("cuda:RTX");
+});
+
+test("the cleanup CPU choice persists without moving speech off its GPU", async () => {
+    const settings: Record<string, unknown> = { enable_grammar_lm: true, llm_backend: "gpu", compute_device: "cuda:RTX" };
+    const { handle, settle } = start(settings);
+    await settle();
+    handle.current.setLlmComputeDevice("cpu"); await settle();
+    expect(llmCalls()).toEqual(["init:gpu", "unload", "init:cpu"]);
+    expect(settings.llm_backend).toBe("cpu");
+    expect(settings.llm_compute_device).toBe("cpu");
+    expect(handle.current.computeDevice).toBe("cuda:RTX");
+});
+
 test("switching FlowScribe to the CPU reloads it on the CPU", async () => {
     const { handle, settle } = start({ enable_grammar_lm: true, llm_backend: "gpu" });
     await settle();

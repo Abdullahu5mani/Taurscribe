@@ -291,12 +291,22 @@ pub struct LLMEngine {
     model_context: Mutex<ModelContext>,
     eos_token_id: LlamaToken,
     eos_im_end_id: LlamaToken,
+    device_key: String,
 }
 
 impl LLMEngine {
     /// Load FlowScribe v3 from models/flowscribe_v3.
     /// Uses CUDA when available (via llama-cpp-2 features) and use_gpu is true.
     pub fn new(use_gpu: bool) -> Result<Self> {
+        Self::new_on(use_gpu, None)
+    }
+
+    pub fn device_key(&self) -> &str {
+        &self.device_key
+    }
+
+    /// FlowScribe can use a different GPU from the speech recognizer.
+    pub fn new_on(use_gpu: bool, device_id: Option<&str>) -> Result<Self> {
         let model_path = v3_model_path().ok_or_else(|| {
             Error::msg("FlowScribe model not found. Download FlowScribe V3 from the Models tab.")
         })?;
@@ -313,7 +323,8 @@ impl LLMEngine {
         // Everything goes to the GPU the flavor was built for (Metal on Apple
         // Silicon measured ~28% faster than the CPU on an M4). Intel Macs with only
         // integrated graphics stay on the CPU, which is faster there.
-        let requested_layers = if use_gpu && crate::gpu::gpu_worth_using() { 99 } else { 0 };
+        let target = crate::gpu::Target::resolve_for(!use_gpu, device_id);
+        let requested_layers = if target != crate::gpu::Target::Cpu { 99 } else { 0 };
         println!(
             "[LLM] Wrapper backend config: use_gpu={}, layers={}",
             use_gpu, requested_layers
@@ -322,9 +333,11 @@ impl LLMEngine {
         let mut model_params = LlamaModelParams::default().with_n_gpu_layers(requested_layers);
         // The GPU chosen in Settings, when llama.cpp's build has it too.
         if requested_layers > 0 {
-            if let Some(index) = crate::gpu::Target::resolve(false).llama_device() {
+            if let Some(index) = target.llama_device() {
                 println!("[LLM] Using llama.cpp device #{index}");
                 model_params = model_params.with_devices(&[index]).map_err(|e| Error::msg(e.to_string()))?;
+            } else if device_id.is_some() {
+                return Err(Error::msg("The selected GPU is not available to FlowScribe in this build"));
             }
         }
 
@@ -398,6 +411,7 @@ impl LLMEngine {
             model_context: Mutex::new(model_context),
             eos_token_id,
             eos_im_end_id,
+            device_key: if loaded_layers > 0 { target.effective_key() } else { crate::gpu::CPU_DEVICE.into() },
         })
     }
 

@@ -45,8 +45,8 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
 
     useEffect(() => {
         if (measuring === null) return;
-        const off = listen<{ index: number; total: number; device: string }>('compute-benchmark-progress', (e) => {
-            setMeasuring(`Testing ${e.payload.device} (${e.payload.index + 1} of ${e.payload.total})…`);
+        const off = listen<{ index: number; total: number; device: string; round?: number; rounds?: number }>('compute-benchmark-progress', (e) => {
+            setMeasuring(`Testing ${e.payload.device} (${e.payload.index + 1} of ${e.payload.total})${e.payload.round ? ` · run ${e.payload.round}/${e.payload.rounds}` : ''}…`);
         });
         return () => { off.then((f) => f()); };
     }, [measuring !== null]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -87,7 +87,7 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
                 <span className="setting-card-label">Speech runs on</span>
             </div>
             <p className="setting-card-desc">
-                The device Whisper, Granite and Qwen3 transcribe with. FlowScribe uses the same GPU when it runs on the GPU.
+                Choose the device Whisper, Granite and Qwen3 use for speech recognition.
             </p>
             <div className="device-list" role="radiogroup" aria-label="Speech model device">
                 {options.map((d) => {
@@ -138,7 +138,7 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
                     {measuring !== null ? <><span className="storage-spinner" /> {measuring}</> : 'Measure speed'}
                 </button>
                 {!speeds && measuring === null && !error && (
-                    <span className="storage-hint">Runs your loaded model on each device with 30 s of test audio.</span>
+                    <span className="storage-hint">Tests the same speech with models unloaded, then already loaded, three times on each device.</span>
                 )}
                 {speeds && measuring === null && (
                     <span className="storage-hint">

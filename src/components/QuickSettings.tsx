@@ -42,11 +42,6 @@ interface QuickSettingsProps {
     soundMuted: boolean;
     setSoundVolume: (val: number) => void;
     setSoundMuted: (val: boolean) => void;
-    // Counts for personalisation
-    dictionaryCount: number;
-    snippetsCount: number;
-    // Nav
-    onOpenSettingsTab: (tab?: string) => void;
 }
 
 
@@ -109,8 +104,6 @@ function QuickSettingsComponent({
     backendInfo, asrBackend, computeDevice = "auto", onToggleAsrBackend, asrBackendLoading,
     llmBackend, setLlmBackend,
     soundVolume, soundMuted, setSoundVolume, setSoundMuted,
-    dictionaryCount, snippetsCount,
-    onOpenSettingsTab,
 }: QuickSettingsProps) {
     // macOS fix: Detect platform to hide the GPU/CPU backend toggle which
     // is irrelevant on macOS (Apple Silicon uses Metal automatically).
@@ -129,14 +122,6 @@ function QuickSettingsComponent({
             llmStatus === "Loading..." ? "loading…" :
                 llmStatus === "Loaded" ? "loaded" : undefined;
 
-    const openFullSettings = useCallback(() => {
-        onOpenSettingsTab();
-    }, [onOpenSettingsTab]);
-
-    const openTextSettings = useCallback(() => {
-        onOpenSettingsTab("text");
-    }, [onOpenSettingsTab]);
-
     const volumeLabel = useMemo(() => {
         return soundMuted ? "Off" : `${Math.round(soundVolume * 100)}%`;
     }, [soundMuted, soundVolume]);
@@ -152,21 +137,6 @@ function QuickSettingsComponent({
         <aside className="quick-settings" aria-label="Quick Settings">
             <div className="qs-header">
                 <span className="qs-title">Quick Settings</span>
-                <button
-                    type="button"
-                    id="qs-settings-btn"
-                    data-testid="qs-settings-btn"
-                    className="qs-settings-link"
-                    onClick={openFullSettings}
-                    title="Open full settings"
-                    aria-label="Open settings"
-                >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
-                        stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="3" />
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </svg>
-                </button>
             </div>
 
             <div className="qs-body">
@@ -215,7 +185,9 @@ function QuickSettingsComponent({
                     />
                 </Row>
 
-                {/* ── Tone ────────────────────────────────────── */}
+                {/* ── Tone and where the LLM runs: only while the grammar LLM is on ── */}
+                {enableGrammarLM && (
+                  <>
                 <Section label="Tone" info="Transcription style applied by the grammar LLM." />
                 <div
                     id="qs-style-pills"
@@ -242,47 +214,59 @@ function QuickSettingsComponent({
                     ))}
                 </div>
 
-                {/* ── Hardware (ASR engine backend) ───────────── */}
-                {/* macOS fix: Hide the GPU/CPU backend toggle on macOS —
-                    Apple Silicon uses Metal automatically, no user choice needed. */}
-                {!isMac && (
-                  <>
-                    <Section label="Speech Engine Backend" info="Run the active speech-recognition engine (Whisper/Granite/Qwen3) on GPU (faster) or CPU. This transcribes your voice." />
-                    <div className="qs-row-hint" style={{ padding: "0 18px 4px" }}>{backendInfo}</div>
-                    <div
-                        id="qs-asr-backend-group"
-                        data-testid="qs-asr-backend-group"
-                        className="qs-backend-row"
-                        role="group"
-                        aria-label="Speech Engine Backend"
-                    >
-                        {showPicker ? (
-                          <>
-                            {gpus.map((d) => (
-                                <button
-                                    key={d.id}
-                                    type="button"
-                                    data-testid={`qs-asr-device-${d.id}`}
-                                    className={`qs-backend-btn${selectedDevice === d.id ? " qs-backend-btn--active" : ""}`}
-                                    onClick={() => onToggleAsrBackend("gpu", d.id, deviceLabel(d))}
-                                    disabled={asrBackendLoading}
-                                    aria-pressed={selectedDevice === d.id}
-                                    title={`Run the active speech engine on ${d.name} with ${d.backend}`}
-                                ><IconBolt size={11} style={{ color: '#facc15' }} /> {deviceLabel(d)}</button>
-                            ))}
+                    {!isMac && (
+                        <div className="qs-backend-row" role="group" aria-label="Grammar LLM runs on" id="qs-llm-backend-group" data-testid="qs-llm-backend-group">
+                            <span className="qs-backend-label">LLM runs on</span>
                             <button
                                 type="button"
-                                id="qs-asr-backend-cpu"
-                                data-testid="qs-asr-backend-cpu"
-                                className={`qs-backend-btn${selectedDevice === "cpu" ? " qs-backend-btn--active" : ""}`}
-                                onClick={() => onToggleAsrBackend("cpu")}
-                                disabled={asrBackendLoading}
-                                aria-pressed={selectedDevice === "cpu"}
-                                title="Run the active speech engine on CPU (universal, slower)"
+                                id="qs-llm-backend-gpu"
+                                data-testid="qs-llm-backend-gpu"
+                                className={`qs-backend-btn${llmBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
+                                onClick={() => setLlmBackend("gpu")}
+                                aria-pressed={llmBackend === "gpu"}
+                                title="Run the grammar LLM on the GPU (fast, uses VRAM)"
+                            ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
+                            <button
+                                type="button"
+                                id="qs-llm-backend-cpu"
+                                data-testid="qs-llm-backend-cpu"
+                                className={`qs-backend-btn${llmBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
+                                onClick={() => setLlmBackend("cpu")}
+                                aria-pressed={llmBackend === "cpu"}
+                                title="Run the grammar LLM on the CPU (works everywhere, slower)"
                             ><IconCpu size={11} /> CPU</button>
-                          </>
-                        ) : (
-                          <>
+                        </div>
+                    )}
+                  </>
+                )}
+
+                {/* ── Speech engine hardware (hidden on macOS: always Metal) ── */}
+                {!isMac && (
+                  <>
+                    <Section label="Speech engine" info="Where the speech-recognition engine (Whisper, Granite, Qwen3) runs. A GPU is much faster." />
+                    {showPicker ? (
+                        <div className="qs-select-row">
+                            <select
+                                id="qs-asr-device"
+                                data-testid="qs-asr-device"
+                                className="qs-select"
+                                aria-label="Speech engine device"
+                                title={backendInfo}
+                                value={selectedDevice}
+                                disabled={asrBackendLoading}
+                                onChange={(e) => {
+                                    const id = e.target.value;
+                                    const d = gpus.find((g) => g.id === id);
+                                    if (d) onToggleAsrBackend("gpu", d.id, deviceLabel(d));
+                                    else onToggleAsrBackend("cpu");
+                                }}
+                            >
+                                {gpus.map((d) => <option key={d.id} value={d.id}>{deviceLabel(d)}</option>)}
+                                <option value="cpu">CPU</option>
+                            </select>
+                        </div>
+                    ) : (
+                        <div className="qs-backend-row" role="group" aria-label="Speech engine backend" id="qs-asr-backend-group" data-testid="qs-asr-backend-group">
                             <button
                                 type="button"
                                 id="qs-asr-backend-gpu"
@@ -291,8 +275,7 @@ function QuickSettingsComponent({
                                 onClick={() => onToggleAsrBackend("gpu")}
                                 disabled={asrBackendLoading}
                                 aria-pressed={asrBackend === "gpu"}
-                                aria-label="Run speech engine on GPU"
-                                title="Run the active speech engine on GPU (faster, requires VRAM)"
+                                title={backendInfo || "Run the speech engine on the GPU (faster, uses VRAM)"}
                             ><IconBolt size={11} style={{ color: '#facc15' }} /> GPU</button>
                             <button
                                 type="button"
@@ -302,49 +285,10 @@ function QuickSettingsComponent({
                                 onClick={() => onToggleAsrBackend("cpu")}
                                 disabled={asrBackendLoading}
                                 aria-pressed={asrBackend === "cpu"}
-                                aria-label="Run speech engine on CPU"
-                                title="Run the active speech engine on CPU (universal, slower)"
+                                title="Run the speech engine on the CPU (works everywhere, slower)"
                             ><IconCpu size={11} /> CPU</button>
-                          </>
-                        )}
                         </div>
-                  </>
-                )}
-
-                {/* ── LLM Backend ──────────────────────────────── */}
-                {/* macOS fix: Hide the LLM GPU/CPU backend toggle on macOS —
-                    Apple Silicon uses Metal automatically, no user choice needed. */}
-                {!isMac && (
-                  <>
-                    <Section label="Grammar LLM Backend" info="Run the grammar/punctuation correction model (FlowScribe) on GPU (faster) or CPU. This cleans up the transcript after the speech engine produces it." />
-                    <div
-                        id="qs-llm-backend-group"
-                        data-testid="qs-llm-backend-group"
-                        className="qs-backend-row"
-                        role="group"
-                        aria-label="Grammar LLM Backend"
-                    >
-                        <button
-                            type="button"
-                            id="qs-llm-backend-gpu"
-                            data-testid="qs-llm-backend-gpu"
-                            className={`qs-backend-btn${llmBackend === "gpu" ? " qs-backend-btn--active" : ""}`}
-                            onClick={() => setLlmBackend("gpu")}
-                            aria-pressed={llmBackend === "gpu"}
-                            aria-label="Run grammar LLM on GPU"
-                            title="Run grammar LLM on GPU (Fast, requires VRAM)"
-                        ><IconBolt size={12} style={{ color: '#facc15' }} /> GPU</button>
-                        <button
-                            type="button"
-                            id="qs-llm-backend-cpu"
-                            data-testid="qs-llm-backend-cpu"
-                            className={`qs-backend-btn${llmBackend === "cpu" ? " qs-backend-btn--active" : ""}`}
-                            onClick={() => setLlmBackend("cpu")}
-                            aria-pressed={llmBackend === "cpu"}
-                            aria-label="Run grammar LLM on CPU"
-                            title="Run grammar LLM on CPU (Universal, slower)"
-                        ><IconCpu size={12} /> CPU</button>
-                    </div>
+                    )}
                   </>
                 )}
 
@@ -382,31 +326,6 @@ function QuickSettingsComponent({
                     />
                     <span className="qs-volume-label">{volumeLabel}</span>
                 </div>
-
-                {/* ── Personalisation ─────────────────────────── */}
-                <Section label="Personalisation" />
-                <button
-                    type="button"
-                    id="qs-personal-dictionary-btn"
-                    data-testid="qs-personal-dictionary-btn"
-                    className="qs-personal-row"
-                    onClick={openTextSettings}
-                    aria-label={`Open Dictionary settings, currently ${dictionaryCount} entries`}
-                >
-                    <span>Dictionary</span>
-                    <span className="qs-personal-count">{dictionaryCount} entries →</span>
-                </button>
-                <button
-                    type="button"
-                    id="qs-personal-snippets-btn"
-                    data-testid="qs-personal-snippets-btn"
-                    className="qs-personal-row"
-                    onClick={openTextSettings}
-                    aria-label={`Open Snippets settings, currently ${snippetsCount} entries`}
-                >
-                    <span>Snippets</span>
-                    <span className="qs-personal-count">{snippetsCount} entries →</span>
-                </button>
             </div>
         </aside>
     );

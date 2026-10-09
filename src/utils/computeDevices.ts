@@ -26,6 +26,11 @@ export interface DeviceSpeed {
     backend: string;
     load_s: number;
     transcribe_s: number;
+    unloaded_total_s: number;
+    loaded_total_s: number;
+    flowscribe_load_s: number;
+    flowscribe_s: number;
+    flowscribe_device_id: string | null;
     /** Seconds of audio per second of compute. */
     realtime: number;
     error: string | null;

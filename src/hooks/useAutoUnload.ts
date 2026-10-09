@@ -138,7 +138,6 @@ export function useAutoUnload({
             (event) => {
                 if (!active) return;
                 setLoadedEngine(null);
-                setRemainingSeconds(null);
                 const timeoutLabel = formatTimeoutLabel(event.payload.timeout_seconds);
                 const msg = event.payload.timeout_seconds === 1
                     ? "Model unloaded immediately after transcription — VRAM freed"

@@ -33,6 +33,7 @@ export function usePostProcessing(
     const [llmBackend, setLlmBackendState] = useState<"gpu" | "cpu">("gpu");
     const [asrBackend, setAsrBackendState] = useState<"gpu" | "cpu">("gpu");
     const [computeDevice, setComputeDeviceState] = useState("auto");
+    const [llmComputeDevice, setLlmComputeDeviceState] = useState("same");
     const [transcriptionStyle, setTranscriptionStyleState] = useState("Clean");
 
     // Gate auto-load effects until settings are loaded from store,
@@ -57,8 +58,9 @@ export function usePostProcessing(
     const llmRevisionRef = useRef(0);
     const llmErrorRevisionRef = useRef<number | null>(null);
     const mountedRef = useRef(true);
-    const llmIntentRef = useRef({ enabled: enableGrammarLM, backend: llmBackend, device: computeDevice });
-    llmIntentRef.current = { enabled: enableGrammarLM, backend: llmBackend, device: computeDevice };
+    const llmDevice = llmComputeDevice === "same" ? computeDevice : llmComputeDevice;
+    const llmIntentRef = useRef({ enabled: enableGrammarLM, backend: llmBackend, device: llmDevice });
+    llmIntentRef.current = { enabled: enableGrammarLM, backend: llmBackend, device: llmDevice };
     useEffect(() => {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
@@ -87,6 +89,7 @@ export function usePostProcessing(
             const backend = await store.get<"gpu" | "cpu">("llm_backend");
             const asrBe = await store.get<"gpu" | "cpu">("asr_backend");
             const device = await store.get<string>("compute_device");
+            const llmDevice = await store.get<string>("llm_compute_device");
 
             if (grammarLM != null && !changedSettingsRef.current.has("enable_grammar_lm")) setEnableGrammarLMState(grammarLM);
             if (denoise != null && !changedSettingsRef.current.has("enable_denoise")) setEnableDenoiseState(denoise);
@@ -97,6 +100,7 @@ export function usePostProcessing(
             if (backend != null && !changedSettingsRef.current.has("llm_backend")) setLlmBackendState(backend);
             if (asrBe != null && !changedSettingsRef.current.has("asr_backend")) setAsrBackendState(asrBe);
             if (device && !changedSettingsRef.current.has("compute_device")) setComputeDeviceState(device);
+            if (llmDevice && !changedSettingsRef.current.has("llm_compute_device")) setLlmComputeDeviceState(llmDevice);
 
             if (mountedRef.current) setSettingsLoaded(true);
         };
@@ -176,6 +180,15 @@ export function usePostProcessing(
         persist("llm_backend", val);
     }, [persist]);
 
+    const setLlmComputeDevice = useCallback((id: string) => {
+        llmRevisionRef.current += 1;
+        setLlmComputeDeviceState(id);
+        persist("llm_compute_device", id);
+        const backend = id === "cpu" ? "cpu" : "gpu";
+        setLlmBackendState(backend);
+        persist("llm_backend", backend);
+    }, [persist]);
+
     const setAsrBackend = useCallback((val: "gpu" | "cpu") => {
         setAsrBackendState(val);
         persist("asr_backend", val);
@@ -186,11 +199,11 @@ export function usePostProcessing(
         // Publish the setting only after the backend can use it for a reload.
         await deviceQueueRef.current(async () => {
             await invoke("set_compute_device", { id });
-            llmRevisionRef.current += 1;
+            if (llmComputeDevice === "same") llmRevisionRef.current += 1;
             setComputeDeviceState(id);
             persist("compute_device", id);
         });
-    }, [persist]);
+    }, [persist, llmComputeDevice]);
 
     // One lifecycle operation at a time. Preferences made during an operation
     // are read again before loading, and reconciled once that operation settles.
@@ -199,7 +212,7 @@ export function usePostProcessing(
         const applied = appliedLlmBackendRef.current;
         if (llmStatus === "Error" && llmErrorRevisionRef.current === llmRevisionRef.current) return;
         if (enableGrammarLM && llmStatus === "Loaded" && applied?.backend === llmBackend
-            && (llmBackend === "cpu" || applied.device === computeDevice)) return;
+            && (llmBackend === "cpu" || applied.device === llmDevice)) return;
         if (!enableGrammarLM && !applied) {
             if (llmStatus !== "Not Loaded") setLlmStatus("Not Loaded");
             return;
@@ -234,7 +247,7 @@ export function usePostProcessing(
                 }
                 const intent = llmIntentRef.current;
                 setHeaderStatus("Loading FlowScribe LLM...", 60_000);
-                const res = await invoke("init_llm", { useGpu: intent.backend === "gpu" });
+                const res = await invoke("init_llm", { useGpu: intent.backend === "gpu", deviceId: intent.device === "cpu" ? undefined : intent.device });
                 appliedLlmBackendRef.current = { backend: intent.backend, device: intent.device };
                 if (mountedRef.current) {
                     setLlmStatus("Loaded");
@@ -251,7 +264,7 @@ export function usePostProcessing(
             }
         };
         void run();
-    }, [enableGrammarLM, llmStatus, llmBackend, computeDevice, settingsLoaded, setEnableGrammarLM, setHeaderStatus, onOpenSettings]);
+    }, [enableGrammarLM, llmStatus, llmBackend, llmDevice, settingsLoaded, setEnableGrammarLM, setHeaderStatus, onOpenSettings]);
 
     // Storage moves release mapped weights. Reload only once the backend has
     // finished the move (including rollback after a failed copy).
@@ -304,5 +317,7 @@ export function usePostProcessing(
         setAsrBackend,
         computeDevice,
         setComputeDevice,
+        llmComputeDevice,
+        setLlmComputeDevice,
     };
 }
