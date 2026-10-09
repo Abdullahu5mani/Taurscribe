@@ -9,9 +9,16 @@
  */
 
 import { DEMO_DEVICES, DEMO_SPEEDS } from "./deviceFixtures";
+import type { RecordingSource } from "../utils/meetingImport";
 import type { FileHistoryRecord } from "../types/fileHistory";
 
 type Callback = (msg: { event: string; id: number; payload: unknown }) => void;
+
+// Set localStorage "taurscribe-demo-platform" to "windows" to preview the
+// Windows layout (GPU pickers, CUDA backend) on any machine.
+const DEMO_WINDOWS = (() => {
+    try { return localStorage.getItem("taurscribe-demo-platform") === "windows"; } catch { return false; }
+})();
 
 const HOUR = 3600_000;
 const now = Date.now();
@@ -171,9 +178,9 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "plugin:window|is_fullscreen": return false;
 
         // System
-        case "get_backend_info": return "Metal (Apple M4)";
-        case "get_platform": return "macos";
-        case "is_apple_silicon": return true;
+        case "get_backend_info": return DEMO_WINDOWS ? "CUDA0" : "Metal (Apple M4)";
+        case "get_platform": return DEMO_WINDOWS ? "windows" : "macos";
+        case "is_apple_silicon": return !DEMO_WINDOWS;
         case "get_system_info": return { cpu_name: "Apple M4", cpu_cores: 10, ram_total_gb: 16, gpu_name: "Apple M4", cuda_available: false, vram_gb: null, backend_hint: "Metal" };
         case "check_microphone_permission": return "granted";
         case "check_accessibility_permission":
@@ -248,6 +255,28 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         }
 
         // Meetings
+        case "plugin:dialog|open":
+            return ["/demo/Meeting part 2.m4a", "/demo/Meeting part 1.wav"];
+        case "inspect_meeting_recordings": {
+            const recordings: RecordingSource[] = (args.paths as string[]).map(path => {
+                const start = new Date(Date.now() - (path.includes("part 1") ? 4 : 2) * HOUR).toISOString();
+                return { path, name: path.split("/").pop()!, duration_ms: 600_000, recorded_start: start,
+                    recorded_end: new Date(Date.parse(start) + 600_000).toISOString(), timestamp_source: "Embedded recording timestamp (demo)",
+                    file_created_at: null, file_modified_at: null, offset_ms: 0 };
+            });
+            return { recordings, errors: [] };
+        }
+        case "import_meeting_recordings": {
+            const sources = (handle("inspect_meeting_recordings", args) as { recordings: RecordingSource[] }).recordings;
+            const id = nextId++;
+            const imported = { ...meetings[0], id, session_id: `demo-import-${id}`, title: String(args.title), platform: "Imported recording", url: "", app_name: "Taurscribe",
+                created_at: sources[0].recorded_start!, duration_ms: sources.reduce((ms, s) => ms + s.duration_ms, 0),
+                recording_sources: sources.map((source, index) => ({ ...source, offset_ms: index * 600_000 })) };
+            meetings.unshift(imported);
+            emitDemo("meeting-processing-complete", { meeting_id: id });
+            return id;
+        }
+        case "suggest_speaker_names": return [];
         case "get_meeting_detection_status": return { is_watching: true, active_meetings_count: 0, active_meetings: [] };
         case "list_meetings":
             return meetings.map((m) => ({
@@ -280,7 +309,7 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "set_compute_device": return null;
         case "get_my_voice": return { enrolled: false, speech_seconds: null, created_at: null, speaker_model_installed: true };
         case "benchmark_compute_devices":
-            return new Promise((r) => setTimeout(r, 1200)).then(() => ({ ok: true, data: DEMO_SPEEDS }));
+            return new Promise((r) => setTimeout(r, 1200)).then(() => ({ ok: true, data: { ...DEMO_SPEEDS, include_flowscribe: !!args?.includeFlowscribe } }));
         case "cli_install_status": return { installed: false, location: "/usr/local/bin/taurscribe", note: null, managed: false };
         case "cli_ui_ready": return null;
         case "get_storage_locations": return [

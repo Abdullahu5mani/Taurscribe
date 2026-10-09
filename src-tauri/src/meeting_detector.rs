@@ -21,6 +21,8 @@ use crate::AudioState;
 mod browser_activity;
 
 fn is_browser_prejoin(pid: u32, app_name: &str, url: &str, platform: &str) -> bool {
+    // Meet's call controls are read over Accessibility, which every macOS browser
+    // exposes (an unreadable page stays unknown and suppresses nothing).
     #[cfg(target_os = "macos")]
     if platform == "meet" && app_name.to_lowercase().contains("chrome") {
         return browser_activity::state(pid, url) == Some(false);
@@ -103,6 +105,33 @@ pub fn classify_meeting_url(url: &str) -> Option<&'static str> {
         return in_call.then_some("webex");
     }
     None
+}
+
+/// How long an app outside the catalogue must hold the mic while playing audio
+/// before it is offered as a call. Skips a voice tool's brief capture or an
+/// app's microphone check.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const OTHER_APP_CALL_MIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Apps meeting-record classifies itself (conferencing clients and browsers), by
+/// macOS bundle id or Windows executable name. Their mic use is the crate's to
+/// judge; WebKit covers Safari's and our own web view's helper processes.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn is_catalogued_app(name: &str, bundle_id: &str) -> bool {
+    const BUNDLES: &[&str] = &[
+        "us.zoom.", "com.microsoft.teams", "com.cisco.webex", "com.webex.meetingmanager",
+        "com.tinyspeck.slackmacgap", "com.hnc.discord", "com.google.chrome", "com.apple.safari",
+        "com.microsoft.edgemac", "org.mozilla.firefox", "company.thebrowser.browser",
+        "com.brave.browser", "com.vivaldi.vivaldi", "com.apple.webkit",
+    ];
+    const EXES: &[&str] = &[
+        "zoom.exe", "cpthost.exe", "teams.exe", "ms-teams.exe", "msteams.exe", "webexmta.exe",
+        "webex.exe", "atmgr.exe", "slack.exe", "discord.exe", "chrome.exe", "msedge.exe",
+        "firefox.exe", "brave.exe", "arc.exe", "vivaldi.exe", "opera.exe", "msedgewebview2.exe",
+    ];
+    let bundle = bundle_id.to_lowercase();
+    let exe = name.to_lowercase();
+    (!bundle.is_empty() && BUNDLES.iter().any(|b| bundle.starts_with(b))) || EXES.contains(&exe.as_str())
 }
 
 // ── macOS & Windows Implementation ──────────────────────────────────────────

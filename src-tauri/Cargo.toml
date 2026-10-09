@@ -51,6 +51,11 @@ path = "tools/engine_bench.rs"
 required-features = ["dev-tools"]
 
 [[bin]]
+name = "stop_latency_bench"
+path = "tools/stop_latency_bench.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
 name = "librispeech_manifest"
 path = "tools/librispeech_manifest.rs"
 required-features = ["dev-tools"]

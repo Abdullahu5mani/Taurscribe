@@ -195,9 +195,6 @@ export function AboutTab() {
                         </span>
                     )}
                 </div>
-                <p className="setting-card-desc">
-                    Hardware acceleration frameworks and neural processing units active on this device.
-                </p>
 
                 {hwLoading ? (
                     <div className="about-hw-loading">Detecting hardware accelerators…</div>
@@ -315,7 +312,6 @@ export function AboutTab() {
 
             <div className="setting-card" style={{ marginTop: '12px' }}>
                 <h4 className="setting-card-label-plain">Storage locations</h4>
-                <p className="setting-card-desc">Everything stays on this computer. Models and meeting recordings can be moved to another drive in Storage.</p>
                 {storageFolders.map(({ label, folder, pathByPlatform }) => (
                     <div className="about-row about-row--folder" key={folder}>
                         <span className="about-row-label">{label}</span>
@@ -337,10 +333,7 @@ export function AboutTab() {
 
             <div className="setting-card" style={{ marginTop: '12px' }}>
                 <h4 className="setting-card-label-plain">Factory reset</h4>
-                <p className="setting-card-desc">
-                    Deletes all local app data and restarts Taurscribe into the setup wizard as a brand-new install.
-                    This removes downloaded models, settings, transcript history, and temp files. Models or recordings kept in a custom folder (Storage) are left where they are.
-                </p>
+                <p className="setting-card-desc">Deletes models, settings and history, then restarts into setup. Files in a custom Storage folder are kept.</p>
                 <div className="about-reset-actions">
                     <button
                         type="button"

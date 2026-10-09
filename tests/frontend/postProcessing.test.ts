@@ -75,6 +75,18 @@ test("the cleanup CPU choice persists without moving speech off its GPU", async 
     expect(handle.current.computeDevice).toBe("cuda:RTX");
 });
 
+test("switching CPU cleanup back to GPU follows speech GPU changes", async () => {
+    const settings: Record<string, unknown> = { enable_grammar_lm: true, llm_backend: "cpu", llm_compute_device: "cpu", compute_device: "cuda:RTX" };
+    const { handle, settle } = start(settings);
+    await settle();
+    handle.current.setLlmBackend("gpu"); await settle();
+    expect(handle.current.llmComputeDevice).toBe("same");
+    expect(settings.llm_compute_device).toBe("same");
+    expect(calls.filter(c => c.cmd === "init_llm").at(-1)?.args?.deviceId).toBe("cuda:RTX");
+    await handle.current.setComputeDevice("vulkan:other"); await settle();
+    expect(calls.filter(c => c.cmd === "init_llm").at(-1)?.args?.deviceId).toBe("vulkan:other");
+});
+
 test("switching FlowScribe to the CPU reloads it on the CPU", async () => {
     const { handle, settle } = start({ enable_grammar_lm: true, llm_backend: "gpu" });
     await settle();

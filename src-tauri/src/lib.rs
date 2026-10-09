@@ -1,6 +1,7 @@
 // Module declarations
 mod audio;
 pub mod audio_decode;
+pub mod recording_import;
 pub mod audio_dual_channel;
 pub mod audio_preprocess;
 pub mod commands;
@@ -464,6 +465,8 @@ pub fn run() {
             cli_server::install_cli,
             cli_server::uninstall_cli,
             commands::list_meetings,
+            commands::inspect_meeting_recordings,
+            commands::import_meeting_recordings,
             commands::get_meeting_platform_counts,
             commands::get_meeting_detail,
             commands::update_meeting,

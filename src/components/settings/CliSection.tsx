@@ -61,10 +61,7 @@ export function CliSection() {
                         >{busy ? 'Working…' : status.installed ? 'Uninstall' : 'Install'}</button>
                     )}
                 </div>
-                <p className="setting-card-desc">
-                    Dictate, transcribe files and search your history from a terminal or a script.
-                    Dictation and file transcription use this app, and start it if it isn't running.
-                </p>
+                <p className="setting-card-desc">Dictate, transcribe and search your history from a terminal.</p>
                 <div className="info-row" style={{ marginTop: '12px' }}>
                     <span className="info-row-label">Location</span>
                     <code className="info-row-value" style={{ wordBreak: 'break-all', fontSize: '11px' }}>{status.location}</code>

@@ -1,5 +1,6 @@
 mod benchmark;
 mod file_transcription;
+mod meeting_import;
 mod history;
 mod llm;
 pub mod misc;
@@ -11,6 +12,7 @@ mod settings;
 
 pub use benchmark::*;
 pub use file_transcription::*;
+pub use meeting_import::*;
 pub use history::*;
 pub use llm::*;
 pub use misc::*;

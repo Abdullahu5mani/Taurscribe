@@ -328,6 +328,8 @@ pub struct MeetingDetailRecord {
     pub category: String,
     pub speaker_count: i64,
     pub turns: Vec<DiarizedTurn>,
+    #[serde(default)]
+    pub recording_sources: Vec<crate::recording_import::RecordingSource>,
     /// The meeting has an audio path but the file is gone (deleted or moved).
     /// The transcript is still complete.
     #[serde(default)]
@@ -562,6 +564,21 @@ pub fn insert_completed_meeting(
     transcript_raw: &str,
     turns: &[DiarizedTurn],
 ) -> Result<i64, String> {
+    insert_meeting_with_sources(conn, title, platform, app_name, url, duration_ms, audio_path, transcript_raw, turns, &[])
+}
+
+pub(super) fn insert_meeting_with_sources(
+    conn: &Connection,
+    title: &str,
+    platform: &str,
+    app_name: &str,
+    url: &str,
+    duration_ms: i64,
+    audio_path: Option<&str>,
+    transcript_raw: &str,
+    turns: &[DiarizedTurn],
+    sources: &[crate::recording_import::RecordingSource],
+) -> Result<i64, String> {
     let tx = conn.unchecked_transaction().map_err(|e| format!("Failed to begin meeting transaction: {}", e))?;
     // Random suffix: two meetings saved within the same millisecond must not collide.
     let session_id = format!(
@@ -570,7 +587,9 @@ pub fn insert_completed_meeting(
         std::process::id(),
         rand::random::<u32>() & 0xff_ffff
     );
-    let created_at = Utc::now().to_rfc3339();
+    let created_at = sources.iter().filter_map(|s| s.recorded_start.as_deref())
+        .filter_map(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).min()
+        .map(|d| d.with_timezone(&Utc).to_rfc3339()).unwrap_or_else(|| Utc::now().to_rfc3339());
 
     // Generate heuristics summary & action items
     let summary_output = extract_summary_heuristics(turns, title);
@@ -608,6 +627,10 @@ pub fn insert_completed_meeting(
     .map_err(|e| format!("Failed to insert meeting: {}", e))?;
 
     let meeting_id = tx.last_insert_rowid();
+    if !sources.is_empty() {
+        let json = serde_json::to_string(sources).map_err(|e| e.to_string())?;
+        tx.execute("UPDATE meetings SET recording_sources = ?1, parts = ?2 WHERE id = ?3", params![json, sources.len() as i64, meeting_id]).map_err(|e| e.to_string())?;
+    }
 
     insert_turns(&tx, meeting_id, turns)?;
     record_vault_appearances(&tx, meeting_id, turns, &std::collections::HashSet::new());
@@ -887,6 +910,8 @@ pub async fn get_meeting_detail(meeting_id: i64) -> Result<MeetingDetailRecord, 
             category: meeting.12,
             speaker_count: meeting.13,
             turns,
+            recording_sources: conn.query_row("SELECT recording_sources FROM meetings WHERE id = ?1", [meeting_id], |r| r.get::<_, Option<String>>(0))
+                .map_err(|e| e.to_string())?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             audio_missing,
             clips_missing,
         })
@@ -1512,6 +1537,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn imported_meeting_saves_source_timeline_and_capture_date_in_one_transaction() {
+        let conn = Connection::open_in_memory().unwrap(); ensure_meetings_schema(&conn).unwrap();
+        let source = crate::recording_import::RecordingSource {
+            path: "/original/part.wav".into(), name: "part.wav".into(), duration_ms: 1000,
+            recorded_start: Some("2026-10-08T12:00:00Z".into()), recorded_end: Some("2026-10-08T12:00:01Z".into()),
+            timestamp_source: Some("Embedded recording timestamp".into()), file_created_at: None, file_modified_at: None, offset_ms: 0,
+        };
+        let id = insert_meeting_with_sources(&conn, "Imported", "Imported recording", "Taurscribe", "", 1000, None, "Speech", &[], &[source]).unwrap();
+        let (created, json, parts): (String, String, i64) = conn.query_row("SELECT created_at, recording_sources, parts FROM meetings WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!(created, "2026-10-08T12:00:00+00:00"); assert_eq!(parts, 1);
+        let sources: Vec<crate::recording_import::RecordingSource> = serde_json::from_str(&json).unwrap();
+        assert_eq!(sources[0].name, "part.wav"); assert_eq!(sources[0].offset_ms, 0);
+    }
+
+    #[test]
     fn test_legacy_wav_meetings_are_compressed() {
         let _serial = crate::meeting_audio::COMPRESS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("taurscribe_legacy_{}", std::process::id()));
@@ -2041,7 +2081,7 @@ mod vault_and_export_tests {
             ],
             category: "Planning".into(), speaker_count: 2,
             turns: vec![turn("You", 5_000, "Let's start."), turn("Sam", 3_723_000, "Done, an hour later.")],
-            audio_missing: false, clips_missing: 0,
+            audio_missing: false, clips_missing: 0, recording_sources: vec![],
         }
     }
 

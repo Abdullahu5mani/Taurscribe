@@ -176,9 +176,13 @@ export function usePostProcessing(
 
     const setLlmBackend = useCallback((val: "gpu" | "cpu") => {
         llmRevisionRef.current += 1;
+        if (val === "gpu" && llmComputeDevice === "cpu") {
+            setLlmComputeDeviceState("same");
+            persist("llm_compute_device", "same");
+        }
         setLlmBackendState(val);
         persist("llm_backend", val);
-    }, [persist]);
+    }, [persist, llmComputeDevice]);
 
     const setLlmComputeDevice = useCallback((id: string) => {
         llmRevisionRef.current += 1;

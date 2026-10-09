@@ -12,7 +12,6 @@
   height: 2.25rem;
   flex-shrink: 0;
   background: var(--bg-primary);
-  border-bottom: 1px solid var(--border-color);
   user-select: none;
   -webkit-user-select: none;
   cursor: default;

@@ -271,7 +271,7 @@ fn cmd_benchmark(o: &Opts) -> Result<(), Fail> {
         return Err(Fail::NotRunning);
     }
     if !o.json {
-        eprintln!("Timing the loaded model on each device (30 s of test audio each)…");
+        eprintln!("Comparing unloaded and loaded models on each device (11 s of speech, three pairs each)…");
     }
     // Loading a large model on each device can take minutes.
     let report = request("benchmark", Value::Null, Some(Duration::from_secs(1800)))?;
@@ -285,12 +285,16 @@ fn cmd_benchmark(o: &Opts) -> Result<(), Fail> {
         match r["error"].as_str() {
             Some(e) => println!("  {device:<44} failed: {e}"),
             None => println!(
-                "  {device:<44} {:>6.1}x real time  (transcribe {:.2}s, load {:.2}s)",
+                "  {device:<44} {:>6.1}x real time  (unloaded {:.2}s, loaded {:.2}s; speech load {:.2}s)",
                 r["realtime"].as_f64().unwrap_or(0.0),
-                r["transcribe_s"].as_f64().unwrap_or(0.0),
+                r["unloaded_total_s"].as_f64().unwrap_or(0.0),
+                r["loaded_total_s"].as_f64().unwrap_or(0.0),
                 r["load_s"].as_f64().unwrap_or(0.0)
             ),
         }
+    }
+    if let Some(error) = report["restore_error"].as_str() {
+        return Err(Fail::Other(format!("Speed test finished, but restoring the model failed: {error}")));
     }
     Ok(())
 }

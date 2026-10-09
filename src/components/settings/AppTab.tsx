@@ -97,7 +97,7 @@ export function AppTab({
                     <span className="slider round" />
                 </label>
             </div>
-            <p className="setting-card-desc">{desc}</p>
+            {desc && <p className="setting-card-desc">{desc}</p>}
         </div>
     );
 
@@ -108,13 +108,13 @@ export function AppTab({
             <h3 className="settings-section-title">Startup</h3>
 
             {switchRow('app-launch-at-login-toggle', 'Launch at login',
-                'Open Taurscribe automatically when you log in, so the hotkey is ready right away.',
+                '',
                 launchAtLogin, toggleLaunchAtLogin)}
             {switchRow('app-start-hidden-toggle', 'Start hidden',
-                `Open in the background without showing the window. Open it from the ${trayName}${isMac ? ', the Dock' : ''} or by launching Taurscribe again.`,
+                'Open in the background, without the window.',
                 startHidden, toggleStartHidden)}
             {switchRow('app-show-tray-icon-toggle', `Show ${trayName}`,
-                `Shows recording status and quick actions in the ${isMac ? 'menu bar' : 'system tray'}. When it's off, open the window by launching Taurscribe again${isMac ? ' or from the Dock' : ''}.`,
+                '',
                 showTrayIcon, toggleTrayIcon)}
             {startupError && <p id="app-startup-error" data-testid="app-startup-error" className="storage-warning storage-warning--error" role="alert">{startupError}</p>}
 
@@ -125,9 +125,6 @@ export function AppTab({
                 <div className="setting-card-header">
                     <span className="setting-card-label">Close button behavior</span>
                 </div>
-                <p className="setting-card-desc">
-                    What happens when you click the window's close (×) button.
-                </p>
                 <div
                     id="close-behavior-options"
                     data-testid="close-behavior-options"
@@ -148,9 +145,6 @@ export function AppTab({
                         />
                         <div className="close-behavior-option-content">
                             <span className="close-behavior-option-title">Minimise to tray</span>
-                            <span className="close-behavior-option-desc">
-                                The app stays running in the system tray. Click the tray icon to reopen.
-                            </span>
                         </div>
                     </label>
                     <label className={`close-behavior-option${closeBehavior === 'quit' ? ' close-behavior-option--active' : ''}`} htmlFor="close-behavior-quit">
@@ -166,9 +160,6 @@ export function AppTab({
                         />
                         <div className="close-behavior-option-content">
                             <span className="close-behavior-option-title">Quit app</span>
-                            <span className="close-behavior-option-desc">
-                                The process exits completely. Use the tray menu to reopen.
-                            </span>
                         </div>
                     </label>
                 </div>
@@ -214,9 +205,6 @@ export function AppTab({
                     </button>
                 </div>
 
-                <p className="setting-card-desc">
-                    Audio cues on recording start, paste complete, and error.
-                </p>
 
                 <div className="volume-row" style={{ opacity: soundMuted ? 0.35 : 1, transition: 'opacity 0.2s' }}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)', flexShrink: 0 }}>

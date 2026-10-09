@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { IconX } from './Icons';
 import { Logo } from './Logo';
@@ -121,6 +121,9 @@ export function SettingsModal({
         return () => clearTimeout(t);
     }, [isOpen]);
     const modalRef = useRef<HTMLDivElement>(null);
+    // The sidebar highlight slides to the active tab instead of jumping.
+    const navRef = useRef<HTMLElement>(null);
+    const [navMarker, setNavMarker] = useState<{ top: number; height: number } | null>(null);
     const previousFocusRef = useRef<HTMLElement | null>(null);
 
     // Jump to the requested tab each time the modal is opened. Done during
@@ -284,6 +287,20 @@ export function SettingsModal({
 
     const current = TABS.find(t => t.id === activeTab) ?? TABS[0];
 
+    useLayoutEffect(() => {
+        if (!isOpen) return;
+        const nav = navRef.current;
+        if (!nav) return;
+        const place = () => {
+            const btn = nav.querySelector<HTMLElement>('.settings-nav-btn.active');
+            setNavMarker(btn ? { top: btn.offsetTop, height: btn.offsetHeight } : null);
+        };
+        place();
+        const ro = new ResizeObserver(place);
+        ro.observe(nav);
+        return () => ro.disconnect();
+    }, [isOpen, activeTab]);
+
     return (
         <div
             id="settings-modal-overlay"
@@ -309,12 +326,20 @@ export function SettingsModal({
                             <span>Settings</span>
                         </div>
                         <nav
+                            ref={navRef}
                             id="settings-tablist"
                             data-testid="settings-tablist"
                             className="settings-nav"
                             role="tablist"
                             aria-label="Settings sections"
                         >
+                            {navMarker && (
+                                <span
+                                    className="settings-nav-marker"
+                                    aria-hidden="true"
+                                    style={{ transform: `translateY(${navMarker.top}px)`, height: navMarker.height }}
+                                />
+                            )}
                             {TABS.map(tab => (
                                 <button
                                     type="button"
@@ -335,18 +360,17 @@ export function SettingsModal({
                                 </button>
                             ))}
                         </nav>
-                        <p className="settings-side-note" aria-live="polite">
-                            <span className="settings-side-note-dot" />
-                            Hotkey paused while Settings is open
-                        </p>
                     </aside>
 
                     <div className="settings-main">
                         <header className="settings-page-header">
                             <div key={activeTab} className="settings-page-heading">
                                 <h2 id="settings-modal-title">{current.label}</h2>
-                                <p>{current.blurb}</p>
                             </div>
+                            <span className="settings-hotkey-paused" role="status" title="The dictation hotkey is turned off while Settings is open, so changing the hotkey can't start a recording. It turns back on when you close Settings.">
+                                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1" width="2.4" height="8" rx="0.8" fill="currentColor" /><rect x="6.1" y="1" width="2.4" height="8" rx="0.8" fill="currentColor" /></svg>
+                                Hotkey off until you close Settings
+                            </span>
                             <button
                                 type="button"
                                 id="settings-close-btn"

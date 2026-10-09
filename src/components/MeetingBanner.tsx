@@ -57,7 +57,9 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
     }, [meetingKey]);
 
     useEffect(() => {
-        if (!meeting || isDismissed) {
+        // A call in an app the detector doesn't know (should_record false) is
+        // only offered: a DAW or a voice tool can look like one.
+        if (!meeting || isDismissed || !meeting.should_record) {
             cancelAutoRecord();
             return;
         }

@@ -92,18 +92,12 @@ export function TextTab({
             </div>
 
             <div className="setting-card">
-                <p className="setting-card-desc">
-                    Biases the acoustic speech decoder toward specialized names, acronyms, and technical jargon.
-                    Eliminates phonetic misspellings at the source before transcripts are generated.
-                </p>
+                <p className="setting-card-desc">Helps the engine spell names, acronyms and jargon.</p>
 
                 {/* Context Bias Toggle */}
                 <div className="setting-row" style={{ padding: "8px 0 16px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                     <div className="setting-info">
                         <span className="setting-label">Use the focused app for context</span>
-                        <span className="setting-desc">
-                            Automatically infer domain keywords from your currently focused window (IDEs, Slack, Zoom, medical software).
-                        </span>
                     </div>
                     <label className="switch" htmlFor="context-bias-toggle">
                         <input
@@ -255,17 +249,11 @@ export function TextTab({
                 </div>
             </div>
 
-            <p className="dict-tab-note">
-                <strong>Tip:</strong> Decoder biasing guides beam search probabilities so proper nouns and acronyms are recognized on the first pass.
-            </p>
-
             {/* ── Custom Dictionary ───────────────────────────────── */}
             <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Replacements</h3>
 
             <div className="setting-card">
-                <p className="setting-card-desc">
-                    Fix words the AI keeps getting wrong — phonetic replacements that run <strong>before</strong> grammar correction.
-                </p>
+                <p className="setting-card-desc">Fix words the engine keeps getting wrong. Runs before grammar correction.</p>
 
                 <div className="dict-add-row">
                     <div className="dict-add-fields">
@@ -356,18 +344,11 @@ export function TextTab({
                 )}
             </div>
 
-            <p className="dict-tab-note">
-                <strong>Tip:</strong> Enter words exactly how the AI mistranscribes them in the "Sounds like" field.
-            </p>
-
             {/* ── Text Snippets ───────────────────────────────────── */}
             <h3 className="settings-section-title" style={{ marginTop: '36px' }}>Text snippets</h3>
 
             <div className="setting-card">
-                <p className="setting-card-desc">
-                    Say a short trigger phrase and it gets replaced with a longer block of text.
-                    Snippets expand <strong>after</strong> grammar correction.
-                </p>
+                <p className="setting-card-desc">Say a trigger phrase to insert longer text. Expands after grammar correction.</p>
 
                 <div className="snippet-add-section">
                     <div className="snippet-add-row">
@@ -462,10 +443,6 @@ export function TextTab({
                     </div>
                 )}
             </div>
-
-            <p className="dict-tab-note">
-                <strong>Tip:</strong> Use short, unique triggers that you wouldn't say in normal speech.
-            </p>
 
         </div>
     );

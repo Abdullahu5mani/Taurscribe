@@ -27,10 +27,12 @@
 
 .settings-overlay.settings-overlay--open {
   /* No !important: it would block the fade-in animation. */
-  background-color: rgba(0, 0, 0, 0.45);
+  background-color: rgba(0, 0, 0, 0.55);
   backdrop-filter: none !important;
   animation: settingsBackdropIn 200ms ease-out both !important;
-  padding: 10px;
+  /* A visible margin of backdrop around the sheet; clicking it closes Settings. */
+  padding: clamp(10px, 3.5vw, 44px);
+  cursor: default;
   align-items: stretch !important;
   justify-content: stretch !important;
 }
@@ -46,14 +48,14 @@
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
   width: 100%;
-  max-width: 1080px;
+  max-width: 1000px;
   height: 100%;
   max-height: none;
   margin: 0 auto;
   background: var(--s-bg);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  border: 1px solid var(--s-border);
+  border: none;
   border-radius: 14px;
   box-shadow: 0 24px 64px -12px rgba(0, 0, 0, 0.7);
   overflow: hidden;
@@ -85,8 +87,8 @@
   gap: 4px;
   padding: 14px 10px 12px;
   background: var(--s-side);
-  border-right: 1px solid var(--s-divider);
   min-height: 0;
+  transition: padding 240ms var(--s-ease);
 }
 
 .settings-side-brand {
@@ -99,12 +101,27 @@
 }
 
 .settings-nav {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+
+/* One highlight that slides between tabs (placed by SettingsModal.tsx). */
+.settings-nav-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.085);
+  transition: transform 280ms var(--s-ease), height 280ms var(--s-ease);
+  pointer-events: none;
+}
+
+.settings-nav-btn { position: relative; }
 
 .settings-nav-btn {
   display: flex;
@@ -134,7 +151,7 @@
 }
 
 .settings-nav-btn.active {
-  background: rgba(255, 255, 255, 0.085);
+  background: none;
   color: var(--s-text);
 }
 
@@ -146,25 +163,6 @@
 .settings-nav-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-}
-
-.settings-side-note {
-  margin: auto 0 0;
-  padding: 10px 8px 2px;
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  font: 400 11px/1.4 var(--font-sans);
-  color: var(--s-text-3);
-}
-
-.settings-side-note-dot {
-  width: 6px;
-  height: 6px;
-  margin-top: 4px;
-  border-radius: 50%;
-  background: #f5a524;
-  flex-shrink: 0;
 }
 
 /* ── Main column ────────────────────────────────────────────────────── */
@@ -180,8 +178,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 22px 28px 14px;
-  border-bottom: 1px solid var(--s-divider);
+  padding: 22px 28px 6px;
 }
 
 .settings-sheet--switched .settings-page-heading {
@@ -200,6 +197,20 @@
   margin: 4px 0 0;
   font: 400 13px/1.4 var(--font-sans);
   color: var(--s-text-2);
+}
+
+.settings-hotkey-paused {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 3px 8px 0 auto;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(245, 165, 36, 0.12);
+  color: #f5b54a;
+  font: 500 12px/1 var(--font-sans);
+  white-space: nowrap;
+  cursor: help;
 }
 
 .settings-close {
@@ -293,7 +304,7 @@
 /* ── Cards (a group of related controls) ────────────────────────────── */
 .settings-sheet .setting-card {
   background: var(--s-card);
-  border: 1px solid var(--s-border);
+  border: 1px solid transparent;
   border-radius: var(--s-radius);
   padding: 14px 16px;
   transition: background 160ms ease, border-color 160ms ease;
@@ -477,43 +488,31 @@
 
 .settings-sheet .volume-slider { accent-color: var(--s-accent); }
 
-/* ── Narrow windows: the sidebar becomes a tab strip ────────────────── */
-@media (max-width: 700px) {
-  .settings-overlay--open { padding: 0; }
+/* ── Narrow windows: the sidebar keeps its place and shrinks to icons ── */
+.settings-modal.settings-sheet {
+  transition: grid-template-columns 240ms var(--s-ease);
+}
+
+@media (max-width: 760px) {
+  .settings-overlay--open { padding: 6px; }
 
   .settings-modal.settings-sheet {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    border-radius: 0;
-    border-width: 0;
+    grid-template-columns: 56px minmax(0, 1fr);
   }
 
-  .settings-side {
-    flex-direction: row;
-    align-items: center;
-    padding: 8px 10px;
-    border-right: none;
-    border-bottom: 1px solid var(--s-divider);
-  }
+  .settings-side { padding: 14px 8px 12px; }
 
-  .settings-side-brand,
-  .settings-side-note { display: none; }
+  .settings-side-brand { justify-content: center; padding: 4px 0 14px; }
 
-  .settings-nav {
-    flex-direction: row;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .settings-nav::-webkit-scrollbar { display: none; }
+  .settings-side-brand span,
+  .settings-nav-btn span { display: none; }
 
-  .settings-nav-btn {
-    width: auto;
-    white-space: nowrap;
-    padding: 6px 10px;
-  }
+  .settings-hotkey-paused { padding: 5px 9px; font-size: 11px; }
 
-  .settings-page-header { padding: 16px 18px 12px; }
-  .settings-sheet .settings-content { padding: 4px 18px 32px !important; }
+  .settings-nav-btn { justify-content: center; padding: 8px 0; }
+
+  .settings-page-header { padding: 16px 18px 4px; }
+  .settings-sheet .settings-content { padding: 8px 18px 32px !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -666,8 +665,8 @@
   width: 100%;
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid var(--s-border);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.035);
   color: var(--s-text);
   font: inherit;
   text-align: left;

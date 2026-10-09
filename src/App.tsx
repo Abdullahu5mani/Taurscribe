@@ -159,7 +159,9 @@ function App() {
   }, []);
   const setFileMode = (files: boolean) => setNavMode(files ? "files" : "mic");
   /** True while FileTranscriptionPanel has a file actively transcribing */
-  const [isFileTranscribing, setIsFileTranscribing] = useState(false);
+  const [isFileJobTranscribing, setIsFileTranscribing] = useState(false);
+  const [isMeetingImporting, setIsMeetingImporting] = useState(false);
+  const isFileTranscribing = isFileJobTranscribing || isMeetingImporting;
   const [noModelCtaAttention, setNoModelCtaAttention] = useState(false);
 
   // macOS fix: Detect the runtime platform so we can hide/adjust UI elements
@@ -867,10 +869,10 @@ function App() {
           recordBtnBusy ? "record-btn processing" :
             "record-btn idle";
   const recordBtnLabel =
-    noModel ? "NO MODEL" :
-      isFileTranscribing ? "BUSY" :
-        isRecording ? "STOP" :
-          recordBtnBusy ? "..." : "REC";
+    noModel ? "No model" :
+      isFileTranscribing ? "Busy" :
+        isRecording ? "Stop" :
+          recordBtnBusy ? "Working…" : "Record";
   const recordBtnAriaLabel =
     noModel ? "Download a model first in Settings" :
       isFileTranscribing ? "Cannot record while a file is being transcribed" :
@@ -1288,8 +1290,8 @@ function App() {
                 aria-label="Microphone dictation mode"
                 className={`mode-toggle-btn${navMode === "mic" ? " mode-toggle-btn--active" : ""}`}
                 onClick={() => setNavMode("mic")}
-                disabled={navMode === "files" && isFileTranscribing}
-                title={navMode === "files" && isFileTranscribing ? "Wait for file transcription to finish" : undefined}
+                disabled={isFileTranscribing}
+                title={isFileTranscribing ? "Wait for audio processing to finish" : undefined}
               >
                 <IconMic size={13} /> Mic
               </button>
@@ -1302,7 +1304,7 @@ function App() {
                 aria-label="Meeting detection and dual-channel recording mode"
                 className={`mode-toggle-btn${navMode === "meetings" ? " mode-toggle-btn--active" : ""}`}
                 onClick={() => setNavMode("meetings")}
-                disabled={navMode === "files" && isFileTranscribing}
+                disabled={isFileTranscribing}
               >
                 <IconVideo size={13} /> Meetings
                 {activeMeeting && (
@@ -1318,6 +1320,7 @@ function App() {
                 aria-label="File transcription mode"
                 className={`mode-toggle-btn${navMode === "files" ? " mode-toggle-btn--active" : ""}`}
                 onClick={() => setNavMode("files")}
+                disabled={isFileTranscribing}
               >
                 <IconFileText size={13} /> Files
               </button>
@@ -1378,11 +1381,15 @@ function App() {
                 currentQwen3Model={currentQwen3Model}
                 isModelLoading={isLoading}
                 isVoiceEnrolling={isVoiceEnrolling}
+                isVisible={navMode === "files"}
                 onFileProcessingChange={setIsFileTranscribing}
               />
             </div>
             {navMode === "meetings" && (
               <MeetingsPanel
+                importBlocked={isLoading || isVoiceEnrolling || isProcessingTranscript || isFileJobTranscribing}
+                hasDiarizationModel={settingsModels.some((m) => m.id === DIARIZATION_MODEL_ID && m.downloaded)}
+                onImportProcessingChange={setIsMeetingImporting}
                 activeMeeting={activeMeeting}
                 isRecording={isRecording}
                 isDualChannelRecording={isDualChannelRecording}
