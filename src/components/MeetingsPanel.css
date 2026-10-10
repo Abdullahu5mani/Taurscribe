@@ -1306,3 +1306,13 @@
 .meeting-tag-chip { padding:4px 9px; border-radius:20px; color:#d5c5ff; background:#392750; }
 .meeting-tags input { flex:1; min-width:150px; color:inherit; background:#181820; border:1px solid #494252; border-radius:7px; padding:8px; }
 .meeting-tags > p { flex-basis:100%; }
+
+.turn-header { flex-wrap:wrap; gap:8px; }
+.turn-speaker-badge-wrap { min-width:0; flex-wrap:wrap; }
+.turn-speaker-name { overflow-wrap:anywhere; }
+.turn-speaker-avatar { flex-shrink:0; }
+.turn-actions { flex-wrap:wrap; margin-left:auto; }
+.turn-speaker-menu { font-size:11px; }
+.turn-speaker-menu summary { cursor:pointer; color:var(--text-secondary, #b8bac4); padding:4px 6px; }
+.turn-speaker-menu-body { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:8px 0; }
+.turn-speaker-menu[open] { flex-basis:100%; }

@@ -7,6 +7,7 @@ let picker: string[] | null = null;
 let inspection: { recordings: RecordingSource[]; errors: string[] };
 let pendingInspection: Promise<typeof inspection> | null = null;
 let importResult: Promise<number>;
+const importFailures = new Set<string>();
 const drops = new Set<(event: any) => void>();
 const realCore = { ...(await import("@tauri-apps/api/core")) };
 mock.module("@tauri-apps/api/core", () => ({ ...realCore, invoke: async (cmd: string, args: any) => {

@@ -14,7 +14,8 @@ const button=(root:any,label:string)=>nodes(root).find(n=>n.type==="button"&&tex
 beforeEach(()=>{stored=null;writes=[];report={groups:[],checked_meetings:5,unavailable_audio:0};});
 test("unlimited by default; a reached custom reminder preserves navigation and saving",async()=>{
  const selected:number[]=[]; const h=renderHook(()=>MeetingHistoryControls({count:12,onSelect:id=>selected.push(id)})); await h.settle();
- expect(text(h.handle.current)).toContain("Unlimited");
+ expect(nodes(h.handle.current).find(n=>n.type==="input").props.placeholder).toBe("Unlimited");
+ expect(nodes(h.handle.current).find(n=>n.type==="details").props.open).toBeUndefined();
  nodes(h.handle.current).find(n=>n.type==="input").props.onChange({target:{value:"10"}});await h.settle();
  await button(h.handle.current,"Save limit").props.onClick();await h.settle();
  expect(writes).toEqual([10]);expect(text(h.handle.current)).toContain("reached your");

@@ -24,7 +24,7 @@ export function MeetingTags({ meetingId, onChanged }: { meetingId: number; onCha
         finally{pending.current=false;if(alive.current)setBusy(false);}
     };
     return <div className="meeting-tags">
-        <span>Tags</span>{tags.map(tag=><span key={tag} className="meeting-tag-chip">{tag}</span>)}
+        {tags.map(tag=><span key={tag} className="meeting-tag-chip">{tag}</span>)}
         {!editing && <button type="button" className="turn-clip-btn" disabled={loading} onClick={()=>setEditing(true)}>{tags.length?"Edit tags":"Add tags"}</button>}
         {editing && <><input aria-label="Meeting tags, separated by commas" placeholder="Project, Client, Planning" value={draft} disabled={busy} onChange={event=>setDraft(event.target.value)} />
             <button type="button" className="turn-clip-btn" disabled={busy} onClick={save}>{busy?"Saving…":"Save tags"}</button>

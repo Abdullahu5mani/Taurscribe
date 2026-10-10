@@ -49,3 +49,32 @@ export function moveRecording(sources: RecordingSource[], index: number, directi
   [next[index], next[target]] = [next[target], next[index]];
   return next;
 }
+
+/** Only embedded recording times can suggest that adjacent files belong together. */
+export function nearbyRecordingGroups(sources: RecordingSource[]): RecordingSource[][] {
+  const groups: RecordingSource[][] = [];
+  let group: RecordingSource[] = [];
+  for (const source of sources) {
+    const previous = group.at(-1);
+    const start = timestamp(source.recorded_start);
+    const end = previous ? timestamp(previous.recorded_end) : null;
+    const previousStart = previous ? timestamp(previous.recorded_start) : null;
+    if (previous && start !== null && end !== null && previousStart !== null && start >= previousStart && Math.abs(start - end) <= 5 * 60_000) {
+      group.push(source);
+    } else {
+      if (group.length > 1) groups.push(group);
+      group = [source];
+    }
+  }
+  if (group.length > 1) groups.push(group);
+  return groups;
+}
+export const recordingGroupKey = (group: RecordingSource[]) => JSON.stringify(group.map(source => source.path));
+
+export function planRecordingImports(sources: RecordingSource[], combineAll: boolean, approvedGroups: Set<string>): RecordingSource[][] {
+  if (combineAll) return [sources];
+  const approved = nearbyRecordingGroups(sources).filter(group => approvedGroups.has(recordingGroupKey(group)));
+  const starts = new Map(approved.map(group => [group[0].path, group]));
+  const consumed = new Set(approved.flatMap(group => group.slice(1).map(source => source.path)));
+  return sources.filter(source => !consumed.has(source.path)).map(source => starts.get(source.path) ?? [source]);
+}
