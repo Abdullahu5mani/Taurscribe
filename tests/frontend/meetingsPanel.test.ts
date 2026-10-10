@@ -484,3 +484,41 @@ test("export file names drop characters no file system accepts", () => {
     expect(exportFileName("Budget: Q3/Q4 <draft>?", "text")).toBe("Budget_Q3_Q4_draft_transcript.txt");
     expect(exportFileName("  ", "json")).toBe("meeting_transcript.json");
 });
+
+test("merging is offered on turns and persisted undo reloads the selected meeting", async () => {
+    detail.turns = [
+        { speaker_id: "a", speaker_name: "Dana", start_ms: 0, end_ms: 1000, channel: 1, text: "First" },
+        { speaker_id: "b", speaker_name: "Speaker 2", start_ms: 1000, end_ms: 2000, channel: 1, text: "Second" },
+    ];
+    detail.merges = [{ id: 7, from_speaker_name: "Speaker 3", into_speaker_name: "Dana" }];
+    const view = renderHook(() => MeetingsPanel(props)); await view.settle();
+    invokeOverride = (cmd) => ["merge_meeting_speakers", "undo_meeting_speaker_merge"].includes(cmd) ? Promise.resolve() : undefined;
+    const select = nodes(view.handle.current).find(n => n.props?.["aria-label"] === "Merge Speaker 2 into");
+    await select.props.onChange({ target: { value: "a" } }); await view.settle();
+    expect(calls.some(c => c.cmd === "merge_meeting_speakers" && c.args.meetingId === 1 && c.args.fromSpeakerId === "b" && c.args.intoSpeakerId === "a")).toBe(true);
+    await byTest(view.handle.current,"meetings-undo-merge-btn").props.onClick(); await view.settle();
+    expect(calls.some(c => c.cmd === "undo_meeting_speaker_merge" && c.args.mergeId === 7 && c.args.meetingId === 1)).toBe(true);
+    expect(byTest(view.handle.current,"meetings-cycle-sample-btn-0")).toBeUndefined();
+});
+test("clicking transcript seeks and highlights all speakers active at that position", async () => {
+    detail.turns = [
+        { speaker_id: "a", speaker_name: "Dana", start_ms: 5000, end_ms: 8000, channel: 1, text: "First" },
+        { speaker_id: "b", speaker_name: "Sam", start_ms: 6000, end_ms: 9000, channel: 1, text: "Second" },
+    ];
+    const view = renderHook(() => MeetingsPanel(props)); await view.settle();
+    const seek = nodes(view.handle.current).find(n=>n.props?.["aria-label"]?.startsWith("Jump to 0:06:"));
+    expect(seek).toBeDefined(); seek.props.onClick(); await view.settle();
+    expect(byTest(view.handle.current,"meetings-turn-0").props["aria-current"]).toBe("true");
+    expect(byTest(view.handle.current,"meetings-turn-1").props["aria-current"]).toBe("true");
+});
+
+test("re-separation requires confirmation and passes the selected model and count", async () => {
+  const busy:boolean[]=[];invokeOverride=(cmd)=>cmd === "reseparate_meeting_speakers" ? Promise.resolve() : undefined;
+  const view=renderHook(()=>MeetingsPanel({...props,modelId:"tiny",useGpu:false,onImportProcessingChange:v=>busy.push(v)}));await view.settle();
+  const hint=nodes(view.handle.current).find(n=>n.props?.["aria-label"] === "Speaker count hint");
+  hint.props.onChange({target:{value:"3"}});await view.settle();
+  byTest(view.handle.current,"meetings-reseparate-btn").props.onClick();await view.settle();
+  expect(calls.some(c=>c.cmd === "reseparate_meeting_speakers")).toBe(false);
+  byTest(view.handle.current,"meetings-reseparate-btn").props.onClick();await view.settle();
+  expect(calls.find(c=>c.cmd === "reseparate_meeting_speakers")?.args).toEqual({meetingId:1,expectedSpeakers:3,modelId:"tiny",useGpu:false});expect(busy).toEqual([true,false]);
+});

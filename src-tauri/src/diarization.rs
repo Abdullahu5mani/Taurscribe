@@ -946,22 +946,34 @@ fn split_remote_speakers_hint(sys_samples: &[f32], sample_rate: u32, expected: O
     }
     if crate::neural_diarizer::model_path().is_some() {
         let neural = crate::audio_preprocess::resample_mono_to_16k(sys_samples, sample_rate)
-            .and_then(|pcm| crate::neural_diarizer::diarize_16k(&pcm));
+            .and_then(|pcm| crate::neural_diarizer::diarize_16k(&pcm).map(|turns| (turns, pcm)));
         match neural {
-            Ok(turns) if !turns.is_empty() => return turns_to_segments(&turns, sys_samples, sample_rate),
+            Ok((turns, pcm)) if !turns.is_empty() => {
+                let turns = refine_with_voiceprints(turns, &pcm, false, expected);
+                return turns_to_segments(&turns, sys_samples, sample_rate);
+            }
             Ok(_) => println!("[DIARIZE] Nemotron-3 found no speech on the call channel; using energy segmentation"),
             Err(e) => eprintln!("[DIARIZE] Nemotron-3 failed ({e}); using acoustic clustering"),
         }
     }
     let mut turns = detect_channel_speech_segments(sys_samples, sample_rate, 1, 0.015);
     let profiles = cluster_remote_turns(&mut turns, 0.40);
+    if let Ok(pcm) = crate::audio_preprocess::resample_mono_to_16k(sys_samples, sample_rate) {
+        let labels = turns.iter().map(|t| crate::neural_diarizer::SpeakerTurn {
+            start_ms: t.start_sample as u64 * 1000 / sample_rate as u64,
+            end_ms: t.end_sample as u64 * 1000 / sample_rate as u64,
+            speaker: t.cluster_id,
+        }).collect();
+        let refined = refine_with_voiceprints(labels, &pcm, false, expected);
+        return turns_to_segments(&refined, sys_samples, sample_rate);
+    }
     (turns, profiles)
 }
 
 /// Splits a room recording into speakers: like [`split_remote_speakers`], but
 /// with the voiceprint check ([`crate::neural_diarizer::split_mixed_speakers`])
 /// that separates similar voices the separator heard as one person.
-fn split_room_speakers(samples: &[f32], sample_rate: u32) -> (Vec<AudioTurnSegment>, Vec<SpeakerProfile>) {
+fn split_room_speakers(samples: &[f32], sample_rate: u32, expected: Option<usize>) -> (Vec<AudioTurnSegment>, Vec<SpeakerProfile>) {
     if samples.is_empty() || crate::neural_diarizer::model_path().is_none() {
         return split_remote_speakers(samples, sample_rate);
     }
@@ -971,17 +983,37 @@ fn split_room_speakers(samples: &[f32], sample_rate: u32) -> (Vec<AudioTurnSegme
     };
     match crate::neural_diarizer::diarize_16k(&pcm) {
         Ok(turns) if !turns.is_empty() => {
-            let engine = crate::speaker_embedding::get_speaker_engine();
-            let turns = if engine.lock().map(|e| e.uses_neural_model()).unwrap_or(false) {
-                let mut voiceprint = |audio: &[f32]| engine.lock().ok()?.compute_embedding(audio, 16_000).ok();
-                crate::neural_diarizer::split_mixed_speakers(turns, &pcm, &mut voiceprint)
-            } else {
-                turns
-            };
+            let turns = refine_with_voiceprints(turns, &pcm, true, expected);
             turns_to_segments(&turns, samples, sample_rate)
         }
         _ => split_remote_speakers(samples, sample_rate),
     }
+}
+
+/// Checks the separator's speakers against voiceprints (CAM++): on a room
+/// recording (`split`), splits a speaker holding two clearly different voices;
+/// then merges speakers that are one voice and folds in fragment speakers.
+/// Missing fingerprints leave speakers intact.
+fn refine_with_voiceprints(
+    turns: Vec<crate::neural_diarizer::SpeakerTurn>,
+    pcm: &[f32],
+    split: bool,
+    expected: Option<usize>,
+) -> Vec<crate::neural_diarizer::SpeakerTurn> {
+    let engine = crate::speaker_embedding::get_speaker_engine();
+    let neural = engine.lock().map(|e| e.uses_neural_model()).unwrap_or(false);
+    let mut voiceprint = |audio: &[f32]| {
+        if !neural {
+            return None;
+        }
+        engine.lock().ok()?.compute_embedding(audio, 16_000).ok()
+    };
+    let turns = if split && neural {
+        crate::neural_diarizer::split_mixed_speakers(turns, pcm, &mut voiceprint)
+    } else {
+        turns
+    };
+    crate::neural_diarizer::merge_voices_with_hint(turns, pcm, &mut voiceprint, expected)
 }
 
 /// Builds channel-1 turn segments and one profile per speaker from neural turns.
@@ -1125,12 +1157,12 @@ pub fn diarize_meeting_recording_with_hint(
         let me = crate::commands::meetings::open_connection()
             .ok()
             .and_then(|conn| crate::commands::my_voice_embedding(&conn));
-        return diarize_in_person_recording(wav_path, raw_transcript, snippets_dir, meeting_id, transcriber, me.as_deref());
+        return diarize_in_person_recording_hint(wav_path, raw_transcript, snippets_dir, meeting_id, transcriber, me.as_deref(), expected);
     }
     let (mic_samples, sys_samples, sample_rate) = read_meeting_channels(wav_path)?;
 
     let mic_turns = detect_channel_speech_segments(&mic_samples, sample_rate, 0, 0.015);
-    let (remote_turns, mut remote_profiles) = split_remote_speakers(&sys_samples, sample_rate);
+    let (remote_turns, mut remote_profiles) = split_remote_speakers_hint(&sys_samples, sample_rate, expected.map(|n| n.saturating_sub(usize::from(!mic_turns.is_empty())).max(1)));
     identify_speakers(&mut remote_profiles, &remote_turns, &sys_samples, &mic_samples, sample_rate, snippets_dir, meeting_id);
 
     align_transcript_to_turns(
@@ -1166,7 +1198,7 @@ fn diarize_in_person_recording_hint(
 ) -> Result<Vec<DiarizedTurn>, String> {
     let (samples, _, sample_rate) = read_capture_channels(wav_path, true)?;
     let samples = &samples[..];
-    let (turns, mut profiles) = split_room_speakers(samples, sample_rate);
+    let (turns, mut profiles) = split_room_speakers(samples, sample_rate, expected);
     // One track: no other channel to check clips against for crosstalk.
     identify_speakers(&mut profiles, &turns, samples, &[], sample_rate, snippets_dir, meeting_id);
 

@@ -35,7 +35,17 @@ export interface MeetingSummaryRecord {
     audio_missing?: boolean;
 }
 
+export interface SpeakerMergeRecord {
+    id: number;
+    from_speaker_id: string;
+    from_speaker_name: string;
+    into_speaker_id: string;
+    into_speaker_name: string;
+    created_at: string;
+}
+
 export interface MeetingDetailRecord {
+    merges?: SpeakerMergeRecord[];
     recording_sources?: import("../utils/meetingImport").RecordingSource[];
     id: number;
     session_id: string;

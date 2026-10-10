@@ -17,6 +17,7 @@ mock.module("@tauri-apps/api/core", () => ({
         if (failures[cmd]) throw failures[cmd];
         switch (cmd) {
             case "find_voice_samples": return suggestions.slice(0, args.limit);
+            case "generate_vault_voice_sample": return "/generated/new.wav";
             case "list_voiceprints": return samples;
             case "suggest_speaker_names": return asks;
             default: return null;
@@ -151,4 +152,16 @@ test("on a meeting: 'Speaker 2 sounds like Dana' — yes labels and reloads, no 
     await settle();
     expect(calls.at(-1)).toEqual({ cmd: "reject_voice_sample", args: { personId: "p_sam", meetingId: 9, speakerId: "speaker_remote_3" } });
     expect(handle.current).toBeNull();
+});
+
+test("generated sample is previewed and only enrolled after explicit identity confirmation", async () => {
+    const { handle, settle } = await panel("samples");
+    await byTest(handle.current,"voicebank-generate-sample").props.onClick(); await settle();
+    expect(calls.some(c=>c.cmd === "generate_vault_voice_sample" && c.args.personId === "p_dana")).toBe(true);
+    expect(calls.some(c=>c.cmd === "add_vault_voice_sample")).toBe(false);
+    byTest(handle.current,"voicebank-preview-sample").props.onClick();
+    expect(played).toContain("/generated/new.wav");
+    await byTest(handle.current,"voicebank-confirm-sample").props.onClick(); await settle();
+    expect(calls.some(c=>c.cmd === "add_vault_voice_sample" && c.args.personId === "p_dana" && c.args.path === "/generated/new.wav")).toBe(true);
+    expect(changed).toBe(1); expect(byTest(handle.current,"voicebank-confirm-sample")).toBeUndefined();
 });

@@ -475,6 +475,123 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce(&Connection) -> Result<T, St
         .map_err(|e| format!("Task failed: {e}"))?
 }
 
+fn sample_operations() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
+}
+
+/// Produce a genuinely new clip from a confirmed person's retained meeting
+/// speech. It is only enrolled after the user listens and confirms the identity.
+#[tauri::command]
+pub async fn generate_vault_voice_sample(person_id: String) -> Result<String, String> {
+    blocking(move |conn| {
+        let _samples = sample_operations().lock().map_err(|e| e.to_string())?;
+        generate_vault_sample_in(conn, &person_id, &super::meetings::get_meetings_dir()?.join("voicebank"))
+
+    }).await
+}
+
+fn generate_vault_sample_in(conn: &Connection, person_id: &str, dir: &Path) -> Result<String, String> {
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM speaker_vault WHERE id=?1)", params![person_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if !exists { return Err("This person is no longer in the vault".into()); }
+        let paths: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT DISTINCT snippet_path FROM meeting_turns WHERE speaker_id=?1 AND snippet_path IS NOT NULL ORDER BY meeting_id DESC").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params![person_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+            rows.collect::<Result<_,_>>().map_err(|e| e.to_string())?
+        };
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        for path in paths {
+            let voice = crate::diarization::voice_sample_path(&path);
+            if !voice.exists() { continue; }
+            let (samples, rate) = match crate::audio_decode::decode_audio_mono_f32(&voice) { Ok(audio) => audio, Err(_) => continue };
+            let pcm = crate::audio_preprocess::resample_mono_to_16k(&samples, rate)?;
+            for chunk in pcm.chunks(16000 * 15) {
+                if chunk.len() < 16000 * 5 { continue; }
+                let mut hasher = sha2::Sha256::new();
+                use sha2::Digest;
+                hasher.update(person_id.as_bytes());
+                for sample in chunk { hasher.update(sample.to_le_bytes()); }
+                let name = format!("sample-{:x}.wav", hasher.finalize());
+                let clip = dir.join(name).to_string_lossy().to_string();
+                let enrolled: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM speaker_voiceprints WHERE person_id=?1 AND clip_path=?2)", params![person_id, clip], |r| r.get(0)).map_err(|e| e.to_string())?;
+                if enrolled { continue; }
+                let spec = hound::WavSpec { channels: 1, sample_rate: 16000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+                let mut writer = hound::WavWriter::create(&clip, spec).map_err(|e| e.to_string())?;
+                for &sample in chunk { writer.write_sample(sample).map_err(|e| e.to_string())?; }
+                writer.finalize().map_err(|e| e.to_string())?;
+                return Ok(clip);
+            }
+        }
+        Err("No new retained speech is available for this person. Use Find more to confirm them in another meeting, or add a recording of just their voice.".into())
+}
+
+/// Delete only an unconfirmed generated preview, never an enrolled voiceprint
+/// or a file chosen by the user outside the app's derived-clip folder.
+#[tauri::command]
+pub async fn discard_generated_voice_sample(path: String) -> Result<(), String> {
+    blocking(move |conn| {
+        let _samples = sample_operations().lock().map_err(|e| e.to_string())?;
+        let dir = super::meetings::get_meetings_dir()?.join("voicebank");
+        let file = Path::new(&path);
+        if file.parent() != Some(dir.as_path()) || !file.file_name().is_some_and(|n| n.to_string_lossy().starts_with("sample-")) { return Err("This is not a generated sample preview".into()); }
+        let enrolled: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM speaker_voiceprints WHERE clip_path=?1)",params![path],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if !enrolled && file.exists() { std::fs::remove_file(file).map_err(|e|e.to_string())?; }
+        Ok(())
+    }).await
+}
+
+/// Explicit confirmation enrolls the audio itself, not merely its preview path.
+#[tauri::command]
+pub async fn add_vault_voice_sample(person_id: String, path: String) -> Result<(), String> {
+    blocking(move |conn| {
+        let _samples = sample_operations().lock().map_err(|e| e.to_string())?;
+        if !speaker_model_installed() { return Err("Download Meeting speakers in Settings → Models first".into()); }
+        add_vault_sample_in(conn, &person_id, &path, &super::meetings::get_meetings_dir()?.join("voicebank"), &mut |pcm| {
+            let mut engine = crate::speaker_embedding::get_speaker_engine().lock().map_err(|e| e.to_string())?;
+            if !engine.uses_neural_model() { return Err("Speaker recognition model is unavailable".into()); }
+            engine.compute_embedding(pcm, 16000)
+        })
+
+    }).await
+}
+
+fn add_vault_sample_in(conn: &Connection, person_id: &str, path: &str, dir: &Path, compute: &mut dyn FnMut(&[f32]) -> Result<Vec<f32>, String>) -> Result<(), String> {
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM speaker_vault WHERE id=?1)", params![person_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if !exists { return Err("This person is no longer in the vault".into()); }
+        // Streaming bounds prevent an accidental full meeting upload allocating
+        // an unbounded buffer. A voice reference needs one isolated short clip.
+        let mut samples = Vec::new();
+        let (_, rate) = crate::audio_decode::decode_audio_mono_stream_strict(Path::new(&path), |part, rate, _, _| {
+            if samples.len() + part.len() > rate as usize * 60 { return Err("Choose a clip of 5–60 seconds containing only this person".into()); }
+            samples.extend_from_slice(part); Ok(())
+        })?;
+        let speech = crate::diarization::detect_channel_speech_segments(&samples, rate, 0, 0.015);
+        let samples: Vec<f32> = speech.iter().flat_map(|s| samples[s.start_sample.min(samples.len())..s.end_sample.min(samples.len())].iter().copied()).collect();
+        if samples.len() < rate as usize * 5 { return Err("At least 5 seconds of clear speech from this person are needed".into()); }
+        let pcm = crate::audio_preprocess::resample_mono_to_16k(&samples, rate)?;
+        let emb = compute(&pcm)?;
+        if emb.is_empty() || emb.iter().any(|v| !v.is_finite()) { return Err("Could not extract a usable voiceprint".into()); }
+        use sha2::Digest;
+        let mut hash = sha2::Sha256::new(); hash.update(person_id.as_bytes());
+        for sample in &pcm { hash.update(sample.to_le_bytes()); }
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let is_generated = Path::new(&path).parent() == Some(dir) && Path::new(&path).file_name().is_some_and(|n| n.to_string_lossy().starts_with("sample-"));
+        let clip = if is_generated { path.to_string() } else { dir.join(format!("voice-{:x}.wav", hash.finalize())).to_string_lossy().to_string() };
+        if !Path::new(&clip).exists() {
+            let spec = hound::WavSpec { channels: 1, sample_rate: 16000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+            let mut writer = hound::WavWriter::create(&clip, spec).map_err(|e| e.to_string())?;
+            for &sample in &pcm { writer.write_sample(sample).map_err(|e| e.to_string())?; }
+            writer.finalize().map_err(|e| e.to_string())?;
+        }
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let still_exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM speaker_vault WHERE id=?1)",params![person_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        if !still_exists { return Err("This person was removed while the sample was processing".into()); }
+        tx.execute("INSERT OR IGNORE INTO speaker_voiceprints(person_id, embedding_json, clip_path, created_at) VALUES(?1,?2,?3,?4)", params![person_id, serde_json::to_string(&emb).map_err(|e| e.to_string())?,clip,Utc::now().to_rfc3339()]).map_err(|e| e.to_string())?;
+        refresh_average(&tx, &person_id)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(())
+}
+
 #[tauri::command]
 pub async fn find_voice_samples(person_id: String, limit: Option<usize>) -> Result<Vec<VoiceSampleSuggestion>, String> {
     require_speaker_model()?;
@@ -702,5 +819,56 @@ mod tests {
         forget_person_in(&conn, "p_dana");
         assert_eq!(prints_of(&conn, "p_dana"), 0);
         assert!(load_rejections(&conn).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod generated_sample_tests {
+    use super::*;
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new() -> Self { let path=std::env::temp_dir().join(format!("ts_voice_sample_{:016x}",rand::random::<u64>())); std::fs::create_dir_all(&path).unwrap(); Self(path) }
+        fn path(&self) -> &Path { &self.0 }
+    }
+    impl Drop for TempDir { fn drop(&mut self) { let _=std::fs::remove_dir_all(&self.0); } }
+    #[test]
+    fn generate_confirm_and_regenerate_use_real_audio_and_keep_distinct_samples() {
+        let conn = Connection::open_in_memory().unwrap();
+        super::super::meetings::ensure_meetings_schema(&conn).unwrap();
+        conn.execute("INSERT INTO speaker_vault(id,name,created_at,last_seen,embedding_json) VALUES('p','Dana','','','[1.0,0.0]')",[]).unwrap();
+        ensure_voice_bank_schema(&conn).unwrap();
+        let root = TempDir::new(); let clip=root.path().join("preview.wav");
+        let voice = crate::diarization::voice_sample_path(&clip.to_string_lossy());
+        let spec=hound::WavSpec {channels:1,sample_rate:16000,bits_per_sample:32,sample_format:hound::SampleFormat::Float};
+        let mut writer=hound::WavWriter::create(&voice,spec).unwrap();
+        for n in 0..16000*30 { let amp=if n<16000*15 {0.3} else {0.5}; writer.write_sample(amp*(n as f32*0.04).sin()).unwrap(); }
+        writer.finalize().unwrap();
+        conn.execute("INSERT INTO meetings(id,session_id,title,platform,app_name,url,created_at,duration_ms,transcript_raw,category) VALUES(1,'m','Meeting','meet','','','',30000,'','General')",[]).unwrap();
+        conn.execute("INSERT INTO meeting_turns(meeting_id,speaker_id,speaker_name,start_ms,end_ms,channel,text,snippet_path) VALUES(1,'p','Dana',0,30000,1,'Speech',?1)",params![clip.to_string_lossy()]).unwrap();
+        let dir=root.path().join("bank");
+        let first=generate_vault_sample_in(&conn,"p",&dir).unwrap();
+        let count=|c:&Connection| c.query_row("SELECT COUNT(*) FROM speaker_voiceprints WHERE person_id='p'",[],|r|r.get::<_,i64>(0)).unwrap();
+        assert_eq!(count(&conn),1,"preview does not enroll");
+        add_vault_sample_in(&conn,"p",&first,&dir,&mut |_| Ok(vec![0.8,0.2])).unwrap();
+        assert_eq!(count(&conn),2);
+        add_vault_sample_in(&conn,"p",&first,&dir,&mut |_| Ok(vec![0.8,0.2])).unwrap();
+        assert_eq!(count(&conn),2,"same clip never adds twice");
+        let second=generate_vault_sample_in(&conn,"p",&dir).unwrap(); assert_ne!(first,second);
+        add_vault_sample_in(&conn,"p",&second,&dir,&mut |_| Ok(vec![0.9,0.1])).unwrap();
+        assert_eq!(count(&conn),3);
+        assert!(generate_vault_sample_in(&conn,"p",&dir).unwrap_err().contains("No new retained speech"));
+        let stored:i64=conn.query_row("SELECT sample_count FROM speaker_vault WHERE id='p'",[],|r|r.get(0)).unwrap();assert_eq!(stored,3);
+        assert!(generate_vault_sample_in(&conn,"missing",&dir).is_err());
+    }
+    #[test]
+    fn silence_and_short_clips_do_not_add_a_voiceprint() {
+        let conn=Connection::open_in_memory().unwrap();super::super::meetings::ensure_meetings_schema(&conn).unwrap();
+        conn.execute("INSERT INTO speaker_vault(id,name,created_at,last_seen) VALUES('p','Dana','','')",[]).unwrap();
+        let root=TempDir::new();let path=root.path().join("silence.wav");
+        let spec=hound::WavSpec{channels:1,sample_rate:16000,bits_per_sample:32,sample_format:hound::SampleFormat::Float};
+        let mut w=hound::WavWriter::create(&path,spec).unwrap();for _ in 0..16000*10 {w.write_sample(0.0f32).unwrap();}w.finalize().unwrap();
+        let err=add_vault_sample_in(&conn,"p",&path.to_string_lossy(),root.path(),&mut |_| panic!("silence must not reach embedding model")).unwrap_err();
+        assert!(err.contains("5 seconds"));
+        assert_eq!(list_voiceprints_in(&conn,"p").unwrap().len(),0);
     }
 }

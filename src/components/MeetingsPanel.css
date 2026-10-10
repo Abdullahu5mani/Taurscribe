@@ -1285,3 +1285,11 @@
 }
 .speaker-suggestion-play:disabled { opacity: 0.4; cursor: default; }
 .speaker-suggestion-yes { border-color: rgba(52, 211, 153, 0.4); color: #6ee7b7; }
+
+.turn-bubble--spoken { border-color: #3b82f6; box-shadow: 0 0 0 1px #3b82f6; background: rgba(59,130,246,.12); }
+.turn-text[role="button"] { cursor: pointer; }
+.turn-text[role="button"]:focus-visible { outline: 2px solid #3b82f6; outline-offset: 3px; }
+.turn-merge-select { max-width: 150px; background: var(--bg-secondary, #202020); color: inherit; border: 1px solid #444; border-radius: 5px; padding: 3px; font-size: 11px; }
+
+.meeting-speaker-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; font-size: 12px; }
+.meeting-speaker-tools input { width: 48px; color: inherit; background: #202020; border: 1px solid #444; border-radius: 4px; padding: 4px; }

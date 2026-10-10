@@ -28,6 +28,7 @@ interface FileItem {
     audioDurationMs?: number;
     processingTimeMs?: number;
     expanded: boolean;
+    detailsExpanded?: boolean;
     error?: string;
     historyError?: string;
     historySaving?: boolean;
@@ -379,6 +380,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                         transcribedAudioMs: undefined, transcriptionTimeMs: undefined,
                         transcript: "",
                         expanded: false,
+                        detailsExpanded: false,
                         audioDurationMs: undefined,
                         processingTimeMs: undefined,
                         error: undefined,

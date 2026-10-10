@@ -126,10 +126,10 @@ test("rename saves the trimmed name; a failure is shown", async () => {
 
 test("cycling the sample shows the next clip; running out of clips is explained", async () => {
     const { handle, settle } = await open();
-    expect(flat(byTest(handle.current, "speaker-vault-cycle-sample-p1"))).toBe("Sample 1/2");
+    expect(flat(byTest(handle.current, "speaker-vault-cycle-sample-p1"))).toBe("Clip 1/2");
     await byTest(handle.current, "speaker-vault-cycle-sample-p1").props.onClick();
     await settle();
-    expect(flat(byTest(handle.current, "speaker-vault-cycle-sample-p1"))).toBe("Sample 2/2");
+    expect(flat(byTest(handle.current, "speaker-vault-cycle-sample-p1"))).toBe("Clip 2/2");
 
     failures.cycle_vault_speaker_snippet = "No other voice samples are available for this person";
     await byTest(handle.current, "speaker-vault-cycle-sample-p1").props.onClick();

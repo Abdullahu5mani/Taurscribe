@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { VoiceSampleSuggestion, Voiceprint } from "../types/meetings";
+import { open } from "@tauri-apps/plugin-dialog";
 import { IconCheck, IconPlay, IconStop, IconTrash, IconX } from "./Icons";
 
 /** How many suggestions "Find more samples" shows per step. */
@@ -56,6 +57,10 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
     const [error, setError] = useState("");
     /** Key of the row whose Add / Not them / Remove is in flight. */
     const [busy, setBusy] = useState<string | null>(null);
+    const generatedCandidate = useRef<string | null>(null);
+    const sampleMutation = useRef(false);
+    const sampleGeneration = useRef(0);
+    const [candidate, setCandidate] = useState<string | null>(null);
     const [confirmRemove, setConfirmRemove] = useState<number | null>(null);
     const request = useRef(0);
 
@@ -78,7 +83,14 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
         }
     };
 
-    useEffect(() => { void load(); }, [personId, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+    const discardPreview = () => {
+        const path = generatedCandidate.current; generatedCandidate.current = null;
+        if (path) void invoke("discard_generated_voice_sample", { path }).catch(console.warn);
+    };
+    useEffect(() => {
+        setCandidate(null); sampleGeneration.current++; void load();
+        return () => { sampleGeneration.current++; discardPreview(); };
+    }, [personId, mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const keyOf = (s: VoiceSampleSuggestion) => `${s.meeting_id}:${s.speaker_id}`;
 
@@ -118,6 +130,34 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
         }
     };
 
+    const prepareSample = async (generate: boolean) => {
+        if (sampleMutation.current || busy) return;
+        sampleMutation.current = true;
+        const generation = sampleGeneration.current;
+        discardPreview(); setCandidate(null);
+        setBusy("prepare"); setError(""); player.stop();
+        try {
+            const path = generate ? await invoke<string>("generate_vault_voice_sample", { personId })
+                : await open({ multiple: false, filters: [{ name: "Voice recording (5–60 seconds)", extensions: ["wav", "mp3", "m4a", "flac", "ogg"] }] });
+            if (generation !== sampleGeneration.current) {
+                if (generate && typeof path === "string") void invoke("discard_generated_voice_sample", { path }).catch(console.warn);
+                return;
+            }
+            if (typeof path === "string") { if (generate) generatedCandidate.current = path; setCandidate(path); }
+        } catch (reason) { setError(String(reason)); }
+        finally { sampleMutation.current = false; setBusy(null); }
+    };
+    const addSample = async () => {
+        if (!candidate || busy || sampleMutation.current) return;
+        sampleMutation.current = true;
+        setBusy("add"); player.stop();
+        try {
+            await invoke("add_vault_voice_sample", { personId, path: candidate });
+            generatedCandidate.current = null; setCandidate(null); setError(""); await load(); onChanged?.();
+        } catch (reason) { setError(String(reason)); }
+        finally { sampleMutation.current = false; setBusy(null); }
+    };
+
     const showMore = () => {
         const next = limit + SUGGESTION_PAGE;
         setLimit(next);
@@ -141,6 +181,16 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
                 </p>
             )}
 
+            {mode === "samples" && <div className="voicebank-new-sample">
+                <p className="voicebank-hint">Generate a new clip from this person's saved meeting speech, or choose a 5–60 second recording. Listen and confirm it contains only {personName} before adding it to their bank.</p>
+                <button type="button" className="vault-action-btn" data-testid="voicebank-generate-sample" disabled={busy !== null} onClick={() => prepareSample(true)}>Generate sample</button>
+                <button type="button" className="vault-action-btn" data-testid="voicebank-choose-sample" disabled={busy !== null} onClick={() => prepareSample(false)}>Choose recording</button>
+                {candidate && <div role="group" aria-label="Confirm new voice sample">
+                    <button type="button" className="vault-action-btn" data-testid="voicebank-preview-sample" onClick={() => player.toggle("candidate", candidate)}>{player.playing === "candidate" ? "Stop preview" : "Listen to new sample"}</button>
+                    <button type="button" className="vault-action-btn" data-testid="voicebank-confirm-sample" disabled={busy !== null} onClick={addSample}>This is {personName} — add sample</button>
+                    <button type="button" className="vault-action-btn" disabled={busy !== null} onClick={() => { player.stop(); discardPreview(); setCandidate(null); }}>Discard</button>
+                </div>}
+            </div>}
             {error && <p className="voicebank-error" role="alert" data-testid="voicebank-error">{error}</p>}
             {loading && (mode === "find" ? suggestions.length === 0 : samples.length === 0) && (
                 <p className="voicebank-empty">{mode === "find" ? "Listening through past meetings…" : "Loading…"}</p>
@@ -218,7 +268,7 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
                     </button>
                     <div className="voicebank-info">
                         <div className="voicebank-line">
-                            <span className="voicebank-meeting">{v.meeting_title ?? (i === samples.length - 1 ? "First sample" : "Earlier meeting")}</span>
+                            <span className="voicebank-meeting">{v.meeting_title ?? "Voice recording"}</span>
                             <span className="voicebank-meta">{formatDate(v.created_at)}{v.clip_path ? "" : " · clip missing"}</span>
                         </div>
                     </div>

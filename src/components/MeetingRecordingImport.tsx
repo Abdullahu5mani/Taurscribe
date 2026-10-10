@@ -5,6 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { IconFileText, IconX } from "./Icons";
 import { chronologicalRecordings, moveRecording, recordingWarnings, type RecordingSource } from "../utils/meetingImport";
+import { speakerCountHint } from "../utils/meetingTimeline";
 import "./MeetingRecordingImport.css";
 
 interface Props {
@@ -25,9 +26,10 @@ export function recordingDate(value: string | null): string {
   return value ? new Date(value).toLocaleString() : "Unknown recording time";
 }
 
-export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = true, onProcessingChange, onComplete, dropTargetRef }: Props) {
+export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = true, onProcessingChange, onComplete, dropTargetRef, modelId, useGpu }: Props) {
   const [modalOpen, setModalOpen] = useState(false);
   const [sources, setSources] = useState<RecordingSource[]>([]);
+  const [expectedSpeakers, setExpectedSpeakers] = useState("");
   const [title, setTitle] = useState("");
   const [inspecting, setInspecting] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -150,10 +152,10 @@ export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = 
     setImporting(true); setError("");
     callbacks.current.onProcessingChange?.(true);
     try {
-      const id = await invoke<number>("import_meeting_recordings", { paths: sources.map(s => s.path), title: title.trim() });
+      const id = await invoke<number>("import_meeting_recordings", { paths: sources.map(s => s.path), title: title.trim(), expectedSpeakers: speakerCountHint(expectedSpeakers), modelId, useGpu });
       if (mounted.current) {
         modalOpenRef.current = false; setModalOpen(false);
-        setSources([]); setTitle(""); manualOrder.current = false; callbacks.current.onComplete(id);
+        setSources([]); setTitle(""); setExpectedSpeakers(""); manualOrder.current = false; callbacks.current.onComplete(id);
       }
     } catch (reason) { if (mounted.current) setError(String(reason)); }
     finally {
@@ -220,6 +222,8 @@ export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = 
               </div>
             </li>)}</ol>
             {undated && <p className="meeting-import-notice">Some files have no recording timestamp. Those files keep their selected positions; use the arrows to set their order. File dates can change when copied.</p>}
+            <label className="meeting-import-title">About how many people? (optional)<input type="number" min="1" max="32" step="1" aria-label="About how many people?" value={expectedSpeakers} disabled={disabled} onChange={e => setExpectedSpeakers(e.target.value)} /></label>
+            <p className="meeting-import-notice">A hint for matching voices; uncertain speakers are kept separate.</p>
             <div className="meeting-import-processing-note"><strong>Transcription & speaker recognition</strong>
               <p>Uses your speech model and saved voices{hasDiarizationModel ? ", with Nemotron speaker separation." : ". Basic speaker separation will be used; install Nemotron in Settings → Models for better results."}</p>
             </div>

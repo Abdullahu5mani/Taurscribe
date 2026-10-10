@@ -331,6 +331,76 @@ pub fn split_mixed_speakers(
     if changed { tidy_turns(pieces) } else { turns }
 }
 
+/// Merge duplicate voices across separator labels. Missing/ambiguous fingerprints
+/// leave speakers intact: a brief contribution alone is not evidence of identity.
+pub fn merge_same_voices(turns: Vec<SpeakerTurn>, pcm: &[f32], voiceprint: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>) -> Vec<SpeakerTurn> {
+    merge_voices_with_hint(turns, pcm, voiceprint, None)
+}
+
+pub fn merge_voices_with_hint(mut turns: Vec<SpeakerTurn>, pcm: &[f32], voiceprint: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, expected: Option<usize>) -> Vec<SpeakerTurn> {
+    use std::collections::BTreeMap;
+    let mut prints: BTreeMap<usize, Vec<f32>> = BTreeMap::new();
+    let mut speech: BTreeMap<usize, u64> = BTreeMap::new();
+    for t in &turns { *speech.entry(t.speaker).or_default() += t.end_ms.saturating_sub(t.start_ms); }
+    for &id in speech.keys() {
+        let mut candidates: Vec<_> = turns.iter().filter(|t| t.speaker == id).collect();
+        candidates.sort_by_key(|t| std::cmp::Reverse(t.end_ms.saturating_sub(t.start_ms)));
+        let mut mean = Vec::<f32>::new();
+        for t in candidates.into_iter().take(3) {
+            let a = (t.start_ms.saturating_mul(16) as usize).min(pcm.len());
+            let b = (t.end_ms.saturating_mul(16) as usize).min(pcm.len()).min(a + 16000 * 15);
+            if b.saturating_sub(a) < 16000 { continue; }
+            if let Some(e) = voiceprint(&pcm[a..b]).filter(|e| !e.is_empty() && e.iter().all(|v| v.is_finite())) {
+                let norm = e.iter().map(|v| v*v).sum::<f32>().sqrt();
+                if norm <= f32::EPSILON { continue; }
+                if mean.is_empty() { mean.resize(e.len(), 0.0); }
+                if mean.len() == e.len() { for (m,v) in mean.iter_mut().zip(e) { *m += v / norm; } }
+            }
+        }
+        if !mean.is_empty() { prints.insert(id, mean); }
+    }
+    loop {
+        let ids: Vec<_> = speech.keys().copied().collect();
+        let long_meeting = turns.iter().map(|t| t.end_ms).max().unwrap_or(0) >= 60_000;
+        let mut best = None;
+        for (i, &a) in ids.iter().enumerate() {
+            for &b in &ids[i+1..] {
+                let (Some(pa), Some(pb)) = (prints.get(&a), prints.get(&b)) else { continue; };
+                // Never collapse simultaneous speakers.
+                if turns.iter().filter(|t| t.speaker == a).any(|x| turns.iter().filter(|t| t.speaker == b).any(|y| x.start_ms < y.end_ms && y.start_ms < x.end_ms)) { continue; }
+                let sim = crate::speaker_embedding::cosine_similarity(pa, pb);
+                let small = speech[&a].min(speech[&b]) < 4_000;
+                let hinted = expected.is_some_and(|n| ids.len() > n);
+                let threshold = if hinted || (long_meeting && small) { 0.55 } else { 0.60 };
+                // Below the ordinary cutoff demand a clear best match, preventing
+                // ambiguous short fragments from being attached to a random voice.
+                if sim < 0.60 {
+                    let fragment = if speech[&a] < speech[&b] { a } else { b };
+                    let other = if fragment == a { b } else { a };
+                    let runner_up = ids.iter().filter(|&&id| id != fragment && id != other)
+                        .filter_map(|id| prints.get(id)).map(|p| crate::speaker_embedding::cosine_similarity(&prints[&fragment], p))
+                        .fold(-1.0f32, f32::max);
+                    if sim - runner_up < 0.15 { continue; }
+                }
+                if sim >= threshold && best.is_none_or(|(_,_,score)| sim > score) { best = Some((a,b,sim)); }
+            }
+        }
+        let Some((a,b,_)) = best else { break; };
+        for t in &mut turns { if t.speaker == b { t.speaker = a; } }
+        let wb = speech.remove(&b).unwrap(); let wa = speech[&a];
+        let pb = prints.remove(&b).unwrap();
+        let pa = prints.get_mut(&a).unwrap();
+        let norm_a = pa.iter().map(|v| v*v).sum::<f32>().sqrt().max(f32::EPSILON);
+        let norm_b = pb.iter().map(|v| v*v).sum::<f32>().sqrt().max(f32::EPSILON);
+        for (x,y) in pa.iter_mut().zip(pb) { *x = *x / norm_a * wa as f32 + y / norm_b * wb as f32; }
+        speech.insert(a,wa+wb);
+    }
+    // Preserve all timestamps, including brief turns; compact labels only.
+    let mut labels = BTreeMap::new();
+    for t in &mut turns { let next = labels.len(); t.speaker = *labels.entry(t.speaker).or_insert(next); }
+    turns
+}
+
 fn count_speakers(turns: &[SpeakerTurn]) -> usize {
     turns.iter().map(|t| t.speaker + 1).max().unwrap_or(0)
 }
@@ -449,5 +519,33 @@ mod tests {
     fn renumbers_by_first_appearance() {
         let got = tidy_turns(vec![t(0, 1000, 4), t(3000, 4000, 2), t(6000, 7000, 4)]);
         assert_eq!(got.iter().map(|t| t.speaker).collect::<Vec<_>>(), vec![0, 1, 0]);
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    fn turn(id: usize, a: u64, b: u64) -> SpeakerTurn { SpeakerTurn { speaker:id,start_ms:a,end_ms:b } }
+    #[test]
+    fn duplicate_voices_merge_without_losing_timing_or_brief_real_speakers() {
+        let turns = vec![turn(0,0,5000),turn(1,6000,11000),turn(2,12000,13000)];
+        let mut pcm = vec![0.1;16000*13]; pcm[16000*12..].fill(0.8);
+        let mut print = |p: &[f32]| Some(if p[0] > 0.5 { vec![0.0,1.0] } else { vec![1.0,0.0] });
+        let out = merge_same_voices(turns.clone(), &pcm, &mut print);
+        assert_eq!(out.iter().map(|t|(t.start_ms,t.end_ms)).collect::<Vec<_>>(),turns.iter().map(|t|(t.start_ms,t.end_ms)).collect::<Vec<_>>());
+        assert_eq!(out[0].speaker,out[1].speaker); assert_ne!(out[0].speaker,out[2].speaker);
+    }
+    #[test]
+    fn missing_prints_and_overlapping_voices_are_not_collapsed() {
+        let turns = vec![turn(0,0,5000),turn(1,3000,7000)]; let pcm=vec![0.1;16000*7];
+        assert_eq!(merge_same_voices(turns.clone(),&pcm,&mut |_| None),turns);
+        assert_eq!(merge_same_voices(turns.clone(),&pcm,&mut |_| Some(vec![1.0,0.0])),turns);
+    }
+    #[test]
+    fn speaker_hint_does_not_force_distinct_people_into_one_voice() {
+        let turns = vec![turn(0,0,5000),turn(1,6000,11000)];
+        let mut pcm=vec![0.1;16000*11];pcm[16000*6..].fill(0.8);
+        let out=merge_voices_with_hint(turns.clone(),&pcm,&mut |p| Some(if p[0]<0.5 {vec![1.0,0.0]} else {vec![0.0,1.0]}),Some(1));
+        assert_eq!(out,turns);
     }
 }

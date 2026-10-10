@@ -22,7 +22,6 @@ import {
   IconChevronRight,
   IconChevronDown,
   IconExternalLink,
-  IconRefresh,
 } from "./Icons";
 import type { MeetingInfo } from "./MeetingHeaderPill";
 import {
@@ -34,6 +33,7 @@ import { SpeakerVaultModal } from "./SpeakerVaultModal";
 import { MeetingReviewModal } from "./MeetingReviewModal";
 import { levelToPercent } from "../utils/audioLevel";
 import { MeetingRecordingImport, recordingDate } from "./MeetingRecordingImport";
+import { conversationBlocks, spokenAt, speakerCountHint } from "../utils/meetingTimeline";
 import "./MeetingsPanel.css";
 
 interface MeetingsPanelProps {
@@ -141,6 +141,34 @@ export function MeetingsPanel({
   const fullAudioRef = useRef<HTMLAudioElement | null>(null);
   const selectedAudioPathRef = useRef<string | null>(null);
 
+  const timelineRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const manualScrollUntil = useRef(0);
+  const scrolledBlock = useRef(-1);
+  const [speakerHint, setSpeakerHint] = useState("");
+  const [confirmReseparate, setConfirmReseparate] = useState(false);
+  const [speakerBusy, setSpeakerBusy] = useState(false);
+  const speakerMutation = useRef(false);
+  const blocks = useMemo(() => conversationBlocks(selectedMeeting?.turns ?? []), [selectedMeeting?.turns]);
+  const meetingSpeakers = useMemo(() => Array.from(new Map((selectedMeeting?.turns ?? []).map(turn => [turn.speaker_id, turn])).values()), [selectedMeeting?.turns]);
+  const activeBlock = blocks.findIndex(t => spokenAt(t.intervals, audioCurrentTime));
+  useEffect(() => {
+    if (!isPlayingAudio || typeof requestAnimationFrame === "undefined") return;
+    let frame = 0;
+    const tick = () => {
+      const audio = fullAudioRef.current;
+      if (audio) setAudioCurrentTime(audio.currentTime);
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [isPlayingAudio]);
+  useEffect(() => {
+    if (isPlayingAudio && activeBlock >= 0 && scrolledBlock.current !== activeBlock && Date.now() >= manualScrollUntil.current) {
+      scrolledBlock.current = activeBlock;
+      timelineRefs.current.get(activeBlock)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [activeBlock, isPlayingAudio, audioCurrentTime]);
+
   // Speaker Snippet Preview Playback
   const [playingSnippetSpeakerId, setPlayingSnippetSpeakerId] = useState<string | null>(null);
   const snippetAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -158,7 +186,7 @@ export function MeetingsPanel({
   // Speaker ids like "speaker_remote_1" repeat across meetings: close any open
   // rename field when another meeting is opened.
   useEffect(() => {
-    setRenamingSpeakerId(null);
+    setRenamingSpeakerId(null); setSpeakerHint(""); setConfirmReseparate(false);
   }, [selectedMeetingId]);
   const [speakerNewName, setSpeakerNewName] = useState("");
   const [copiedTranscript, setCopiedTranscript] = useState(false);
@@ -179,6 +207,7 @@ export function MeetingsPanel({
       setToolbarError("");
       stopFullAudio();
       stopSnippetAudio();
+      manualScrollUntil.current = 0; scrolledBlock.current = -1;
       setAudioCurrentTime(0);
       setAudioDuration(0);
       selectedAudioPathRef.current = null;
@@ -471,31 +500,25 @@ export function MeetingsPanel({
     }
   };
 
-  const handleCycleSnippet = async (meetingId: number, speakerId: string) => {
-    try {
-      const [nextPath, nextIdx] = await invoke<[string, number]>("cycle_speaker_turn_snippet", {
-        meetingId,
-        speakerId,
-      });
-
-      if (selectedMeetingIdRef.current === meetingId) {
-        setSelectedMeeting((prev) => prev?.id === meetingId ? {
-          ...prev,
-          turns: prev.turns.map((t) => t.speaker_id === speakerId ? {
-            ...t,
-            snippet_path: nextPath,
-            current_snippet_idx: nextIdx,
-          } : t),
-        } : prev);
-      }
-
-      // If this speaker's snippet was currently playing, immediately play the new candidate sample
-      if (selectedMeetingIdRef.current === meetingId && playingSnippetSpeakerId === speakerId) {
-        handlePlaySnippet(speakerId, nextPath, true);
-      }
-    } catch (err) {
-      console.error("Failed to cycle speaker snippet:", err);
+  const changeSpeakers = async (command: string, args: Record<string, unknown>) => {
+    if (!selectedMeeting || speakerMutation.current) return;
+    const id = selectedMeeting.id;
+    if (command === "reseparate_meeting_speakers") {
+      try { args.expectedSpeakers = speakerCountHint(speakerHint); }
+      catch (error) { setToolbarError(String(error)); return; }
     }
+    speakerMutation.current = true; setSpeakerBusy(true);
+    try {
+      const rerun = command === "reseparate_meeting_speakers";
+      if (rerun) { onImportProcessingChange?.(true); stopFullAudio(); }
+      try { await invoke(command, { meetingId: id, ...args }); }
+      finally { if (rerun) onImportProcessingChange?.(false); }
+      if (selectedMeetingIdRef.current === id) await loadMeetingDetail(id);
+      void loadMeetings();
+      if (selectedMeetingIdRef.current === id) setToolbarError("");
+    } catch (error) {
+      if (selectedMeetingIdRef.current === id) setToolbarError(String(error));
+    } finally { speakerMutation.current = false; setSpeakerBusy(false); }
   };
 
   // ── Detail Updates ─────────────────────────────────────────────
@@ -1051,7 +1074,11 @@ export function MeetingsPanel({
         </div>
 
         {/* Right Column: Selected Meeting Deep-Dive Detail View */}
-        <div className="meeting-detail-card" key={selectedMeeting?.id ?? "none"}>
+        <div className="meeting-detail-card"
+          onPointerDown={() => { manualScrollUntil.current = Date.now() + 5000; scrolledBlock.current = -1; }}
+          onWheel={() => { manualScrollUntil.current = Date.now() + 5000; scrolledBlock.current = -1; }}
+          onTouchMove={() => { manualScrollUntil.current = Date.now() + 5000; scrolledBlock.current = -1; }}
+          onKeyDown={e => { if (["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) { manualScrollUntil.current = Date.now() + 5000; scrolledBlock.current = -1; } }} key={selectedMeeting?.id ?? "none"}>
           {loadingDetail ? (
             <div className="meeting-detail-empty">Loading meeting transcript...</div>
           ) : !selectedMeeting ? (
@@ -1291,8 +1318,23 @@ export function MeetingsPanel({
                   </span>
                 </div>
 
+                <div className="meeting-speaker-tools">
+                  <label>About how many people? <input type="number" min="1" max="32" step="1" value={speakerHint} aria-label="Speaker count hint" disabled={speakerBusy}
+                    onChange={e => setSpeakerHint(e.target.value)} /></label>
+                  <button type="button" className="turn-clip-btn" data-testid="meetings-reseparate-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
+                    onClick={() => { if (!confirmReseparate) { setConfirmReseparate(true); return; } setConfirmReseparate(false); void changeSpeakers("reseparate_meeting_speakers", { expectedSpeakers: speakerHint ? Number(speakerHint) : null, modelId, useGpu }); }}>
+                    {speakerBusy ? "Working…" : confirmReseparate ? "Confirm re-separation" : "Re-separate speakers"}
+                  </button>
+                  {confirmReseparate && <><span>Rebuilds turns and transcript; manual labels and merge undo are replaced after success. Notes and original recording are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmReseparate(false)}>Cancel</button></>}
+                </div>
+                {selectedMeeting.merges?.[0] && (
+                  <button type="button" className="turn-clip-btn" data-testid="meetings-undo-merge-btn" disabled={speakerBusy}
+                    onClick={() => changeSpeakers("undo_meeting_speaker_merge", { mergeId: selectedMeeting.merges![0].id })}>
+                    Undo merge: {selectedMeeting.merges[0].from_speaker_name} → {selectedMeeting.merges[0].into_speaker_name}
+                  </button>
+                )}
                 <div className="turns-conversation-flow">
-                  {selectedMeeting.turns.map((t, idx) => {
+                  {blocks.map((t, idx) => {
                     const isYou = t.channel === 0;
                     const isSnippetPlaying = playingSnippetSpeakerId === t.speaker_id;
                     const isRenaming = renamingSpeakerId === t.speaker_id;
@@ -1300,7 +1342,10 @@ export function MeetingsPanel({
                     return (
                       <div
                         key={idx}
-                        className={`turn-bubble ${
+                        ref={node => { if (node) timelineRefs.current.set(idx, node); else timelineRefs.current.delete(idx); }}
+                        data-testid={`meetings-turn-${idx}`}
+                        aria-current={spokenAt(t.intervals, audioCurrentTime) ? "true" : undefined}
+                        className={`turn-bubble ${spokenAt(t.intervals, audioCurrentTime) ? "turn-bubble--spoken " : ""}${
                           isYou ? "turn-bubble--you" : "turn-bubble--remote"
                         }`}
                       >
@@ -1362,19 +1407,14 @@ export function MeetingsPanel({
                               </button>
                             )}
 
-                            {!isYou && t.candidate_snippets && t.candidate_snippets.length > 1 && (
-                              <button
-                                id={`meetings-cycle-sample-btn-${idx}`}
-                                data-testid={`meetings-cycle-sample-btn-${idx}`}
-                                type="button"
-                                className="turn-clip-btn cycle-sample-btn"
-                                onClick={() => selectedMeeting && handleCycleSnippet(selectedMeeting.id, t.speaker_id)}
-                                title="Find more voices: Cycle through alternative clear isolated voice samples for this speaker"
-                              >
-                                <IconRefresh size={11} />
-                                <span>Sample {(t.current_snippet_idx ?? 0) + 1}/{t.candidate_snippets.length}</span>
-                              </button>
-                            )}
+                            <select aria-label={`Merge ${t.speaker_name} into`} className="turn-merge-select"
+                              value="" disabled={speakerBusy}
+                              onChange={e => { if (e.target.value) void changeSpeakers("merge_meeting_speakers", { fromSpeakerId: t.speaker_id, intoSpeakerId: e.target.value }); }}>
+                              <option value="">Merge into…</option>
+                              {meetingSpeakers
+                                .filter(other => other.speaker_id !== t.speaker_id)
+                                .map(other => <option key={other.speaker_id} value={other.speaker_id}>{other.speaker_name}</option>)}
+                            </select>
 
                             {!isYou && (
                               <button
@@ -1398,7 +1438,11 @@ export function MeetingsPanel({
                           </div>
                         </div>
 
-                        <p className="turn-text">{t.text}</p>
+                        <p className="turn-text" role={selectedMeeting.audio_path && !audioFailed ? "button" : undefined}
+                          tabIndex={selectedMeeting.audio_path && !audioFailed ? 0 : undefined}
+                          aria-label={`Jump to ${formatSeconds(t.start_ms / 1000)}: ${t.text}`}
+                          onClick={() => { if (selectedMeeting.audio_path && !audioFailed) handleScrubAudio(t.start_ms / 1000); }}
+                          onKeyDown={e => { if (selectedMeeting.audio_path && !audioFailed && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); handleScrubAudio(t.start_ms / 1000); } }}>{t.text}</p>
                       </div>
                     );
                   })}

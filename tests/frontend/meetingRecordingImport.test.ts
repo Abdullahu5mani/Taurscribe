@@ -64,6 +64,7 @@ test("failed processing preserves the draft and two immediate clicks start only 
   expect(calls.filter(c => c.cmd === "import_meeting_recordings")).toHaveLength(1);
   reject(new Error("Recording retained after ASR failure")); await pending; await view.settle();
   expect(content(view.handle.current)).toContain("Recording retained after ASR failure");
+  byTest(view.handle.current, "meeting-import-open").props.onClick(); await view.settle();
   expect(content(view.handle.current)).toContain("earlier.wav"); expect(view.completed).toEqual([]);
   expect(view.busy).toEqual([true, false]);
 });
@@ -137,4 +138,16 @@ test("processing keeps the modal open until completion, which closes it automati
   resolve(47); await job; await view.settle();
   expect(byTest(view.handle.current, "meeting-import-modal")).toBeUndefined();
   expect(view.completed).toEqual([47]);
+  expect(view.busy).toEqual([true, false]);
+});
+
+test("import sends optional people hint and invalid counts preserve the draft", async () => {
+  const view=fixture(); await view.settle(); byTest(view.handle.current,"meeting-import-open").props.onClick(); await view.settle();
+  await byTest(view.handle.current,"meeting-import-browse").props.onClick();await view.settle();
+  byLabel(view.handle.current,"About how many people?").props.onChange({target:{value:"2.5"}});await view.settle();
+  await byTest(view.handle.current,"meeting-import-submit").props.onClick();await view.settle();
+  expect(calls.some(c=>c.cmd === "import_meeting_recordings")).toBe(false);expect(content(view.handle.current)).toContain("1–32");
+  byLabel(view.handle.current,"About how many people?").props.onChange({target:{value:"4"}});await view.settle();
+  await byTest(view.handle.current,"meeting-import-submit").props.onClick();await view.settle();
+  expect(calls.find(c=>c.cmd === "import_meeting_recordings")?.args.expectedSpeakers).toBe(4);
 });

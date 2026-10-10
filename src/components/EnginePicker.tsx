@@ -51,7 +51,7 @@ const CLOSE_MS = 140;
  */
 export function EnginePicker(props: EnginePickerProps) {
   const {
-    activeEngine, loadedEngine, loadingTargetEngine,
+    activeEngine, loadedEngine, loadedModelId, loadingTargetEngine,
     models, currentModel, graniteModels, currentGraniteModel, qwen3Models, currentQwen3Model,
     isWhisperDownloading, isGraniteDownloading, isQwen3Downloading,
     disabled,
@@ -147,7 +147,7 @@ export function EnginePicker(props: EnginePickerProps) {
               data-testid={`ep-model-row-${r.id}`}
               role="radio"
               aria-checked={r.selected}
-              aria-label={`Select model ${r.name}, size ${r.size}`}
+              aria-label={`Select model ${r.name}, size ${r.size}${loadedEngine === drilled && !loadingTargetEngine && (loadedModelId === undefined ? r.selected : r.id === loadedModelId) ? ", loaded" : ""}`}
               className={`ep-model-row${r.selected ? " ep-model-row--selected" : ""}`}
               style={{ animationDelay: `${40 + i * 28}ms` }}
               disabled={disabled}
@@ -163,7 +163,7 @@ export function EnginePicker(props: EnginePickerProps) {
               <span className="ep-model-state" aria-hidden="true">
                 {isLoadingThis && r.selected ? (
                   <span className="ep-model-spinner" />
-                ) : r.selected ? (
+                ) : loadedEngine === drilled && !loadingTargetEngine && (loadedModelId === undefined ? r.selected : r.id === loadedModelId) ? (
                   <svg className="ep-model-check" width="14" height="14" viewBox="0 0 14 14" style={{ color: meta.color }}>
                     <path d="M3 7.4l2.6 2.6L11 4.5" stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
@@ -226,7 +226,8 @@ export function EnginePicker(props: EnginePickerProps) {
                 <span className="ep-row-blurb">{meta.blurb}</span>
               </span>
               {isLoadingThis && <span className="ep-row-badge">Loading…</span>}
-              {isActive && !isLoadingThis && <span className="ep-row-badge ep-row-badge--active">In use</span>}
+              {loadedEngine === engine && !loadingTargetEngine && <span className="ep-row-badge ep-row-badge--active">Loaded</span>}
+              {isActive && loadedEngine !== engine && !isLoadingThis && <span className="ep-row-badge">Selected</span>}
               <svg className="ep-row-caret" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
           );

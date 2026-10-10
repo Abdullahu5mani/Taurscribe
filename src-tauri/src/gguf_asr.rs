@@ -93,6 +93,19 @@ impl GgufAsr {
     }
 }
 
+/// Add silence only when an encoder cannot represent a short nonempty clip.
+/// All original speech samples stay unchanged; empty input remains empty.
+fn run_with_minimum_audio(
+    pcm: &[f32], minimum: usize,
+    run: &mut impl FnMut(&[f32]) -> Result<String, transcribe_cpp::Error>,
+) -> Result<String, transcribe_cpp::Error> {
+    if pcm.is_empty() { return Ok(String::new()); }
+    if pcm.len() >= minimum { return run(pcm); }
+    let mut padded = pcm.to_vec();
+    padded.resize(minimum, 0.0);
+    run(&padded)
+}
+
 /// A failed decode is incomplete by contract. Retry all its audio, never its
 /// partial text. This shared path covers files, live speech, and meeting turns.
 fn recover_decode_limits(

@@ -19,6 +19,14 @@ pub fn decode_audio_interleaved_f32(path: &Path) -> Result<(Vec<f32>, u32, u32),
     })
 }
 
+/// Strict full-channel decode for reprocessing saved meetings: corrupt packets
+/// must not replace a complete existing transcript with partial audio.
+pub fn decode_audio_interleaved_strict(path: &Path) -> Result<(Vec<f32>, u32, u32), String> {
+    let mut samples = Vec::new();
+    let (_, rate, channels) = decode_audio_packets(path, true, |part, _, _, _, _| { samples.extend_from_slice(part); Ok(()) })?;
+    Ok((samples, rate, channels))
+}
+
 /// Decode an audio file directly to mono f32 samples.
 ///
 /// This avoids materializing the full interleaved buffer before immediately

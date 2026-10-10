@@ -300,11 +300,11 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
                                                 data-testid={`speaker-vault-cycle-sample-${s.id}`}
                                                 className="vault-action-btn"
                                                 onClick={() => handleCycleVaultSnippet(s)}
-                                                title="Find more voices: Cycle alternative voice sample"
+                                                title="Preview another existing clip (does not add a voiceprint)"
                                             >
                                                 <IconRefresh size={13} />
                                                 <span>
-                                                    Sample {Math.max(1, (s.candidate_snippets.indexOf(s.snippet_path || "") + 1))}/{s.candidate_snippets.length}
+                                                    Clip {Math.max(1, (s.candidate_snippets.indexOf(s.snippet_path || "") + 1))}/{s.candidate_snippets.length}
                                                 </span>
                                             </button>
                                         )}

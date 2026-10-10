@@ -1389,6 +1389,8 @@ function App() {
             </div>
             {navMode === "meetings" && (
               <MeetingsPanel
+                modelId={activeEngine === "whisper" ? currentModel : activeEngine === "granite" ? currentGraniteModel : currentQwen3Model}
+                useGpu={asrBackend !== "cpu"}
                 importBlocked={isLoading || isVoiceEnrolling || isProcessingTranscript || isFileJobTranscribing}
                 hasDiarizationModel={settingsModels.some((m) => m.id === DIARIZATION_MODEL_ID && m.downloaded)}
                 onImportProcessingChange={setIsMeetingImporting}
@@ -1691,7 +1693,8 @@ function App() {
               {isEnginePickerOpen && (
                 <EnginePicker
                   activeEngine={activeEngine}
-                  loadedEngine={loadedEngine}
+                  loadedEngine={engineSelectionState ? engineSelectionState.loaded_engine as ASREngine | null : loadedEngine}
+                  loadedModelId={engineSelectionState?.loaded_model_id}
                   loadingTargetEngine={loadingTargetEngine}
                   models={models}
                   currentModel={currentModel}

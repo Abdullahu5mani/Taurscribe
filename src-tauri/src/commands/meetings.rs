@@ -81,6 +81,23 @@ pub fn ensure_meetings_schema(conn: &Connection) -> Result<(), String> {
             candidate_snippets  TEXT
         );
 
+        -- Speakers the user merged in a meeting ("these two are one person"),
+        -- newest last. Each row keeps what the merged turns were before, so
+        -- the merge can be undone exactly.
+        CREATE TABLE IF NOT EXISTS meeting_speaker_merges (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id          INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+            from_speaker_id     TEXT NOT NULL,
+            from_speaker_name   TEXT NOT NULL,
+            into_speaker_id     TEXT NOT NULL,
+            into_speaker_name   TEXT NOT NULL,
+            turns_json          TEXT NOT NULL,
+            created_at          TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_meeting_speaker_merges_meeting_id
+            ON meeting_speaker_merges(meeting_id, id);
+
         -- The user's own voiceprint, for telling "You" apart in in-person
         -- meetings (one microphone). Never part of the speaker vault.
         CREATE TABLE IF NOT EXISTS my_voice (
@@ -337,6 +354,20 @@ pub struct MeetingDetailRecord {
     /// Speaker clips that are gone; they are left out of `turns`.
     #[serde(default)]
     pub clips_missing: usize,
+    /// Speaker merges the user can undo, newest first.
+    #[serde(default)]
+    pub merges: Vec<SpeakerMergeRecord>,
+}
+
+/// One "these two speakers are the same person" merge in a meeting.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpeakerMergeRecord {
+    pub id: i64,
+    pub from_speaker_id: String,
+    pub from_speaker_name: String,
+    pub into_speaker_id: String,
+    pub into_speaker_name: String,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -521,6 +552,9 @@ pub fn replace_meeting_content(
     .map_err(|e| format!("Failed to update meeting: {}", e))?;
     tx.execute("DELETE FROM meeting_turns WHERE meeting_id = ?1", params![meeting_id])
         .map_err(|e| format!("Failed to clear meeting turns: {}", e))?;
+    // The old turns are gone, so their merges can no longer be undone.
+    tx.execute("DELETE FROM meeting_speaker_merges WHERE meeting_id = ?1", params![meeting_id])
+        .map_err(|e| format!("Failed to clear speaker merges: {}", e))?;
     insert_turns(&tx, meeting_id, turns)?;
     let counted: std::collections::HashSet<String> = old_turns.iter().map(|t| t.0.clone()).collect();
     record_vault_appearances(&tx, meeting_id, turns, &counted);
@@ -914,6 +948,7 @@ pub async fn get_meeting_detail(meeting_id: i64) -> Result<MeetingDetailRecord, 
                 .map_err(|e| e.to_string())?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             audio_missing,
             clips_missing,
+            merges: speaker_merges(&conn, meeting_id)?,
         })
     })
     .await
@@ -1061,6 +1096,8 @@ fn delete_meeting_internal(conn: &Connection, meeting_id: i64) -> Result<(), Str
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM meeting_turns WHERE meeting_id = ?1", params![meeting_id])
             .map_err(|e| format!("Failed to delete turns: {}", e))?;
+        tx.execute("DELETE FROM meeting_speaker_merges WHERE meeting_id = ?1", params![meeting_id])
+            .map_err(|e| format!("Failed to delete speaker merges: {}", e))?;
         tx.execute("DELETE FROM meetings WHERE id = ?1", params![meeting_id])
             .map_err(|e| format!("Failed to delete meeting: {}", e))?;
         tx.commit().map_err(|e| format!("Failed to commit meeting deletion: {}", e))?;
@@ -1208,6 +1245,14 @@ pub(crate) fn rename_speaker_internal(
     Ok(())
 }
 
+// ── Speaker merges ──────────────────────────────────────────────────────────
+//
+// The separator can hear one person as two speakers. Merging moves every turn
+// of one speaker to another in this meeting; the turns' previous speaker, name,
+// channel and clips are kept in meeting_speaker_merges so the merge can be
+// undone. Merges are undone newest first: a later merge may have moved the
+// same turns again.
+
 /// A merged turn as it was before the merge.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct MergedTurn {
@@ -1218,6 +1263,166 @@ struct MergedTurn {
     snippet_path: Option<String>,
     candidate_snippets: Option<String>,
     current_snippet_idx: i64,
+}
+
+/// Merges the user can undo in a meeting, newest first.
+fn speaker_merges(conn: &Connection, meeting_id: i64) -> Result<Vec<SpeakerMergeRecord>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, from_speaker_id, from_speaker_name, into_speaker_id, into_speaker_name, created_at \
+             FROM meeting_speaker_merges WHERE meeting_id = ?1 ORDER BY id DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![meeting_id], |r| {
+            Ok(SpeakerMergeRecord {
+                id: r.get(0)?,
+                from_speaker_id: r.get(1)?,
+                from_speaker_name: r.get(2)?,
+                into_speaker_id: r.get(3)?,
+                into_speaker_name: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+fn recount_speakers(conn: &Connection, meeting_id: i64) -> Result<(), String> {
+    conn.execute(
+        "UPDATE meetings SET speaker_count = MAX(1, (SELECT COUNT(DISTINCT speaker_id) FROM meeting_turns WHERE meeting_id = ?1)) WHERE id = ?1",
+        params![meeting_id],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("Failed to recount speakers: {}", e))
+}
+
+#[tauri::command]
+pub async fn merge_meeting_speakers(
+    meeting_id: i64,
+    from_speaker_id: String,
+    into_speaker_id: String,
+) -> Result<SpeakerMergeRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection()?;
+        merge_speakers_internal(&conn, meeting_id, &from_speaker_id, &into_speaker_id)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// Moves every turn of `from` to `into` (name, channel and clip included).
+pub(crate) fn merge_speakers_internal(
+    conn: &Connection,
+    meeting_id: i64,
+    from: &str,
+    into: &str,
+) -> Result<SpeakerMergeRecord, String> {
+    if from == into {
+        return Err("Pick two different speakers to merge".into());
+    }
+    let target: (String, i64, Option<String>, Option<String>, i64) = conn
+        .query_row(
+            "SELECT speaker_name, channel, snippet_path, candidate_snippets, COALESCE(current_snippet_idx, 0) FROM meeting_turns \
+             WHERE meeting_id = ?1 AND speaker_id = ?2 ORDER BY (snippet_path IS NULL), start_ms LIMIT 1",
+            params![meeting_id, into],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .map_err(|_| "That speaker is no longer in this meeting".to_string())?;
+    let moved: Vec<MergedTurn> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, speaker_id, speaker_name, channel, snippet_path, candidate_snippets, COALESCE(current_snippet_idx, 0) \
+                 FROM meeting_turns WHERE meeting_id = ?1 AND speaker_id = ?2 ORDER BY start_ms",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![meeting_id, from], |r| {
+                Ok(MergedTurn {
+                    turn_id: r.get(0)?,
+                    speaker_id: r.get(1)?,
+                    speaker_name: r.get(2)?,
+                    channel: r.get(3)?,
+                    snippet_path: r.get(4)?,
+                    candidate_snippets: r.get(5)?,
+                    current_snippet_idx: r.get(6)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+    };
+    let Some(first) = moved.first() else {
+        return Err("That speaker is no longer in this meeting".into());
+    };
+    let from_name = first.speaker_name.clone();
+    let turns_json = serde_json::to_string(&moved).map_err(|e| e.to_string())?;
+    let created_at = Utc::now().to_rfc3339();
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO meeting_speaker_merges (meeting_id, from_speaker_id, from_speaker_name, into_speaker_id, into_speaker_name, turns_json, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![meeting_id, from, from_name, into, target.0, turns_json, created_at],
+    )
+    .map_err(|e| format!("Failed to record merge: {}", e))?;
+    let id = tx.last_insert_rowid();
+    tx.execute(
+        "UPDATE meeting_turns SET speaker_id = ?1, speaker_name = ?2, channel = ?3, snippet_path = ?4, candidate_snippets = ?5, current_snippet_idx = ?6 \
+         WHERE meeting_id = ?7 AND speaker_id = ?8",
+        params![into, target.0, target.1, target.2, target.3, target.4, meeting_id, from],
+    )
+    .map_err(|e| format!("Failed to merge speakers: {}", e))?;
+    recount_speakers(&tx, meeting_id)?;
+    tx.commit().map_err(|e| format!("Failed to save merge: {}", e))?;
+    Ok(SpeakerMergeRecord {
+        id,
+        from_speaker_id: from.to_string(),
+        from_speaker_name: from_name,
+        into_speaker_id: into.to_string(),
+        into_speaker_name: target.0,
+        created_at,
+    })
+}
+
+#[tauri::command]
+pub async fn undo_meeting_speaker_merge(meeting_id: i64, merge_id: i64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection()?;
+        undo_merge_internal(&conn, meeting_id, merge_id)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+}
+
+/// Puts the turns of the newest merge back as they were.
+pub(crate) fn undo_merge_internal(conn: &Connection, meeting_id: i64, merge_id: i64) -> Result<(), String> {
+    let newest: Option<(i64, String)> = conn
+        .query_row(
+            "SELECT id, turns_json FROM meeting_speaker_merges WHERE meeting_id = ?1 ORDER BY id DESC LIMIT 1",
+            params![meeting_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    let Some((newest_id, turns_json)) = newest else {
+        return Err("Nothing to undo in this meeting".into());
+    };
+    if newest_id != merge_id {
+        return Err("Undo the later merges first".into());
+    }
+    let turns: Vec<MergedTurn> = serde_json::from_str(&turns_json).map_err(|e| format!("Merge record is damaged: {}", e))?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for t in &turns {
+        tx.execute(
+            "UPDATE meeting_turns SET speaker_id = ?1, speaker_name = ?2, channel = ?3, snippet_path = ?4, candidate_snippets = ?5, current_snippet_idx = ?6 \
+             WHERE id = ?7 AND meeting_id = ?8",
+            params![t.speaker_id, t.speaker_name, t.channel, t.snippet_path, t.candidate_snippets, t.current_snippet_idx, t.turn_id, meeting_id],
+        )
+        .map_err(|e| format!("Failed to undo merge: {}", e))?;
+    }
+    tx.execute("DELETE FROM meeting_speaker_merges WHERE id = ?1", params![merge_id])
+        .map_err(|e| format!("Failed to undo merge: {}", e))?;
+    recount_speakers(&tx, meeting_id)?;
+    tx.commit().map_err(|e| format!("Failed to undo merge: {}", e))
 }
 
 #[tauri::command]
@@ -1872,6 +2077,83 @@ mod tests {
         assert_eq!(category, "Planning");
     }
 
+    fn speakers_of(conn: &Connection, m: i64) -> Vec<(String, String, i64)> {
+        let mut stmt = conn.prepare("SELECT speaker_id, speaker_name, channel FROM meeting_turns WHERE meeting_id = ?1 ORDER BY start_ms").unwrap();
+        stmt.query_map([m], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+    }
+
+    fn speaker_count_of(conn: &Connection, m: i64) -> i64 {
+        conn.query_row("SELECT speaker_count FROM meetings WHERE id = ?1", [m], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn merging_speakers_moves_turns_and_undo_restores_them() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let mut a = turn("speaker_remote_1", "Speaker 1", 1, 0);
+        a.snippet_path = Some("/clips/one.wav".into());
+        let mut b = turn("speaker_remote_3", "Speaker 3", 1, 5000);
+        b.snippet_path = Some("/clips/three.wav".into());
+        let m = meeting_with(&conn, &[turn("speaker_you", "You", 0, 0), a, turn("speaker_remote_2", "Speaker 2", 1, 2500), b]);
+        let before = speakers_of(&conn, m);
+        assert_eq!(speaker_count_of(&conn, m), 4);
+
+        let merge = merge_speakers_internal(&conn, m, "speaker_remote_3", "speaker_remote_1").unwrap();
+        assert_eq!((merge.from_speaker_name.as_str(), merge.into_speaker_name.as_str()), ("Speaker 3", "Speaker 1"));
+        let after = speakers_of(&conn, m);
+        assert_eq!(after[3], ("speaker_remote_1".into(), "Speaker 1".into(), 1));
+        assert_eq!(speaker_count_of(&conn, m), 3);
+        let clip: Option<String> = conn.query_row("SELECT snippet_path FROM meeting_turns WHERE meeting_id = ?1 AND start_ms = 5000", [m], |r| r.get(0)).unwrap();
+        assert_eq!(clip.as_deref(), Some("/clips/one.wav"));
+
+        undo_merge_internal(&conn, m, merge.id).unwrap();
+        assert_eq!(speakers_of(&conn, m), before);
+        assert_eq!(speaker_count_of(&conn, m), 4);
+        let clip: Option<String> = conn.query_row("SELECT snippet_path FROM meeting_turns WHERE meeting_id = ?1 AND start_ms = 5000", [m], |r| r.get(0)).unwrap();
+        assert_eq!(clip.as_deref(), Some("/clips/three.wav"));
+        assert!(speaker_merges(&conn, m).unwrap().is_empty());
+    }
+
+    #[test]
+    fn merges_are_undone_newest_first() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let m = meeting_with(&conn, &[turn("speaker_remote_1", "Speaker 1", 1, 0), turn("speaker_remote_2", "Speaker 2", 1, 2500), turn("speaker_remote_3", "Speaker 3", 1, 5000)]);
+        let before = speakers_of(&conn, m);
+        let first = merge_speakers_internal(&conn, m, "speaker_remote_2", "speaker_remote_1").unwrap();
+        let second = merge_speakers_internal(&conn, m, "speaker_remote_3", "speaker_remote_1").unwrap();
+        assert_eq!(speaker_count_of(&conn, m), 1);
+        assert_eq!(speaker_merges(&conn, m).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), [second.id, first.id]);
+
+        assert!(undo_merge_internal(&conn, m, first.id).is_err());
+        undo_merge_internal(&conn, m, second.id).unwrap();
+        undo_merge_internal(&conn, m, first.id).unwrap();
+        assert_eq!(speakers_of(&conn, m), before);
+        assert!(undo_merge_internal(&conn, m, first.id).is_err());
+    }
+
+    #[test]
+    fn merging_a_speaker_into_itself_or_a_missing_one_fails() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let m = meeting_with(&conn, &[turn("speaker_remote_1", "Speaker 1", 1, 0)]);
+        assert!(merge_speakers_internal(&conn, m, "speaker_remote_1", "speaker_remote_1").is_err());
+        assert!(merge_speakers_internal(&conn, m, "speaker_remote_9", "speaker_remote_1").is_err());
+        assert!(merge_speakers_internal(&conn, m, "speaker_remote_1", "speaker_remote_9").is_err());
+        assert!(speaker_merges(&conn, m).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_a_meeting_removes_its_merges() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let m = meeting_with(&conn, &[turn("speaker_remote_1", "Speaker 1", 1, 0), turn("speaker_remote_2", "Speaker 2", 1, 2500)]);
+        merge_speakers_internal(&conn, m, "speaker_remote_2", "speaker_remote_1").unwrap();
+        delete_meeting_internal(&conn, m).unwrap();
+        let left: i64 = conn.query_row("SELECT COUNT(*) FROM meeting_speaker_merges", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0);
+    }
+
     fn vault_rows(conn: &Connection) -> Vec<(String, String, i64)> {
         let mut stmt = conn.prepare("SELECT id, name, meeting_count FROM speaker_vault ORDER BY created_at").unwrap();
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
@@ -2093,7 +2375,7 @@ mod vault_and_export_tests {
             ],
             category: "Planning".into(), speaker_count: 2,
             turns: vec![turn("You", 5_000, "Let's start."), turn("Sam", 3_723_000, "Done, an hour later.")],
-            audio_missing: false, clips_missing: 0, recording_sources: vec![],
+            audio_missing: false, clips_missing: 0, recording_sources: vec![], merges: vec![],
         }
     }
 
@@ -2142,3 +2424,112 @@ mod vault_and_export_tests {
         }
     }
 }
+
+pub(crate) fn turn_revision(conn: &Connection, meeting_id: i64) -> Result<String, String> {
+    let mut stmt = conn.prepare("SELECT id,speaker_id,speaker_name,start_ms,end_ms,channel,text,snippet_path,candidate_snippets,COALESCE(current_snippet_idx,0) FROM meeting_turns WHERE meeting_id=?1 ORDER BY id").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![meeting_id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,i64>(3)?,r.get::<_,i64>(4)?,r.get::<_,i64>(5)?,r.get::<_,String>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,i64>(9)?))).map_err(|e|e.to_string())?;
+    serde_json::to_string(&rows.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())?).map_err(|e|e.to_string())
+}
+
+/// Commit re-separation only after all decoding succeeded. Existing manual
+/// merges are obsolete once turns are replaced; vault identities stay untouched.
+pub(crate) fn replace_separated_turns(conn: &Connection, meeting_id: i64, turns: &[DiarizedTurn], expected_revision: &str) -> Result<(), String> {
+    if turns.is_empty() || turns.iter().all(|t| t.text.trim().is_empty()) { return Err("No speech was recovered; existing transcript is unchanged".into()); }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    if turn_revision(&tx,meeting_id)? != expected_revision { return Err("The meeting was edited during processing; existing changes were kept. Try re-separating again.".into()); }
+    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM meetings WHERE id=?1)",params![meeting_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if !exists { return Err("Meeting was deleted during processing".into()); }
+    tx.execute("DELETE FROM meeting_turns WHERE meeting_id=?1", params![meeting_id]).map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM meeting_speaker_merges WHERE meeting_id=?1", params![meeting_id]).map_err(|e| e.to_string())?;
+    insert_turns(&tx, meeting_id, turns)?;
+    let transcript = turns.iter().map(|t| t.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
+    tx.execute("UPDATE meetings SET transcript_raw=?2 WHERE id=?1", params![meeting_id,transcript]).map_err(|e| e.to_string())?;
+    recount_speakers(&tx,meeting_id)?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod reseparation_tests {
+    use super::*;
+    #[test]
+    fn reprocessing_preserves_concurrent_edits_and_rolls_back_failed_writes() {
+        let conn=Connection::open_in_memory().unwrap();ensure_meetings_schema(&conn).unwrap();
+        conn.execute("INSERT INTO meetings(id,session_id,title,platform,app_name,url,created_at,duration_ms,transcript_raw,category,summary) VALUES(1,'m','Meeting','meet','','','',10000,'Original','Planning',?1)",[r#"["Keep notes"]"#]).unwrap();
+        let t=DiarizedTurn {speaker_id:"a".into(),speaker_name:"Dana".into(),start_ms:0,end_ms:10000,channel:1,text:"Original".into(),snippet_path:None,candidate_snippets:vec![],current_snippet_idx:0};
+        insert_turns(&conn,1,&[t.clone()]).unwrap();let original=turn_revision(&conn,1).unwrap();
+        conn.execute("UPDATE meeting_turns SET speaker_name='Edited' WHERE meeting_id=1",[]).unwrap();
+        let new=DiarizedTurn{text:"New".into(),..t};
+        assert!(replace_separated_turns(&conn,1,&[new.clone()],&original).unwrap_err().contains("edited"));
+        let edited=turn_revision(&conn,1).unwrap();
+        assert!(replace_separated_turns(&conn,1,&[],&edited).is_err());
+        conn.execute_batch("CREATE TRIGGER reject_turn BEFORE INSERT ON meeting_turns BEGIN SELECT RAISE(ABORT,'blocked'); END;").unwrap();
+        assert!(replace_separated_turns(&conn,1,&[new.clone()],&edited).is_err());assert_eq!(turn_revision(&conn,1).unwrap(),edited);
+        conn.execute_batch("DROP TRIGGER reject_turn;").unwrap();
+        replace_separated_turns(&conn,1,&[new],&edited).unwrap();
+        let (raw,notes):(String,String)=conn.query_row("SELECT transcript_raw,summary FROM meetings WHERE id=1",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(raw,"New");assert_eq!(notes,r#"["Keep notes"]"#);
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct DuplicateMeetingGroup {
+    pub kind: String,
+    pub meeting_ids: Vec<i64>,
+}
+#[derive(Debug, Serialize)]
+pub struct MeetingDuplicateReport {
+    pub groups: Vec<DuplicateMeetingGroup>,
+    pub checked_meetings: usize,
+    pub unavailable_audio: usize,
+}
+
+fn duplicate_meetings_in(conn: &Connection) -> Result<MeetingDuplicateReport, String> {
+    use sha2::{Digest, Sha256};
+    use std::{collections::BTreeMap, io::Read};
+    let records = {
+        let mut statement = conn.prepare("SELECT id, audio_path, transcript_raw, duration_ms FROM meetings ORDER BY id").map_err(|e| e.to_string())?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_,i64>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?, row.get::<_,i64>(3)?))).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?
+    };
+    let mut audio_groups = BTreeMap::<String, Vec<i64>>::new();
+    let mut text_groups = BTreeMap::<String, Vec<(i64,i64)>>::new();
+    let mut unavailable_audio = 0;
+    for (id, path, transcript, duration) in &records {
+        if let Some(path) = path {
+            let hash = (|| -> std::io::Result<String> {
+                let mut file = std::fs::File::open(path)?;
+                let before = file.metadata()?;
+                let mut hash = Sha256::new(); let mut buffer = [0u8; 64*1024];
+                loop { let n=file.read(&mut buffer)?; if n==0 {break;} hash.update(&buffer[..n]); }
+                let after=file.metadata()?;
+                if before.len()!=after.len() || before.modified()?!=after.modified()? || after.len()==0 {
+                    return Err(std::io::Error::other("Recording changed or is empty"));
+                }
+                Ok(format!("{:x}", hash.finalize()))
+            })();
+            match hash { Ok(key) => audio_groups.entry(key).or_default().push(*id), Err(_) => unavailable_audio+=1 }
+        } else { unavailable_audio+=1; }
+        let normalized = transcript.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        if normalized.chars().count() >= 80 {
+            text_groups.entry(format!("{:x}",Sha256::digest(normalized.as_bytes()))).or_default().push((*id,*duration));
+        }
+    }
+    let mut groups: Vec<_> = audio_groups.into_values().filter(|ids| ids.len()>1)
+        .map(|meeting_ids| DuplicateMeetingGroup { kind:"identical_recording".into(), meeting_ids }).collect();
+    for candidates in text_groups.into_values() {
+        // Require duration agreement as well as text; exact audio groups already
+        // cover the strongest match and should not be shown twice.
+        let mut remaining=candidates;
+        while let Some((id,duration))=remaining.pop() {
+            let mut ids=vec![id];
+            remaining.retain(|(other,time)| {
+                if (time-duration).abs() <= (duration.abs()/100).max(1000) {ids.push(*other);false} else {true}
+            });
+            if ids.len()>1 && !groups.iter().any(|group| ids.iter().all(|id| group.meeting_ids.contains(id))) {
+                ids.sort_unstable(); groups.push(DuplicateMeetingGroup{kind:"matching_transcript".into(),meeting_ids:ids});
+            }
+        }
+    }
+    Ok(MeetingDuplicateReport {groups,checked_meetings:records.len(),unavailable_audio})
+}
+
