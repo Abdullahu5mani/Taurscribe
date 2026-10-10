@@ -10,6 +10,7 @@ import "./EnginePicker.css";
 interface EnginePickerProps {
   activeEngine: ASREngine;
   loadedEngine: ASREngine | null;
+  loadedModelId?: string | null;
   loadingTargetEngine: ASREngine | null;
   models: ModelInfo[];
   currentModel: string | null;
