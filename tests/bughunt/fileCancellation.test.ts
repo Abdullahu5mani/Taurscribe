@@ -121,8 +121,11 @@ test("rerunning a finished file has a fresh identity and ignores progress from i
     const rerun = nodes(h.handle.current).find(n => n.props?.["aria-label"]?.startsWith("Re-transcribe again.wav"));
     rerun.props.onClick(); await h.settle();
     expect(jobs[1].args.jobId).not.toBe(previousId);
-    progress(1, 30); flushFrames(); await h.settle();
-    progress(0, 99); flushFrames(); await h.settle();
-    expect(text(cards(h.handle.current)[0])).toContain("30%");
-    expect(text(cards(h.handle.current)[0])).not.toContain("99%");
+    for (const fn of progressListeners) fn({payload:{path:jobs[1].args.path,job_id:jobs[1].args.jobId,percent:30,status:"transcribing",backend:"CUDA0"}});
+    flushFrames(); await h.settle();
+    for (const fn of progressListeners) fn({payload:{path:jobs[0].args.path,job_id:previousId,percent:99,status:"finalizing",backend:"CPU"}});
+    flushFrames(); await h.settle();
+    expect(text(cards(h.handle.current)[0])).toContain("CUDA");
+    expect(text(cards(h.handle.current)[0])).not.toContain("CPU");
+    expect(text(cards(h.handle.current)[0])).not.toContain("Finishing…");
 });
