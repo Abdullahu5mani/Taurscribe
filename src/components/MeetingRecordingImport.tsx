@@ -8,6 +8,8 @@ import { chronologicalRecordings, moveRecording, recordingWarnings, type Recordi
 import "./MeetingRecordingImport.css";
 
 interface Props {
+  modelId?: string | null;
+  useGpu?: boolean;
   dropTargetRef?: React.RefObject<HTMLDivElement | null>;
   blocked?: boolean;
   hasDiarizationModel?: boolean;

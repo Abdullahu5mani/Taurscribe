@@ -41,6 +41,9 @@ pub async fn import_meeting_recordings(
     state: State<'_, AudioState>,
     paths: Vec<String>,
     title: String,
+    expected_speakers: Option<usize>,
+    model_id: Option<String>,
+    use_gpu: Option<bool>,
 ) -> Result<i64, String> {
     if title.trim().is_empty() {
         return Err("Give the meeting a title".into());

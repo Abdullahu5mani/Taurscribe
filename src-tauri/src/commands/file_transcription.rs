@@ -24,6 +24,10 @@ pub struct FileTranscriptionProgress {
     pub percent: u8,
     pub status: String, // "decoding" | "transcribing" | "done" | "error" | "cancelled"
     pub error: Option<String>,
+    pub steps_started: Vec<String>,
+    pub steps_completed: Vec<String>,
+    pub model_id: Option<String>,
+    pub backend: Option<String>,
     /// Completed speech chunks only; excludes loading, decoding, and VAD.
     pub transcribed_audio_ms: Option<u64>,
     pub transcription_time_ms: Option<u64>,
@@ -47,6 +51,10 @@ struct FileJobState {
     /// own steps, and the bar must not move backwards.
     last_percent: u8,
     timing: FileTiming,
+    steps_started: Vec<String>,
+    steps_completed: Vec<String>,
+    model_id: Option<String>,
+    backend: Option<String>,
 }
 
 #[derive(Default)]
@@ -93,6 +101,8 @@ fn register_cancel_flag(path: &str, job_id: Option<String>) -> Result<Arc<Atomic
             job_id,
             last_percent: 0,
             timing: FileTiming::default(),
+            steps_started: Vec::new(), steps_completed: Vec::new(),
+            model_id: None, backend: None,
         },
     );
     Ok(flag)
@@ -140,18 +150,11 @@ pub async fn transcribe_file(
         );
     }
 
-    // A file job and a recording can't share the engine: the live transcriber
-    // stalls behind a file window (dropping audio) and the file job's try_lock
-    // fails mid-way. The UI blocks recording during its own file jobs, but CLI
-    // jobs bypass the UI. Holding the recording transition while registering
-    // keeps a start from slipping in; start_recording checks file_job_active().
+    // New file requests wait behind capture; per-chunk priority protects the shared engine.
     if crate::storage::move_in_progress() {
         return Err("A storage folder is being moved (Settings → Storage); try again when the move finishes".into());
     }
     let transition = state.begin_recording_transition()?;
-    if state.recording_handle.lock().unwrap().is_some() {
-        return Err("Stop the recording before transcribing a file".into());
-    }
     let cancel = register_cancel_flag(&path, job_id)?;
     drop(transition);
     let whisper = state.whisper.clone();
@@ -241,17 +244,24 @@ pub async fn finish_file_transcription_batch(
 }
 
 fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: Option<String>) {
-    let (job_id, percent, timing) = match cancel_flags().lock().unwrap().get_mut(path) {
+    let (job_id, percent, timing, steps_started, steps_completed, model_id, backend) = match cancel_flags().lock().unwrap().get_mut(path) {
         Some(job) => {
-            let percent = if matches!(status, "decoding" | "transcribing") {
-                percent.max(job.last_percent)
-            } else {
-                percent
-            };
+            let percent = if !matches!(status, "cancelled" | "error" | "done") { percent.max(job.last_percent) } else { percent };
             job.last_percent = percent;
-            (job.job_id.clone(), percent, job.timing.snapshot())
+            let step = match status {
+                "loading model" => Some("model"), "decoding" => Some("open"),
+                "resampling" => Some("convert"), "detecting speech" => Some("speech"),
+                "transcribing" => Some("recognize"), "finalizing" => Some("finalize"), _ => None,
+            };
+            if let Some(step) = step { push_step(&mut job.steps_started, step); }
+            if status == "resampling" { push_step(&mut job.steps_completed, "open"); }
+            if status == "finalizing" || status == "done" {
+                for step in ["open", "convert", "speech", "recognize"] { push_step(&mut job.steps_completed, step); }
+            }
+            if status == "done" { push_step(&mut job.steps_completed, "finalize"); }
+            (job.job_id.clone(), percent, job.timing.snapshot(), job.steps_started.clone(), job.steps_completed.clone(), job.model_id.clone(), job.backend.clone())
         }
-        None => (None, percent, (None, None)),
+        None => (None, percent, (None, None), Vec::new(), Vec::new(), None, None),
     };
     let _ = app.emit(
         "file-transcription-progress",
@@ -261,10 +271,21 @@ fn emit_progress(app: &AppHandle, path: &str, percent: u8, status: &str, error: 
             percent,
             status: status.to_string(),
             error,
+            steps_started, steps_completed, model_id, backend,
             transcribed_audio_ms: timing.0,
             transcription_time_ms: timing.1,
         },
     );
+}
+
+fn push_step(steps: &mut Vec<String>, step: &str) {
+    if !steps.iter().any(|existing| existing == step) { steps.push(step.into()); }
+}
+fn report_model(path: &str, id: Option<String>, backend: String) {
+    if let Some(job) = cancel_flags().lock().unwrap().get_mut(path) {
+        job.model_id = id; job.backend = Some(backend);
+        push_step(&mut job.steps_completed, "model");
+    }
 }
 
 fn record_chunk_timing(app: &AppHandle, path: &str, samples: usize, elapsed: std::time::Duration) {
@@ -275,6 +296,15 @@ fn record_chunk_timing(app: &AppHandle, path: &str, samples: usize, elapsed: std
         job.last_percent
     };
     emit_progress(app, path, percent, "transcribing", None);
+}
+
+fn wait_for_background(app: &AppHandle, path: &str, cancel: &Arc<AtomicBool>) -> Result<crate::asr_priority::Background, String> {
+    let mut reported = false;
+    crate::asr_priority::shared().background(|| {
+        ensure_not_cancelled(app, path, cancel)?;
+        if !reported { emit_progress(app, path, 0, "paused", None); reported = true; }
+        Ok(())
+    })
 }
 
 static FILE_JOB_TURN: Mutex<()> = Mutex::new(());
@@ -316,7 +346,7 @@ fn ensure_not_cancelled(
     }
 }
 
-fn file_model_needs_load(expected: Option<&str>, loaded: Option<&str>) -> Result<bool, String> {
+pub(super) fn file_model_needs_load(expected: Option<&str>, loaded: Option<&str>) -> Result<bool, String> {
     if let (Some(expected), Some(loaded)) = (expected, loaded) {
         if expected != loaded {
             return Err("The loaded model changed after this file was queued. Re-run it with the desired model.".into());
@@ -362,6 +392,8 @@ fn transcribe_file_blocking(
     // Validate and reload under the same model lock, on the blocking worker.
     // An unloaded selected model is normal after auto-unload; a different
     // resident model still means the queued selection is stale.
+    {
+    let _priority = wait_for_background(app, path, &cancel)?;
     match active_engine {
         ASREngine::Whisper => {
             let mut model = whisper.lock().map_err(|e| e.to_string())?;
@@ -369,6 +401,7 @@ fn transcribe_file_blocking(
                 emit_progress(app, path, 0, "loading model", None);
                 model.initialize(expected_model_id, force_cpu)?;
             }
+            report_model(path, model.get_current_model().cloned(), model.get_backend().to_string());
         }
         ASREngine::Granite | ASREngine::Qwen3 => {
             let manager = if active_engine == ASREngine::Granite { &granite } else { &qwen3 };
@@ -377,7 +410,10 @@ fn transcribe_file_blocking(
                 emit_progress(app, path, 0, "loading model", None);
                 model.initialize(expected_model_id, force_cpu)?;
             }
+            let status = model.get_status();
+            report_model(path, status.model_id, status.backend);
         }
+    }
     }
     ensure_not_cancelled(app, path, &cancel)?;
 
@@ -386,10 +422,15 @@ fn transcribe_file_blocking(
     // Decode and transcribe bounded source windows. Keeping a whole imported
     // file (and then a second resampled/speech copy) can exhaust memory.
     let mut parts = Vec::<String>::new();
+    let mut conversion_reported = false;
     let (decoded_frames, sample_rate) = stream_file_windows(
         Path::new(path),
         16_000 * 120,
-        || ensure_not_cancelled(app, path, &cancel),
+        || {
+            ensure_not_cancelled(app, path, &cancel)?;
+            if !conversion_reported { emit_progress(app, path, 5, "resampling", None); conversion_reported = true; }
+            Ok(())
+        },
         |window, decoded_so_far, expected_frames| {
             ensure_not_cancelled(app, path, &cancel)?;
             let text = transcribe_file_window(
@@ -418,6 +459,7 @@ fn transcribe_file_blocking(
     ensure_not_cancelled(app, path, &cancel)?;
     let audio_duration_ms = (decoded_frames as f64 / sample_rate as f64 * 1000.0) as i64;
     let text = parts.join(" ");
+    emit_progress(app, path, 95, "finalizing", None);
 
     let (custom_vocab, _) = crate::context::load_custom_vocabulary_from_settings();
     let cleaned = clean_transcript(&text);
@@ -695,12 +737,12 @@ fn transcribe_file_window(
     cancel: &Arc<AtomicBool>,
     mut mono: Vec<f32>,
 ) -> Result<String, String> {
-    emit_progress(app, path, 20, "decoding", None);
+    emit_progress(app, path, 20, "detecting speech", None);
     prepare_file_window_edges(&mut mono);
 
     ensure_not_cancelled(app, path, &cancel)?;
 
-    emit_progress(app, path, 30, "transcribing", None);
+    emit_progress(app, path, 30, "detecting speech", None);
 
     // ── Energy VAD: only feed detected speech to ASR (file drop) ───────────────
     // Adaptive RMS thresholding finds speech regions; silent gaps are dropped.
@@ -785,6 +827,7 @@ fn transcribe_file_window(
                         ),
                     ],
                 );
+                let _priority = wait_for_background(app, path, cancel)?;
                 let mut w = whisper.try_lock().map_err(|_| {
                     "Whisper engine is busy loading or processing another request".to_string()
                 })?;
@@ -837,6 +880,8 @@ fn transcribe_file_window(
                     ],
                 );
 
+                let _priority = wait_for_background(app, path, cancel)?;
+                emit_progress(app, path, percent, "transcribing", None);
                 let started = std::time::Instant::now();
                 let t = match active_engine {
                     ASREngine::Granite => {

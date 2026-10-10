@@ -162,6 +162,7 @@ function App() {
   const [isFileJobTranscribing, setIsFileTranscribing] = useState(false);
   const [isMeetingImporting, setIsMeetingImporting] = useState(false);
   const isFileTranscribing = isFileJobTranscribing || isMeetingImporting;
+  const isFileJobTranscribingRef = useSyncedRef(isFileJobTranscribing);
   const [noModelCtaAttention, setNoModelCtaAttention] = useState(false);
 
   // macOS fix: Detect the runtime platform so we can hide/adjust UI elements
@@ -381,7 +382,7 @@ function App() {
   } = useRecording({
     activeEngineRef: activeEngineForwarded,
     models, graniteModels, qwen3Models, currentModel, currentGraniteModel, currentQwen3Model,
-    asrBackend,
+    asrBackend, isFileTranscribingRef: isFileJobTranscribingRef,
     setCurrentModel, setLoadedEngine: (e) => setLoadedEngineForwarded.current(e), enableGrammarLMRef,
     enableDenoiseRef, enableOverlayRef, muteBackgroundAudioRef, transcriptionStyleRef, setHeaderStatus, setTrayState, setIsSettingsOpen,
     playStart, playPaste, playError,
@@ -468,7 +469,7 @@ function App() {
     invoke("cli_ui_busy", { busy: isLoading || isInitialLoading || isProcessingTranscript || isVoiceEnrolling }).catch(() => {});
   }, [isLoading, isInitialLoading, isProcessingTranscript, isVoiceEnrolling]);
 
-  // File transcription shows in the tray too (recording is blocked meanwhile).
+  // Foreground capture/cleanup takes priority over background file status.
   const fileTrayActiveRef = useRef(false);
   useEffect(() => {
     if (isRecording || isProcessingTranscript) return;
@@ -480,7 +481,7 @@ function App() {
       void setTrayState(isRecording ? "recording" : "ready", activeMeeting);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isFileTranscribing]);
+  }, [isFileTranscribing, isRecording, isProcessingTranscript]);
 
   // Direct meeting detector event subscriptions and periodic reconciliation
   useEffect(() => {
@@ -627,7 +628,7 @@ function App() {
     granite: graniteModels.length,
     qwen3: qwen3Models.length,
   };
-  const isFileTranscribingRef = useSyncedRef(isFileTranscribing);
+  const isMeetingImportingRef = useSyncedRef(isMeetingImporting);
   const playErrorRef = useSyncedRef(playError);
   const setHeaderStatusRef = useSyncedRef(setHeaderStatus);
   const startNoModelCtaAttention = useCallback(() => {
@@ -699,7 +700,7 @@ function App() {
     isRecordingRef,
     isLoadingRef,
     activeEngineRef,
-    isFileTranscribingRef,
+    isMeetingImportingRef,
     enableOverlayRef,
     asrModelCountsRef,
     handleStartRecordingRef,
@@ -865,22 +866,22 @@ function App() {
   const loadControlsBusy = isLoading || isRecording || isProcessingTranscript || isFileTranscribing;
   const recordBtnClass =
     noModel ? "record-btn disabled" :
-      isFileTranscribing ? "record-btn disabled" :
+      isMeetingImporting ? "record-btn disabled" :
         isRecording ? "record-btn recording" :
           recordBtnBusy ? "record-btn processing" :
             "record-btn idle";
   const recordBtnLabel =
     noModel ? "No model" :
-      isFileTranscribing ? "Busy" :
+      isMeetingImporting ? "Busy" :
         isRecording ? "Stop" :
           recordBtnBusy ? "Working…" : "Record";
   const recordBtnAriaLabel =
     noModel ? "Download a model first in Settings" :
-      isFileTranscribing ? "Cannot record while a file is being transcribed" :
+      isMeetingImporting ? "Wait for the meeting import to finish" :
         isRecording ? "Stop recording" :
           recordBtnBusy ? "Please wait…" :
             "Start recording (REC)";
-  const recordBtnDisabled = isVoiceEnrolling || isFileTranscribing || (isLoading && !isRecording) || isProcessingTranscript;
+  const recordBtnDisabled = isVoiceEnrolling || isMeetingImporting || (isLoading && !isRecording) || isProcessingTranscript;
 
   const onRecordClick = () => {
     if (noModel) { setIsSettingsOpen(true); return; }
@@ -1291,8 +1292,8 @@ function App() {
                 aria-label="Microphone dictation mode"
                 className={`mode-toggle-btn${navMode === "mic" ? " mode-toggle-btn--active" : ""}`}
                 onClick={() => setNavMode("mic")}
-                disabled={isFileTranscribing}
-                title={isFileTranscribing ? "Wait for audio processing to finish" : undefined}
+                disabled={isMeetingImporting}
+                title={isMeetingImporting ? "Wait for the meeting import to finish" : undefined}
               >
                 <IconMic size={13} /> Mic
               </button>
@@ -1305,7 +1306,7 @@ function App() {
                 aria-label="Meeting detection and dual-channel recording mode"
                 className={`mode-toggle-btn${navMode === "meetings" ? " mode-toggle-btn--active" : ""}`}
                 onClick={() => setNavMode("meetings")}
-                disabled={isFileTranscribing}
+                disabled={isMeetingImporting}
               >
                 <IconVideo size={13} /> Meetings
                 {activeMeeting && (
@@ -1321,7 +1322,7 @@ function App() {
                 aria-label="File transcription mode"
                 className={`mode-toggle-btn${navMode === "files" ? " mode-toggle-btn--active" : ""}`}
                 onClick={() => setNavMode("files")}
-                disabled={isFileTranscribing}
+                disabled={isMeetingImporting}
               >
                 <IconFileText size={13} /> Files
               </button>
@@ -1726,7 +1727,7 @@ function App() {
                 className={recordBtnClass}
                 disabled={!noModel && recordBtnDisabled}
                 onClick={onRecordClick}
-                title={noModel ? "Download a model first in Settings" : isFileTranscribing ? "Cannot record while a file is being transcribed" : recordBtnBusy ? "Please wait…" : isRecording ? "Stop recording" : "Start recording"}
+                title={noModel ? "Download a model first in Settings" : isMeetingImporting ? "Wait for the meeting import to finish" : recordBtnBusy ? "Please wait…" : isRecording ? "Stop recording" : "Start recording"}
               >
                 {recordBtnLabel}
               </button>

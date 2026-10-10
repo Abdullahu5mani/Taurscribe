@@ -66,6 +66,7 @@ pub struct AudioState {
     // macOS fix: Arc-wrapped so it can be cloned into spawn_blocking closures
     // in start_recording / stop_recording async commands.
     pub recording_handle: Arc<Mutex<Option<RecordingHandle>>>,
+    pub(crate) recording_file_priority: Arc<Mutex<Option<crate::asr_priority::Foreground>>>,
     recording_transition: Arc<AtomicBool>,
     pub voice_enrollment_active: Arc<AtomicBool>,
 
@@ -224,6 +225,7 @@ impl AudioState {
     ) -> Self {
         Self {
             recording_handle: Arc::new(Mutex::new(None)),
+            recording_file_priority: Arc::new(Mutex::new(None)),
             recording_transition: Arc::new(AtomicBool::new(false)),
             voice_enrollment_active: Arc::new(AtomicBool::new(false)),
             whisper_status: whisper.status_handle(),

@@ -1,3 +1,4 @@
+mod asr_priority;
 // Module declarations
 mod audio;
 pub mod audio_decode;

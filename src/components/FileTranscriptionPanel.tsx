@@ -19,6 +19,9 @@ interface FileItem {
     status: "queued" | "processing" | "done" | "error" | "cancelled";
     progress: number;
     phase?: string;
+    stepsStarted?: string[];
+    stepsCompleted?: string[];
+    backend?: string;
     transcribedAudioMs?: number;
     transcriptionTimeMs?: number;
     transcript: string;
@@ -42,6 +45,10 @@ interface ProgressPayload {
     job_id?: string | null;
     percent: number;
     status: string;
+    steps_started?: string[];
+    steps_completed?: string[];
+    model_id?: string | null;
+    backend?: string | null;
     error?: string;
     transcribed_audio_ms?: number | null;
     transcription_time_ms?: number | null;
@@ -166,12 +173,16 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                     && payload.transcription_time_ms! >= (file.transcriptionTimeMs ?? 0);
                 const audioMs = hasTiming ? payload.transcribed_audio_ms! : file.transcribedAudioMs;
                 const timeMs = hasTiming ? payload.transcription_time_ms! : file.transcriptionTimeMs;
+                const stepsStarted = [...new Set([...(file.stepsStarted ?? []), ...(payload.steps_started ?? [])])];
+                const stepsCompleted = [...new Set([...(file.stepsCompleted ?? []), ...(payload.steps_completed ?? [])])];
+                const backend = payload.backend ?? file.backend;
 
                 if (
                     file.status === nextStatus &&
                     file.progress === nextProgress &&
                     file.error === nextError && file.phase === payload.status &&
-                    file.transcribedAudioMs === audioMs && file.transcriptionTimeMs === timeMs
+                    file.transcribedAudioMs === audioMs && file.transcriptionTimeMs === timeMs &&
+                    file.backend === backend && file.stepsStarted?.join() === stepsStarted.join() && file.stepsCompleted?.join() === stepsCompleted.join()
                 ) {
                     return file;
                 }
@@ -183,6 +194,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                     status: nextStatus,
                     error: nextError,
                     phase: payload.status,
+                    stepsStarted, stepsCompleted, backend,
                     transcribedAudioMs: audioMs,
                     transcriptionTimeMs: timeMs,
                 };
@@ -226,7 +238,11 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                 && (event.payload.transcription_time_ms ?? 0) >= (previous?.transcription_time_ms ?? 0)
                 ? event.payload : previous;
             pendingProgressRef.current.set(active.id, {
-                ...event.payload, percent: Math.max(previous?.percent ?? 0, event.payload.percent),
+                ...event.payload,
+                steps_started: [...new Set([...(previous?.steps_started ?? []), ...(event.payload.steps_started ?? [])])],
+                steps_completed: [...new Set([...(previous?.steps_completed ?? []), ...(event.payload.steps_completed ?? [])])],
+                backend: event.payload.backend ?? previous?.backend,
+                percent: Math.max(previous?.percent ?? 0, event.payload.percent),
                 transcribed_audio_ms: timing?.transcribed_audio_ms,
                 transcription_time_ms: timing?.transcription_time_ms,
             });
@@ -269,7 +285,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
         processingRef.current = true;
         activeFileRef.current = { id: queued.id, path: queued.path };
         setFiles(prev =>
-            prev.map(f => f.id === queued.id ? { ...f, status: "processing", progress: 5, phase: undefined, transcribedAudioMs: undefined, transcriptionTimeMs: undefined } : f)
+            prev.map(f => f.id === queued.id ? { ...f, status: "processing", progress: 5, phase: undefined, stepsStarted: [], stepsCompleted: [], backend: undefined, transcribedAudioMs: undefined, transcriptionTimeMs: undefined } : f)
         );
 
         try {
@@ -296,7 +312,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
             setFiles(prev =>
                 prev.map(f =>
                     f.id === queued.id
-                        ? completed
+                        ? { ...completed, backend: f.backend, stepsStarted: f.stepsStarted, stepsCompleted: f.stepsCompleted }
                         : f
                 )
             );
@@ -359,6 +375,8 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                         id: crypto.randomUUID(),
                         status: "queued",
                         progress: 0,
+                        phase: undefined, stepsStarted: [], stepsCompleted: [], backend: undefined,
+                        transcribedAudioMs: undefined, transcriptionTimeMs: undefined,
                         transcript: "",
                         expanded: false,
                         audioDurationMs: undefined,
@@ -699,37 +717,33 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                 </div>
                             </div>
 
-                            {/* Progress bar */}
-                            {(item.status === "processing") && (
+                            {item.status !== "queued" && (
                                 <div className="file-card-progress-wrap">
-                                    <div className="file-card-progress-label">
-                                        <span>{item.phase === "loading model" ? "Loading model…" : item.phase === "waiting" ? "Waiting…" : item.phase === "done" ? "Finishing…" : item.phase === "cancelled" ? "Cancelling…" : item.phase === "decoding" || (!item.phase && item.progress < 25) ? "Decoding…" : "Transcribing…"}</span>
-                                        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                                            <span>{item.progress}%</span>
-                                            <button
-                                                type="button"
-                                                id={`file-cancel-${item.id}`}
-                                                data-testid={`file-cancel-${item.id}`}
-                                                className="file-card-btn file-card-btn--error"
-                                                onClick={() => cancelTranscription(item)}
-                                                title="Stop transcription"
-                                                aria-label={`Cancel transcription for ${item.name}`}
-                                            >
-                                                Cancel
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div className="file-card-progress-bar">
-                                        <div
-                                            className="file-card-progress-fill"
-                                            style={{ transform: `scaleX(${Math.min(1, Math.max(0, item.progress / 100))})` }}
-                                        />
-                                    </div>
-                                    <span className="file-card-live-speed" data-testid={`file-live-speed-${item.id}`} title="Average speech audio recognized per second of model inference. Updates after each completed chunk; excludes model loading, decoding, and silence removal.">
+                                    {item.status === "processing" && <div className="file-card-progress-label">
+                                        <span role="status">{item.phase === "paused" ? "Paused for recording — resumes automatically" : item.phase === "loading model" ? "Loading model…" : item.phase === "waiting" ? "Waiting…" : item.phase === "done" || item.phase === "finalizing" ? "Finishing…" : item.phase === "cancelled" ? "Cancelling…" : item.phase === "decoding" || !item.phase ? "Decoding…" : item.phase === "resampling" ? "Converting audio to 16 kHz mono…" : item.phase === "detecting speech" ? "Finding speech…" : "Transcribing…"}</span>
+                                        <button type="button" id={`file-cancel-${item.id}`} data-testid={`file-cancel-${item.id}`} className="file-card-btn file-card-btn--error" onClick={() => cancelTranscription(item)} title="Stop transcription" aria-label={`Cancel transcription for ${item.name}`}>Cancel</button>
+                                    </div>}
+                                    <ol className="file-pipeline-checklist" aria-label={`Transcription steps for ${item.name}`}>
+                                        {[
+                                            ["model", `Load ${engineLabel(item.engine, item.modelId)}${item.backend ? ` · ${item.backend}` : ""}`],
+                                            ["open", "Open and decode file"],
+                                            ["convert", "Convert to 16 kHz mono (streamed)"],
+                                            ["speech", "Find speech and prepare audio (streamed)"],
+                                            ["recognize", `Transcribe with ${engineLabel(item.engine, item.modelId)}${item.backend ? ` · ${item.backend}` : ""}`],
+                                            ["finalize", "Prepare transcript"],
+                                            ["save", "Save to history"],
+                                        ].map(([key, label]) => {
+                                            const complete = key === "save" ? item.status === "done" && !item.historySaving && !item.historyError : item.status === "done" || item.stepsCompleted?.includes(key);
+                                            const active = key === "save" ? item.historySaving : item.stepsStarted?.includes(key) && !complete;
+                                            const state = complete ? "complete" : active ? item.phase === "paused" ? "paused" : item.status === "error" || item.status === "cancelled" ? "stopped" : "active" : "pending";
+                                            return <li key={key} data-step={key} data-state={state}><span aria-hidden="true">{complete ? "✓" : active ? "◉" : "○"}</span><span>{label}</span><small>{state === "complete" ? "Done" : state === "active" ? "In progress" : state === "paused" ? "Paused" : state === "stopped" ? "Stopped" : "Waiting"}</small></li>;
+                                        })}
+                                    </ol>
+                                    {item.status === "processing" && <span className="file-card-live-speed" data-testid={`file-live-speed-${item.id}`} title="Average speech audio recognized per second of model inference. Updates after each completed chunk; excludes model loading, decoding, and silence removal.">
                                         {item.transcribedAudioMs != null && item.transcriptionTimeMs != null && formatRealtime(item.transcribedAudioMs, item.transcriptionTimeMs)
                                             ? `Speech speed: ${formatRealtime(item.transcribedAudioMs, item.transcriptionTimeMs)} realtime · ${formatDuration(item.transcribedAudioMs)} speech processed`
                                             : "Measuring speech speed…"}
-                                    </span>
+                                    </span>}
                                 </div>
                             )}
 

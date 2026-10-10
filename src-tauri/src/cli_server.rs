@@ -325,11 +325,6 @@ async fn handle(app: &AppHandle, cmd: &str, args: &Value, job_id: &str) -> Resul
             }
             let action = args.get("action").and_then(Value::as_str).unwrap_or("toggle");
             let recording = is_recording(&app.state::<AudioState>());
-            // start_recording refuses during a file job; say so now rather than
-            // leaving the CLI to wait for a recording that never starts.
-            if !recording && action != "stop" && crate::commands::file_job_active() {
-                return Err("Taurscribe is transcribing a file; try again when it finishes".into());
-            }
             let event = match action {
                 "start" if recording => return Err("already recording".into()),
                 "stop" if !recording => return Err("not recording".into()),

@@ -191,6 +191,8 @@ pub async fn start_recording(
     state: State<'_, AudioState>,
     denoise: Option<bool>,
     audio_source: Option<String>,
+    model_id: Option<String>,
+    use_gpu: Option<bool>,
 ) -> Result<CommandResult<String>, String> {
     let _recording_transition = Arc::new(state.begin_recording_transition()?);
     let _model_operation = Arc::new(state.begin_model_operation()?);
@@ -198,14 +200,7 @@ pub async fn start_recording(
     if state.recording_handle.lock().unwrap().is_some() {
         return Ok(CommandResult::err("already_recording", "Already recording"));
     }
-    // A file job (possibly from the CLI, which the UI doesn't know about) holds
-    // the engine; see transcribe_file.
-    if super::file_transcription::file_job_active() {
-        return Ok(CommandResult::err(
-            "file_transcribing",
-            "Wait for the file transcription to finish before recording",
-        ));
-    }
+    let file_priority = crate::asr_priority::shared().foreground();
 
     // Only a call or in-person session is a meeting recording (the UI starts
     // meetings that way); a dictation during a call stays a dictation.
@@ -231,8 +226,30 @@ pub async fn start_recording(
         let _operation = worker_operation;
         let _transition = worker_transition;
         let worker_state = state.clone();
-        let result = start_recording_blocking(app_handle.clone(), state, denoise, audio_source);
-        if result.is_err() {
+        file_priority.wait_for_file_chunk();
+        let result = (|| {
+            if let Some(id) = model_id.as_deref() {
+                match *state.active_engine.lock().unwrap() {
+                    ASREngine::Whisper => {
+                        let mut model = state.whisper.lock().unwrap();
+                        if super::file_transcription::file_model_needs_load(Some(id), model.get_current_model().map(String::as_str))? {
+                            model.initialize(Some(id), !use_gpu.unwrap_or(true))?;
+                        }
+                    }
+                    engine => {
+                        let manager = state.gguf_manager(engine).unwrap();
+                        let mut model = manager.lock().unwrap();
+                        if super::file_transcription::file_model_needs_load(Some(id), model.get_status().model_id.as_deref())? {
+                            model.initialize(Some(id), !use_gpu.unwrap_or(true))?;
+                        }
+                    }
+                }
+            }
+            start_recording_blocking(app_handle.clone(), state.clone(), denoise, audio_source)
+        })();
+        if result.is_ok() {
+            *worker_state.recording_file_priority.lock().unwrap() = Some(file_priority);
+        } else {
             crate::meeting_continuation::release_recording_claim();
             *worker_state.recording_meeting.lock().unwrap() = None;
         }
@@ -1176,6 +1193,7 @@ pub async fn cancel_recording(state: State<'_, AudioState>, app: AppHandle) -> R
     let Some(recording) = state.recording_handle.lock().unwrap().take() else {
         return Ok(CommandResult::err("not_recording", "Not recording"));
     };
+    let file_priority = state.recording_file_priority.lock().unwrap().take();
     emit_recording_state(&app, &state);
     let last_recording_path = state.last_recording_path.lock().unwrap().clone();
     let session_transcript = state.session_transcript.clone();
@@ -1186,6 +1204,7 @@ pub async fn cancel_recording(state: State<'_, AudioState>, app: AppHandle) -> R
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _operation = worker_operation;
         let _transition = worker_transition;
+        let _file_priority = file_priority;
         let teardown_result = teardown_recording(recording, 0);
         crate::meeting_continuation::release_recording_claim();
         session_transcript.lock().unwrap().clear();
@@ -2365,6 +2384,7 @@ pub async fn stop_recording(
     let Some(recording) = state.recording_handle.lock().unwrap().take() else {
         return Ok(CommandResult::err("not_recording", "Not recording"));
     };
+    let file_priority = state.recording_file_priority.lock().unwrap().take();
     emit_recording_state(&app, &state);
 
     let active_engine = *state.active_engine.lock().unwrap();
@@ -2414,6 +2434,7 @@ pub async fn stop_recording(
     let task = tauri::async_runtime::spawn_blocking(move || {
         let _operation = worker_operation;
         let _transition = worker_transition;
+        let _file_priority = file_priority;
         let result = stop_recording_blocking(
             recording,
             active_engine,

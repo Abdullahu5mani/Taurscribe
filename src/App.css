@@ -3479,3 +3479,10 @@ button.top-settings-btn:focus-visible {
   background-color: transparent;
 }
 
+
+.file-pipeline-checklist { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 7px; font-size: 12px; }
+.file-pipeline-checklist li { display: flex; align-items: baseline; gap: 8px; color: var(--text-secondary); }
+.file-pipeline-checklist li small { margin-left: auto; font-size: 10px; white-space: nowrap; opacity: .75; }
+.file-pipeline-checklist li[data-state="complete"] > span:first-child { color: var(--accent-color, #63c69a); }
+.file-pipeline-checklist li[data-state="active"] { color: var(--text-primary); }
+.file-pipeline-checklist li[data-state="pending"] { opacity: .55; }

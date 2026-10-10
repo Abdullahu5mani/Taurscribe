@@ -37,6 +37,8 @@ import { MeetingRecordingImport, recordingDate } from "./MeetingRecordingImport"
 import "./MeetingsPanel.css";
 
 interface MeetingsPanelProps {
+  modelId?: string | null;
+  useGpu?: boolean;
   activeMeeting: MeetingInfo | null;
   isRecording: boolean;
   isDualChannelRecording: boolean;
@@ -96,6 +98,7 @@ export function exportFileName(title: string, format: "markdown" | "text" | "jso
 }
 
 export function MeetingsPanel({
+  modelId, useGpu,
   activeMeeting,
   isRecording,
   isDualChannelRecording,
@@ -837,6 +840,7 @@ export function MeetingsPanel({
       </div>
 
       <MeetingRecordingImport
+        modelId={modelId} useGpu={useGpu}
         dropTargetRef={meetingDropTargetRef}
         blocked={isRecording || !!processing || importBlocked || isVaultOpen || reviewMeetingId !== null}
         hasDiarizationModel={hasDiarizationModel}

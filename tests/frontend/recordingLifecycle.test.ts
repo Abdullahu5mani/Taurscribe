@@ -36,7 +36,7 @@ function deferred<T>() {
     const promise = new Promise<T>((done) => { resolve = done; });
     return { promise, resolve };
 }
-function fixture(options: { grammar?: boolean; mute?: boolean } = {}) {
+function fixture(options: { grammar?: boolean; mute?: boolean; file?: boolean } = {}) {
     const phases: string[] = [], notices: any[] = [], transcripts: string[] = [], headers: string[] = [];
     const noop = () => {};
     const hook = renderHook(() => useRecording({
@@ -267,4 +267,14 @@ test("mounting during voice enrollment hydrates the busy state", async () => {
     expect(h.handle.current.isVoiceEnrolling).toBe(true);
     await h.handle.current.handleStartRecording();
     expect(calls).not.toContain("start_recording");
+});
+
+test("recording during a file skips the conflicting UI model load and supplies the model to the priority worker", async () => {
+    responses.set("get_granite_status", () => ({ loaded: false, model_id: null }));
+    const h = fixture({ file: true }); await h.settle();
+    await h.handle.current.handleStartRecording(true);
+    expect(calls).toContain("start_recording"); expect(calls).not.toContain("load_granite_model");
+    expect(argumentsByCommand.get("start_recording")).toMatchObject({ modelId: "granite-test", useGpu: false });
+    expect(h.headers).toContain("Pausing file transcription at the next chunk…");
+    expect(h.handle.current.isRecordingRef.current).toBe(true);
 });

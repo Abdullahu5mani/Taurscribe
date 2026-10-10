@@ -8,8 +8,8 @@ interface UseHotkeyListenersParams {
     isRecordingRef: React.RefObject<boolean>;
     isLoadingRef: React.RefObject<boolean>;
     activeEngineRef: React.RefObject<ASREngine>;
-    /** True while FileTranscriptionPanel is transcribing — mirrors Record button BUSY. */
-    isFileTranscribingRef: React.RefObject<boolean>;
+    /** Meeting imports currently own the speech engine without file-job yielding. */
+    isMeetingImportingRef?: React.RefObject<boolean>;
     /** Settings > Recording > Recording overlay. */
     enableOverlayRef: React.RefObject<boolean>;
     asrModelCountsRef: MutableRefObject<{
@@ -45,7 +45,7 @@ export function useHotkeyListeners({
     isRecordingRef,
     isLoadingRef,
     activeEngineRef,
-    isFileTranscribingRef,
+    isMeetingImportingRef,
     enableOverlayRef,
     asrModelCountsRef,
     handleStartRecordingRef,
@@ -130,10 +130,10 @@ export function useHotkeyListeners({
                     return;
                 }
 
-                if (isFileTranscribingRef.current) {
+                if (isMeetingImportingRef?.current) {
                     playErrorRef.current?.();
                     setHeaderStatusRef.current?.(
-                        "Cannot record while a file is being transcribed",
+                        "Wait for the meeting import to finish before recording",
                         4000
                     );
                     return;

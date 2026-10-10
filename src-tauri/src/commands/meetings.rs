@@ -1208,6 +1208,18 @@ pub(crate) fn rename_speaker_internal(
     Ok(())
 }
 
+/// A merged turn as it was before the merge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct MergedTurn {
+    turn_id: i64,
+    speaker_id: String,
+    speaker_name: String,
+    channel: i64,
+    snippet_path: Option<String>,
+    candidate_snippets: Option<String>,
+    current_snippet_idx: i64,
+}
+
 #[tauri::command]
 pub async fn list_speaker_vault() -> Result<Vec<SpeakerVaultRecord>, String> {
     tauri::async_runtime::spawn_blocking(move || {

@@ -102,7 +102,7 @@ test("a stop pressed while the recording is still starting stops it once it has 
     expect(events).toEqual(["start", "stop"]);
 });
 
-test("the hotkey refuses while a model loads, a file transcribes, or no model is installed", async () => {
+test("the hotkey accepts file jobs and still refuses model loading or missing models", async () => {
     await mount();
     refs.isLoadingRef.current = true;
     await fire("hotkey-start-recording");
@@ -113,13 +113,14 @@ test("the hotkey refuses while a model loads, a file transcribes, or no model is
     refs.isFileTranscribingRef.current = true;
     await wait(360);
     await fire("hotkey-start-recording");
-    expect(statuses).toContain("Cannot record while a file is being transcribed");
+    expect(events).toEqual(["error-sound", "start"]);
+    refs.isRecordingRef.current = false;
 
     refs.isFileTranscribingRef.current = false;
     refs.activeEngineRef.current = "granite";
     await wait(360);
     await fire("hotkey-start-recording");
-    expect(events).toEqual(["error-sound", "error-sound", "error-sound", "no-model"]);
+    expect(events).toEqual(["error-sound", "start", "error-sound", "no-model"]);
 });
 
 test("a disconnected microphone stops the recording once and says why", async () => {
@@ -173,4 +174,11 @@ test("unmounting removes every listener", async () => {
     expect(listeners.size).toBeGreaterThanOrEqual(10);
     view.unmount();
     expect(listeners.size).toBe(0);
+});
+
+test("meeting imports retain the recording guard", async () => {
+    await mount(); refs.isMeetingImportingRef.current = true;
+    await fire("hotkey-start-recording");
+    expect(events).toEqual(["error-sound"]);
+    expect(statuses).toContain("Wait for the meeting import to finish before recording");
 });

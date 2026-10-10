@@ -267,7 +267,7 @@ async fn capture_start_handler(
     let denoise = body.as_ref().and_then(|b| b.denoise);
 
     let audio_state = state.app_handle.state::<AudioState>();
-    match crate::commands::start_recording(state.app_handle.clone(), audio_state, denoise, audio_source).await {
+    match crate::commands::start_recording(state.app_handle.clone(), audio_state, denoise, audio_source, None, None).await {
         Ok(res) => {
             if res.ok {
                 success_response("Capture started", res.data.map(|d| serde_json::json!(d)))

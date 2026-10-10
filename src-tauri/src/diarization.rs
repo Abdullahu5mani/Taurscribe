@@ -938,6 +938,9 @@ fn align_turns(
 /// Splits the call channel into speakers: Nemotron-3 Diarization when its model
 /// is installed, otherwise energy segmentation + acoustic clustering.
 fn split_remote_speakers(sys_samples: &[f32], sample_rate: u32) -> (Vec<AudioTurnSegment>, Vec<SpeakerProfile>) {
+    split_remote_speakers_hint(sys_samples, sample_rate, None)
+}
+fn split_remote_speakers_hint(sys_samples: &[f32], sample_rate: u32, expected: Option<usize>) -> (Vec<AudioTurnSegment>, Vec<SpeakerProfile>) {
     if sys_samples.is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -1111,6 +1114,13 @@ pub fn diarize_meeting_recording_with(
     transcriber: Option<TurnTranscriber<'_>>,
     in_person: bool,
 ) -> Result<Vec<DiarizedTurn>, String> {
+    diarize_meeting_recording_with_hint(wav_path, raw_transcript, snippets_dir, meeting_id, transcriber, in_person, None)
+}
+
+pub fn diarize_meeting_recording_with_hint(
+    wav_path: &Path, raw_transcript: &str, snippets_dir: &Path, meeting_id: i64,
+    transcriber: Option<TurnTranscriber<'_>>, in_person: bool, expected: Option<usize>,
+) -> Result<Vec<DiarizedTurn>, String> {
     if in_person {
         let me = crate::commands::meetings::open_connection()
             .ok()
@@ -1147,6 +1157,12 @@ pub fn diarize_in_person_recording(
     meeting_id: i64,
     transcriber: Option<TurnTranscriber<'_>>,
     me: Option<&[f32]>,
+) -> Result<Vec<DiarizedTurn>, String> {
+    diarize_in_person_recording_hint(wav_path, raw_transcript, snippets_dir, meeting_id, transcriber, me, None)
+}
+fn diarize_in_person_recording_hint(
+    wav_path: &Path, raw_transcript: &str, snippets_dir: &Path, meeting_id: i64,
+    transcriber: Option<TurnTranscriber<'_>>, me: Option<&[f32]>, expected: Option<usize>,
 ) -> Result<Vec<DiarizedTurn>, String> {
     let (samples, _, sample_rate) = read_capture_channels(wav_path, true)?;
     let samples = &samples[..];

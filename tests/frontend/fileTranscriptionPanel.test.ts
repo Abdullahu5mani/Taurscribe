@@ -56,7 +56,7 @@ const text = (root: any): string => root == null || typeof root === "boolean" ? 
     : typeof root !== "object" ? String(root) : Array.isArray(root) ? root.map(text).join(" ").replace(/\s+%/g, "%") : text(root.props?.children);
 const byLabel = (root: any, label: string) => nodes(root).find(n => n.props?.["aria-label"] === label);
 const cards = (root: any) => nodes(root).filter(n => n.props?.role === "article");
-const progress = (job: number, percent: number, status = "transcribing", id = jobs[job].args.jobId, timing: Record<string, number | null> = {}) => {
+const progress = (job: number, percent: number, status = "transcribing", id = jobs[job].args.jobId, timing: Record<string, any> = {}) => {
     for (const fn of progressListeners) fn({ payload: { path: jobs[job].args.path, job_id: id, percent, status, ...timing } });
 };
 const flushFrames = () => { const pending = [...frames.values()]; frames.clear(); for (const fn of pending) fn(0); };
@@ -126,14 +126,14 @@ test("same-path jobs ignore old, missing and foreign job identifiers", async () 
     progress(1, 90, "transcribing", jobs[0].args.jobId); progress(1, 95, "transcribing", null as any);
     for (const fn of progressListeners) fn({ payload: { path: "/other.wav", job_id: jobs[1].args.jobId, percent: 95 } });
     flushFrames(); await h.settle();
-    expect(text(cards(h.handle.current)[1])).toContain("5%");
-    progress(1, 70); flushFrames(); await h.settle(); expect(text(cards(h.handle.current)[1])).toContain("70%");
+    expect(text(cards(h.handle.current)[1])).toContain("Decoding…");
+    progress(1, 70); flushFrames(); await h.settle(); expect(text(cards(h.handle.current)[1])).toContain("Transcribing…");
 });
 
-test("out-of-order progress is monotonic even when events coalesce in one frame", async () => {
+test("the pipeline does not display fabricated percentages", async () => {
     const h = fixture(); drop("/progress.wav"); await h.settle();
     progress(0, 90); progress(0, 20); flushFrames(); await h.settle();
-    expect(text(cards(h.handle.current)[0])).toContain("90%");
+    expect(text(cards(h.handle.current)[0])).not.toContain("%");
 });
 
 test("done progress does not expose incomplete results or unlock removal before the command returns", async () => {
@@ -254,4 +254,28 @@ test("voice setup blocks file drops and gives a truthful busy message", async ()
     h.setProps({ isVoiceEnrolling: false }); drop("/ready.wav"); await h.settle();
     expect(jobs).toHaveLength(1);
     jobs[0].resolve(result()); await h.settle();
+});
+
+test("streamed steps stay active until the whole file finishes and saving has its own step", async () => {
+    const h = fixture(); drop("/steps.wav"); await h.settle();
+    const step = (key: string) => nodes(cards(h.handle.current)[0]).find(n => n.props?.["data-step"] === key);
+    progress(0, 83, "transcribing", jobs[0].args.jobId, {
+        steps_started: ["open", "convert", "speech", "recognize"], steps_completed: ["model", "open"], backend: "CUDA0",
+        transcribed_audio_ms: 16000, transcription_time_ms: 1000,
+    }); flushFrames(); await h.settle();
+    expect(step("open").props["data-state"]).toBe("complete");
+    expect(step("convert").props["data-state"]).toBe("active");
+    expect(text(step("recognize"))).toContain("CUDA0");
+    expect(text(h.handle.current)).toContain("16.0× realtime");
+    expect(text(h.handle.current)).not.toContain("83%");
+    progress(0, 83, "paused"); flushFrames(); await h.settle();
+    expect(text(h.handle.current)).toContain("Paused for recording");
+    expect(step("recognize").props["data-state"]).toBe("paused");
+    const pending = deferred<unknown>(); historyPending = pending.promise;
+    jobs[0].resolve(result()); await h.settle();
+    expect(step("convert").props["data-state"]).toBe("complete");
+    expect(text(step("recognize"))).toContain("CUDA0");
+    expect(step("save").props["data-state"]).toBe("active");
+    pending.resolve(null); await h.settle();
+    expect(step("save").props["data-state"]).toBe("complete");
 });

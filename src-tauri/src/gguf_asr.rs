@@ -37,11 +37,12 @@ impl GgufAsr {
 
     /// Transcribe 16 kHz mono PCM.
     pub fn transcribe(&mut self, pcm: &[f32]) -> Result<String, String> {
-        let out = self
-            .session
-            .run(pcm, &transcribe_cpp::RunOptions::default())
-            .map_err(|e| format!("transcribe: {e}"))?;
-        Ok(out.text.trim().to_string())
+        let max_samples = self.session.limits().ok().and_then(|limits| {
+            (limits.effective_max_audio_ms > 0).then_some(limits.effective_max_audio_ms as usize * 16)
+        });
+        recover_decode_limits(pcm, max_samples, &mut |audio| {
+            self.session.run(audio, &transcribe_cpp::RunOptions::default()).map(|out| out.text.trim().to_string())
+        }).map_err(|e| format!("transcribe: {e}"))
     }
 
     /// Transcribe, aborting mid-run once `cancel` is set. transcribe.cpp polls its
@@ -67,12 +68,20 @@ impl GgufAsr {
                 }
             })
         };
-        let result = self.session.run(pcm, &transcribe_cpp::RunOptions::default());
+        let max_samples = self.session.limits().ok().and_then(|limits| {
+            (limits.effective_max_audio_ms > 0).then_some(limits.effective_max_audio_ms as usize * 16)
+        });
+        let result = recover_decode_limits(pcm, max_samples, &mut |audio| {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(transcribe_cpp::Error::Aborted { message: "Cancelled".into(), partial: None });
+            }
+            self.session.run(audio, &transcribe_cpp::RunOptions::default()).map(|out| out.text.trim().to_string())
+        });
         done.store(true, Ordering::Relaxed);
         let _ = watcher.join();
         self.session.clear_cancel_token();
         match result {
-            Ok(out) => Ok(out.text.trim().to_string()),
+            Ok(text) => Ok(text),
             Err(transcribe_cpp::Error::Aborted { .. }) => Err("Transcription cancelled".to_string()),
             Err(e) => Err(format!("transcribe: {e}")),
         }
@@ -82,6 +91,47 @@ impl GgufAsr {
     pub fn backend(&self) -> &str {
         &self.backend
     }
+}
+
+/// A failed decode is incomplete by contract. Retry all its audio, never its
+/// partial text. This shared path covers files, live speech, and meeting turns.
+fn recover_decode_limits(
+    pcm: &[f32],
+    max_samples: Option<usize>,
+    run: &mut impl FnMut(&[f32]) -> Result<String, transcribe_cpp::Error>,
+) -> Result<String, transcribe_cpp::Error> {
+    const MIN_SECTION: usize = 16_000 * 2;
+    let over_input_limit = max_samples.is_some_and(|max| max > 0 && pcm.len() > max);
+    if !over_input_limit {
+        match run(pcm) {
+            Ok(text) => return Ok(text),
+            Err(error @ (transcribe_cpp::Error::OutputTruncated { .. } | transcribe_cpp::Error::InputTooLong(_))) => {
+                if pcm.len() < MIN_SECTION * 2 {
+                    return Err(transcribe_cpp::Error::InputTooLong(format!(
+                        "The speech model still reached its decode limit on a short section after retrying. The recording/file has not been marked complete; try another speech model. ({error})"
+                    )));
+                }
+                eprintln!("[ASR] Decode limit on {:.1}s; retrying shorter sections", pcm.len() as f32 / 16_000.0);
+            }
+            Err(other) => return Err(other),
+        }
+    } else if pcm.len() < MIN_SECTION * 2 {
+        // Still let the engine return its precise error for an unusually tiny limit.
+        return run(pcm);
+    }
+    // Search around the midpoint for quiet audio, reducing cuts through words.
+    let midpoint = pcm.len() / 2;
+    let start = (midpoint - pcm.len() / 8).max(MIN_SECTION);
+    let end = (midpoint + pcm.len() / 8).min(pcm.len() - MIN_SECTION);
+    let mut cut = midpoint;
+    let mut quietest = f32::INFINITY;
+    for at in (start..end).step_by(320) {
+        let energy: f32 = pcm[at..(at + 320).min(pcm.len())].iter().map(|sample| sample * sample).sum();
+        if energy < quietest { quietest = energy; cut = at; }
+    }
+    let first = recover_decode_limits(&pcm[..cut], max_samples, run)?;
+    let second = recover_decode_limits(&pcm[cut..], max_samples, run)?;
+    Ok([first, second].into_iter().filter(|text| !text.is_empty()).collect::<Vec<_>>().join(" "))
 }
 
 /// A downloadable model of a GGUF family. `id` is also its folder under the
@@ -391,5 +441,82 @@ mod tests {
     fn model_ids_are_unique_folders() {
         let ids: std::collections::HashSet<_> = GRANITE_MODELS.iter().chain(QWEN3_MODELS).map(|m| m.id).collect();
         assert_eq!(ids.len(), GRANITE_MODELS.len() + QWEN3_MODELS.len());
+    }
+}
+
+#[cfg(test)]
+mod decode_limit_tests {
+    use super::*;
+    /// Uses a real model but injects the first status-18 result, making the
+    /// recovery reproducible without depending on nondeterministic hallucination.
+    #[test]
+    #[ignore = "requires installed Granite model and a GPU"]
+    fn native_decode_limit_recovery_preserves_fixture_transcript() {
+        let model_path = gguf_in(&crate::utils::get_models_dir().unwrap().join("granite-speech-5-nc")).expect("Granite model required");
+        let mut engine = GgufAsr::load(&model_path).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../taurscribe-runtime/samples/jfk.wav");
+        let (audio, rate) = crate::audio_decode::decode_audio_mono_f32(&fixture).unwrap();
+        let audio = crate::audio_preprocess::resample_mono_to_16k(&audio, rate).unwrap();
+        let baseline = engine.transcribe(&audio).unwrap();
+        let mut first = true;
+        let recovered = recover_decode_limits(&audio, None, &mut |part| {
+            if first {
+                first = false;
+                return Err(transcribe_cpp::Error::OutputTruncated { message: "injected status 18".into(), partial: None });
+            }
+            engine.session.run(part, &transcribe_cpp::RunOptions::default()).map(|out| out.text.trim().to_string())
+        }).unwrap();
+        let normalize = |text: &str| text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()).map(str::to_string).collect::<Vec<_>>();
+        assert_eq!(normalize(&recovered), normalize(&baseline), "shorter retries changed the fixed-fixture transcript");
+        println!("NATIVE_RECOVERY backend={} baseline={} recovered={}", engine.backend(), baseline, recovered);
+    }
+
+    #[test]
+    fn truncated_file_or_meeting_turn_retries_every_sample_in_order() {
+        let audio = (0..16_000 * 25).map(|i| i as f32).collect::<Vec<_>>();
+        let mut successful = Vec::new(); let mut failures = 0; let mut sections = 0;
+        let text = recover_decode_limits(&audio, None, &mut |part| {
+            if part.len() > 16_000 * 5 {
+                failures += 1;
+                Err(transcribe_cpp::Error::OutputTruncated { message: "status 18".into(), partial: Some(Box::new(transcribe_cpp::Transcript { text: "incomplete partial must be discarded".into(), ..Default::default() })) })
+            } else {
+                sections += 1; successful.extend_from_slice(part);
+                Ok(format!("{}", part[0]))
+            }
+        }).unwrap();
+        assert!(failures > 1); assert_eq!(successful, audio);
+        assert_eq!(text.split_whitespace().count(), sections);
+        assert!(text.starts_with('0')); assert!(!text.contains("incomplete"));
+    }
+    #[test]
+    fn declared_input_limit_avoids_an_oversized_run() {
+        let mut samples = 0;
+        recover_decode_limits(&vec![0.0; 160_000], Some(64_000), &mut |part| {
+            assert!(part.len() <= 64_000); samples += part.len(); Ok("speech".into())
+        }).unwrap();
+        assert_eq!(samples, 160_000);
+    }
+    #[test]
+    fn cancellation_and_non_limit_failures_do_not_retry_or_return_partial_success() {
+        for cancelled in [false, true] {
+            let mut calls = 0;
+            let result = recover_decode_limits(&vec![0.0; 160_000], None, &mut |_| {
+                calls += 1;
+                if calls == 1 { return Err(transcribe_cpp::Error::InputTooLong("cap".into())); }
+                if calls == 2 { return Ok("first half".into()); }
+                if cancelled { Err(transcribe_cpp::Error::Aborted { message: "cancel".into(), partial: None }) }
+                else { Err(transcribe_cpp::Error::Backend("device failed".into())) }
+            });
+            assert!(result.is_err()); assert_eq!(calls, 3);
+        }
+    }
+    #[test]
+    fn pathological_output_is_bounded_and_never_saved_as_complete() {
+        let mut calls = 0;
+        let result = recover_decode_limits(&vec![0.0; 160_000], None, &mut |_| {
+            calls += 1; Err(transcribe_cpp::Error::OutputTruncated { message: "cap".into(), partial: None })
+        });
+        assert!(result.unwrap_err().to_string().contains("not been marked complete"));
+        assert!(calls <= 4);
     }
 }

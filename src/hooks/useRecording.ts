@@ -76,6 +76,7 @@ export function useRecording({
     currentGraniteModel,
     currentQwen3Model,
     asrBackend,
+    isFileTranscribingRef,
     setCurrentModel,
     setLoadedEngine,
     enableGrammarLMRef,
@@ -351,8 +352,10 @@ export function useRecording({
         }
         const targetModel = engineSetup.selected || engineSetup.installed[0].id;
         if (!engineSetup.selected) engineSetup.select?.(targetModel);
+        const fileHasPriority = isFileTranscribingRef?.current === true;
+        if (fileHasPriority) setHeaderStatus("Pausing file transcription at the next chunk…", 60_000);
         try {
-            const outcome = await ensureEngineModel(currentEngine, targetModel, asrBackend === "gpu", () => {
+            const outcome = fileHasPriority ? "ready" : await ensureEngineModel(currentEngine, targetModel, asrBackend === "gpu", () => {
                 if (!isCurrent()) throw new Error("Recording request superseded");
                 setHeaderStatus(`Loading ${engineSetup.label}...`, 60_000);
                 setSessionPhase?.("loading_model");
@@ -378,7 +381,7 @@ export function useRecording({
             if (!isCurrent()) return;
             resetRecordingSession();
             // Play start sound before muting so the app's own audio isn't silenced.
-            playStart?.();
+            if (!fileHasPriority) playStart?.();
             if (muteBackgroundAudioRef.current && !isMeeting) {
                 await invoke("mute_system_audio").then(() => { mutedByStart = true; })
                     .catch(e => console.warn("mute_system_audio failed:", e));
@@ -386,10 +389,13 @@ export function useRecording({
             if (!isCurrent()) return;
             const result = await invoke<CommandResult<string>>("start_recording", {
                 denoise: enableDenoiseRef.current,
+                modelId: targetModel, useGpu: asrBackend === "gpu",
                 audioSource: isDual ? "dual_channel" : isInPerson ? "in_person" : "mic",
             });
             if (!isCurrent()) return;
             if (!result.ok) throw result.error ?? new Error("Failed to start recording");
+            if (fileHasPriority) playStart?.();
+            setLoadedEngine(currentEngine);
             // The command reports the temp file path; users only need to know it started.
             setHeaderStatus("Recording started");
             // A backend event may already have established this session's clock.
