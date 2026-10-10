@@ -391,3 +391,31 @@
 .voicebank-add { border-color: rgba(52, 211, 153, 0.4); color: #6ee7b7; }
 .voicebank-more { align-self: flex-start; }
 .vault-action-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* Dialog lives in document.body, outside meeting scroll containers. */
+.speaker-vault-overlay { padding: 12px; box-sizing: border-box; }
+.speaker-vault-modal { width: 680px; max-width: 100%; max-height: calc(100dvh - 24px); min-height: 0; }
+.vault-header, .vault-footer { flex-shrink: 0; }
+.vault-body { min-height: 0; }
+.voicebank-panel { margin: 4px 0; padding: 14px; background: #191a1e; min-width: 0; }
+.voicebank-title, .voicebank-meeting { overflow-wrap: anywhere; }
+.voicebank-new-sample { display: flex; flex-wrap: wrap; gap: 8px; }
+.voicebank-hint { flex-basis: 100%; }
+.voicebank-candidate { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid #34373e; border-radius: 9px; background: #202126; width: 100%; box-sizing: border-box; font-size: 12px; color: #ddd; }
+.voicebank-candidate-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.voicebank-candidate-actions button { white-space: normal; text-align: left; }
+@media (max-width: 560px) {
+  .vault-header, .vault-body, .vault-footer { padding: 12px; }
+  .vault-item, .voicebank-row { flex-wrap: wrap; }
+  .voicebank-actions { width: 100%; justify-content: flex-end; }
+  .vault-actions { flex-wrap: wrap; }
+}
+
+.speaker-preview-body p { margin: 0; color: #aeb3be; font-size: 13px; line-height: 1.5; }
+.speaker-preview-body small { color: #9ca3af; line-height: 1.5; }
+.speaker-preview-body a { color: #93c5fd; }
+.speaker-preview-body > button { align-self: flex-start; }
+.speaker-preview-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid #34373e; border-radius: 9px; background: #202126; min-width: 0; }
+.speaker-preview-card strong { font-size: 12px; color: #e5e7eb; }
+.speaker-preview-card audio { display: block; width: 100%; max-width: 100%; }
+.speaker-preview-card button { align-self: flex-start; white-space: normal; text-align: left; }

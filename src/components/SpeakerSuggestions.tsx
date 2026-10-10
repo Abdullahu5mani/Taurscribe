@@ -1,3 +1,4 @@
+import { claimAudioPlayback } from "../utils/audioPlayback";
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { SpeakerNameSuggestion } from "../types/meetings";
@@ -48,6 +49,7 @@ export function SpeakerSuggestions({ meetingId, onLabelled }: Props) {
         const done = () => { if (audio.current === a) { audio.current = null; setPlaying(null); } };
         a.onended = done;
         a.onerror = done;
+        claimAudioPlayback(a, done);
         a.play().catch(done);
     };
 

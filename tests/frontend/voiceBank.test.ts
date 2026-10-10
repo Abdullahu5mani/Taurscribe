@@ -49,11 +49,13 @@ const suggestion = (meeting: number, speaker: string, similarity: number) => ({
     speech_ms: 14_000, preview: "The budget is fine", similarity,
 });
 let changed: number;
+let generated: string[];
 beforeEach(() => {
     calls.length = 0;
     played.length = 0;
     failures = {};
     changed = 0;
+    generated = [];
     suggestions = Array.from({ length: 13 }, (_, i) => suggestion(i + 1, "speaker_remote_2", 0.9 - i * 0.03));
     samples = [
         { id: 2, clip_path: "/clips/b.wav", meeting_id: 7, meeting_title: "Planning", created_at: "2026-10-05T00:00:00Z" },
