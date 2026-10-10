@@ -9,6 +9,7 @@ import { speakerCountHint } from "../utils/meetingTimeline";
 import "./MeetingRecordingImport.css";
 
 interface Props {
+  isVisible?: boolean;
   modelId?: string | null;
   useGpu?: boolean;
   dropTargetRef?: React.RefObject<HTMLDivElement | null>;
@@ -26,7 +27,7 @@ export function recordingDate(value: string | null): string {
   return value ? new Date(value).toLocaleString() : "Unknown recording time";
 }
 
-export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = true, onProcessingChange, onComplete, dropTargetRef, modelId, useGpu }: Props) {
+export function MeetingRecordingImport({ isVisible = true, blocked = false, hasDiarizationModel = true, onProcessingChange, onComplete, dropTargetRef, modelId, useGpu }: Props) {
   const [modalOpen, setModalOpen] = useState(false);
   const [sources, setSources] = useState<RecordingSource[]>([]);
   const [expectedSpeakers, setExpectedSpeakers] = useState("");
@@ -43,7 +44,7 @@ export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = 
   const mounted = useRef(true);
   const busy = useRef(false);
   const blockedRef = useRef(blocked);
-  blockedRef.current = blocked;
+  blockedRef.current = blocked || !isVisible;
   const manualOrder = useRef(false);
   const inspectionQueue = useRef(Promise.resolve());
   const pendingInspections = useRef(0);
@@ -148,11 +149,16 @@ export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = 
 
   const importMeeting = async () => {
     if (busy.current || blockedRef.current || pendingInspections.current || !sources.length || !title.trim()) return;
+    let count: number | null;
+    try { count = speakerCountHint(expectedSpeakers); }
+    catch (reason) { setError(String(reason)); return; }
     busy.current = true;
+    // Close directly: the busy guard intentionally prevents reopening during the job.
+    modalOpenRef.current = false; setModalOpen(false);
     setImporting(true); setError("");
     callbacks.current.onProcessingChange?.(true);
     try {
-      const id = await invoke<number>("import_meeting_recordings", { paths: sources.map(s => s.path), title: title.trim(), expectedSpeakers: speakerCountHint(expectedSpeakers), modelId, useGpu });
+      const id = await invoke<number>("import_meeting_recordings", { paths: sources.map(s => s.path), title: title.trim(), expectedSpeakers: count, modelId, useGpu });
       if (mounted.current) {
         modalOpenRef.current = false; setModalOpen(false);
         setSources([]); setTitle(""); setExpectedSpeakers(""); manualOrder.current = false; callbacks.current.onComplete(id);
@@ -182,11 +188,12 @@ export function MeetingRecordingImport({ blocked = false, hasDiarizationModel = 
   return <>
     <div ref={zone} className={`meeting-import ${dragging && !modalOpen ? "meeting-import--dragging" : ""}`} data-testid="meeting-import-drop-zone" role="region" aria-label="Import meeting recordings" {...dropHandlers}>
       <div className="meeting-import-launcher-icon"><IconFileText size={20} /></div>
-      <div className="meeting-import-launcher-copy"><strong>{sources.length ? `${sources.length} recording${sources.length === 1 ? "" : "s"} ready to import` : "Add a meeting recording"}</strong>
-        <p>{dragging ? "Drop to open the recording importer" : "Drop audio files anywhere in Meetings to get started."}</p>
+      <div className="meeting-import-launcher-copy"><strong>{importing ? "Importing meeting in the background" : sources.length ? `${sources.length} recording${sources.length === 1 ? "" : "s"} ready to import` : "Add a meeting recording"}</strong>
+        <p>{importing ? "You can browse the rest of the app. Progress appears below." : dragging ? "Drop to open the recording importer" : "Drop audio files anywhere in Meetings to get started."}</p>
       </div>
       <button type="button" className="meeting-vault-btn" onClick={openModal} disabled={disabled} data-testid="meeting-import-open">{sources.length ? "Review import" : "Import recordings"}</button>
     </div>
+    {error && !modalOpen && <p className="meeting-import-error" role="alert">{error} — choose Review import to retry.</p>}
     <ModalLayer>{modalOpen && <div className="meeting-import-overlay" data-testid="meeting-import-overlay" onClick={event => { if (event.target === event.currentTarget) closeModal(); }}>
       <div ref={modal} className={`meeting-import-modal ${dragging ? "meeting-import--dragging" : ""}`} role="dialog" aria-modal="true" aria-labelledby="meeting-import-dialog-title" aria-describedby="meeting-import-dialog-description" tabIndex={-1} data-testid="meeting-import-modal" aria-busy={importing || inspecting} {...dropHandlers}>
         <header className="meeting-import-modal-header">

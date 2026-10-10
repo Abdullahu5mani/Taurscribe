@@ -1,3 +1,4 @@
+import { claimAudioPlayback } from "../utils/audioPlayback";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { SpeakerSuggestions } from "./SpeakerSuggestions";
@@ -29,6 +30,9 @@ import {
   MeetingDetailRecord,
   PlatformCount,
 } from "../types/meetings";
+import { MeetingTags } from "./MeetingTags";
+import { MeetingHistoryControls } from "./MeetingHistoryControls";
+import { SpeakerPreviewModal } from "./SpeakerPreviewModal";
 import { SpeakerVaultModal } from "./SpeakerVaultModal";
 import { MeetingReviewModal } from "./MeetingReviewModal";
 import { levelToPercent } from "../utils/audioLevel";
@@ -52,6 +56,7 @@ interface MeetingsPanelProps {
   onRecordInPerson?: () => void;
   /** The in-person recording section, shown at the top while open. */
   inPerson?: React.ReactNode;
+  isVisible?: boolean;
   importBlocked?: boolean;
   hasDiarizationModel?: boolean;
   onImportProcessingChange?: (busy: boolean) => void;
@@ -108,10 +113,13 @@ export function MeetingsPanel({
   onOpenModelSettings,
   onRecordInPerson,
   inPerson,
+  isVisible = true,
   importBlocked = false,
   hasDiarizationModel = true,
   onImportProcessingChange,
 }: MeetingsPanelProps) {
+  const visibleRef = useRef(isVisible);
+  visibleRef.current = isVisible;
   // Meetings Catalog
   const [meetings, setMeetings] = useState<MeetingSummaryRecord[]>([]);
   const meetingDropTargetRef = useRef<HTMLDivElement>(null);
@@ -145,6 +153,7 @@ export function MeetingsPanel({
   const manualScrollUntil = useRef(0);
   const scrolledBlock = useRef(-1);
   const [speakerHint, setSpeakerHint] = useState("");
+  const [confirmPipeline, setConfirmPipeline] = useState(false);
   const [confirmReseparate, setConfirmReseparate] = useState(false);
   const [speakerBusy, setSpeakerBusy] = useState(false);
   const speakerMutation = useRef(false);
@@ -170,6 +179,7 @@ export function MeetingsPanel({
   }, [activeBlock, isPlayingAudio, audioCurrentTime]);
 
   // Speaker Snippet Preview Playback
+  const [previewSpeaker, setPreviewSpeaker] = useState<{ id: string; name: string; path?: string | null } | null>(null);
   const [playingSnippetSpeakerId, setPlayingSnippetSpeakerId] = useState<string | null>(null);
   const snippetAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -178,7 +188,7 @@ export function MeetingsPanel({
   const [reviewMeetingId, setReviewMeetingId] = useState<number | null>(null);
   // A stopped call being transcribed + diarized (between the backend's
   // meeting-processing-started and meeting-processing-finished events).
-  const [processing, setProcessing] = useState<{ title: string; platform: string; startedAt: number } | null>(null);
+  const [processing, setProcessing] = useState<{ title: string; platform: string; startedAt: number; stage?: string } | null>(null);
   const [processingError, setProcessingError] = useState<string | null>(null);
   const [processingElapsed, setProcessingElapsed] = useState(0);
   const [editingTitle, setEditingTitle] = useState("");
@@ -207,6 +217,7 @@ export function MeetingsPanel({
       setToolbarError("");
       stopFullAudio();
       stopSnippetAudio();
+      setPreviewSpeaker(null);
       manualScrollUntil.current = 0; scrolledBlock.current = -1;
       setAudioCurrentTime(0);
       setAudioDuration(0);
@@ -216,6 +227,7 @@ export function MeetingsPanel({
   };
 
   // Fetch list of meetings and platform counts
+  const [historyPages, setHistoryPages] = useState(1);
   const loadMeetings = async () => {
     const request = ++listRequestRef.current;
     setLoadingList(true);
@@ -225,7 +237,7 @@ export function MeetingsPanel({
           search: searchQueryRef.current.trim() || null,
           category: null,
           platform: selectedPlatformRef.current === "All" ? null : selectedPlatformRef.current,
-          limit: 100,
+          limit: historyPages * 100,
           offset: 0,
         }),
         invoke<PlatformCount[]>("get_meeting_platform_counts").catch(() => []),
@@ -236,7 +248,7 @@ export function MeetingsPanel({
 
       // Auto-select first meeting on wider screens if none selected or if previously selected was deleted
       if (list.length > 0) {
-        if (!selectedMeetingIdRef.current || !list.some((m) => m.id === selectedMeetingIdRef.current)) {
+        if (!selectedMeetingIdRef.current || ((searchQueryRef.current.trim() || selectedPlatformRef.current !== "All") && !list.some(m => m.id === selectedMeetingIdRef.current))) {
           if (window.innerWidth >= 768) {
             selectMeeting(list[0].id);
           }
@@ -314,7 +326,7 @@ export function MeetingsPanel({
 
   useEffect(() => {
     loadMeetings();
-  }, [searchQuery, selectedPlatform]);
+  }, [searchQuery, selectedPlatform, historyPages]);
 
   useEffect(() => {
     if (selectedMeetingId !== null) {
@@ -333,6 +345,9 @@ export function MeetingsPanel({
           platform: event.payload?.platform || "",
           startedAt: Date.now(),
         });
+      }),
+      listen<{ stage: string }>("meeting-processing-progress", event => {
+        setProcessing(previous => previous ? { ...previous, stage: event.payload.stage } : previous);
       }),
       listen<{ meeting_id: number | null; error: string | null }>("meeting-processing-finished", (event) => {
         setProcessing(null);
@@ -364,10 +379,11 @@ export function MeetingsPanel({
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    listen<{ meeting_id: number }>("meeting-processing-complete", (event) => {
+    listen<{ meeting_id: number; imported?: boolean }>("meeting-processing-complete", (event) => {
       const id = event.payload?.meeting_id;
       if (id) {
-        setReviewMeetingId(id);
+        // Imported meetings finish quietly; live meeting review stays in its visible view.
+        if (!event.payload.imported && visibleRef.current) setReviewMeetingId(id);
         loadMeetings();
         if (id === selectedMeetingIdRef.current) void loadMeetingDetail(id);
       }
@@ -393,10 +409,10 @@ export function MeetingsPanel({
     setIsPlayingAudio(false);
   };
 
-  const handleToggleFullAudio = () => {
+  const handleToggleFullAudio = (seekTo?: number, forcePlay = false) => {
     if (!selectedMeeting?.audio_path) return;
 
-    if (isPlayingAudio) {
+    if (isPlayingAudio && !forcePlay) {
       fullAudioRef.current?.pause();
       setIsPlayingAudio(false);
     } else {
@@ -411,7 +427,7 @@ export function MeetingsPanel({
           setAudioFailed(true);
         };
         audio.playbackRate = playbackSpeed;
-        audio.currentTime = audioCurrentTime;
+        audio.currentTime = seekTo ?? audioCurrentTime;
 
         audio.ontimeupdate = () => {
           if (fullAudioRef.current !== audio) return;
@@ -428,6 +444,8 @@ export function MeetingsPanel({
         fullAudioRef.current = audio;
       }
       const audio = fullAudioRef.current;
+      if (seekTo !== undefined) handleScrubAudio(seekTo);
+      claimAudioPlayback(audio, () => setIsPlayingAudio(false));
       audio.play().then(() => {
         if (fullAudioRef.current === audio && !audio.paused) setIsPlayingAudio(true);
       }).catch((error) => {
@@ -442,9 +460,15 @@ export function MeetingsPanel({
   };
 
   const handleScrubAudio = (targetSec: number) => {
-    setAudioCurrentTime(targetSec);
+    const target = Math.max(0, targetSec);
+    setAudioCurrentTime(target);
+    manualScrollUntil.current = 0;
+    const next = blocks.findIndex(t => t.end_ms / 1000 > target);
+    const index = next < 0 ? blocks.length - 1 : next;
+    scrolledBlock.current = index;
+    timelineRefs.current.get(index)?.scrollIntoView({ block: "center", behavior: "smooth" });
     if (fullAudioRef.current) {
-      fullAudioRef.current.currentTime = targetSec;
+      fullAudioRef.current.currentTime = target;
     }
   };
 
@@ -466,7 +490,8 @@ export function MeetingsPanel({
   };
 
   const handlePlaySnippet = (speakerId: string, snippetPath?: string | null, replace = false) => {
-    if (!replace && playingSnippetSpeakerId === speakerId) {
+    const clipKey = `${speakerId}:${snippetPath ?? ""}`;
+    if (!replace && playingSnippetSpeakerId === clipKey) {
       stopSnippetAudio();
       return;
     }
@@ -477,7 +502,7 @@ export function MeetingsPanel({
       const assetUrl = convertFileSrc(snippetPath);
       const audio = new Audio(assetUrl);
       snippetAudioRef.current = audio;
-      setPlayingSnippetSpeakerId(speakerId);
+      setPlayingSnippetSpeakerId(clipKey);
 
       audio.onended = () => {
         if (snippetAudioRef.current !== audio) return;
@@ -491,6 +516,7 @@ export function MeetingsPanel({
         snippetAudioRef.current = null;
       };
 
+      claimAudioPlayback(audio, () => { if (snippetAudioRef.current === audio) { snippetAudioRef.current = null; setPlayingSnippetSpeakerId(null); } });
       audio.play().catch((error) => {
         console.error("Snippet playback failed:", error);
         if (snippetAudioRef.current === audio) stopSnippetAudio();
@@ -741,7 +767,10 @@ export function MeetingsPanel({
         </div>
       )}
 
+      <MeetingHistoryControls count={platformCounts.reduce((sum, platform) => sum + platform.count, 0)} onSelect={selectMeeting} />
       {/* ── Search & Filter Controls ─────────────────────────── */}
+      {previewSpeaker && selectedMeeting && <SpeakerPreviewModal key={`${selectedMeeting.id}-${previewSpeaker.id}`} meetingId={selectedMeeting.id}
+        speakerId={previewSpeaker.id} speakerName={previewSpeaker.name} initialPath={previewSpeaker.path} onClose={() => setPreviewSpeaker(null)} />}
       <div className={`meeting-filter-bar ${selectedMeetingId ? "meeting-filter-bar--has-selection" : ""}`}>
         <div className="meeting-search-row">
           <div className="meeting-search-input-wrap">
@@ -863,12 +892,12 @@ export function MeetingsPanel({
       </div>
 
       <MeetingRecordingImport
-        modelId={modelId} useGpu={useGpu}
+        isVisible={isVisible} modelId={modelId} useGpu={useGpu}
         dropTargetRef={meetingDropTargetRef}
         blocked={isRecording || !!processing || importBlocked || isVaultOpen || reviewMeetingId !== null}
         hasDiarizationModel={hasDiarizationModel}
         onProcessingChange={onImportProcessingChange}
-        onComplete={id => { setReviewMeetingId(id); setSelectedPlatform("All"); setSearchQuery(""); selectMeeting(id); void loadMeetings(); }}
+        onComplete={id => { setSelectedPlatform("All"); setSearchQuery(""); selectMeeting(id); void loadMeetings(); }}
       />
 
       {/* ── 2-Column Master-Detail Catalog Layout ─────────────── */}
@@ -891,7 +920,7 @@ export function MeetingsPanel({
                   <span className="meeting-processing-elapsed">{processingElapsed}s</span>
                 </div>
                 <h3 className="meeting-card-title">{processing.title}</h3>
-                <span className="meeting-processing-detail">Transcribing and separating speakers</span>
+                <span className="meeting-processing-detail">{processing.stage || "Preparing meeting processing"}</span>
               </div>
             </div>
           )}
@@ -1071,6 +1100,7 @@ export function MeetingsPanel({
               );
             })
           )}
+          {meetings.length >= historyPages * 100 && <button type="button" className="turn-clip-btn" disabled={loadingList} onClick={() => setHistoryPages(pages => pages + 1)}>Load older meetings</button>}
         </div>
 
         {/* Right Column: Selected Meeting Deep-Dive Detail View */}
@@ -1086,7 +1116,7 @@ export function MeetingsPanel({
               <IconVideo size={36} style={{ opacity: 0.2 }} />
               <h4>Select a meeting to view transcript</h4>
               <p style={{ fontSize: "12px", maxWidth: "260px" }}>
-                Review the full speaker-diarized transcript, listen to call audio, and play back isolated voice snippets.
+                Review the full speaker-diarized transcript, listen to call audio, and compare speaker previews.
               </p>
             </div>
           ) : (
@@ -1191,6 +1221,7 @@ export function MeetingsPanel({
                   title="Click to rename meeting title"
                 />
 
+                <MeetingTags key={selectedMeeting.id} meetingId={selectedMeeting.id} onChanged={() => { void loadMeetings(); }} />
                 <div className="detail-meta-row">
                   <div className="detail-meta-badges">
                     <span
@@ -1249,7 +1280,7 @@ export function MeetingsPanel({
                   <summary>{selectedMeeting.recording_sources.length} imported recording{selectedMeeting.recording_sources.length === 1 ? "" : "s"} · original timeline</summary>
                   <ol>{selectedMeeting.recording_sources.map((source, index) => <li key={`${source.path}-${index}`}>
                     <button type="button" disabled={!selectedMeeting.audio_path || selectedMeeting.audio_missing || audioFailed}
-                      onClick={() => { if (!fullAudioRef.current) handleToggleFullAudio(); handleScrubAudio(source.offset_ms / 1000); }}>
+                      onClick={() => { handleToggleFullAudio(source.offset_ms / 1000, true); }}>
                       {formatDurationMs(source.offset_ms)} · {source.name} · {recordingDate(source.recorded_start)}
                       {source.recorded_end ? ` → ${recordingDate(source.recorded_end)}` : ""}
                     </button>
@@ -1267,7 +1298,7 @@ export function MeetingsPanel({
                     data-testid="meetings-audio-play-btn"
                     type="button"
                     className="audio-play-toggle-btn"
-                    onClick={handleToggleFullAudio}
+                    onClick={() => handleToggleFullAudio()}
                     title={isPlayingAudio ? "Pause Audio" : "Play Recording"}
                   >
                     {isPlayingAudio ? <IconStop size={14} /> : <IconPlay size={14} />}
@@ -1325,6 +1356,11 @@ export function MeetingsPanel({
                     onClick={() => { if (!confirmReseparate) { setConfirmReseparate(true); return; } setConfirmReseparate(false); void changeSpeakers("reseparate_meeting_speakers", { expectedSpeakers: speakerHint ? Number(speakerHint) : null, modelId, useGpu }); }}>
                     {speakerBusy ? "Working…" : confirmReseparate ? "Confirm re-separation" : "Re-separate speakers"}
                   </button>
+                  <button type="button" className="turn-clip-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
+                    onClick={() => { if (!confirmPipeline) { setConfirmPipeline(true); return; } setConfirmPipeline(false); void changeSpeakers("reprocess_meeting", { expectedSpeakers: speakerHint ? Number(speakerHint) : null, modelId, useGpu }); }}>
+                    {confirmPipeline ? "Confirm full reprocessing" : "Clean audio and rerun pipeline"}
+                  </button>
+                  {confirmPipeline && <><span>Rebuilds the transcript from cleaned audio. Separate mic/caller tracks allow echo cleanup; mixed recordings get noise cleanup. Manual turn labels and merge undo are replaced after success. Original audio, notes and tags are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmPipeline(false)}>Cancel</button></>}
                   {confirmReseparate && <><span>Rebuilds turns and transcript; manual labels and merge undo are replaced after success. Notes and original recording are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmReseparate(false)}>Cancel</button></>}
                 </div>
                 {selectedMeeting.merges?.[0] && (
@@ -1336,7 +1372,7 @@ export function MeetingsPanel({
                 <div className="turns-conversation-flow">
                   {blocks.map((t, idx) => {
                     const isYou = t.channel === 0;
-                    const isSnippetPlaying = playingSnippetSpeakerId === t.speaker_id;
+                    const isSnippetPlaying = playingSnippetSpeakerId === `${t.speaker_id}:${t.snippet_path ?? ""}`;
                     const isRenaming = renamingSpeakerId === t.speaker_id;
 
                     return (
@@ -1396,7 +1432,7 @@ export function MeetingsPanel({
                                   isSnippetPlaying ? "playing" : ""
                                 }`}
                                 onClick={() => handlePlaySnippet(t.speaker_id, t.snippet_path)}
-                                title="Play isolated 3s voice snippet"
+                                title="Play a 3-second speaker preview; overlapping voices may also be audible"
                               >
                                 {isSnippetPlaying ? (
                                   <IconStop size={11} />
@@ -1407,16 +1443,20 @@ export function MeetingsPanel({
                               </button>
                             )}
 
+                            {!isYou && t.speaker_id !== "background" && <button type="button" className="turn-clip-btn" aria-label={`Compare voice samples for ${t.speaker_name}`}
+                              onClick={() => { stopSnippetAudio(); stopFullAudio(); setPreviewSpeaker({ id: t.speaker_id, name: t.speaker_name, path: t.snippet_path }); }}>Compare samples</button>}
+
                             <select aria-label={`Merge ${t.speaker_name} into`} className="turn-merge-select"
                               value="" disabled={speakerBusy}
                               onChange={e => { if (e.target.value) void changeSpeakers("merge_meeting_speakers", { fromSpeakerId: t.speaker_id, intoSpeakerId: e.target.value }); }}>
                               <option value="">Merge into…</option>
+                              {t.speaker_id !== "background" && <option value="background">Background noise</option>}
                               {meetingSpeakers
-                                .filter(other => other.speaker_id !== t.speaker_id)
+                                .filter(other => other.speaker_id !== t.speaker_id && other.speaker_id !== "background")
                                 .map(other => <option key={other.speaker_id} value={other.speaker_id}>{other.speaker_name}</option>)}
                             </select>
 
-                            {!isYou && (
+                            {!isYou && t.speaker_id !== "background" && (
                               <button
                                 id={`meetings-rename-speaker-btn-${idx}`}
                                 data-testid={`meetings-rename-speaker-btn-${idx}`}
@@ -1441,8 +1481,8 @@ export function MeetingsPanel({
                         <p className="turn-text" role={selectedMeeting.audio_path && !audioFailed ? "button" : undefined}
                           tabIndex={selectedMeeting.audio_path && !audioFailed ? 0 : undefined}
                           aria-label={`Jump to ${formatSeconds(t.start_ms / 1000)}: ${t.text}`}
-                          onClick={() => { if (selectedMeeting.audio_path && !audioFailed) handleScrubAudio(t.start_ms / 1000); }}
-                          onKeyDown={e => { if (selectedMeeting.audio_path && !audioFailed && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); handleScrubAudio(t.start_ms / 1000); } }}>{t.text}</p>
+                          onClick={() => { if (selectedMeeting.audio_path && !audioFailed) handleToggleFullAudio(t.start_ms / 1000, true); }}
+                          onKeyDown={e => { if (selectedMeeting.audio_path && !audioFailed && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); handleToggleFullAudio(t.start_ms / 1000, true); } }}>{t.text}</p>
                       </div>
                     );
                   })}

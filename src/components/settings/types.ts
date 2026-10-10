@@ -3,7 +3,7 @@
 export interface DownloadableModel {
     id: string;
     name: string;
-    type: 'Whisper' | 'Granite' | 'LLM' | 'CoreML' | 'Qwen3' | 'Speaker';
+    type: 'Whisper' | 'Granite' | 'LLM' | 'CoreML' | 'Qwen3' | 'Speaker' | 'Audio';
     size: string;
     description: string;
     downloaded: boolean;
@@ -41,6 +41,8 @@ export const MODELS: DownloadableModel[] = [
     { id: SPEAKER_MODEL_ID, name: 'Speaker Recognition (CAM++)', type: 'Speaker', size: '28 MB', description: 'Recognises meeting participants by voice across meetings. Required for the Speaker Vault.', downloaded: false },
 
     { id: DIARIZATION_MODEL_ID, name: 'Speaker Separation (Nemotron 3)', type: 'Speaker', size: '199 MB', description: 'Tells the people on a call apart (up to 8). Much more accurate than the built-in voice grouping. OpenMDW licence.', downloaded: false },
+
+    { id: 'voice-separation', name: 'Overlapping voice isolation', type: 'Audio', size: '29 MB', description: 'Optional experimental two-voice previews. Compare samples in a meeting, then listen to both isolated voices. Does not change speaker labels or transcripts.', downloaded: false, beta: true },
 
     // --- Tiny ---
     // aneCapable = full-precision models whose download auto-bundles the ANE encoder on Apple Silicon.

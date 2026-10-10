@@ -337,7 +337,7 @@ pub fn merge_same_voices(turns: Vec<SpeakerTurn>, pcm: &[f32], voiceprint: &mut 
     merge_voices_with_hint(turns, pcm, voiceprint, None)
 }
 
-pub fn merge_voices_with_hint(mut turns: Vec<SpeakerTurn>, pcm: &[f32], voiceprint: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, expected: Option<usize>) -> Vec<SpeakerTurn> {
+pub fn merge_voices_with_hint(mut turns: Vec<SpeakerTurn>, pcm: &[f32], voiceprint: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>, _expected: Option<usize>) -> Vec<SpeakerTurn> {
     use std::collections::BTreeMap;
     let mut prints: BTreeMap<usize, Vec<f32>> = BTreeMap::new();
     let mut speech: BTreeMap<usize, u64> = BTreeMap::new();
@@ -370,8 +370,9 @@ pub fn merge_voices_with_hint(mut turns: Vec<SpeakerTurn>, pcm: &[f32], voicepri
                 if turns.iter().filter(|t| t.speaker == a).any(|x| turns.iter().filter(|t| t.speaker == b).any(|y| x.start_ms < y.end_ms && y.start_ms < x.end_ms)) { continue; }
                 let sim = crate::speaker_embedding::cosine_similarity(pa, pb);
                 let small = speech[&a].min(speech[&b]) < 4_000;
-                let hinted = expected.is_some_and(|n| ids.len() > n);
-                let threshold = if hinted || (long_meeting && small) { 0.55 } else { 0.60 };
+                // A count hint must not weaken identity evidence to force a
+                // requested total. Only tiny fragments get the existing margin gate.
+                let threshold = if long_meeting && small { 0.55 } else { 0.60 };
                 // Below the ordinary cutoff demand a clear best match, preventing
                 // ambiguous short fragments from being attached to a random voice.
                 if sim < 0.60 {
@@ -540,6 +541,14 @@ mod merge_tests {
         let turns = vec![turn(0,0,5000),turn(1,3000,7000)]; let pcm=vec![0.1;16000*7];
         assert_eq!(merge_same_voices(turns.clone(),&pcm,&mut |_| None),turns);
         assert_eq!(merge_same_voices(turns.clone(),&pcm,&mut |_| Some(vec![1.0,0.0])),turns);
+    }
+    #[test]
+    fn count_hint_does_not_lower_identity_threshold() {
+        let turns = vec![turn(0,0,5000),turn(1,6000,11000)];
+        let mut pcm=vec![0.1;16000*11];pcm[16000*6..].fill(0.8);
+        // Similar but below 0.60: the old hint-only 0.55 threshold merged them.
+        let out=merge_voices_with_hint(turns.clone(),&pcm,&mut |p| Some(if p[0]<0.5 {vec![1.0,0.0]} else {vec![0.57,0.8216447]}),Some(1));
+        assert_eq!(out,turns);
     }
     #[test]
     fn speaker_hint_does_not_force_distinct_people_into_one_voice() {

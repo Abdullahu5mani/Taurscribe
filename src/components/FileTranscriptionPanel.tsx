@@ -719,7 +719,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                 </div>
                             </div>
 
-                            {item.status !== "queued" && (
+                            {item.status !== "queued" && (item.status === "processing" || item.historySaving || item.detailsExpanded) && (
                                 <div className="file-card-progress-wrap">
                                     {item.status === "processing" && <div className="file-card-progress-label">
                                         <span role="status">{item.phase === "paused" ? "Paused for recording — resumes automatically" : item.phase === "loading model" ? "Loading model…" : item.phase === "waiting" ? "Waiting…" : item.phase === "done" || item.phase === "finalizing" ? "Finishing…" : item.phase === "cancelled" ? "Cancelling…" : item.phase === "decoding" || !item.phase ? "Decoding…" : item.phase === "resampling" ? "Converting audio to 16 kHz mono…" : item.phase === "detecting speech" ? "Finding speech…" : "Transcribing…"}</span>
@@ -727,11 +727,11 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                     </div>}
                                     <ol className="file-pipeline-checklist" aria-label={`Transcription steps for ${item.name}`}>
                                         {[
-                                            ["model", `Load ${engineLabel(item.engine, item.modelId)}${item.backend ? ` · ${item.backend}` : ""}`],
+                                            ["model", `Load ${engineLabel(item.engine, item.modelId)}${item.backend ? ` · ${item.backend.replace(/^(CUDA|Vulkan|ROCm)\d+$/i, "$1").replace(/^MTL\d+$/, "Metal")}` : ""}`],
                                             ["open", "Open and decode file"],
                                             ["convert", "Convert to 16 kHz mono (streamed)"],
                                             ["speech", "Find speech and prepare audio (streamed)"],
-                                            ["recognize", `Transcribe with ${engineLabel(item.engine, item.modelId)}${item.backend ? ` · ${item.backend}` : ""}`],
+                                            ["recognize", `Transcribe with ${engineLabel(item.engine, item.modelId)}${item.backend ? ` · ${item.backend.replace(/^(CUDA|Vulkan|ROCm)\d+$/i, "$1").replace(/^MTL\d+$/, "Metal")}` : ""}`],
                                             ["finalize", "Prepare transcript"],
                                             ["save", "Save to history"],
                                         ].map(([key, label]) => {
@@ -747,6 +747,14 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                                             : "Measuring speech speed…"}
                                     </span>}
                                 </div>
+                            )}
+
+                            {item.status !== "queued" && item.status !== "processing" && !item.historySaving && (
+                                <button type="button" className="file-card-btn file-card-btn--secondary"
+                                    aria-label={`Transcription details for ${item.name}`} aria-expanded={!!item.detailsExpanded}
+                                    onClick={() => setFiles(prev => prev.map(f => f.id === item.id ? { ...f, detailsExpanded: !f.detailsExpanded } : f))}>
+                                    {item.detailsExpanded ? "Hide details" : "Details"}
+                                </button>
                             )}
 
                             {/* Error */}

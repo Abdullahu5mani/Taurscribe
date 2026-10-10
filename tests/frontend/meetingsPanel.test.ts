@@ -119,16 +119,16 @@ beforeEach(() => {
     playPlans.length = 0;
 });
 
-test("continuation and Save & View refresh the selected meeting", async () => {
+test("completion refreshes the selected meeting without opening a review popup", async () => {
     const { handle, settle } = render();
     await settle();
     expect(textOf(handle.current)).toContain("Original transcript");
     detail = makeDetail(1, "Continued transcript plus new speech");
     finished();
-    listeners.get("meeting-processing-complete")!({ payload: { meeting_id: 1 } });
+    listeners.get("meeting-processing-complete")!({ payload: { meeting_id: 1, imported: true } });
     await settle();
     const review = nodes(handle.current).find(node => typeof node.props?.onViewInCatalog === "function");
-    review.props.onViewInCatalog(1);
+    expect(review.props.meetingId).toBeNull();
     await settle();
     expect(textOf(handle.current)).toContain("Continued transcript plus new speech");
 });
@@ -259,7 +259,7 @@ test("late listener registrations are removed after unmount", async () => {
 test("strict effect replay leaves exactly one subscription per event", async () => {
     const view = renderHook(() => MeetingsPanel(props), { strictEffects: true });
     await view.settle();
-    expect([...subscriptions.values()].map(active => active.size)).toEqual([1, 1, 1]);
+    expect([...subscriptions.values()].map(active => active.size)).toEqual([1, 1, 1, 1]);
     detail = makeDetail(1, "After strict effect replay");
     listeners.get("meeting-processing-complete")!({ payload: { meeting_id: 1 } });
     await view.settle();
@@ -521,4 +521,13 @@ test("re-separation requires confirmation and passes the selected model and coun
   expect(calls.some(c=>c.cmd === "reseparate_meeting_speakers")).toBe(false);
   byTest(view.handle.current,"meetings-reseparate-btn").props.onClick();await view.settle();
   expect(calls.find(c=>c.cmd === "reseparate_meeting_speakers")?.args).toEqual({meetingId:1,expectedSpeakers:3,modelId:"tiny",useGpu:false});expect(busy).toEqual([true,false]);
+});
+
+test("processing stage updates and completion clears the status", async () => {
+    const view = render(); await view.settle();
+    listeners.get("meeting-processing-started")!({ payload: { title: "Import", platform: "Imported recording" } }); await view.settle();
+    listeners.get("meeting-processing-progress")!({ payload: { stage: "Converting and joining recordings" } }); await view.settle();
+    expect(textOf(byTest(view.handle.current, "meetings-processing-status"))).toContain("Converting and joining recordings");
+    listeners.get("meeting-processing-finished")!({ payload: { meeting_id: 1, error: null } }); await view.settle();
+    expect(byTest(view.handle.current, "meetings-processing-status")).toBeUndefined();
 });

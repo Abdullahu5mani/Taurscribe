@@ -2,6 +2,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--_benchmark-worker") {
+        let args: Vec<_> = std::env::args().skip(2).collect();
+        if let Err(error) = taurscribe_lib::commands::run_benchmark_worker(&args) { eprintln!("{error}"); std::process::exit(1); }
+        return;
+    }
     // `taurscribe mcp`: read-only transcript server for LLM apps (stdio), no window.
     if std::env::args().nth(1).as_deref() == Some("mcp") {
         taurscribe_lib::mcp_server::run();

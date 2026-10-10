@@ -1,3 +1,4 @@
+import { claimAudioPlayback } from "../utils/audioPlayback";
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -112,6 +113,7 @@ export const MeetingReviewModal: React.FC<MeetingReviewModalProps> = ({
                 audioRef.current = null;
             };
 
+            claimAudioPlayback(audio, () => { if (audioRef.current === audio) { audioRef.current = null; setPlayingSnippetSpeakerId(null); } });
             audio.play().catch((e) => {
                 if (audioRef.current !== audio) return;
                 console.error("Failed to play snippet audio:", e);

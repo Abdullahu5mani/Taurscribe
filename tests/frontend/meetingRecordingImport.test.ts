@@ -126,15 +126,17 @@ test("closing the importer preserves the draft and reopening restores its select
   expect(calls.filter(c => c.cmd === "inspect_meeting_recordings")).toHaveLength(1);
 });
 
-test("processing keeps the modal open until completion, which closes it automatically", async () => {
+test("processing dismisses the modal immediately and does not reopen it at completion", async () => {
   let resolve!: (id: number) => void; importResult = new Promise(r => { resolve = r; });
   const view = fixture(); await view.settle();
   byTest(view.handle.current, "meeting-import-open").props.onClick(); await view.settle();
   await byTest(view.handle.current, "meeting-import-browse").props.onClick(); await view.settle();
   const job = byTest(view.handle.current, "meeting-import-submit").props.onClick(); await view.settle();
-  expect(byTest(view.handle.current, "meeting-import-close").props.disabled).toBe(true);
-  byTest(view.handle.current, "meeting-import-close").props.onClick(); await view.settle();
-  expect(byTest(view.handle.current, "meeting-import-modal")).toBeDefined();
+  expect(byTest(view.handle.current, "meeting-import-modal")).toBeUndefined();
+  expect(content(view.handle.current)).toContain("background");
+  expect(view.busy).toEqual([true]);
+  byTest(view.handle.current, "meeting-import-open").props.onClick(); await view.settle();
+  expect(byTest(view.handle.current, "meeting-import-modal")).toBeUndefined();
   resolve(47); await job; await view.settle();
   expect(byTest(view.handle.current, "meeting-import-modal")).toBeUndefined();
   expect(view.completed).toEqual([47]);
@@ -150,4 +152,14 @@ test("import sends optional people hint and invalid counts preserve the draft", 
   byLabel(view.handle.current,"About how many people?").props.onChange({target:{value:"4"}});await view.settle();
   await byTest(view.handle.current,"meeting-import-submit").props.onClick();await view.settle();
   expect(calls.find(c=>c.cmd === "import_meeting_recordings")?.args.expectedSpeakers).toBe(4);
+});
+
+test("hidden Meetings does not capture native file drops", async () => {
+  const target = { current: { getBoundingClientRect: () => ({ left: 0, right: 600, top: 0, bottom: 600, width: 600 }) } };
+  const view = renderHook(() => MeetingRecordingImport({ isVisible: false, dropTargetRef: target, onComplete: () => {} }));
+  await view.settle();
+  for (const fn of drops) fn({ payload: { type: "drop", paths: ["/audio/a.wav"], position: { x: 100, y: 100 } } });
+  await view.settle(); expect(calls).toHaveLength(0);
+  expect(byTest(view.handle.current, "meeting-import-modal")).toBeUndefined();
+  view.unmount();
 });

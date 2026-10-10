@@ -1293,3 +1293,16 @@
 
 .meeting-speaker-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; font-size: 12px; }
 .meeting-speaker-tools input { width: 48px; color: inherit; background: #202020; border: 1px solid #444; border-radius: 4px; padding: 4px; }
+
+/* Keep playback controls reachable while the meeting transcript scrolls. */
+.meeting-audio-player { position: sticky; top: 0; z-index: 6; flex-shrink: 0; background: #151517; box-shadow: 0 8px 14px #151517; }
+
+.meeting-history-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:12px 16px; color:#c4c4ce; font-size:12px; }
+.meeting-history-controls label { display:flex; gap:8px; align-items:center; }
+.meeting-history-controls input { width:105px; border:1px solid #3c3c48; border-radius:6px; background:#17171e; color:inherit; padding:6px; }
+.meeting-history-controls small, .meeting-history-controls > p, .meeting-history-controls > div { flex-basis:100%; }
+
+.meeting-tags { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 0; font-size:12px; }
+.meeting-tag-chip { padding:4px 9px; border-radius:20px; color:#d5c5ff; background:#392750; }
+.meeting-tags input { flex:1; min-width:150px; color:inherit; background:#181820; border:1px solid #494252; border-radius:7px; padding:8px; }
+.meeting-tags > p { flex-basis:100%; }

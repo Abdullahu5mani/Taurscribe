@@ -49,6 +49,12 @@ pub fn ensure_meetings_schema(conn: &Connection) -> Result<(), String> {
             reviewed            INTEGER NOT NULL DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS meeting_tags (
+            meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+            tag TEXT NOT NULL,
+            PRIMARY KEY(meeting_id, tag)
+        );
+
         CREATE INDEX IF NOT EXISTS idx_meetings_created_at
             ON meetings(created_at DESC);
 
@@ -742,8 +748,9 @@ pub async fn list_meetings(
 
         if let Some(ref s) = search {
             if !s.trim().is_empty() {
-                query.push_str(" AND (title LIKE ? OR transcript_raw LIKE ?)");
+                query.push_str(" AND (title LIKE ? OR transcript_raw LIKE ? OR EXISTS (SELECT 1 FROM meeting_tags WHERE meeting_tags.meeting_id = meetings.id AND tag LIKE ?))");
                 let pattern = format!("%{}%", s.trim());
+                param_values.push(Box::new(pattern.clone()));
                 param_values.push(Box::new(pattern.clone()));
                 param_values.push(Box::new(pattern));
             }
@@ -1290,7 +1297,7 @@ fn speaker_merges(conn: &Connection, meeting_id: i64) -> Result<Vec<SpeakerMerge
 
 fn recount_speakers(conn: &Connection, meeting_id: i64) -> Result<(), String> {
     conn.execute(
-        "UPDATE meetings SET speaker_count = MAX(1, (SELECT COUNT(DISTINCT speaker_id) FROM meeting_turns WHERE meeting_id = ?1)) WHERE id = ?1",
+        "UPDATE meetings SET speaker_count = (SELECT COUNT(DISTINCT speaker_id) FROM meeting_turns WHERE meeting_id = ?1 AND speaker_id != 'background') WHERE id = ?1",
         params![meeting_id],
     )
     .map(|_| ())
@@ -1321,14 +1328,16 @@ pub(crate) fn merge_speakers_internal(
     if from == into {
         return Err("Pick two different speakers to merge".into());
     }
-    let target: (String, i64, Option<String>, Option<String>, i64) = conn
+    let target: (String, i64, Option<String>, Option<String>, i64) = if into == "background" {
+        ("Background".into(), 1, None, None, 0)
+    } else { conn
         .query_row(
             "SELECT speaker_name, channel, snippet_path, candidate_snippets, COALESCE(current_snippet_idx, 0) FROM meeting_turns \
              WHERE meeting_id = ?1 AND speaker_id = ?2 ORDER BY (snippet_path IS NULL), start_ms LIMIT 1",
             params![meeting_id, into],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
-        .map_err(|_| "That speaker is no longer in this meeting".to_string())?;
+        .map_err(|_| "That speaker is no longer in this meeting".to_string())? };
     let moved: Vec<MergedTurn> = {
         let mut stmt = conn
             .prepare(
@@ -2483,6 +2492,14 @@ pub struct MeetingDuplicateReport {
     pub unavailable_audio: usize,
 }
 
+/// Read-only: identical stored recordings are certain; matching substantial
+/// transcripts are only candidates (different encodings or repeated content).
+#[tauri::command]
+pub async fn check_duplicate_meetings() -> Result<MeetingDuplicateReport, String> {
+    tauri::async_runtime::spawn_blocking(|| duplicate_meetings_in(&open_connection()?))
+        .await.map_err(|e| format!("Duplicate check failed: {e}"))?
+}
+
 fn duplicate_meetings_in(conn: &Connection) -> Result<MeetingDuplicateReport, String> {
     use sha2::{Digest, Sha256};
     use std::{collections::BTreeMap, io::Read};
@@ -2533,3 +2550,85 @@ fn duplicate_meetings_in(conn: &Connection) -> Result<MeetingDuplicateReport, St
     Ok(MeetingDuplicateReport {groups,checked_meetings:records.len(),unavailable_audio})
 }
 
+#[cfg(test)]
+mod duplicate_check_tests {
+    use super::*;
+    #[test]
+    fn duplicates_require_audio_or_substantial_matching_text_and_do_not_mutate_history() {
+        let conn=Connection::open_in_memory().unwrap(); ensure_meetings_schema(&conn).unwrap();
+        let dir=std::env::temp_dir().join(format!("taurscribe-dupe-test-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a=dir.join("a.wav"); let b=dir.join("b.wav");
+        std::fs::write(&a,b"identical fixture recording").unwrap(); std::fs::write(&b,b"identical fixture recording").unwrap();
+        let long="substantial meeting text with specific agenda items and decisions rather than a common hello repeated";
+        for (id,path,text,duration) in [(1,Some(a),"hello",5000),(2,Some(b),"different text",5000),(3,None,long,20000),(4,None,long,20100),(5,None,long,40000),(6,None,"hello",5000)] {
+            conn.execute("INSERT INTO meetings(id,session_id,title,platform,app_name,url,created_at,duration_ms,audio_path,transcript_raw,category) VALUES (?1,?2,'same title','test','test','','now',?3,?4,?5,'')",
+                params![id,format!("fixture-{id}"),duration,path.map(|p|p.to_string_lossy().into_owned()),text]).unwrap();
+        }
+        let report=duplicate_meetings_in(&conn).unwrap();
+        assert_eq!(report.checked_meetings,6); assert_eq!(report.unavailable_audio,4);
+        assert_eq!(report.groups.len(),2);
+        assert!(report.groups.iter().any(|g|g.kind=="identical_recording"&&g.meeting_ids==vec![1,2]));
+        assert!(report.groups.iter().any(|g|g.kind=="matching_transcript"&&g.meeting_ids==vec![3,4]));
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM meetings",[],|r|r.get::<_,i64>(0)).unwrap(),6);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+
+#[tauri::command]
+pub async fn get_meeting_tags(meeting_id: i64) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn=open_connection()?;
+        let mut statement=conn.prepare("SELECT tag FROM meeting_tags WHERE meeting_id=?1 ORDER BY tag COLLATE NOCASE").map_err(|e|e.to_string())?;
+        let rows=statement.query_map([meeting_id],|row|row.get::<_,String>(0)).map_err(|e|e.to_string())?;
+        rows.collect::<Result<Vec<_>,_>>().map_err(|e|e.to_string())
+    }).await.map_err(|e|e.to_string())?
+}
+
+fn save_tags_in(conn: &Connection, meeting_id: i64, tags: Vec<String>) -> Result<Vec<String>, String> {
+    let mut normalized=Vec::new();let mut seen=std::collections::HashSet::new();
+    for tag in tags {
+        let tag=tag.split_whitespace().collect::<Vec<_>>().join(" ");
+        if tag.is_empty(){continue;}
+        if tag.chars().count()>40 || tag.contains(',') || tag.chars().any(char::is_control) {return Err("Tags must be at most 40 characters, without commas or control characters".into());}
+        if seen.insert(tag.to_lowercase()){normalized.push(tag);}
+    }
+    if normalized.len()>10 {return Err("Use at most 10 tags per meeting".into());}
+    let tx=conn.unchecked_transaction().map_err(|e|e.to_string())?;
+    let exists=tx.query_row("SELECT COUNT(*) FROM meetings WHERE id=?1",[meeting_id],|row|row.get::<_,i64>(0)).map_err(|e|e.to_string())?;
+    if exists==0{return Err("Meeting no longer exists".into());}
+    tx.execute("DELETE FROM meeting_tags WHERE meeting_id=?1",[meeting_id]).map_err(|e|e.to_string())?;
+    for tag in &normalized {tx.execute("INSERT INTO meeting_tags(meeting_id,tag) VALUES (?1,?2)",params![meeting_id,tag]).map_err(|e|e.to_string())?;}
+    tx.commit().map_err(|e|e.to_string())?;
+    Ok(normalized)
+}
+
+#[tauri::command]
+pub async fn set_meeting_tags(meeting_id: i64, tags: Vec<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || save_tags_in(&open_connection()?,meeting_id,tags)).await.map_err(|e|e.to_string())?
+}
+
+#[cfg(test)]
+mod history_persistence_tests {
+    use super::*;
+    #[test]
+    fn tags_background_and_undo_survive_reopening_without_losing_transcript(){
+        let root=std::env::temp_dir().join(format!("ts-history-persistence-{:016x}",rand::random::<u64>()));
+        std::fs::create_dir_all(&root).unwrap();let db=root.join("history.db");
+        let conn=Connection::open(&db).unwrap();ensure_meetings_schema(&conn).unwrap();
+        let turns=vec![DiarizedTurn {speaker_id:"guest".into(),speaker_name:"Guest".into(),start_ms:0,end_ms:5000,channel:1,
+            text:"Retained meeting transcript".into(),snippet_path:None,candidate_snippets:vec![],current_snippet_idx:0}];
+        let id=insert_completed_meeting(&conn,"History fixture","test","test","",5000,None,"Retained meeting transcript",&turns).unwrap();
+        assert_eq!(save_tags_in(&conn,id,vec!["  Project A ".into(),"project a".into(),"Review".into()]).unwrap(),vec!["Project A","Review"]);
+        assert!(save_tags_in(&conn,id,vec!["x".repeat(41)]).is_err());
+        let merged=merge_speakers_internal(&conn,id,"guest","background").unwrap();drop(conn);
+        let conn=Connection::open(&db).unwrap();ensure_meetings_schema(&conn).unwrap();
+        assert_eq!(conn.query_row("SELECT speaker_count FROM meetings WHERE id=?1",[id],|row|row.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(conn.query_row("SELECT transcript_raw FROM meetings WHERE id=?1",[id],|row|row.get::<_,String>(0)).unwrap(),"Retained meeting transcript");
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM meeting_tags WHERE meeting_id=?1",[id],|row|row.get::<_,i64>(0)).unwrap(),2);
+        undo_merge_internal(&conn,id,merged.id).unwrap();
+        assert_eq!(conn.query_row("SELECT speaker_id FROM meeting_turns WHERE meeting_id=?1",[id],|row|row.get::<_,String>(0)).unwrap(),"guest");
+        drop(conn);std::fs::remove_dir_all(root).unwrap();
+    }
+}

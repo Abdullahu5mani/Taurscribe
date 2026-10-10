@@ -17,7 +17,7 @@ mock.module("@tauri-apps/api/core", () => ({
         if (failures[cmd]) throw failures[cmd];
         switch (cmd) {
             case "find_voice_samples": return suggestions.slice(0, args.limit);
-            case "generate_vault_voice_sample": return "/generated/new.wav";
+            case "generate_vault_voice_sample": return generated.shift() ?? "/generated/new.wav";
             case "list_voiceprints": return samples;
             case "suggest_speaker_names": return asks;
             default: return null;
@@ -166,4 +166,22 @@ test("generated sample is previewed and only enrolled after explicit identity co
     await byTest(handle.current,"voicebank-confirm-sample").props.onClick(); await settle();
     expect(calls.some(c=>c.cmd === "add_vault_voice_sample" && c.args.personId === "p_dana" && c.args.path === "/generated/new.wav")).toBe(true);
     expect(changed).toBe(1); expect(byTest(handle.current,"voicebank-confirm-sample")).toBeUndefined();
+});
+
+
+test("generating a second preview keeps both and enrolls only the selected sample", async () => {
+    generated = ["/generated/one.wav", "/generated/two.wav"];
+    const view = await panel("samples");
+    await byTest(view.handle.current,"voicebank-generate-sample").props.onClick(); await view.settle();
+    await byTest(view.handle.current,"voicebank-generate-sample").props.onClick(); await view.settle();
+    const requests = calls.filter(c => c.cmd === "generate_vault_voice_sample");
+    expect(requests[1].args.excludedPaths).toEqual(["/generated/one.wav"]);
+    const confirm = nodes(view.handle.current).filter(n => n.props?.["data-testid"] === "voicebank-confirm-sample");
+    expect(confirm).toHaveLength(2);
+    await confirm[1].props.onClick(); await view.settle();
+    expect(calls.filter(c => c.cmd === "add_vault_voice_sample").map(c => c.args.path)).toEqual(["/generated/two.wav"]);
+    expect(nodes(view.handle.current).filter(n => n.props?.["data-testid"] === "voicebank-confirm-sample")).toHaveLength(1);
+    view.unmount();
+    expect(calls.some(c => c.cmd === "discard_generated_voice_sample" && c.args.path === "/generated/one.wav")).toBe(true);
+    expect(calls.some(c => c.cmd === "discard_generated_voice_sample" && c.args.path === "/generated/two.wav")).toBe(false);
 });

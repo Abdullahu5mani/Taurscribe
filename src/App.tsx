@@ -1292,8 +1292,6 @@ function App() {
                 aria-label="Microphone dictation mode"
                 className={`mode-toggle-btn${navMode === "mic" ? " mode-toggle-btn--active" : ""}`}
                 onClick={() => setNavMode("mic")}
-                disabled={isMeetingImporting}
-                title={isMeetingImporting ? "Wait for the meeting import to finish" : undefined}
               >
                 <IconMic size={13} /> Mic
               </button>
@@ -1306,7 +1304,6 @@ function App() {
                 aria-label="Meeting detection and dual-channel recording mode"
                 className={`mode-toggle-btn${navMode === "meetings" ? " mode-toggle-btn--active" : ""}`}
                 onClick={() => setNavMode("meetings")}
-                disabled={isMeetingImporting}
               >
                 <IconVideo size={13} /> Meetings
                 {activeMeeting && (
@@ -1322,7 +1319,6 @@ function App() {
                 aria-label="File transcription mode"
                 className={`mode-toggle-btn${navMode === "files" ? " mode-toggle-btn--active" : ""}`}
                 onClick={() => setNavMode("files")}
-                disabled={isMeetingImporting}
               >
                 <IconFileText size={13} /> Files
               </button>
@@ -1387,8 +1383,9 @@ function App() {
                 onFileProcessingChange={setIsFileTranscribing}
               />
             </div>
-            {navMode === "meetings" && (
+            <div style={{ display: navMode === "meetings" ? undefined : "none" }}>
               <MeetingsPanel
+                isVisible={navMode === "meetings"}
                 modelId={activeEngine === "whisper" ? currentModel : activeEngine === "granite" ? currentGraniteModel : currentQwen3Model}
                 useGpu={asrBackend !== "cpu"}
                 importBlocked={isLoading || isVoiceEnrolling || isProcessingTranscript || isFileJobTranscribing}
@@ -1428,7 +1425,7 @@ function App() {
                   />
                 ) : null}
               />
-            )}
+            </div>
             {navMode === "mic" && (activeEngineHasNoModel ? (
               <div className="empty-state">
                 <div className="empty-state-icon" aria-hidden="true">

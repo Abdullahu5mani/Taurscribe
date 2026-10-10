@@ -243,7 +243,7 @@ where
 }
 
 
-/// Decode Ogg Opus through the existing demuxer and bundled multistream decoder.
+/// Decode Ogg/WebM Opus through the existing demuxer and bundled multistream decoder.
 /// Header pre-skip and the final granule count remove encoder delay/padding.
 /// Symphonia's first buffered page can lack packet trims, especially in short
 /// files, so apply those bounds to decoded positions rather than packet flags.
@@ -251,10 +251,14 @@ fn decode_opus_packets<F>(path: &Path, mut on_packet: F) -> Result<(u64, u32, u3
 where
     F: FnMut(&[f32], usize, u32, u64, Option<u64>) -> Result<(), String>,
 {
-    let file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
+    use std::io::{Read, Seek};
+    let mut file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
+    let mut magic=[0u8;4];file.read_exact(&mut magic).map_err(|e|format!("Cannot read Opus container: {e}"))?;
+    file.rewind().map_err(|e|e.to_string())?;
+    let ogg_granules=magic==*b"OggS";
     let source = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
-    hint.with_extension("ogg");
+    if let Some(extension)=path.extension().and_then(|extension|extension.to_str()){hint.with_extension(extension);}
     let options = FormatOptions {
         enable_gapless: true,
         ..Default::default()
@@ -269,7 +273,8 @@ where
         .find(|t| t.codec_params.codec == symphonia::core::codecs::CODEC_TYPE_OPUS)
         .ok_or("No Opus track found")?;
     let track_id = track.id;
-    let granule_frames = track.codec_params.n_frames;
+    let duration_ticks = track.codec_params.n_frames;
+    let time_base = track.codec_params.time_base;
     let header = track
         .codec_params
         .extra_data
@@ -279,9 +284,18 @@ where
         return Err("Invalid Opus identification header".into());
     }
     let pre_skip = u16::from_le_bytes([header[10], header[11]]) as u64;
-    let expected_frames = granule_frames
-        .and_then(|frames| frames.checked_sub(pre_skip))
-        .ok_or("Cannot determine Opus audio length after pre-skip")?;
+    // Ogg granules are 48 kHz sample counts including encoder pre-skip.
+    // Matroska/WebM duration is in the track time base (usually milliseconds)
+    // and already describes presentation duration. Mixing these units silently
+    // reduced a 33-second saved meeting to only 0.7 seconds when reprocessed.
+    let expected_frames = if ogg_granules {
+        Some(duration_ticks.and_then(|frames|frames.checked_sub(pre_skip)).ok_or("Cannot determine Ogg Opus audio length after pre-skip")?)
+    } else if let Some(ticks)=duration_ticks {
+        let base=time_base.ok_or("Cannot determine Opus container time base")?;
+        if base.denom==0 {return Err("Invalid Opus container time base".into());}
+        Some(u64::try_from(ticks as u128 * base.numer as u128 * 48_000 / base.denom as u128).map_err(|_|"Opus duration is too large")?)
+    } else { None }; // Streaming WebM can omit its duration; decode every packet.
+    let expected_end=expected_frames.map(|frames|frames.checked_add(pre_skip).ok_or("Opus duration is too large")).transpose()?;
     let channels = header[9] as usize;
     let (streams, coupled, mapping) = match header[18] {
         0 if channels == 1 => (1, 0, vec![0]),
@@ -340,9 +354,7 @@ where
             .decode_float(&packet.data, &mut samples, false)
             .map_err(|e| format!("Opus audio packet could not be decoded: {e}"))?;
         let start = pre_skip.saturating_sub(decoded_position).min(frames as u64) as usize;
-        let end = (pre_skip + expected_frames)
-            .saturating_sub(decoded_position)
-            .min(frames as u64) as usize;
+        let end = expected_end.map(|end|end.saturating_sub(decoded_position).min(frames as u64) as usize).unwrap_or(frames);
         decoded_position += frames as u64;
         if end <= start {
             continue;
@@ -353,16 +365,14 @@ where
             channels,
             48_000,
             total,
-            Some(expected_frames),
+            expected_frames,
         )?;
     }
     if total == 0 {
         return Err("Opus audio file contains no decoded samples".into());
     }
-    if total != expected_frames {
-        return Err(format!(
-            "Opus audio ended early: decoded {total} of {expected_frames} frames"
-        ));
+    if let Some(expected)=expected_frames {
+        if total != expected {return Err(format!("Opus audio ended early: decoded {total} of {expected} frames"));}
     }
     Ok((total, 48_000, channels as u32))
 }
@@ -370,6 +380,20 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webm_duration_ticks_are_not_audio_sample_counts() {
+        let _lock=crate::meeting_audio::COMPRESS_TEST_LOCK.lock().unwrap_or_else(|error|error.into_inner());
+        let dir=std::env::temp_dir().join(format!("taurscribe-webm-duration-{}",std::process::id()));std::fs::create_dir_all(&dir).unwrap();
+        let wav=dir.join("source.wav");
+        let mut writer=hound::WavWriter::create(&wav,hound::WavSpec {channels:1,sample_rate:16000,bits_per_sample:16,sample_format:hound::SampleFormat::Int}).unwrap();
+        for index in 0..16000*2 {writer.write_sample(((index as f32*440.0*std::f32::consts::TAU/16000.0).sin()*12000.0) as i16).unwrap();}writer.finalize().unwrap();
+        let webm=crate::meeting_audio::compress_for_playback(&wav).unwrap();
+        let (audio,rate,channels)=decode_audio_interleaved_strict(&webm).unwrap();
+        assert_eq!(rate,48000);assert_eq!(channels,1);assert_eq!(audio.len(),48000*2);
+        assert!(audio.iter().all(|sample|sample.is_finite()));assert!(audio.iter().any(|sample|sample.abs()>0.1));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn ogg_opus_preserves_gapless_bounds_and_channel_order() {

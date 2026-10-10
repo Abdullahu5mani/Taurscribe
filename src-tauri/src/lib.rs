@@ -35,6 +35,7 @@ pub mod platform_tuning;
 mod state;
 pub mod storage;
 pub mod speaker_embedding;
+pub mod voice_separation;
 mod system_audio;
 pub mod text_injection;
 mod tray;
@@ -467,9 +468,13 @@ pub fn run() {
             cli_server::install_cli,
             cli_server::uninstall_cli,
             commands::list_meetings,
+            commands::check_duplicate_meetings,
+            commands::get_meeting_tags,
+            commands::set_meeting_tags,
             commands::inspect_meeting_recordings,
             commands::import_meeting_recordings,
             commands::reseparate_meeting_speakers,
+            commands::reprocess_meeting,
             commands::get_meeting_platform_counts,
             commands::get_meeting_detail,
             commands::update_meeting,
@@ -486,6 +491,9 @@ pub fn run() {
             commands::export_meeting_notes,
             commands::save_meeting_notes,
             commands::generate_vault_voice_sample,
+            commands::generate_meeting_speaker_preview,
+            voice_separation::voice_separation_available,
+            voice_separation::separate_meeting_sample,
             commands::discard_generated_voice_sample,
             commands::add_vault_voice_sample,
             commands::find_voice_samples,

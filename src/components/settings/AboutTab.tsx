@@ -333,7 +333,7 @@ export function AboutTab() {
 
             <div className="setting-card" style={{ marginTop: '12px' }}>
                 <h4 className="setting-card-label-plain">Factory reset</h4>
-                <p className="setting-card-desc">Deletes models, settings and history, then restarts into setup. Files in a custom Storage folder are kept.</p>
+                <p className="setting-card-desc">Deletes settings, all history, speaker banks and app-managed recordings/models, including those in custom Storage folders, then restarts into setup. Original imported files and unrelated files are kept.</p>
                 <div className="about-reset-actions">
                     <button
                         type="button"

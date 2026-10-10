@@ -3,7 +3,7 @@
 
 use crate::{gpu, llm::{FlowRequest, LLMEngine}, state::AudioState};
 use crate::types::{ASREngine, CommandResult};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 use std::time::Instant;
 use tauri::{Emitter, State};
@@ -11,7 +11,7 @@ use tauri::{Emitter, State};
 const ROUNDS: usize = 3;
 type Shared<T> = Arc<Mutex<T>>;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeedTrial {
     pub load_s: f32,
     pub transcribe_s: f32,
@@ -22,13 +22,13 @@ pub struct SpeedTrial {
     pub output: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeedPair {
     pub unloaded: SpeedTrial,
     pub loaded: SpeedTrial,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceSpeed {
     pub device_id: String,
     pub name: String,
@@ -45,7 +45,7 @@ pub struct DeviceSpeed {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpeedReport {
     pub engine: ASREngine,
     pub model: String,
@@ -137,7 +137,7 @@ fn time_speech(engine: ASREngine, whisper: &Shared<crate::whisper::WhisperManage
 pub async fn benchmark_compute_devices(
     state: State<'_, AudioState>, app: tauri::AppHandle,
     include_flowscribe: Option<bool>, flowscribe_device_id: Option<String>,
-    flowscribe_use_gpu: Option<bool>, style: Option<String>,
+    flowscribe_use_gpu: Option<bool>, style: Option<String>, device_ids: Option<Vec<String>>,
 ) -> Result<CommandResult<SpeedReport>, String> {
     let include_flow = include_flowscribe.unwrap_or(false);
     if include_flow && crate::llm::v3_model_path().is_none() {
@@ -149,6 +149,13 @@ pub async fn benchmark_compute_devices(
     if super::file_job_active() {
         return Ok(CommandResult::err("busy", "Wait for the file transcription to finish"));
     }
+    let available = gpu::compute_devices();
+    if let Some(ids) = &device_ids {
+        if ids.is_empty() || ids.iter().any(|id| !available.iter().any(|device| device.usable && &device.id == id)) {
+            return Ok(CommandResult::err("invalid_device", "Choose at least one available compute device"));
+        }
+    }
+    let devices: Vec<_> = available.into_iter().filter(|device| device.usable && device_ids.as_ref().is_none_or(|ids| ids.contains(&device.id))).collect();
     let operation = state.begin_exclusive_model_operation()?;
     if state.engine_loading.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
         return Ok(CommandResult::err("engine_loading", "A model is already loading — please wait"));
@@ -175,7 +182,7 @@ pub async fn benchmark_compute_devices(
             None => whisper.lock().map_err(|e| e.to_string())?.device_key().to_string(),
             Some(g) => g.lock().map_err(|e| e.to_string())?.device_key().to_string(),
         };
-        let clip = test_clip()?;
+        unload_asr(whisper, gguf.as_ref())?;
         let clip_seconds = 11.0; // Original WAV duration; VAD removes silence.
         let request = FlowRequest {
             engine: match engine { ASREngine::Whisper => "whisper", ASREngine::Granite => "granite", ASREngine::Qwen3 => "qwen3" }.into(),
@@ -186,13 +193,59 @@ pub async fn benchmark_compute_devices(
         let flow_loaded_on = original_flow.as_ref().map(|f| f.device_key().to_string());
         drop(original_flow); // Do not keep an extra GPU copy during measurements.
         let mut results = Vec::new();
-        let devices: Vec<_> = gpu::compute_devices().into_iter().filter(|d| d.usable).collect();
         for (i, d) in devices.iter().enumerate() {
+            let job = BenchmarkJob { engine, model:model.clone(), id:d.id.clone(),name:d.name.clone(),backend:d.backend.clone(),
+                include_flow,flowscribe_device_id:flowscribe_device_id.clone(),flowscribe_use_gpu,request:request.clone() };
+            let measured=isolated_trial(&job, |round| {
+                let _=worker_app.emit("compute-benchmark-progress",serde_json::json!({"index":i,"total":devices.len(),"device":d.name,"round":round,"rounds":ROUNDS}));
+            });
+            results.push(measured.unwrap_or_else(|error| failed_device(&job,error)));
+        }
+        let mut restore_errors = Vec::new();
+        if let Err(e) = load_asr(engine, whisper, gguf.as_ref(), &model, &loaded_on) { restore_errors.push(format!("Speech model: {e}")); }
+        if let Some(device) = flow_loaded_on {
+            match LLMEngine::new_on(device != gpu::CPU_DEVICE, Some(&device)) {
+                Ok(flow) => { *state.llm.lock().map_err(|e| e.to_string())? = Some(flow); }
+                Err(e) => restore_errors.push(format!("FlowScribe: {e}")),
+            }
+        }
+        crate::tray::reconcile_model_loaded_tray(&worker_app, &state);
+        Ok::<_, String>(SpeedReport {
+            engine, model, clip_seconds, rounds: ROUNDS, include_flowscribe: include_flow, results,
+            restore_error: (!restore_errors.is_empty()).then(|| restore_errors.join("; ")),
+        })
+    }).await.map_err(|e| e.to_string())?;
+    result.map(CommandResult::ok)
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkJob {
+    engine: ASREngine, model: String, id: String, name: String, backend: String,
+    include_flow: bool, flowscribe_device_id: Option<String>, flowscribe_use_gpu: Option<bool>, request: FlowRequest,
+}
+
+fn worker_trials(d: &BenchmarkJob, progress_path: &std::path::Path) -> DeviceSpeed {
+    let engine = d.engine;
+    let model = &d.model;
+    let include_flow = d.include_flow;
+    let flowscribe_device_id = &d.flowscribe_device_id;
+    let flowscribe_use_gpu = d.flowscribe_use_gpu;
+    let request = &d.request;
+    let whisper = Arc::new(Mutex::new(crate::whisper::WhisperManager::new()));
+    let gguf = match engine {
+        ASREngine::Granite => Some(Arc::new(Mutex::new(crate::gguf_asr::GgufAsrManager::granite()))),
+        ASREngine::Qwen3 => Some(Arc::new(Mutex::new(crate::gguf_asr::GgufAsrManager::qwen3()))),
+        _ => None,
+    };
+    let whisper = &whisper;
+    let clip = match test_clip() { Ok(clip) => clip, Err(error) => return failed_device(d, error) };
+    let clip_seconds = 11.0;
             let mut pairs = Vec::new();
             let mut actual_flow_device = None;
             let mut error = None;
             for round in 0..ROUNDS {
-                let _ = worker_app.emit("compute-benchmark-progress", serde_json::json!({ "index": i, "total": devices.len(), "device": d.name, "round": round + 1, "rounds": ROUNDS }));
+                let _ = std::fs::write(progress_path, (round + 1).to_string());
                 let pair = (|| -> Result<SpeedPair, String> {
                     unload_asr(whisper, gguf.as_ref())?;
                     let total = Instant::now();
@@ -215,7 +268,7 @@ pub async fn benchmark_compute_devices(
                 match pair { Ok(pair) => pairs.push(pair), Err(e) => { error = Some(e); break; } }
             }
             let loaded_total_s = median(pairs.iter().map(|p| p.loaded.total_s));
-            results.push(DeviceSpeed {
+            DeviceSpeed {
                 device_id: d.id.clone(), name: d.name.clone(), backend: d.backend.clone(),
                 load_s: median(pairs.iter().map(|p| p.unloaded.load_s)),
                 transcribe_s: median(pairs.iter().map(|p| p.loaded.transcribe_s)),
@@ -224,28 +277,75 @@ pub async fn benchmark_compute_devices(
                 flowscribe_s: median(pairs.iter().map(|p| p.loaded.flowscribe_s)),
                 flowscribe_device_id: actual_flow_device,
                 realtime: if loaded_total_s > 0.0 { clip_seconds / loaded_total_s } else { 0.0 }, trials: pairs, error,
-            });
-        }
-        let mut restore_errors = Vec::new();
-        if let Err(e) = load_asr(engine, whisper, gguf.as_ref(), &model, &loaded_on) { restore_errors.push(format!("Speech model: {e}")); }
-        if let Some(device) = flow_loaded_on {
-            match LLMEngine::new_on(device != gpu::CPU_DEVICE, Some(&device)) {
-                Ok(flow) => { *state.llm.lock().map_err(|e| e.to_string())? = Some(flow); }
-                Err(e) => restore_errors.push(format!("FlowScribe: {e}")),
             }
+}
+
+fn failed_device(d: &BenchmarkJob, error: String) -> DeviceSpeed {
+    DeviceSpeed { device_id:d.id.clone(), name:d.name.clone(), backend:d.backend.clone(), load_s:0.0,transcribe_s:0.0,
+        unloaded_total_s:0.0,loaded_total_s:0.0,flowscribe_load_s:0.0,flowscribe_s:0.0,
+        flowscribe_device_id:None,realtime:0.0,trials:vec![],error:Some(error) }
+}
+
+/// Private child entry point. No GUI, single-instance lock, or shared parent model state.
+pub fn run_benchmark_worker(args: &[String]) -> Result<(), String> {
+    if args.len()!=3 { return Err("Invalid benchmark worker arguments".into()); }
+    let job: BenchmarkJob = serde_json::from_slice(&std::fs::read(&args[0]).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    let result = worker_trials(&job, std::path::Path::new(&args[2]));
+    std::fs::write(&args[1], serde_json::to_vec(&result).map_err(|e|e.to_string())?).map_err(|e|e.to_string())
+}
+
+fn isolated_trial(job: &BenchmarkJob, mut progress: impl FnMut(usize)) -> Result<DeviceSpeed, String> {
+    isolated_trial_with(job, &std::env::current_exe().map_err(|e|e.to_string())?, &mut progress)
+}
+
+fn isolated_trial_with(job: &BenchmarkJob, executable: &std::path::Path, progress: &mut impl FnMut(usize)) -> Result<DeviceSpeed, String> {
+    use std::process::{Command, Stdio};
+    let root=dirs::data_local_dir().ok_or("No application data folder")?.join("Taurscribe").join("benchmark-runs");
+    std::fs::create_dir_all(&root).map_err(|e|e.to_string())?;
+    let key=format!("{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e|e.to_string())?.as_nanos());
+    let dir=root.join(key);std::fs::create_dir(&dir).map_err(|e|e.to_string())?;
+    let request=dir.join("request.json");let result=dir.join("result.json");let rounds=dir.join("progress.txt");let log=dir.join("native.log");
+    std::fs::write(&request,serde_json::to_vec(job).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    let mut command=Command::new(executable);
+    command.arg("--_benchmark-worker").arg(&request).arg(&result).arg(&rounds)
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(std::fs::File::create(&log).map_err(|e|e.to_string())?);
+    #[cfg(windows)] { use std::os::windows::process::CommandExt;command.creation_flags(0x08000000); }
+    let mut child=command.spawn().map_err(|e|format!("Could not start benchmark worker: {e}"))?;
+    let started=Instant::now();let mut last_round=0;
+    let status=loop {
+        match child.try_wait() { Ok(Some(status))=>break status,Ok(None)=>{},Err(error)=>{let _=child.kill();let _=child.wait();return Err(error.to_string());} }
+        if started.elapsed()>std::time::Duration::from_secs(20*60) {
+            let _=child.kill();let _=child.wait();let _=std::fs::remove_file(&request);
+            return Err(format!("Speed test timed out; the app is still running. Details: {}",log.display()));
         }
-        crate::tray::reconcile_model_loaded_tray(&worker_app, &state);
-        Ok::<_, String>(SpeedReport {
-            engine, model, clip_seconds, rounds: ROUNDS, include_flowscribe: include_flow, results,
-            restore_error: (!restore_errors.is_empty()).then(|| restore_errors.join("; ")),
-        })
-    }).await.map_err(|e| e.to_string())?;
-    result.map(CommandResult::ok)
+        if let Ok(round)=std::fs::read_to_string(&rounds).and_then(|text|text.parse::<usize>().map_err(std::io::Error::other)) {
+            if round!=last_round { last_round=round;progress(round); }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    let _=std::fs::remove_file(&request); // Do not retain custom vocabulary in crash diagnostics.
+    if !status.success() {return Err(format!("The native speed-test worker stopped ({status}); the app is still running. Details: {}",log.display()));}
+    let report=serde_json::from_slice(&std::fs::read(&result).map_err(|e|format!("No benchmark result: {e}"))?).map_err(|e|e.to_string())?;
+    let _=std::fs::remove_dir_all(dir);
+    Ok(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn child_native_failure_returns_error_without_terminating_parent() {
+        let job = BenchmarkJob { engine: ASREngine::Granite, model: "granite-speech-5-nc".into(), id:"cpu".into(), name:"CPU".into(), backend:"CPU".into(), include_flow:true,
+            flowscribe_device_id:None, flowscribe_use_gpu:Some(false), request:FlowRequest { engine:"granite".into(),level:"clean".into(),app:"general".into(),vocab:vec!["private-test-token".into()],prev:None } };
+        let error=isolated_trial_with(&job,std::path::Path::new("/usr/bin/false"),&mut |_|{}).unwrap_err();
+        assert!(error.contains("app is still running"));
+        let log=std::path::PathBuf::from(error.split("Details: ").nth(1).unwrap());
+        let dir=log.parent().unwrap();
+        assert!(!dir.join("request.json").exists(),"failed workers must not retain vocabulary");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn benchmark_uses_real_nonempty_bounded_speech() {
         let clip = test_clip().unwrap();

@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use dirs::data_local_dir;
 use serde::Serialize;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use sysinfo::System;
 use tauri::{Emitter, Manager};
 
@@ -965,6 +965,58 @@ fn remove_app_coreml_bundles(models_dir: &Path) {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct ResetManifest { managed_files: Vec<PathBuf> }
+
+/// Custom storage may be shared with other files. Capture only the paths owned
+/// by our database and model catalogue before resetting the storage mapping.
+fn custom_reset_manifest() -> Result<ResetManifest, String> {
+    let mut managed_files=Vec::new();
+    let recordings=crate::storage::current_dir(crate::storage::Area::Recordings)?;
+    let default_recordings=crate::storage::default_dir(crate::storage::Area::Recordings)?;
+    if recordings!=default_recordings {
+        if !recordings.exists(){return Err("Reconnect the custom recordings drive before resetting app data".into());}
+        let conn=crate::commands::meetings::open_connection()?;
+        for (table,column,json) in [("meetings","audio_path",false),("meeting_turns","snippet_path",false),("meeting_turns","candidate_snippets",true),
+            ("speaker_vault","snippet_path",false),("speaker_vault","candidate_snippets",true),("speaker_voiceprints","clip_path",false)] {
+            let Ok(mut statement)=conn.prepare(&format!("SELECT {column} FROM {table} WHERE {column} IS NOT NULL")) else {continue;};
+            let rows=statement.query_map([],|row|row.get::<_,String>(0)).map_err(|e|e.to_string())?;
+            for value in rows {
+                let value=value.map_err(|e|e.to_string())?;
+                let paths=if json {serde_json::from_str::<Vec<String>>(&value).unwrap_or_default()} else {vec![value]};
+                for path in paths {let path=PathBuf::from(path);if path.starts_with(&recordings) && path.is_file() {managed_files.push(path);}}
+            }
+        }
+    }
+    if recordings!=default_recordings {
+        for folder in ["audio","snippets","voicebank"] {
+            if let Ok(entries)=fs::read_dir(recordings.join(folder)) {
+                for entry in entries.flatten() {
+                    let name=entry.file_name().to_string_lossy().into_owned();
+                    if entry.file_type().map(|kind|kind.is_file()).unwrap_or(false)
+                        && (name.starts_with("meeting_") || name.starts_with("snippet_") || name.starts_with("sample-") || name.starts_with("voice-") || name.starts_with("import_")) {
+                        managed_files.push(entry.path());
+                    }
+                }
+            }
+        }
+    }
+    let models=crate::storage::current_dir(crate::storage::Area::Models)?;
+    if models!=crate::storage::default_dir(crate::storage::Area::Models)? {
+        if !models.exists(){return Err("Reconnect the custom models drive before resetting app data".into());}
+        for entry in fs::read_dir(&models).map_err(|e|e.to_string())? {
+            let entry=entry.map_err(|e|e.to_string())?;let name=entry.file_name().to_string_lossy().into_owned();
+            let id=if name.starts_with("ggml-") {format!("whisper-{}",name.trim_start_matches("ggml-").trim_end_matches(".bin"))} else {name.clone()};
+            let known=crate::commands::model_registry::get_model_config(&id).is_some()
+                || matches!(name.as_str(),"flowscribe_v3"|"speaker"|"diarization-nemotron3")
+                || (name.starts_with("ggml-") && name.ends_with("-encoder.mlmodelc"));
+            if known {managed_files.push(entry.path());}
+        }
+    }
+    managed_files.sort();managed_files.dedup();
+    Ok(ResetManifest{managed_files})
+}
+
 /// Runs a pending factory reset: clears the app's folders under `local` (and
 /// `roaming`, where settings.json lives on Windows), then removes `marker`.
 /// On failure the marker stays, so the reset retries on the next launch.
@@ -972,6 +1024,8 @@ fn run_pending_factory_reset(marker: &Path, local: &Path, roaming: Option<&Path>
     if !marker.exists() {
         return Ok(false);
     }
+    let manifest=fs::read(marker).ok().and_then(|bytes|serde_json::from_slice::<ResetManifest>(&bytes).ok()).unwrap_or_default();
+    for path in &manifest.managed_files {remove_path_with_retries(path)?;}
     println!("[RESET] Pending factory reset detected. Clearing app data before startup...");
     for name in ["Taurscribe", "taurscribe"] {
         remove_app_coreml_bundles(&local.join(name).join("models"));
@@ -1004,6 +1058,11 @@ pub async fn factory_reset_app_data(
     if state.recording_handle.lock().unwrap().is_some() {
         return Err("Stop the current recording before running a factory reset.".to_string());
     }
+
+    if super::file_job_active() { return Err("Wait for file transcription to finish before resetting.".into()); }
+    let _transition=state.begin_recording_transition()?;
+    let _operation=state.begin_exclusive_model_operation()?;
+    let manifest=custom_reset_manifest()?;
 
     // Signal any in-progress downloads to cancel so they clean up partial files
     // before the process is killed by app.restart().
@@ -1064,6 +1123,7 @@ pub async fn factory_reset_app_data(
     if cfg!(debug_assertions) {
         let app_data =
             data_local_dir().ok_or_else(|| "Could not find app data directory".to_string())?;
+        for path in &manifest.managed_files { remove_path_with_retries(path)?; }
         for name in ["Taurscribe", "taurscribe"] {
             clear_app_data_root_runtime_safe(&app_data.join(name))?;
         }
@@ -1071,7 +1131,7 @@ pub async fn factory_reset_app_data(
     }
 
     let marker_path = factory_reset_marker_path()?;
-    fs::write(&marker_path, b"pending").map_err(|e| {
+    fs::write(&marker_path, serde_json::to_vec(&manifest).map_err(|e|e.to_string())?).map_err(|e| {
         format!(
             "Failed to create factory reset marker at {}: {}",
             marker_path.display(),
@@ -1552,6 +1612,18 @@ mod factory_reset_tests {
         fs::write(local.join("OtherApp/keep.txt"), b"keep").unwrap();
         fs::write(roaming.join("taurscribe/settings.json"), b"{}").unwrap();
         (local, roaming, marker)
+    }
+
+    #[test]
+    fn reset_manifest_removes_managed_custom_data_and_preserves_unrelated_files() {
+        let tmp=tempdir();let (local,roaming,marker)=tree(tmp.path());
+        let custom=tmp.path().join("custom");fs::create_dir_all(&custom).unwrap();
+        let managed=custom.join("sample-owned.wav");let unrelated=custom.join("keep.wav");
+        fs::write(&managed,b"owned").unwrap();fs::write(&unrelated,b"original").unwrap();
+        let manifest=ResetManifest{managed_files:vec![managed.clone()]};
+        fs::write(&marker,serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(run_pending_factory_reset(&marker,&local,Some(&roaming)).unwrap());
+        assert!(!managed.exists());assert_eq!(fs::read(unrelated).unwrap(),b"original");assert!(!marker.exists());
     }
 
     #[test]

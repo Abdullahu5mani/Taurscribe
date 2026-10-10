@@ -121,6 +121,13 @@ fn diarization_model_config() -> ModelConfig {
 
 pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
     match model_id {
+        "voice-separation" => Some(ModelConfig {
+            repo: "dellusional/sepformer-wsj02mix-int8-onnx",
+            branch: "183c54cd3d3b791a8acb7fc1defb83106865f26b",
+            files: vec![ModelFile { filename: "sepformer_int8.onnx", remote_path: "sepformer_int8.onnx",
+                sha1: "c28ef4168295b182fbf4b18b3c5743d649d39cbf7e0eee8b0e49a653f35bcb5e" }],
+            subdirectory: Some("voice-separation"),
+        }),
         DIARIZATION_MODEL_ID => Some(diarization_model_config()),
         SPEAKER_MODEL_ID => Some(ModelConfig {
             repo: "github-release:k2-fsa/sherpa-onnx",

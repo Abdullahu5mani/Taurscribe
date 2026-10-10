@@ -14,6 +14,7 @@ use std::sync::Arc;
 pub struct GgufAsr {
     session: transcribe_cpp::Session,
     backend: String,
+    minimum_samples: usize,
 }
 
 impl GgufAsr {
@@ -31,8 +32,11 @@ impl GgufAsr {
         let model = transcribe_cpp::Model::load_with(path, options)
             .map_err(|e| format!("load {}: {e}", path.display()))?;
         let backend = model.backend();
+        // Granite CTC repeatedly halves the encoder sequence. Very short file
+        // tails otherwise produce zero frames and report a misleading status 4.
+        let minimum_samples = if model.arch() == "granite_speech5_ctc" { 16_000 } else { 0 };
         let session = model.session().map_err(|e| format!("session: {e}"))?;
-        Ok(Self { session, backend })
+        Ok(Self { session, backend, minimum_samples })
     }
 
     /// Transcribe 16 kHz mono PCM.
@@ -41,7 +45,9 @@ impl GgufAsr {
             (limits.effective_max_audio_ms > 0).then_some(limits.effective_max_audio_ms as usize * 16)
         });
         recover_decode_limits(pcm, max_samples, &mut |audio| {
-            self.session.run(audio, &transcribe_cpp::RunOptions::default()).map(|out| out.text.trim().to_string())
+            run_with_minimum_audio(audio, self.minimum_samples, &mut |input| {
+                self.session.run(input, &transcribe_cpp::RunOptions::default()).map(|out| out.text.trim().to_string())
+            })
         }).map_err(|e| format!("transcribe: {e}"))
     }
 
@@ -75,7 +81,9 @@ impl GgufAsr {
             if cancel.load(Ordering::Relaxed) {
                 return Err(transcribe_cpp::Error::Aborted { message: "Cancelled".into(), partial: None });
             }
-            self.session.run(audio, &transcribe_cpp::RunOptions::default()).map(|out| out.text.trim().to_string())
+            run_with_minimum_audio(audio, self.minimum_samples, &mut |input| {
+                self.session.run(input, &transcribe_cpp::RunOptions::default()).map(|out| out.text.trim().to_string())
+            })
         });
         done.store(true, Ordering::Relaxed);
         let _ = watcher.join();
@@ -125,6 +133,15 @@ fn recover_decode_limits(
                     )));
                 }
                 eprintln!("[ASR] Decode limit on {:.1}s; retrying shorter sections", pcm.len() as f32 / 16_000.0);
+            }
+            Err(transcribe_cpp::Error::ModelLoad(message))
+                if message.starts_with("run:") && message.contains("status 4") => {
+                if pcm.len() < MIN_SECTION * 2 {
+                    return Err(transcribe_cpp::Error::ModelLoad(format!(
+                        "The loaded speech model could not process this audio, even in a short section. Try reloading the model or another compute device. The file has not been saved as complete. ({message})"
+                    )));
+                }
+                eprintln!("[ASR] Inference graph failed on {:.1}s; retrying all audio in shorter sections: {message}", pcm.len() as f32 / 16_000.0);
             }
             Err(other) => return Err(other),
         }
@@ -305,7 +322,7 @@ impl GgufAsrManager {
         };
         let mut engine = GgufAsr::load_with(&path, &options)?;
         // Compile GPU kernels now rather than on the first dictation.
-        let _ = engine.transcribe(&vec![0.0; 16_000]);
+        engine.transcribe(&vec![0.0; 16_000]).map_err(|error| format!("Model warm-up failed; the model is not ready: {error}"))?;
         println!(
             "[{}] {} ready on {} in {:.2}s",
             self.family.to_uppercase(),
@@ -482,6 +499,57 @@ mod decode_limit_tests {
         let normalize = |text: &str| text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()).map(str::to_string).collect::<Vec<_>>();
         assert_eq!(normalize(&recovered), normalize(&baseline), "shorter retries changed the fixed-fixture transcript");
         println!("NATIVE_RECOVERY backend={} baseline={} recovered={}", engine.backend(), baseline, recovered);
+    }
+
+    #[test]
+    #[ignore = "requires installed Granite model; reproduces status 4 then tests the repair"]
+    fn native_short_tail_no_longer_fails_after_model_load() {
+        let path=gguf_in(&crate::utils::get_models_dir().unwrap().join("granite-speech-5-nc")).expect("Granite model required");
+        let mut engine=GgufAsr::load(&path).unwrap();
+        let clip:Vec<f32>=(0..800).map(|i|(i as f32*0.1).sin()*0.01).collect();
+        let failure=engine.session.run(&clip,&Default::default()).unwrap_err();
+        assert!(failure.to_string().contains("status 4"),"{failure}");
+        for length in [160,800,1600,3200] {
+            let clip:Vec<f32>=(0..length).map(|i|(i as f32*0.1).sin()*0.01).collect();
+            engine.transcribe(&clip).unwrap();
+            engine.transcribe_cancellable(&clip,&Arc::new(AtomicBool::new(false))).unwrap();
+        }
+        println!("NATIVE_SHORT_TAIL backend={} repaired all lengths",engine.backend());
+    }
+
+    #[test]
+    fn tiny_input_preserves_speech_and_only_pads_silence() {
+        let original = vec![0.25; 800];
+        let text = run_with_minimum_audio(&original, 16_000, &mut |part| {
+            assert_eq!(&part[..800], original.as_slice());
+            assert_eq!(part.len(), 16_000);
+            assert!(part[800..].iter().all(|sample| *sample == 0.0));
+            Ok("short speech".into())
+        }).unwrap();
+        assert_eq!(text, "short speech");
+        assert_eq!(run_with_minimum_audio(&[], 16_000, &mut |_| panic!("empty audio must not run")).unwrap(), "");
+    }
+
+    #[test]
+    fn inference_status_four_recovers_every_sample_but_load_errors_do_not_retry() {
+        let audio: Vec<f32> = (0..160_000).map(|i| i as f32).collect();
+        let mut recovered = Vec::new();
+        recover_decode_limits(&audio, None, &mut |part| {
+            if part.len() > 64_000 {
+                Err(transcribe_cpp::Error::ModelLoad("run: gguf load error (status 4)".into()))
+            } else { recovered.extend_from_slice(part); Ok("speech".into()) }
+        }).unwrap();
+        assert_eq!(recovered, audio);
+        let mut calls = 0;
+        let result = recover_decode_limits(&audio, None, &mut |_| {
+            calls += 1;
+            Err(transcribe_cpp::Error::ModelLoad("load model: gguf load error (status 4)".into()))
+        });
+        assert!(result.is_err()); assert_eq!(calls, 1);
+        let result = recover_decode_limits(&audio, None, &mut |_| {
+            Err(transcribe_cpp::Error::ModelLoad("run: gguf load error (status 4)".into()))
+        });
+        assert!(result.unwrap_err().to_string().contains("not been saved as complete"));
     }
 
     #[test]

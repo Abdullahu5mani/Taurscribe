@@ -1,3 +1,5 @@
+import { claimAudioPlayback } from "../utils/audioPlayback";
+import { createPortal } from "react-dom";
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -79,16 +81,20 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
             setPlayingSnippetId(speaker.id);
 
             audio.onended = () => {
+                if (audioRef.current !== audio) return;
                 setPlayingSnippetId(null);
                 audioRef.current = null;
             };
 
             audio.onerror = () => {
+                if (audioRef.current !== audio) return;
                 setPlayingSnippetId(null);
                 audioRef.current = null;
             };
 
+            claimAudioPlayback(audio, () => { if (audioRef.current === audio) { audioRef.current = null; setPlayingSnippetId(null); } });
             audio.play().catch((e) => {
+                if (audioRef.current !== audio) return;
                 console.error("Failed to play audio snippet:", e);
                 setPlayingSnippetId(null);
             });
@@ -172,7 +178,7 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
 
     if (!isOpen) return null;
 
-    return (
+    const content = (
         <div className="speaker-vault-overlay" onClick={onClose}>
             <div className="speaker-vault-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="vault-header">
@@ -414,4 +420,5 @@ export const SpeakerVaultModal: React.FC<SpeakerVaultModalProps> = ({
             </div>
         </div>
     );
+    return typeof document !== "undefined" && document.body ? createPortal(content, document.body) : content;
 };

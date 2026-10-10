@@ -265,7 +265,7 @@ test("streamed steps stay active until the whole file finishes and saving has it
     }); flushFrames(); await h.settle();
     expect(step("open").props["data-state"]).toBe("complete");
     expect(step("convert").props["data-state"]).toBe("active");
-    expect(text(step("recognize"))).toContain("CUDA0");
+    expect(text(step("recognize"))).toContain("CUDA");
     expect(text(h.handle.current)).toContain("16.0× realtime");
     expect(text(h.handle.current)).not.toContain("83%");
     progress(0, 83, "paused"); flushFrames(); await h.settle();
@@ -274,8 +274,30 @@ test("streamed steps stay active until the whole file finishes and saving has it
     const pending = deferred<unknown>(); historyPending = pending.promise;
     jobs[0].resolve(result()); await h.settle();
     expect(step("convert").props["data-state"]).toBe("complete");
-    expect(text(step("recognize"))).toContain("CUDA0");
+    expect(text(step("recognize"))).toContain("CUDA");
     expect(step("save").props["data-state"]).toBe("active");
     pending.resolve(null); await h.settle();
+    expect(step("save")).toBeUndefined();
+    expect(text(h.handle.current)).not.toContain("Done");
+    byLabel(h.handle.current, "Transcription details for steps.wav").props.onClick(); await h.settle();
     expect(step("save").props["data-state"]).toBe("complete");
+});
+
+
+test("failed jobs collapse stale checkmarks and retry starts with fresh details", async () => {
+    const h = fixture(); drop("/failed.wav"); await h.settle();
+    progress(0, 5, "transcribing", jobs[0].args.jobId, {
+        steps_started: ["model", "open", "recognize"], steps_completed: ["model", "open"], backend: "CUDA0",
+    }); flushFrames(); await h.settle();
+    jobs[0].reject("transcribe: model load failed: run: gguf load error (status 4)"); await h.settle();
+    expect(text(h.handle.current)).toContain("status 4");
+    expect(nodes(h.handle.current).some(n => n.props?.["data-step"])).toBe(false);
+    byLabel(h.handle.current, "Transcription details for failed.wav").props.onClick(); await h.settle();
+    expect(text(h.handle.current)).toContain("Stopped");
+    expect(text(h.handle.current)).not.toContain("CUDA0");
+    byLabel(h.handle.current, "Retry transcribing failed.wav").props.onClick(); await h.settle();
+    expect(jobs).toHaveLength(2);
+    expect(nodes(h.handle.current).filter(n => n.props?.["data-state"] === "complete")).toHaveLength(0);
+    jobs[1].resolve(result()); await h.settle();
+    expect(nodes(h.handle.current).some(n => n.props?.["data-step"])).toBe(false);
 });

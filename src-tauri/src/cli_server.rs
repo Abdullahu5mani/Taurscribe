@@ -312,7 +312,7 @@ async fn handle(app: &AppHandle, cmd: &str, args: &Value, job_id: &str) -> Resul
     match cmd {
         "status" => Ok(status(app)),
         "benchmark" => {
-            let result = crate::commands::benchmark_compute_devices(app.state::<AudioState>(), app.clone(), None, None, None, None).await?;
+            let result = crate::commands::benchmark_compute_devices(app.state::<AudioState>(), app.clone(), None, None, None, None, None).await?;
             match (result.data, result.error) {
                 (Some(report), _) => serde_json::to_value(report).map_err(|e| e.to_string()),
                 (None, Some(e)) => Err(e.message),

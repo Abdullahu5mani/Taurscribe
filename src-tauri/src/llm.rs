@@ -21,7 +21,7 @@ pub const V3_FILENAME: &str = "flowscribe-v3-f16.gguf";
 const V3_SYSTEM: &str = "You are FlowScribe. Rewrite the dictation in <text> as the speaker meant it, following the tags. Output only the result.";
 
 /// What v3 needs to know besides the transcript.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FlowRequest {
     /// "whisper" | "granite" | "qwen3"
     pub engine: String,

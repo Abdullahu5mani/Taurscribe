@@ -541,6 +541,11 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
                 </div>
             </div>
 
+            <div className="model-group" id="models-group-isolation">
+                <div className="model-group-header"><h3 className="settings-section-title">Voice isolation</h3><span className="model-group-sub">optional listening aid for overlapping speakers</span></div>
+                <div className="model-list">{models.filter(m => m.id === 'voice-separation').map(model => <ModelRow key={model.id} model={model} {...rowProps} />)}</div>
+            </div>
+
             {/* ── Built-in models (ship with the app, nothing to download) ── */}
             <div className="model-group" id="models-group-builtin" data-testid="models-group-builtin">
                 <div className="model-group-header">

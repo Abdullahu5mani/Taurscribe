@@ -1,0 +1,33 @@
+import { expect, mock, test, beforeEach } from "bun:test";
+import { renderHook } from "./hookHarness";
+let stored: number | null = null;
+let writes: unknown[]=[];
+let report: any = { groups: [], checked_meetings: 5, unavailable_audio: 0 };
+const core={...(await import("@tauri-apps/api/core"))};
+mock.module("@tauri-apps/api/core",()=>({...core,invoke:async(cmd:string)=>{expect(cmd).toBe("check_duplicate_meetings");return report;}}));
+const store={...(await import("@tauri-apps/plugin-store"))};
+mock.module("@tauri-apps/plugin-store",()=>({...store,Store:{load:async()=>({get:async()=>stored,set:async(_:string,value:unknown)=>{writes.push(value);},save:async()=>{}})}}));
+const { MeetingHistoryControls }=await import("../../src/components/MeetingHistoryControls");
+const nodes=(root:any):any[]=>root==null||typeof root!=="object"?[]:Array.isArray(root)?root.flatMap(nodes):[root,...nodes(root.props?.children)];
+const text=(root:any):string=>root==null||typeof root==="boolean"?"":typeof root!=="object"?String(root):Array.isArray(root)?root.map(text).join(" "):text(root.props?.children);
+const button=(root:any,label:string)=>nodes(root).find(n=>n.type==="button"&&text(n)===label);
+beforeEach(()=>{stored=null;writes=[];report={groups:[],checked_meetings:5,unavailable_audio:0};});
+test("unlimited by default; a reached custom reminder preserves navigation and saving",async()=>{
+ const selected:number[]=[]; const h=renderHook(()=>MeetingHistoryControls({count:12,onSelect:id=>selected.push(id)})); await h.settle();
+ expect(text(h.handle.current)).toContain("Unlimited");
+ nodes(h.handle.current).find(n=>n.type==="input").props.onChange({target:{value:"10"}});await h.settle();
+ await button(h.handle.current,"Save limit").props.onClick();await h.settle();
+ expect(writes).toEqual([10]);expect(text(h.handle.current)).toContain("reached your");
+ expect(text(h.handle.current)).toContain("new meetings can still be saved");
+ report={groups:[{kind:"identical_recording",meeting_ids:[1,2]}],checked_meetings:12,unavailable_audio:2};
+ await button(h.handle.current,"Check duplicates").props.onClick();await h.settle();
+ nodes(h.handle.current).find(n=>n.props?.["aria-label"]==="Open meeting 2").props.onClick();expect(selected).toEqual([2]);
+ expect(text(h.handle.current)).toContain("Identical recording");
+ nodes(h.handle.current).find(n=>n.type==="input").props.onChange({target:{value:""}});await h.settle();
+ await button(h.handle.current,"Save limit").props.onClick();await h.settle();expect(writes).toEqual([10,null]);
+});
+test("invalid limit never persists",async()=>{
+ const h=renderHook(()=>MeetingHistoryControls({count:0,onSelect:()=>{}}));await h.settle();
+ nodes(h.handle.current).find(n=>n.type==="input").props.onChange({target:{value:"-1"}});await h.settle();
+ await button(h.handle.current,"Save limit").props.onClick();await h.settle();expect(writes).toEqual([]);expect(text(h.handle.current)).toContain("positive whole number");
+});

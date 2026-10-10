@@ -144,7 +144,7 @@ impl StreamingResampler {
     }
 }
 
-fn resample_mono_ratio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, String> {
+pub(crate) fn resample_mono_ratio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, String> {
     if from_rate == to_rate {
         return Ok(samples.to_vec());
     }

@@ -197,7 +197,7 @@ fn unnamed_speakers(conn: &Connection, meeting: Option<i64>) -> Result<Vec<Meeti
                    (SELECT text FROM meeting_turns x WHERE x.meeting_id = t.meeting_id AND x.speaker_id = t.speaker_id
                       ORDER BY (x.end_ms - x.start_ms) DESC LIMIT 1)
             FROM meeting_turns t JOIN meetings m ON m.id = t.meeting_id
-            WHERE t.channel = 1 AND t.speaker_id != 'speaker_you'
+            WHERE t.channel = 1 AND t.speaker_id NOT IN ('speaker_you', 'background')
               AND t.speaker_id NOT IN (SELECT id FROM speaker_vault)
               AND (?1 IS NULL OR t.meeting_id = ?1)
             GROUP BY t.meeting_id, t.speaker_id
@@ -483,15 +483,19 @@ fn sample_operations() -> &'static std::sync::Mutex<()> {
 /// Produce a genuinely new clip from a confirmed person's retained meeting
 /// speech. It is only enrolled after the user listens and confirms the identity.
 #[tauri::command]
-pub async fn generate_vault_voice_sample(person_id: String) -> Result<String, String> {
+pub async fn generate_vault_voice_sample(person_id: String, excluded_paths: Option<Vec<String>>) -> Result<String, String> {
     blocking(move |conn| {
         let _samples = sample_operations().lock().map_err(|e| e.to_string())?;
-        generate_vault_sample_in(conn, &person_id, &super::meetings::get_meetings_dir()?.join("voicebank"))
+        generate_vault_sample_excluding(conn, &person_id, &super::meetings::get_meetings_dir()?.join("voicebank"), &excluded_paths.unwrap_or_default())
 
     }).await
 }
 
+#[cfg(test)]
 fn generate_vault_sample_in(conn: &Connection, person_id: &str, dir: &Path) -> Result<String, String> {
+    generate_vault_sample_excluding(conn, person_id, dir, &[])
+}
+fn generate_vault_sample_excluding(conn: &Connection, person_id: &str, dir: &Path, excluded: &[String]) -> Result<String, String> {
         let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM speaker_vault WHERE id=?1)", params![person_id], |r| r.get(0)).map_err(|e| e.to_string())?;
         if !exists { return Err("This person is no longer in the vault".into()); }
         let paths: Vec<String> = {
@@ -499,6 +503,11 @@ fn generate_vault_sample_in(conn: &Connection, person_id: &str, dir: &Path) -> R
             let rows = stmt.query_map(params![person_id], |r| r.get(0)).map_err(|e| e.to_string())?;
             rows.collect::<Result<_,_>>().map_err(|e| e.to_string())?
         };
+        generate_sample_from_paths(conn, person_id, paths, dir, excluded)
+}
+
+fn generate_sample_from_paths(conn: &Connection, person_id: &str, paths: Vec<String>, dir: &Path, excluded: &[String]) -> Result<String, String> {
+        if excluded.len() > 32 { return Err("Close some previews before generating more".into()); }
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         for path in paths {
             let voice = crate::diarization::voice_sample_path(&path);
@@ -514,7 +523,7 @@ fn generate_vault_sample_in(conn: &Connection, person_id: &str, dir: &Path) -> R
                 let name = format!("sample-{:x}.wav", hasher.finalize());
                 let clip = dir.join(name).to_string_lossy().to_string();
                 let enrolled: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM speaker_voiceprints WHERE person_id=?1 AND clip_path=?2)", params![person_id, clip], |r| r.get(0)).map_err(|e| e.to_string())?;
-                if enrolled { continue; }
+                if enrolled || excluded.contains(&clip) { continue; }
                 let spec = hound::WavSpec { channels: 1, sample_rate: 16000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
                 let mut writer = hound::WavWriter::create(&clip, spec).map_err(|e| e.to_string())?;
                 for &sample in chunk { writer.write_sample(sample).map_err(|e| e.to_string())?; }
@@ -523,6 +532,20 @@ fn generate_vault_sample_in(conn: &Connection, person_id: &str, dir: &Path) -> R
             }
         }
         Err("No new retained speech is available for this person. Use Find more to confirm them in another meeting, or add a recording of just their voice.".into())
+}
+
+/// A listening preview from another retained section of this meeting speaker.
+/// This does not add a person or voiceprint to the vault.
+#[tauri::command]
+pub async fn generate_meeting_speaker_preview(meeting_id: i64, speaker_id: String, excluded_paths: Option<Vec<String>>) -> Result<String, String> {
+    blocking(move |conn| {
+        let _samples = sample_operations().lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare("SELECT DISTINCT snippet_path FROM meeting_turns WHERE meeting_id=?1 AND speaker_id=?2 AND snippet_path IS NOT NULL ORDER BY start_ms").map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![meeting_id,speaker_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        let paths: Vec<String> = rows.collect::<Result<_,_>>().map_err(|e| e.to_string())?;
+        if paths.is_empty() { return Err("No retained speaker audio is available for this meeting".into()); }
+        generate_sample_from_paths(conn, &format!("meeting-{meeting_id}-{speaker_id}"), paths, &super::meetings::get_meetings_dir()?.join("voicebank"), &excluded_paths.unwrap_or_default())
+    }).await
 }
 
 /// Delete only an unconfirmed generated preview, never an enrolled voiceprint
