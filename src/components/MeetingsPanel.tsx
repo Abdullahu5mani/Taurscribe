@@ -30,6 +30,7 @@ import {
   MeetingDetailRecord,
   PlatformCount,
 } from "../types/meetings";
+import { MODELS } from "./settings/types";
 import { MeetingTags } from "./MeetingTags";
 import { MeetingHistoryControls } from "./MeetingHistoryControls";
 import { SpeakerPreviewModal } from "./SpeakerPreviewModal";
@@ -154,6 +155,15 @@ export function MeetingsPanel({
   const manualScrollUntil = useRef(0);
   const scrolledBlock = useRef(-1);
   const [speakerHint, setSpeakerHint] = useState("");
+  const [assignBlock, setAssignBlock] = useState<number | null>(null);
+  const [assignPerson, setAssignPerson] = useState("");
+  const [assignName, setAssignName] = useState("");
+  const [assignAll, setAssignAll] = useState(false);
+  const transcriptScroll = useRef<HTMLDivElement>(null);
+  const scrollToPassage = (index: number) => {
+    const pane = transcriptScroll.current, node = timelineRefs.current.get(index);
+    if (pane && node) pane.scrollTo({ top: pane.scrollTop + node.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientHeight / 2 + node.clientHeight / 2, behavior: "smooth" });
+  };
   const [detailView, setDetailView] = useState<"transcript" | "speakers" | "tools">("transcript");
   const [confirmPipeline, setConfirmPipeline] = useState(false);
   const [confirmReseparate, setConfirmReseparate] = useState(false);
@@ -176,7 +186,7 @@ export function MeetingsPanel({
   useEffect(() => {
     if (isPlayingAudio && activeBlock >= 0 && scrolledBlock.current !== activeBlock && Date.now() >= manualScrollUntil.current) {
       scrolledBlock.current = activeBlock;
-      timelineRefs.current.get(activeBlock)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      scrollToPassage(activeBlock);
     }
   }, [activeBlock, isPlayingAudio, audioCurrentTime]);
 
@@ -198,7 +208,7 @@ export function MeetingsPanel({
   // Speaker ids like "speaker_remote_1" repeat across meetings: close any open
   // rename field when another meeting is opened.
   useEffect(() => {
-    setRenamingSpeakerId(null); setSpeakerHint(""); setConfirmReseparate(false); setConfirmPipeline(false); setDetailView("transcript");
+    setAssignBlock(null); setRenamingSpeakerId(null); setSpeakerHint(""); setConfirmReseparate(false); setConfirmPipeline(false); setDetailView("transcript");
   }, [selectedMeetingId]);
   const [speakerNewName, setSpeakerNewName] = useState("");
   const [copiedTranscript, setCopiedTranscript] = useState(false);
@@ -475,7 +485,7 @@ export function MeetingsPanel({
     const next = blocks.findIndex(t => t.end_ms / 1000 > target);
     const index = next < 0 ? blocks.length - 1 : next;
     scrolledBlock.current = index;
-    timelineRefs.current.get(index)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    scrollToPassage(index);
     if (fullAudioRef.current) {
       fullAudioRef.current.currentTime = target;
     }
@@ -554,6 +564,23 @@ export function MeetingsPanel({
     } catch (error) {
       if (selectedMeetingIdRef.current === id) setToolbarError(String(error));
     } finally { speakerMutation.current = false; setSpeakerBusy(false); }
+  };
+
+  const assignPassage = async () => {
+    if (!selectedMeeting || assignBlock === null || speakerMutation.current) return;
+    const block = blocks[assignBlock];
+    if (!block) return;
+    const indices = assignAll ? selectedMeeting.turns.flatMap((turn, index) => turn.speaker_id === block.speaker_id ? [index] : []) : block.sourceIndices;
+    const ids = indices.map(index => selectedMeeting.turn_ids?.[index]);
+    if (ids.some(id => id === undefined)) { setToolbarError("Reopen this meeting before assigning a speaker."); return; }
+    const meetingId = selectedMeeting.id;
+    speakerMutation.current = true; setSpeakerBusy(true);
+    try {
+      await invoke("assign_meeting_turns", { meetingId, turnIds: ids, speakerId: assignPerson || null, newName: assignPerson ? null : assignName.trim() });
+      if (selectedMeetingIdRef.current === meetingId) { setAssignBlock(null); setToolbarError(""); await loadMeetingDetail(meetingId); }
+      void loadMeetings();
+    } catch (error) { if (selectedMeetingIdRef.current === meetingId) setToolbarError(String(error)); }
+    finally { speakerMutation.current = false; setSpeakerBusy(false); }
   };
 
   // ── Detail Updates ─────────────────────────────────────────────
@@ -959,6 +986,8 @@ export function MeetingsPanel({
                           <div
                             key={m.id}
                             className={`meeting-list-card ${isSelected ? "selected" : ""}`}
+                            role="button" tabIndex={0} aria-label={`Open meeting ${m.title}`}
+                            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectMeeting(m.id); } }}
                             onClick={() => selectMeeting(m.id)}
                           >
                             <div className="meeting-card-top-row">
@@ -1018,6 +1047,8 @@ export function MeetingsPanel({
                 <div
                   key={m.id}
                   className={`meeting-list-card ${isSelected ? "selected" : ""}`}
+                  role="button" tabIndex={0} aria-label={`Open meeting ${m.title}`}
+                  onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectMeeting(m.id); } }}
                   onClick={() => selectMeeting(m.id)}
                 >
                   <div className="meeting-card-top-row">
@@ -1194,6 +1225,8 @@ export function MeetingsPanel({
                 </div>
               )}
 
+                <div className="meeting-transcription-model" data-testid="meeting-transcription-model">Transcribed with <strong>{MODELS.find(model => model.id === selectedMeeting.transcription_model)?.name || selectedMeeting.transcription_model || "Unknown (older meeting)"}</strong></div>
+
               {/* Audio Scrubber Bar (if recording audio exists) */}
               {selectedMeeting.audio_path && !selectedMeeting.audio_missing && !audioFailed && (
                 <div className="meeting-audio-player">
@@ -1256,7 +1289,7 @@ export function MeetingsPanel({
                   {view === "transcript" ? "Transcript" : view === "speakers" ? `Speakers · ${meetingSpeakers.filter(person => person.speaker_id !== "background").length}` : "Tools"}
                 </button>)}
               </div>
-              <div className="meeting-detail-scroll">
+              <div className="meeting-detail-scroll" ref={transcriptScroll}>
               {/* Diarized Conversation Turns */}
               <section className="detail-turns-section" role="tabpanel" id="meetings-panel-transcript" aria-labelledby="meetings-tab-transcript" hidden={detailView !== "transcript"}>
                 <div className="turns-conversation-flow">
@@ -1286,6 +1319,19 @@ export function MeetingsPanel({
 
                         </div>
 
+                        <button type="button" className="turn-clip-btn turn-assign-btn" aria-label={`Assign speaker for passage at ${formatSeconds(t.start_ms / 1000)}`} disabled={speakerBusy} onClick={() => { setAssignBlock(idx); setAssignPerson(""); setAssignName(""); setAssignAll(false); }}>Assign speaker</button>
+                        {assignBlock === idx && <form className="turn-assignment" aria-label="Assign passage speaker" onSubmit={e => { e.preventDefault(); void assignPassage(); }}>
+                          <label>Person<select value={assignPerson} onChange={e => setAssignPerson(e.target.value)} disabled={speakerBusy}>
+                            <option value="">New person…</option>
+                            {meetingSpeakers.filter(person => person.speaker_id !== "background").map(person => <option key={person.speaker_id} value={person.speaker_id}>{person.speaker_name}</option>)}
+                          </select></label>
+                          {!assignPerson && <label>Name<input autoFocus value={assignName} maxLength={200} onChange={e => setAssignName(e.target.value)} placeholder="Person’s name" disabled={speakerBusy} /></label>}
+                          <label><input type="checkbox" checked={assignAll} onChange={e => setAssignAll(e.target.checked)} disabled={speakerBusy} />Apply to every passage currently labeled {t.speaker_name}</label>
+                          <p>Otherwise, only this passage changes. Voice samples can be added in Speaker Vault.</p>
+                          {!!selectedMeeting.merges?.length && <p>Saving a correction clears earlier merge undo history.</p>}
+                          <button className="turn-clip-btn" type="submit" disabled={speakerBusy || (!assignPerson && !assignName.trim())}>{speakerBusy ? "Saving…" : "Save speaker"}</button>
+                          <button className="turn-clip-btn" type="button" disabled={speakerBusy} onClick={() => setAssignBlock(null)}>Cancel</button>
+                        </form>}
                         <p className="turn-text" role={selectedMeeting.audio_path && !audioFailed ? "button" : undefined}
                           tabIndex={selectedMeeting.audio_path && !audioFailed ? 0 : undefined}
                           aria-label={`Jump to ${formatSeconds(t.start_ms / 1000)}: ${t.text}`}

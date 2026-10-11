@@ -144,3 +144,31 @@
 .meetings-panel--workspace .meeting-card-bottom-row { border:0; padding-top:0; }
 .meetings-panel--workspace .meeting-vault-btn { min-height:34px; padding:7px 12px; border-radius:6px; font-weight:500; }
 .meetings-panel--workspace .detail-tool-btn, .meetings-panel--workspace .turn-clip-btn, .meetings-panel--workspace .turn-merge-select { border-radius:6px; }
+
+/* Only Meetings contains its scrolling; Mic and Files keep their existing layout. */
+.app-body--meetings { overflow-y:hidden; }
+.meetings-panel--workspace { height:auto; overflow:hidden; }
+.meetings-panel--workspace .meeting-catalog-layout { height:auto; }
+.meetings-panel--workspace .meeting-detail-card { height:auto; min-height:0; }
+.meetings-panel--workspace .meeting-audio-player { flex-shrink:0; }
+.meeting-transcription-model { flex-shrink:0; font-size:12px; color:var(--text-secondary); margin-bottom:8px; }
+.meeting-transcription-model strong { color:var(--text-primary); font-weight:500; }
+.turn-assign-btn { margin:0 0 10px; }
+.turn-assignment { display:flex; flex-wrap:wrap; gap:10px; padding:12px; margin-bottom:12px; border:1px solid var(--border-color); border-radius:8px; }
+.turn-assignment label { display:flex; align-items:center; gap:8px; font-size:13px; }
+.turn-assignment p { flex-basis:100%; margin:0; font-size:12px; color:var(--text-secondary); }
+.turn-assignment input:not([type=checkbox]), .turn-assignment select { min-width:0; max-width:100%; padding:6px; background:var(--bg-primary); color:var(--text-primary); border:1px solid var(--border-color); border-radius:6px; }
+
+.app-body--meetings .container { overflow-y:hidden; }
+.output-area--meetings { min-height:0; overflow:hidden; }
+.output-area--meetings::before, .output-area--meetings::after { display:none; }
+.output-area--meetings [data-overlayscrollbars-viewport] { height:100%; }
+.meetings-view-frame { height:100%; min-height:0; flex-direction:column; }
+.meetings-panel--workspace .meeting-cards-list { overscroll-behavior:contain; scrollbar-gutter:stable; }
+
+.meetings-panel--workspace .meeting-cards-list { scrollbar-width:thin; scrollbar-color:var(--border-hover) transparent; }
+.meetings-panel--workspace .meeting-cards-list::-webkit-scrollbar { width:8px; }
+.meetings-panel--workspace .meeting-cards-list::-webkit-scrollbar-thumb { background:var(--border-hover); border-radius:8px; }
+.meetings-panel--workspace .meeting-list-card:focus-visible { outline:2px solid var(--text-secondary); outline-offset:-2px; }
+
+.meetings-panel--workspace .turn-assign-btn { align-self:flex-start; width:auto; }

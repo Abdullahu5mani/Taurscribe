@@ -82,6 +82,7 @@ pub async fn import_meeting_recordings(
         let result = (|| {
             progress("Loading the selected speech model");
             load_import_engine(engine, &whisper, gguf.as_ref(), model_id.as_deref(), !use_gpu.unwrap_or(true))?;
+            let actual_model = import_model_id(engine, &whisper, gguf.as_ref());
             let dir = super::meetings::get_meetings_dir()?;
             let wav = recording_import::unique_audio_path(&dir.join("audio"));
             progress("Converting and joining recordings");
@@ -99,6 +100,7 @@ pub async fn import_meeting_recordings(
             progress("Saving the meeting and preparing playback");
             let conn = super::meetings::open_connection().map_err(retained)?;
             let id = super::meetings::insert_meeting_with_sources(&conn, &title, "Imported recording", "Taurscribe", "", duration, Some(&wav.to_string_lossy()), &transcript, &turns, &sources).map_err(retained)?;
+            super::meetings::save_transcription_model(&conn, id, actual_model.as_deref()).map_err(retained)?;
             if let Err(error) = super::meetings::convert_meeting_audio(&conn, id, &wav) { eprintln!("[IMPORT] Keeping playable WAV: {error}"); }
             Ok(id)
         })();
@@ -117,6 +119,13 @@ pub async fn import_meeting_recordings(
 fn validate_speaker_hint(count: Option<usize>) -> Result<(), String> {
     if count.is_some_and(|n| !(1..=32).contains(&n)) { return Err("Choose about 1–32 people, or leave the hint blank".into()); }
     Ok(())
+}
+
+fn import_model_id(engine: ASREngine, whisper: &std::sync::Arc<std::sync::Mutex<crate::whisper::WhisperManager>>, gguf: Option<&std::sync::Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>) -> Option<String> {
+    match engine {
+        ASREngine::Whisper => whisper.lock().ok().and_then(|m| m.get_current_model().cloned()),
+        _ => gguf.and_then(|g| g.lock().ok().and_then(|m| m.get_status().model_id)),
+    }
 }
 
 fn load_import_engine(engine: ASREngine, whisper: &std::sync::Arc<std::sync::Mutex<crate::whisper::WhisperManager>>, gguf: Option<&std::sync::Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>, model_id: Option<&str>, force_cpu: bool) -> Result<(), String> {
@@ -178,7 +187,8 @@ pub async fn reseparate_meeting_speakers(app: AppHandle, state: State<'_, AudioS
             let turns = crate::diarization::diarize_meeting_recording_with_hint(&wav, "", &dir.join("snippets"), stamp, Some(transcribe.as_mut()), room, expected_speakers)?;
             if turns.is_empty() || turns.iter().all(|t| t.text.trim().is_empty()) { return Err("No speech was recovered; existing transcript is unchanged".into()); }
             let _ = app.emit("meeting-processing-progress", serde_json::json!({"stage":"Saving the rebuilt transcript"}));
-            super::meetings::replace_separated_turns(&conn, meeting_id, &turns, &revision)
+            super::meetings::replace_separated_turns(&conn, meeting_id, &turns, &revision)?;
+            super::meetings::save_transcription_model(&conn, meeting_id, import_model_id(engine, &whisper, gguf.as_ref()).as_deref())
         })();
         activity.store(chrono::Utc::now().timestamp() as u64, Ordering::Relaxed);
         let _ = app.emit("meeting-processing-finished", serde_json::json!({"meeting_id":meeting_id,"error":result.as_ref().err()}));

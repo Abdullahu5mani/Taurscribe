@@ -1877,6 +1877,7 @@ impl Finishing<'_> {
                     self.active_engine,
                     self.whisper_arc,
                     self.gguf,
+                    self.model_id.as_deref(),
                 )?;
                 (id, HistoryOutcome::Skipped)
             }
@@ -1940,6 +1941,7 @@ fn process_and_save_meeting_if_applicable(
     active_engine: ASREngine,
     whisper_arc: &Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
     gguf: Option<&Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,
+    transcription_model: Option<&str>,
 ) -> Result<Option<i64>, String> {
     // meeting_info is None for a dual-channel recording with no detected meeting;
     // it is saved under the "Direct Audio" label below.
@@ -2099,6 +2101,7 @@ fn process_and_save_meeting_if_applicable(
     };
     match saved {
         Ok(id) => {
+            crate::commands::meetings::save_transcription_model(&conn, id, transcription_model)?;
             // Keep the full stereo recording for a while so recording this call
             // again continues this meeting (before the WAV is swapped for playback).
             if let Some(key) = call_key.as_deref() {
