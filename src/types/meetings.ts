@@ -45,8 +45,6 @@ export interface SpeakerMergeRecord {
 }
 
 export interface MeetingDetailRecord {
-    turn_ids?: number[];
-    transcription_model?: string | null;
     merges?: SpeakerMergeRecord[];
     recording_sources?: import("../utils/meetingImport").RecordingSource[];
     id: number;

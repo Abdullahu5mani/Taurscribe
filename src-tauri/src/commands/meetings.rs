@@ -116,7 +116,6 @@ pub fn ensure_meetings_schema(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| format!("Failed to initialize meetings schema: {}", e))?;
 
-    let _ = conn.execute("ALTER TABLE meetings ADD COLUMN transcription_model TEXT", []);
     // Incremental column migrations for existing databases
     let _ = conn.execute("ALTER TABLE meeting_turns ADD COLUMN candidate_snippets TEXT", []);
     let _ = conn.execute("ALTER TABLE meeting_turns ADD COLUMN current_snippet_idx INTEGER DEFAULT 0", []);
@@ -337,10 +336,6 @@ pub struct MeetingSummaryRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeetingDetailRecord {
-    #[serde(default)]
-    pub transcription_model: Option<String>,
-    #[serde(default)]
-    pub turn_ids: Vec<i64>,
     pub id: i64,
     pub session_id: String,
     pub title: String,
@@ -899,8 +894,8 @@ pub async fn get_meeting_detail(meeting_id: i64) -> Result<MeetingDetailRecord, 
             .prepare(
                 r#"
                 SELECT speaker_id, speaker_name, start_ms, end_ms, channel, text, snippet_path,
-                       candidate_snippets, current_snippet_idx, id
-                FROM meeting_turns WHERE meeting_id = ?1 ORDER BY start_ms ASC, id ASC
+                       candidate_snippets, current_snippet_idx
+                FROM meeting_turns WHERE meeting_id = ?1 ORDER BY start_ms ASC
                 "#,
             )
             .map_err(|e| format!("Turn query error: {}", e))?;
@@ -913,7 +908,7 @@ pub async fn get_meeting_detail(meeting_id: i64) -> Result<MeetingDetailRecord, 
                     .unwrap_or_default();
                 let cur_idx: i64 = row.get(8).unwrap_or(0);
 
-                Ok((row.get::<_, i64>(9)?, DiarizedTurn {
+                Ok(DiarizedTurn {
                     speaker_id: row.get(0)?,
                     speaker_name: row.get(1)?,
                     start_ms: row.get::<_, i64>(2)? as u64,
@@ -923,16 +918,14 @@ pub async fn get_meeting_detail(meeting_id: i64) -> Result<MeetingDetailRecord, 
                     snippet_path: row.get(6)?,
                     candidate_snippets: cand_vec,
                     current_snippet_idx: cur_idx.max(0) as usize,
-                }))
+                })
             })
             .map_err(|e| format!("Failed to read turns: {}", e))?;
 
         let mut turns = Vec::new();
-        let mut turn_ids = Vec::new();
         let mut clips_missing = 0;
         for t in turn_rows {
-            if let Ok((id, mut turn)) = t {
-                turn_ids.push(id);
+            if let Ok(mut turn) = t {
                 clips_missing += drop_missing_clips(&mut turn.snippet_path, &mut turn.candidate_snippets, Some(&mut turn.current_snippet_idx));
                 turns.push(turn);
             }
@@ -943,8 +936,6 @@ pub async fn get_meeting_detail(meeting_id: i64) -> Result<MeetingDetailRecord, 
         }
 
         Ok(MeetingDetailRecord {
-            turn_ids,
-            transcription_model: conn.query_row("SELECT transcription_model FROM meetings WHERE id=?1", [meeting_id], |r| r.get(0)).map_err(|e| e.to_string())?,
             id: meeting.0,
             session_id: meeting.1,
             title: meeting.2,
@@ -1146,50 +1137,6 @@ fn rename_vault_speaker_internal(conn: &Connection, speaker_id: &str, name: &str
     tx.execute("UPDATE meeting_turns SET speaker_name = ?1 WHERE speaker_id = ?2", params![name, speaker_id])
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
-}
-
-/// Manual labels affect only the explicitly selected stored turns. They do not
-/// enroll voiceprints or rewrite any other meeting.
-#[tauri::command]
-pub async fn assign_meeting_turns(meeting_id: i64, turn_ids: Vec<i64>, speaker_id: Option<String>, new_name: Option<String>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_connection()?;
-        assign_meeting_turns_internal(&conn, meeting_id, &turn_ids, speaker_id.as_deref(), new_name.as_deref())
-    }).await.map_err(|e| e.to_string())?
-}
-
-fn assign_meeting_turns_internal(conn: &Connection, meeting_id: i64, turn_ids: &[i64], speaker_id: Option<&str>, new_name: Option<&str>) -> Result<(), String> {
-    if turn_ids.is_empty() { return Err("Choose a transcript passage".into()); }
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let (id, name): (String, String) = if let Some(id) = speaker_id {
-        tx.query_row("SELECT speaker_id, speaker_name FROM meeting_turns WHERE meeting_id=?1 AND speaker_id=?2 LIMIT 1", params![meeting_id, id], |r| Ok((r.get(0)?, r.get(1)?)))
-            .map_err(|_| "That person is no longer in this meeting".to_string())?
-    } else {
-        let name = new_name.unwrap_or("").trim();
-        if name.is_empty() || name.len() > 200 { return Err("Enter a person’s name (up to 200 bytes)".into()); }
-        (format!("manual_{}_{:016x}", Utc::now().timestamp_millis(), rand::random::<u64>()), name.into())
-    };
-    let mut affected = vec![id.clone()];
-    for turn in turn_ids {
-        let previous: String = tx.query_row("SELECT speaker_id FROM meeting_turns WHERE meeting_id=?1 AND id=?2", params![meeting_id, turn], |r| r.get(0)).map_err(|_| "This transcript changed. Reopen it and select the passage again".to_string())?;
-        affected.push(previous);
-        let changed = tx.execute("UPDATE meeting_turns SET speaker_id=?1, speaker_name=?2 WHERE meeting_id=?3 AND id=?4", params![id, name, meeting_id, turn]).map_err(|e| e.to_string())?;
-        if changed != 1 { return Err("This transcript changed. Reopen it and select the passage again".into()); }
-    }
-    // Old group previews may contain either person. Regenerate from the corrected
-    // turn ranges rather than offering mislabeled samples. Vault samples are kept.
-    for speaker in affected {
-        tx.execute("UPDATE meeting_turns SET snippet_path=NULL, candidate_snippets=NULL, current_snippet_idx=0 WHERE meeting_id=?1 AND speaker_id=?2", params![meeting_id, speaker]).map_err(|e| e.to_string())?;
-    }
-    // Merge undo snapshots predate these corrections and must not overwrite them.
-    tx.execute("DELETE FROM meeting_speaker_merges WHERE meeting_id=?1", [meeting_id]).map_err(|e| e.to_string())?;
-    recount_speakers(&tx, meeting_id)?;
-    tx.commit().map_err(|e| e.to_string())
-}
-
-pub(crate) fn save_transcription_model(conn: &Connection, meeting_id: i64, model: Option<&str>) -> Result<(), String> {
-    conn.execute("UPDATE meetings SET transcription_model=?1 WHERE id=?2", params![model, meeting_id]).map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 #[tauri::command]
@@ -2428,7 +2375,6 @@ mod vault_and_export_tests {
             channel: 0, text: text.into(), snippet_path: None, candidate_snippets: Vec::new(), current_snippet_idx: 0,
         };
         MeetingDetailRecord {
-            turn_ids: vec![], transcription_model: None,
             id: 7, session_id: "s".into(), title: "Budget review".into(), platform: "In person".into(),
             app_name: "".into(), url: "".into(), created_at: "2026-10-07T12:00:00Z".into(), duration_ms: 3_725_000,
             audio_path: None, transcript_raw: "".into(), summary: vec!["Budget approved".into()],
@@ -2684,49 +2630,5 @@ mod history_persistence_tests {
         undo_merge_internal(&conn,id,merged.id).unwrap();
         assert_eq!(conn.query_row("SELECT speaker_id FROM meeting_turns WHERE meeting_id=?1",[id],|row|row.get::<_,String>(0)).unwrap(),"guest");
         drop(conn);std::fs::remove_dir_all(root).unwrap();
-    }
-}
-
-#[cfg(test)]
-mod manual_passage_tests {
-    use super::*;
-    fn fixture() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        ensure_meetings_schema(&conn).unwrap();
-        for meeting in [1, 2] {
-            conn.execute("INSERT INTO meetings (id,session_id,title,platform,app_name,url,created_at,duration_ms,transcript_raw,category,speaker_count) VALUES (?1,'s'||?1,'Title','','','','',10000,'Original','General',1)", [meeting]).unwrap();
-            for start in [0, 5000] {
-                conn.execute("INSERT INTO meeting_turns (meeting_id,speaker_id,speaker_name,start_ms,end_ms,channel,text) VALUES (?1,'speaker_1','Speaker 1',?2,?3,1,'Original words')", params![meeting,start,start+4000]).unwrap();
-            }
-        }
-        conn
-    }
-    #[test]
-    fn manual_passage_assignments_split_and_reuse_people_without_changing_other_meetings() {
-        let conn = fixture();
-        assign_meeting_turns_internal(&conn,1,&[1],None,Some("Alice")).unwrap();
-        let alice: String = conn.query_row("SELECT speaker_id FROM meeting_turns WHERE id=1",[],|r|r.get(0)).unwrap();
-        assert_eq!(conn.query_row("SELECT speaker_count FROM meetings WHERE id=1",[],|r|r.get::<_,i64>(0)).unwrap(),2);
-        assert_eq!(conn.query_row("SELECT speaker_name FROM meeting_turns WHERE id=2",[],|r|r.get::<_,String>(0)).unwrap(),"Speaker 1");
-        assign_meeting_turns_internal(&conn,1,&[2],Some(&alice),None).unwrap();
-        assert_eq!(conn.query_row("SELECT speaker_count FROM meetings WHERE id=1",[],|r|r.get::<_,i64>(0)).unwrap(),1);
-        assert_eq!(conn.query_row("SELECT speaker_name FROM meeting_turns WHERE id=3",[],|r|r.get::<_,String>(0)).unwrap(),"Speaker 1");
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM speaker_vault",[],|r|r.get::<_,i64>(0)).unwrap(),0);
-    }
-    #[test]
-    fn stale_or_foreign_turns_roll_back_the_whole_assignment() {
-        let conn = fixture();
-        assert!(assign_meeting_turns_internal(&conn,1,&[1,3],None,Some("Alice")).is_err());
-        assert_eq!(conn.query_row("SELECT speaker_name FROM meeting_turns WHERE id=1",[],|r|r.get::<_,String>(0)).unwrap(),"Speaker 1");
-        assert!(assign_meeting_turns_internal(&conn,1,&[1],Some("missing"),None).is_err());
-        assert!(assign_meeting_turns_internal(&conn,1,&[],None,Some("Alice")).is_err());
-        assert!(assign_meeting_turns_internal(&conn,1,&[1],None,Some(" ")).is_err());
-    }
-    #[test]
-    fn transcription_model_is_saved_without_guessing_for_old_meetings() {
-        let conn=fixture();
-        assert_eq!(conn.query_row("SELECT transcription_model FROM meetings WHERE id=1",[],|r|r.get::<_,Option<String>>(0)).unwrap(),None);
-        save_transcription_model(&conn,1,Some("granite-speech-5-nc")).unwrap();
-        assert_eq!(conn.query_row("SELECT transcription_model FROM meetings WHERE id=1",[],|r|r.get::<_,String>(0)).unwrap(),"granite-speech-5-nc");
     }
 }
