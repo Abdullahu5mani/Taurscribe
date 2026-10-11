@@ -13,7 +13,7 @@ const realCore = { ...(await import("@tauri-apps/api/core")) };
 mock.module("@tauri-apps/api/core", () => ({ ...realCore, invoke: async (cmd: string, args: any) => {
   calls.push({ cmd, args });
   if (cmd === "inspect_meeting_recordings") return pendingInspection ?? inspection;
-  if (cmd === "import_meeting_recordings") return importResult;
+  if (cmd === "import_meeting_recordings") { if (importFailures.has(args.paths[0])) throw new Error("Bad recording"); return importResult; }
   throw new Error(cmd);
 } }));
 const realDialog = { ...(await import("@tauri-apps/plugin-dialog")) };
@@ -35,7 +35,7 @@ const fixture = (dropTargetRef?: any) => {
   return { ...view, busy, completed, block: () => { blocked = true; view.rerender(); } };
 };
 beforeEach(() => {
-  calls.length = 0; drops.clear(); picker = ["/audio/later.wav", "/audio/earlier.wav"];
+  calls.length = 0; drops.clear(); importFailures.clear(); picker = ["/audio/later.wav", "/audio/earlier.wav"];
   inspection = { recordings: [source("later.wav", "2026-10-10T12:00:00Z"), source("earlier.wav", "2026-10-09T12:00:00Z")], errors: [] };
   importResult = Promise.resolve(47);
   pendingInspection = null;
@@ -46,6 +46,7 @@ test("metadata sorts the initial selection; warnings allow import and manual ord
   const view = fixture(); await view.settle();
   byTest(view.handle.current, "meeting-import-open").props.onClick(); await view.settle();
   await byTest(view.handle.current, "meeting-import-browse").props.onClick(); await view.settle();
+  byTest(view.handle.current, "meeting-import-combine").props.onChange({target:{checked:true}}); await view.settle();
   expect(content(view.handle.current)).toContain("may be different meetings");
   expect(byTest(view.handle.current, "meeting-import-submit").props.disabled).toBe(false);
   byLabel(view.handle.current, "Move later.wav earlier").props.onClick(); await view.settle();
@@ -134,7 +135,7 @@ test("processing dismisses the modal immediately and does not reopen it at compl
   await byTest(view.handle.current, "meeting-import-browse").props.onClick(); await view.settle();
   const job = byTest(view.handle.current, "meeting-import-submit").props.onClick(); await view.settle();
   expect(byTest(view.handle.current, "meeting-import-modal")).toBeUndefined();
-  expect(content(view.handle.current)).toContain("background");
+  expect(content(view.handle.current)).toContain("You can keep using the app");
   expect(view.busy).toEqual([true]);
   byTest(view.handle.current, "meeting-import-open").props.onClick(); await view.settle();
   expect(byTest(view.handle.current, "meeting-import-modal")).toBeUndefined();
@@ -163,4 +164,49 @@ test("hidden Meetings does not capture native file drops", async () => {
   await view.settle(); expect(calls).toHaveLength(0);
   expect(byTest(view.handle.current, "meeting-import-modal")).toBeUndefined();
   view.unmount();
+});
+
+
+test("a selection of 151 recordings is inspected and all paths are imported", async () => {
+  inspection = { recordings: Array.from({ length: 151 }, (_, i) => source(`part-${i}.wav`, new Date(Date.UTC(2026, 9, 10, 0, i)).toISOString())), errors: [] };
+  picker = inspection.recordings.map(s => s.path);
+  const view = fixture(); await view.settle();
+  byTest(view.handle.current, "meeting-import-open").props.onClick(); await view.settle();
+  await byTest(view.handle.current, "meeting-import-browse").props.onClick(); await view.settle();
+  expect(calls.find(c => c.cmd === "inspect_meeting_recordings")?.args.paths).toHaveLength(151);
+  expect(byTest(view.handle.current, "meeting-import-submit").props.disabled).toBe(false);
+  await byTest(view.handle.current, "meeting-import-submit").props.onClick(); await view.settle();
+  expect(calls.filter(c => c.cmd === "import_meeting_recordings").map(c => c.args.paths)).toEqual(picker!.map(path => [path]));
+  expect(view.completed).toEqual([47]);
+});
+
+
+test("nearby recordings ask to combine and remain separate without approval", async () => {
+  inspection = { recordings: [source("a.wav", "2026-10-10T12:00:00Z"), source("b.wav", "2026-10-10T12:02:00Z")], errors: [] };
+  const view = fixture(); await view.settle();
+  byTest(view.handle.current, "meeting-import-open").props.onClick(); await view.settle();
+  await byTest(view.handle.current, "meeting-import-browse").props.onClick(); await view.settle();
+  expect(content(view.handle.current)).toContain("Combine?");
+  const suggestion = nodes(view.handle.current).find(n => n.props?.className === "meeting-import-merge-suggestion");
+  expect(nodes(suggestion).find(n => n.type === "input").props.checked).toBe(false);
+  nodes(suggestion).find(n => n.type === "input").props.onChange({target:{checked:true}}); await view.settle();
+  await byTest(view.handle.current, "meeting-import-submit").props.onClick(); await view.settle();
+  expect(calls.filter(c => c.cmd === "import_meeting_recordings").map(c => c.args.paths)).toEqual([["/audio/a.wav", "/audio/b.wav"]]);
+});
+
+
+test("batch continues after a bad recording; retry excludes successful files", async () => {
+ const view=fixture();await view.settle();
+ byTest(view.handle.current,"meeting-import-open").props.onClick();await view.settle();
+ await byTest(view.handle.current,"meeting-import-browse").props.onClick();await view.settle();
+ importFailures.add("/audio/earlier.wav");
+ await byTest(view.handle.current,"meeting-import-submit").props.onClick();await view.settle();
+ expect(calls.filter(c=>c.cmd==="import_meeting_recordings")).toHaveLength(2);
+ expect(view.completed).toEqual([47]);
+ expect(content(view.handle.current)).toContain("1 of 2 meetings imported");
+ importFailures.clear();
+ byTest(view.handle.current,"meeting-import-open").props.onClick();await view.settle();
+ await byTest(view.handle.current,"meeting-import-submit").props.onClick();await view.settle();
+ expect(calls.filter(c=>c.cmd==="import_meeting_recordings").at(-1)?.args.paths).toEqual(["/audio/earlier.wav"]);
+ expect(calls.filter(c=>c.cmd==="import_meeting_recordings")).toHaveLength(3);
 });

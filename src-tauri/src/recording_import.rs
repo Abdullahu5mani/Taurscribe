@@ -253,8 +253,8 @@ pub fn inspect(path: &Path) -> Result<RecordingSource, String> {
 /// Keeps all audio, in the user-selected order, without inserting wall-clock gaps
 /// or trimming overlaps. Sources retain wall-clock dates plus playback offsets.
 pub fn join(paths: &[String], dest: &Path) -> Result<Vec<RecordingSource>, String> {
-    if paths.is_empty() || paths.len() > 100 {
-        return Err("Choose between 1 and 100 recordings".into());
+    if paths.is_empty() {
+        return Err("Choose at least one recording".into());
     }
     let mut sources = paths
         .iter()
@@ -339,6 +339,25 @@ mod tests {
             "2026-10-09T16:30:00+00:00"
         );
     }
+    #[test]
+    fn joining_more_than_hundred_recordings_preserves_every_source() {
+        let dir = std::env::temp_dir().join(format!("ts-import-large-{:016x}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("input.wav");
+        let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut writer = hound::WavWriter::create(&input, spec).unwrap();
+        for _ in 0..480 { writer.write_sample(1000i16).unwrap(); }
+        writer.finalize().unwrap();
+        let paths = vec![input.to_string_lossy().to_string(); 151];
+        let dest = dir.join("joined.wav");
+        let sources = join(&paths, &dest).unwrap();
+        assert_eq!(sources.len(), 151);
+        assert_eq!(sources.last().unwrap().offset_ms, 1500);
+        assert_eq!(hound::WavReader::open(dest).unwrap().duration(), 151 * 480);
+        assert_eq!(hound::WavReader::open(input).unwrap().duration(), 480);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn joining_preserves_order_duration_and_originals() {
         let dir = std::env::temp_dir().join(format!("ts-import-{:016x}", rand::random::<u64>()));

@@ -1100,7 +1100,7 @@ export function MeetingsPanel({
               );
             })
           )}
-          {meetings.length >= historyPages * 100 && <button type="button" className="turn-clip-btn" disabled={loadingList} onClick={() => setHistoryPages(pages => pages + 1)}>Load older meetings</button>}
+          {meetings.length >= historyPages * 100 && <button type="button" className="meeting-load-more" disabled={loadingList} onClick={() => setHistoryPages(pages => pages + 1)}>{loadingList ? "Loading…" : "Load more meetings"}</button>}
         </div>
 
         {/* Right Column: Selected Meeting Deep-Dive Detail View */}
@@ -1349,6 +1349,8 @@ export function MeetingsPanel({
                   </span>
                 </div>
 
+                <details className="meeting-repair-tools" key={selectedMeeting.id}>
+                  <summary>Repair transcript &amp; speakers</summary>
                 <div className="meeting-speaker-tools">
                   <label>About how many people? <input type="number" min="1" max="32" step="1" value={speakerHint} aria-label="Speaker count hint" disabled={speakerBusy}
                     onChange={e => setSpeakerHint(e.target.value)} /></label>
@@ -1363,6 +1365,7 @@ export function MeetingsPanel({
                   {confirmPipeline && <><span>Rebuilds the transcript from cleaned audio. Separate mic/caller tracks allow echo cleanup; mixed recordings get noise cleanup. Manual turn labels and merge undo are replaced after success. Original audio, notes and tags are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmPipeline(false)}>Cancel</button></>}
                   {confirmReseparate && <><span>Rebuilds turns and transcript; manual labels and merge undo are replaced after success. Notes and original recording are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmReseparate(false)}>Cancel</button></>}
                 </div>
+                </details>
                 {selectedMeeting.merges?.[0] && (
                   <button type="button" className="turn-clip-btn" data-testid="meetings-undo-merge-btn" disabled={speakerBusy}
                     onClick={() => changeSpeakers("undo_meeting_speaker_merge", { mergeId: selectedMeeting.merges![0].id })}>
@@ -1443,6 +1446,9 @@ export function MeetingsPanel({
                               </button>
                             )}
 
+                            <details className="turn-speaker-menu">
+                              <summary aria-label={`Speaker actions for ${t.speaker_name}`}>Speaker</summary>
+                              <div className="turn-speaker-menu-body">
                             {!isYou && t.speaker_id !== "background" && <button type="button" className="turn-clip-btn" aria-label={`Compare voice samples for ${t.speaker_name}`}
                               onClick={() => { stopSnippetAudio(); stopFullAudio(); setPreviewSpeaker({ id: t.speaker_id, name: t.speaker_name, path: t.snippet_path }); }}>Compare samples</button>}
 
@@ -1475,6 +1481,8 @@ export function MeetingsPanel({
                                 {isRenaming ? <IconCheck size={11} /> : <IconEdit size={11} />}
                               </button>
                             )}
+                              </div>
+                            </details>
                           </div>
                         </div>
 

@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { IconFileText, IconX } from "./Icons";
-import { chronologicalRecordings, moveRecording, recordingWarnings, type RecordingSource } from "../utils/meetingImport";
+import { chronologicalRecordings, moveRecording, recordingWarnings, nearbyRecordingGroups, recordingGroupKey, planRecordingImports, type RecordingSource } from "../utils/meetingImport";
 import { speakerCountHint } from "../utils/meetingTimeline";
 import "./MeetingRecordingImport.css";
 
@@ -32,6 +32,9 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
   const [sources, setSources] = useState<RecordingSource[]>([]);
   const [expectedSpeakers, setExpectedSpeakers] = useState("");
   const [title, setTitle] = useState("");
+  const [combineAll, setCombineAll] = useState(false);
+  const [approvedGroups, setApprovedGroups] = useState<Set<string>>(new Set());
+  const [batchProgress, setBatchProgress] = useState({ completed: 0, total: 0 });
   const [inspecting, setInspecting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -148,7 +151,7 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
   };
 
   const importMeeting = async () => {
-    if (busy.current || blockedRef.current || pendingInspections.current || !sources.length || !title.trim()) return;
+    if (busy.current || blockedRef.current || pendingInspections.current || !sources.length || ((combineAll || sources.length === 1) && !title.trim())) return;
     let count: number | null;
     try { count = speakerCountHint(expectedSpeakers); }
     catch (reason) { setError(String(reason)); return; }
@@ -157,13 +160,27 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
     modalOpenRef.current = false; setModalOpen(false);
     setImporting(true); setError("");
     callbacks.current.onProcessingChange?.(true);
+    const jobs = planRecordingImports(sources, combineAll, approvedGroups);
+    setBatchProgress({ completed: 0, total: jobs.length });
+    const failed: RecordingSource[] = [], errors: string[] = [];
+    let lastId: number | null = null;
     try {
-      const id = await invoke<number>("import_meeting_recordings", { paths: sources.map(s => s.path), title: title.trim(), expectedSpeakers: count, modelId, useGpu });
-      if (mounted.current) {
-        modalOpenRef.current = false; setModalOpen(false);
-        setSources([]); setTitle(""); setExpectedSpeakers(""); manualOrder.current = false; callbacks.current.onComplete(id);
+      for (let index = 0; index < jobs.length; index++) {
+        const job = jobs[index];
+        const jobTitle = combineAll || sources.length === 1 ? title.trim() : job[0].name.replace(/\.[^.]+$/, "");
+        try {
+          lastId = await invoke<number>("import_meeting_recordings", { paths: job.map(s => s.path), title: jobTitle, expectedSpeakers: count, modelId, useGpu });
+        } catch (reason) { failed.push(...job); errors.push(`${job[0].name}: ${String(reason)}`); }
+        if (mounted.current) setBatchProgress({ completed: index + 1, total: jobs.length });
       }
-    } catch (reason) { if (mounted.current) setError(String(reason)); }
+      if (mounted.current) {
+        setSources(failed);
+        if (failed.length && !combineAll) setTitle(failed[0].name.replace(/\.[^.]+$/, ""));
+        if (!failed.length) { setTitle(""); setExpectedSpeakers(""); manualOrder.current = false; setApprovedGroups(new Set()); }
+        if (errors.length) setError(`${jobs.length - errors.length} of ${jobs.length} meetings imported. Failed files are ready to retry.\n${errors.join("\n")}`);
+        if (lastId !== null) callbacks.current.onComplete(lastId);
+      }
+    }
     finally {
       busy.current = false;
       // Parent busy state must last until the backend finishes, even after unmount.
@@ -172,7 +189,9 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
     }
   };
   const disabled = blocked || importing;
-  const warnings = recordingWarnings(sources);
+  const warnings = combineAll ? recordingWarnings(sources) : [];
+  const nearbyGroups = nearbyRecordingGroups(sources);
+  const plannedCount = planRecordingImports(sources, combineAll, approvedGroups).length;
   const undated = sources.some(s => !s.recorded_start);
   const dropHandlers = {
     onDragOver: (event: React.DragEvent) => { event.preventDefault(); if (!disabled) setDragging(true); },
@@ -188,8 +207,8 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
   return <>
     <div ref={zone} className={`meeting-import ${dragging && !modalOpen ? "meeting-import--dragging" : ""}`} data-testid="meeting-import-drop-zone" role="region" aria-label="Import meeting recordings" {...dropHandlers}>
       <div className="meeting-import-launcher-icon"><IconFileText size={20} /></div>
-      <div className="meeting-import-launcher-copy"><strong>{importing ? "Importing meeting in the background" : sources.length ? `${sources.length} recording${sources.length === 1 ? "" : "s"} ready to import` : "Add a meeting recording"}</strong>
-        <p>{importing ? "You can browse the rest of the app. Progress appears below." : dragging ? "Drop to open the recording importer" : "Drop audio files anywhere in Meetings to get started."}</p>
+      <div className="meeting-import-launcher-copy"><strong>{importing ? `Importing meetings · ${batchProgress.completed}/${batchProgress.total}` : sources.length ? `${sources.length} recording${sources.length === 1 ? "" : "s"} ready to import` : "Add a meeting recording"}</strong>
+        {importing && <p>You can keep using the app.</p>}
       </div>
       <button type="button" className="meeting-vault-btn" onClick={openModal} disabled={disabled} data-testid="meeting-import-open">{sources.length ? "Review import" : "Import recordings"}</button>
     </div>
@@ -198,13 +217,13 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
       <div ref={modal} className={`meeting-import-modal ${dragging ? "meeting-import--dragging" : ""}`} role="dialog" aria-modal="true" aria-labelledby="meeting-import-dialog-title" aria-describedby="meeting-import-dialog-description" tabIndex={-1} data-testid="meeting-import-modal" aria-busy={importing || inspecting} {...dropHandlers}>
         <header className="meeting-import-modal-header">
           <div className="meeting-import-modal-heading"><span className="meeting-import-launcher-icon"><IconFileText size={22} /></span><div>
-            <span className="meeting-import-eyebrow">MEETING RECORDINGS</span>
-            <h2 id="meeting-import-dialog-title">Import a meeting</h2>
+            
+            <h2 id="meeting-import-dialog-title">Import recordings</h2>
           </div></div>
           <button type="button" className="meeting-import-close" onClick={closeModal} disabled={importing} aria-label="Close recording importer" data-testid="meeting-import-close"><IconX size={18} /></button>
         </header>
         <div className="meeting-import-modal-body">
-          <p id="meeting-import-dialog-description" className="meeting-import-description">Bring your recordings together, arrange the timeline, and identify the speakers.</p>
+          <p id="meeting-import-dialog-description" className="meeting-import-description">Each file becomes a separate meeting unless you choose to combine it.</p>
           <div className="meeting-import-add-files">
             <div><strong>{dragging ? "Drop to add recordings" : sources.length ? "Add more recordings" : "Drop your audio files here"}</strong>
               <p className="meeting-import-formats">WAV, MP3, M4A, AAC, FLAC, OGG · MP4/MOV audio</p>
@@ -213,14 +232,19 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
           </div>
           {inspecting && <p className="meeting-import-reading" role="status">Reading recording metadata…</p>}
           {sources.length > 0 && <>
-            <label className="meeting-import-title">Meeting title<input value={title} onChange={event => setTitle(event.target.value)} disabled={disabled} data-testid="meeting-import-title" /></label>
+            <label className="meeting-import-mode"><input type="checkbox" checked={combineAll} disabled={disabled} onChange={event => setCombineAll(event.target.checked)} data-testid="meeting-import-combine" />Combine all files into one meeting</label>
+            {!combineAll && nearbyGroups.map(group => {
+              const key = recordingGroupKey(group);
+              return <label className="meeting-import-merge-suggestion" key={key}><input type="checkbox" checked={approvedGroups.has(key)} disabled={disabled} onChange={event => setApprovedGroups(previous => { const next = new Set(previous); if (event.target.checked) next.add(key); else next.delete(key); return next; })} />
+                <span>These {group.length} recordings are within 5 minutes of each other. Combine? <strong>{group[0].name} → {group[group.length - 1].name}</strong></span></label>;
+            })}
+            {(combineAll || sources.length === 1) && <label className="meeting-import-title">Meeting title<input value={title} onChange={event => setTitle(event.target.value)} disabled={disabled} data-testid="meeting-import-title" /></label>}
             {warnings.map((warning, index) => <p className="meeting-import-warning" role="status" key={index}>{warning}</p>)}
-            <div className="meeting-import-order"><span>Playback order · {sources.length} recording{sources.length === 1 ? "" : "s"}</span>
+            <div className="meeting-import-order"><span>Selected files · {sources.length} recording{sources.length === 1 ? "" : "s"}</span>
               <button type="button" onClick={() => { manualOrder.current = false; setSources(chronologicalRecordings); }} disabled={disabled || inspecting} data-testid="meeting-import-sort">Sort by recording time</button>
             </div>
             <ol className="meeting-import-files">{sources.map((source, index) => <li key={source.path}>
-              <div className="meeting-import-file-info"><strong>{source.name}</strong><span>{Math.round(source.duration_ms / 1000)} seconds · {recordingDate(source.recorded_start)}{source.recorded_end ? ` → ${recordingDate(source.recorded_end)}` : ""}</span>
-                <small>{source.timestamp_source || `No embedded recording timestamp. File modified: ${recordingDate(source.file_modified_at)} (file date only).`}</small>
+              <div className="meeting-import-file-info"><strong>{source.name}</strong><span title={source.timestamp_source || "No recording timestamp"}>{Math.round(source.duration_ms / 1000)} seconds{source.recorded_start ? ` · ${recordingDate(source.recorded_start)}` : ""}</span>
               </div>
               <div className="meeting-import-file-actions">
                 <button type="button" aria-label={`Move ${source.name} earlier`} disabled={disabled || inspecting || index === 0} onClick={() => { manualOrder.current = true; setSources(previous => moveRecording(previous, index, -1)); }}>↑</button>
@@ -228,20 +252,18 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
                 <button type="button" aria-label={`Remove ${source.name}`} disabled={disabled || inspecting} onClick={() => setSources(previous => previous.filter(s => s.path !== source.path))}>×</button>
               </div>
             </li>)}</ol>
-            {undated && <p className="meeting-import-notice">Some files have no recording timestamp. Those files keep their selected positions; use the arrows to set their order. File dates can change when copied.</p>}
+            {undated && sources.length > 1 && <p className="meeting-import-notice">Undated files keep their selected order. Use the arrows to rearrange.</p>}
+            <details className="meeting-import-options"><summary>Speaker options</summary>
             <label className="meeting-import-title">About how many people? (optional)<input type="number" min="1" max="32" step="1" aria-label="About how many people?" value={expectedSpeakers} disabled={disabled} onChange={e => setExpectedSpeakers(e.target.value)} /></label>
-            <p className="meeting-import-notice">A hint for matching voices; uncertain speakers are kept separate.</p>
-            <div className="meeting-import-processing-note"><strong>Transcription & speaker recognition</strong>
-              <p>Uses your speech model and saved voices{hasDiarizationModel ? ", with Nemotron speaker separation." : ". Basic speaker separation will be used; install Nemotron in Settings → Models for better results."}</p>
-            </div>
-            <p className="meeting-import-notice">Files become one meeting in the order above. Gaps add no silence; overlaps are kept in full. Original files stay unchanged.</p>
+            {!hasDiarizationModel && <p className="meeting-import-notice">Install Meeting speakers in Settings → Models for better speaker recognition.</p>}
+            </details>
           </>}
           {blocked && !importing && <p className="meeting-import-notice">Finish the current audio or model operation before importing.</p>}
           {error && <p className="meeting-import-error" role="alert">{error}</p>}
         </div>
         <footer className="meeting-import-modal-footer">
           <button type="button" className="meeting-vault-btn" onClick={closeModal} disabled={importing}>Close</button>
-          <button type="button" className="meeting-import-submit" onClick={importMeeting} disabled={disabled || inspecting || !sources.length || !title.trim()} data-testid="meeting-import-submit">{importing ? "Importing and processing…" : warnings.length ? "Import together anyway" : "Import and process meeting"}</button>
+          <button type="button" className="meeting-import-submit" onClick={importMeeting} disabled={disabled || inspecting || !sources.length || ((combineAll || sources.length === 1) && !title.trim())} data-testid="meeting-import-submit">{importing ? "Importing and processing…" : warnings.length ? "Import together anyway" : `Import ${plannedCount} meeting${plannedCount === 1 ? "" : "s"}`}</button>
         </footer>
       </div>
     </div>}</ModalLayer>

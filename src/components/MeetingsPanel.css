@@ -1297,10 +1297,18 @@
 /* Keep playback controls reachable while the meeting transcript scrolls. */
 .meeting-audio-player { position: sticky; top: 0; z-index: 6; flex-shrink: 0; background: #151517; box-shadow: 0 8px 14px #151517; }
 
-.meeting-history-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:12px 16px; color:#c4c4ce; font-size:12px; }
-.meeting-history-controls label { display:flex; gap:8px; align-items:center; }
-.meeting-history-controls input { width:105px; border:1px solid #3c3c48; border-radius:6px; background:#17171e; color:inherit; padding:6px; }
-.meeting-history-controls small, .meeting-history-controls > p, .meeting-history-controls > div { flex-basis:100%; }
+.meeting-history-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:8px 16px; color:var(--text-secondary, #c4c4ce); font-size:12px; flex-shrink:0; }
+.meeting-history-controls > p { flex-basis:100%; margin:0; }
+.meeting-history-settings { flex:1; min-width:0; text-align:right; }
+.meeting-history-settings summary, .meeting-repair-tools summary, .meeting-import-options summary { cursor:pointer; color:var(--text-secondary, #b8bac4); padding:8px 0; font-size:12px; }
+.meeting-history-settings-body { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:12px; margin-top:6px; text-align:left; border:1px solid var(--border-color, #333); border-radius:8px; background:var(--bg-secondary, #17171e); }
+.meeting-history-settings-body label { display:flex; gap:8px; align-items:center; }
+.meeting-history-settings-body input { width:105px; border:1px solid #3c3c48; border-radius:6px; background:#17171e; color:inherit; padding:6px; }
+.meeting-history-settings-body small, .meeting-history-settings-body > p, .meeting-history-settings-body > div { flex-basis:100%; }
+.meeting-repair-tools { margin:8px 0 12px; border-bottom:1px solid var(--border-color, #333); }
+.meeting-speaker-tools > span { flex-basis:100%; line-height:1.5; }
+.meeting-load-more { width:100%; padding:12px; margin:8px 0; border:1px solid var(--border-color, #333); border-radius:8px; background:var(--bg-secondary, #202020); color:var(--text-primary, #eee); cursor:pointer; flex-shrink:0; }
+.meeting-load-more:disabled { opacity:.5; cursor:default; }
 
 .meeting-tags { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:8px 0; font-size:12px; }
 .meeting-tag-chip { padding:4px 9px; border-radius:20px; color:#d5c5ff; background:#392750; }

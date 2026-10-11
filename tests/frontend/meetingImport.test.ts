@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chronologicalRecordings, moveRecording, recordingWarnings, type RecordingSource } from "../../src/utils/meetingImport";
+import { chronologicalRecordings, moveRecording, recordingWarnings, nearbyRecordingGroups, recordingGroupKey, planRecordingImports, type RecordingSource } from "../../src/utils/meetingImport";
 
 const source = (name: string, start: string | null, duration = 60_000): RecordingSource => ({
   name, path: `/audio/${name}`, duration_ms: duration, recorded_start: start,
@@ -30,4 +30,15 @@ test("overlaps and reversed chronology are explicit; manual moves win", () => {
   expect(reversed.map(s => s.name)).toEqual(["b", "a"]);
   expect(recordingWarnings(reversed)[0]).toContain("chosen order");
   expect(moveRecording(reversed, 0, -1)).toBe(reversed);
+});
+
+
+test("only real nearby recording times suggest merging; consent affects only that group", () => {
+ const a=source("a","2026-10-10T12:00:00Z"), b=source("b","2026-10-10T12:02:00Z"), c=source("c","2026-10-10T14:00:00Z"), d=source("d",null);
+ const files=[a,b,c,d];
+ expect(nearbyRecordingGroups(files)).toEqual([[a,b]]);
+ expect(planRecordingImports(files,false,new Set())).toEqual([[a],[b],[c],[d]]);
+ expect(planRecordingImports(files,false,new Set([recordingGroupKey([a,b])]))).toEqual([[a,b],[c],[d]]);
+ expect(nearbyRecordingGroups([d,source("unknown",null)])).toEqual([]);
+ expect(nearbyRecordingGroups([b,a])).toEqual([]);
 });

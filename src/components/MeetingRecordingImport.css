@@ -58,24 +58,16 @@
   .meeting-import-submit { padding: 10px 12px; }
 }
 @media (prefers-reduced-motion: reduce) { .meeting-import-overlay { animation: none; } }
-/* Recording import belongs to the Meetings workspace. */
-.meeting-import-modal { font-size:14px; background:#191e20; color:#edf1f0; border-color:#303736; }
-.meeting-import-modal h2 { font-size:22px; }
-.meeting-import-modal-header .meeting-import-launcher-icon { display:none; }
-.meeting-import-description { color:#a0aaa7; }
-.meeting-import-add-files--selected { padding:0; border:0; background:none; }
-.meeting-import-add-files--selected > div { display:none; }
-.meeting-import-add-files--selected > button { margin-left:auto; }
-.meeting-import-files { max-height:300px; border:1px solid #303736; border-radius:8px; }
-.meeting-import-files li { margin:0; padding:12px; border:0; border-bottom:1px solid #303736; border-radius:0; background:#202729; }
-.meeting-import-files li:last-child { border-bottom:0; }
-.meeting-import-files li::before { font-size:12px; color:#a0aaa7; }
-.meeting-import-files strong { font-weight:500; }
-.meeting-import-files span { font-size:12px; }
-.meeting-import-file-actions button { min-width:30px; min-height:30px; }
-.meeting-import-order button, .meeting-import-formats { font-size:12px; }
-.meeting-import-merge-suggestion strong { font-size:12px; }
-.meeting-import-options summary { cursor:pointer; padding:12px 0; color:#a0aaa7; }
-.meeting-import-submit { background:#7bdfc4; color:#14241f; border-color:#7bdfc4; }
-.meeting-import-submit:hover:not(:disabled) { background:#a0ead5; }
-.meeting-import-modal-footer { background:#161b1d; }
+
+/* Large selections scroll independently so options and submit stay reachable. */
+.meeting-import-files { max-height:280px; overflow-y:auto; overscroll-behavior:contain; }
+.meeting-import-files li { padding:10px; margin-bottom:4px; border-radius:7px; }
+.meeting-import-file-info { gap:3px; }
+.meeting-import-options { margin:12px 0; border-top:1px solid rgba(255,255,255,.08); }
+.meeting-import-modal h2 { margin:0; }
+.meeting-import-modal-footer { flex-wrap:wrap; }
+
+.meeting-import-mode, .meeting-import-merge-suggestion { display:flex; align-items:flex-start; gap:8px; margin:12px 0; line-height:1.5; }
+.meeting-import-mode input, .meeting-import-merge-suggestion input { flex-shrink:0; margin-top:3px; accent-color:#14b8a6; }
+.meeting-import-merge-suggestion { padding:10px; border:1px solid rgba(20,184,166,.25); border-radius:8px; }
+.meeting-import-merge-suggestion strong { display:block; font-size:11px; overflow-wrap:anywhere; color:#92949c; font-weight:400; }

@@ -15,10 +15,17 @@ pub struct RecordingInspection {
 
 #[tauri::command]
 pub async fn inspect_meeting_recordings(paths: Vec<String>) -> Result<RecordingInspection, String> {
-    if paths.is_empty() || paths.len() > 100 {
-        return Err("Choose between 1 and 100 recordings".into());
+    if paths.is_empty() {
+        return Err("Choose at least one recording".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        inspect_recording_paths(&paths)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn inspect_recording_paths(paths: &[String]) -> RecordingInspection {
         let mut result = RecordingInspection {
             recordings: vec![],
             errors: vec![],
@@ -30,9 +37,6 @@ pub async fn inspect_meeting_recordings(paths: Vec<String>) -> Result<RecordingI
             }
         }
         result
-    })
-    .await
-    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -49,8 +53,8 @@ pub async fn import_meeting_recordings(
     if title.trim().is_empty() {
         return Err("Give the meeting a title".into());
     }
-    if paths.is_empty() || paths.len() > 100 {
-        return Err("Choose between 1 and 100 recordings".into());
+    if paths.is_empty() {
+        return Err("Choose at least one recording".into());
     }
     if crate::storage::move_in_progress() {
         return Err("Wait for the storage folder move to finish".into());
@@ -262,5 +266,17 @@ mod pipeline_audio_tests {
         let (cleaned,rate,channels)=clean_pipeline_audio(&samples,48000,2,false).unwrap();
         assert_eq!(rate,16000);assert_eq!(channels,2);assert_eq!(cleaned.len(),16000*3*2);
         assert!(cleaned.iter().all(|v|v.is_finite()));
+    }
+}
+
+#[cfg(test)]
+mod import_batch_tests {
+    #[test]
+    fn inspects_every_path_above_the_old_hundred_file_limit() {
+        // Invalid entries must be reported individually, not reject the whole batch.
+        let paths: Vec<String> = (0..151).map(|n| format!("/missing/recording-{n}.wav")).collect();
+        let result = super::inspect_recording_paths(&paths);
+        assert!(result.recordings.is_empty());
+        assert_eq!(result.errors.len(), paths.len());
     }
 }

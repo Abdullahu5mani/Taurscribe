@@ -37,18 +37,24 @@ export function MeetingHistoryControls({ count, onSelect }: { count: number; onS
         finally { mutation.current = false; setBusy(false); }
     };
     return <div className="meeting-history-controls">
+        <span className="meeting-history-count">{count} meetings</span>
+        <details className="meeting-history-settings">
+        <summary>Manage history</summary>
+        <div className="meeting-history-settings-body">
         <label>Meeting limit <input type="number" min="1" step="1" placeholder="Unlimited" aria-label="Meeting history advisory limit"
             value={draft} disabled={!ready || busy} onChange={event => setDraft(event.target.value)} /></label>
         <button type="button" className="turn-clip-btn" onClick={save} disabled={!ready || busy}>Save limit</button>
-        <span>{count} saved · {limit == null ? "Unlimited" : `Reminder at ${limit}`}</span>
+        
         <button type="button" className="turn-clip-btn" onClick={check} disabled={busy}>{busy ? "Working…" : "Check duplicates"}</button>
         <small>The limit is a reminder. Every meeting is kept and new meetings can still be saved.</small>
-        {limit != null && count >= limit && <p role="status">You have reached your {limit}-meeting reminder. Review your history when convenient.</p>}
+
         {error && <p role="alert">{error}</p>}
         {report && <div role="status"><p>{report.groups.length ? `${report.groups.length} duplicate candidates` : "No duplicate candidates found"} · {report.checked_meetings} meetings checked. {report.unavailable_audio > 0 ? `${report.unavailable_audio} recordings unavailable; transcripts were still checked.` : ""}</p>
             {report.groups.map((group, index) => <div key={index}><span>{group.kind === "identical_recording" ? "Identical recording" : "Matching transcript and duration — review to confirm"}: </span>
                 {group.meeting_ids.map(id => <button type="button" key={id} className="turn-clip-btn" aria-label={`Open meeting ${id}`} onClick={() => onSelect(id)}>Open meeting #{id}</button>)}
             </div>)}
         </div>}
+        </div></details>
+        {limit != null && count >= limit && <p role="status">You have reached your {limit}-meeting reminder.</p>}
     </div>;
 }
