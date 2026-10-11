@@ -62,6 +62,9 @@ fn run_model(path: &std::path::Path, pcm: &[f32]) -> Result<(Vec<SpeakerTurn>, S
         .map_err(|e| format!("load {}: {e}", path.display()))?;
     let backend = model.backend();
     let mut session = model.session().map_err(|e| format!("session: {e}"))?;
+    let watch=crate::meeting_job::current_cancel().map(crate::meeting_job::NativeCancelWatch::new);
+    if let Some(watch)=watch.as_ref(){session.set_cancel_token(&watch.token);}
+    crate::meeting_job::check_current()?;
     // Default preset = NVIDIA's offline configuration (30.4 s lookahead), the
     // most accurate one; the recording is complete, so latency does not matter.
     let out = session

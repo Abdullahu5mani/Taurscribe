@@ -1903,3 +1903,9 @@ mod tests {
         assert_eq!((turns[1].channel, turns[1].text.as_str()), (1, "said on call"));
     }
 }
+
+/// Decode imported mixed audio using the same validation as room diarization.
+pub fn read_room_audio(path: &Path) -> Result<(Vec<f32>, u32), String> {
+    let (samples, _, rate) = read_capture_channels(path, true)?;
+    Ok((samples, rate))
+}

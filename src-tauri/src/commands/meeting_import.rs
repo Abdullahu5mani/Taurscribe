@@ -48,6 +48,7 @@ pub async fn import_meeting_recordings(
     expected_speakers: Option<usize>,
     model_id: Option<String>,
     use_gpu: Option<bool>,
+    job_id: Option<String>,
 ) -> Result<i64, String> {
     validate_speaker_hint(expected_speakers)?;
     if title.trim().is_empty() {
@@ -82,6 +83,7 @@ pub async fn import_meeting_recordings(
         let result = (|| {
             progress("Loading the selected speech model");
             load_import_engine(engine, &whisper, gguf.as_ref(), model_id.as_deref(), !use_gpu.unwrap_or(true))?;
+            let actual_model = import_model_id(engine, &whisper, gguf.as_ref());
             let dir = super::meetings::get_meetings_dir()?;
             let wav = recording_import::unique_audio_path(&dir.join("audio"));
             progress("Converting and joining recordings");
@@ -119,7 +121,15 @@ fn validate_speaker_hint(count: Option<usize>) -> Result<(), String> {
     Ok(())
 }
 
+fn import_model_id(engine: ASREngine, whisper: &std::sync::Arc<std::sync::Mutex<crate::whisper::WhisperManager>>, gguf: Option<&std::sync::Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>) -> Option<String> {
+    match engine {
+        ASREngine::Whisper => whisper.lock().ok().and_then(|m| m.get_current_model().cloned()),
+        _ => gguf.and_then(|g| g.lock().ok().and_then(|m| m.get_status().model_id)),
+    }
+}
+
 fn load_import_engine(engine: ASREngine, whisper: &std::sync::Arc<std::sync::Mutex<crate::whisper::WhisperManager>>, gguf: Option<&std::sync::Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>, model_id: Option<&str>, force_cpu: bool) -> Result<(), String> {
+    let device_key=crate::gpu::Target::resolve(force_cpu).key();
     match engine {
         ASREngine::Whisper => {
             let mut model = whisper.lock().map_err(|e| e.to_string())?;

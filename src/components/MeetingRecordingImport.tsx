@@ -146,7 +146,7 @@ export function MeetingRecordingImport({ compact = false, isVisible = true, bloc
   const browse = async () => {
     if (busy.current || blockedRef.current) return;
     try {
-      const selected = await open({ multiple: true, filters: [{ name: "Meeting recordings", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "mp4", "mov"] }] });
+      const selected = await open({ multiple: true, filters: [{ name: "Meeting recordings", extensions: ["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "mp4", "mov", "mkv", "webm"] }] });
       if (selected && mounted.current) addPaths(Array.isArray(selected) ? selected : [selected]);
     } catch (reason) { if (mounted.current) setError(String(reason)); }
   };
