@@ -1,10 +1,10 @@
 .meeting-import { display: flex; align-items: center; gap: 12px; margin: 4px 0 8px; padding: 14px 16px; border: 1px dashed rgba(255, 255, 255, .16); border-radius: 12px; background: rgba(255, 255, 255, .025); font-size: 12px; flex-shrink: 0; }
 .meeting-import-launcher-copy { flex: 1; min-width: 0; }
 .meeting-import-launcher-copy p { margin: 4px 0 0; color: #92949c; line-height: 1.45; }
-.meeting-import-launcher-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; border: 1px solid rgba(20, 184, 166, .2); border-radius: 11px; color: #5eead4; background: rgba(20, 184, 166, .08); }
+.meeting-import-launcher-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 40px; height: 40px; border: 1px solid rgba(20, 184, 166, .2); border-radius: 11px; color: var(--text-secondary); background: rgba(20, 184, 166, .08); }
 .meeting-import--dragging { border-color: #14b8a6; background: rgba(20, 184, 166, .1); }
 .meeting-import-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0, 0, 0, .72); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); animation: meetingImportFade .16s ease-out; }
-.meeting-import-modal { display: flex; flex-direction: column; width: 660px; max-width: 100%; max-height: min(88vh, 820px); min-height: 0; border: 1px solid rgba(255, 255, 255, .14); border-radius: 18px; background: #121316; color: #e4e4e7; box-shadow: 0 32px 90px rgba(0, 0, 0, .65); overflow: hidden; outline: none; font-size: 12px; }
+.meeting-import-modal { display: flex; flex-direction: column; width: 660px; max-width: 100%; max-height: min(88vh, 820px); min-height: 0; border: 1px solid rgba(255, 255, 255, .14); border-radius: 18px; background: var(--bg-primary); color: var(--text-primary); box-shadow: 0 32px 90px rgba(0, 0, 0, .65); overflow: hidden; outline: none; font-size: 12px; }
 .meeting-import-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; border-bottom: 1px solid rgba(255, 255, 255, .07); flex-shrink: 0; }
 .meeting-import-modal-heading { display: flex; align-items: center; gap: 12px; }
 .meeting-import-eyebrow { font-size: 9px; letter-spacing: .15em; color: #92949c; }
@@ -17,17 +17,17 @@
 .meeting-import-add-files { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; margin: 16px 0; border: 1px dashed rgba(255, 255, 255, .2); border-radius: 10px; background: rgba(255, 255, 255, .025); }
 .meeting-import-formats, .meeting-import-notice { color: #92949c; }
 .meeting-import-formats { font-size: 10px; }
-.meeting-import-reading { color: #5eead4; }
+.meeting-import-reading { color: var(--text-secondary); }
 .meeting-import-title { display: grid; gap: 7px; margin: 18px 0; font-weight: 500; }
 .meeting-import-title input { min-width: 0; padding: 11px 12px; border: 1px solid rgba(255, 255, 255, .14); border-radius: 8px; background: rgba(0, 0, 0, .18); color: inherit; font: inherit; font-size: 13px; }
-.meeting-import-title input:focus { outline: 2px solid rgba(20, 184, 166, .4); outline-offset: 1px; }
+.meeting-import-title input:focus { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 .meeting-import-order { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 500; }
 .meeting-import-order button, .meeting-import-file-actions button { border: 1px solid rgba(255, 255, 255, .12); border-radius: 6px; background: rgba(255, 255, 255, .025); color: #b8bac2; cursor: pointer; font: inherit; padding: 6px 9px; }
 .meeting-import-order button { font-size: 10px; }
 .meeting-import-file-actions button:hover:not(:disabled), .meeting-import-order button:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: #fff; }
 .meeting-import-files { margin: 12px 0; padding: 0; list-style: none; counter-reset: recordings; }
 .meeting-import-files li { display: flex; align-items: flex-start; gap: 12px; padding: 14px 12px; margin-bottom: 8px; border: 1px solid rgba(255, 255, 255, .08); border-radius: 10px; background: rgba(255, 255, 255, .02); counter-increment: recordings; }
-.meeting-import-files li::before { content: counter(recordings, decimal-leading-zero); flex-shrink: 0; color: #5eead4; font-size: 10px; padding-top: 2px; font-variant-numeric: tabular-nums; }
+.meeting-import-files li::before { content: counter(recordings, decimal-leading-zero); flex-shrink: 0; color: var(--text-secondary); font-size: 10px; padding-top: 2px; font-variant-numeric: tabular-nums; }
 .meeting-import-file-info { flex: 1; min-width: 0; display: grid; gap: 5px; overflow-wrap: anywhere; }
 .meeting-import-files span, .meeting-import-files small { color: #92949c; line-height: 1.45; }
 .meeting-import-files small { font-size: 10px; }
@@ -39,7 +39,7 @@
 .meeting-import-processing-note strong { color: #b8dcd4; font-weight: 500; }
 .meeting-import-processing-note p { color: #92949c; }
 .meeting-import-modal-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 24px; border-top: 1px solid rgba(255, 255, 255, .08); flex-shrink: 0; background: rgba(0, 0, 0, .12); }
-.meeting-import-submit { padding: 10px 16px; border: 1px solid rgba(94, 234, 212, .4); border-radius: 8px; background: rgba(20, 184, 166, .14); color: #99f6e4; font: inherit; font-weight: 500; cursor: pointer; }
+.meeting-import-submit { padding: 10px 16px; border: 1px solid rgba(94, 234, 212, .4); border-radius: 8px; background: rgba(20, 184, 166, .14); color: var(--text-primary); font: inherit; font-weight: 500; cursor: pointer; }
 .meeting-import-submit:hover:not(:disabled) { background: rgba(20, 184, 166, .22); }
 .meeting-import-sources { margin-top: 12px; color: var(--text-secondary, #a1a1aa); font-size: 12px; }
 .meeting-import-sources button { border: 0; padding: 4px 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
@@ -68,6 +68,33 @@
 .meeting-import-modal-footer { flex-wrap:wrap; }
 
 .meeting-import-mode, .meeting-import-merge-suggestion { display:flex; align-items:flex-start; gap:8px; margin:12px 0; line-height:1.5; }
-.meeting-import-mode input, .meeting-import-merge-suggestion input { flex-shrink:0; margin-top:3px; accent-color:#14b8a6; }
+.meeting-import-mode input, .meeting-import-merge-suggestion input { flex-shrink:0; margin-top:3px; accent-color:var(--accent-primary); }
 .meeting-import-merge-suggestion { padding:10px; border:1px solid rgba(20,184,166,.25); border-radius:8px; }
 .meeting-import-merge-suggestion strong { display:block; font-size:11px; overflow-wrap:anywhere; color:#92949c; font-weight:400; }
+
+/* Recording import belongs to the Meetings workspace. */
+.meeting-import-modal { font-size:14px; background:var(--bg-primary); color:var(--text-primary); border-color:var(--border-color); }
+.meeting-import-modal h2 { font-size:22px; }
+.meeting-import-modal-header .meeting-import-launcher-icon { display:none; }
+.meeting-import-description { color:var(--text-secondary); }
+.meeting-import-add-files--selected { padding:0; border:0; background:none; }
+.meeting-import-add-files--selected > div { display:none; }
+.meeting-import-add-files--selected > button { margin-left:auto; }
+.meeting-import-files { max-height:300px; border:1px solid var(--border-color); border-radius:8px; }
+.meeting-import-files li { margin:0; padding:12px; border:0; border-bottom:1px solid var(--border-color); border-radius:0; background:var(--bg-tertiary); }
+.meeting-import-files li:last-child { border-bottom:0; }
+.meeting-import-files li::before { font-size:12px; color:var(--text-secondary); }
+.meeting-import-files strong { font-weight:500; }
+.meeting-import-files span { font-size:12px; }
+.meeting-import-file-actions button { min-width:30px; min-height:30px; }
+.meeting-import-order button, .meeting-import-formats { font-size:12px; }
+.meeting-import-merge-suggestion strong { font-size:12px; }
+.meeting-import-options summary { cursor:pointer; padding:12px 0; color:var(--text-secondary); }
+.meeting-import-submit { background:rgba(255,255,255,.06); color:var(--text-primary); border-color:var(--border-hover); }
+.meeting-import-submit:hover:not(:disabled) { background:var(--bg-tertiary); }
+.meeting-import-modal-footer { background:var(--bg-primary); }
+
+.meeting-import-modal { font-family:var(--font-sans); border-radius:var(--sheet-radius); }
+.meeting-import-modal button { border-radius:6px; }
+.meeting-import-add-files, .meeting-import-merge-suggestion { border-color:var(--border-color); background:transparent; }
+.meeting-import-reading { color:var(--text-secondary); }

@@ -9,6 +9,7 @@ import { speakerCountHint } from "../utils/meetingTimeline";
 import "./MeetingRecordingImport.css";
 
 interface Props {
+  compact?: boolean;
   isVisible?: boolean;
   modelId?: string | null;
   useGpu?: boolean;
@@ -27,7 +28,7 @@ export function recordingDate(value: string | null): string {
   return value ? new Date(value).toLocaleString() : "Unknown recording time";
 }
 
-export function MeetingRecordingImport({ isVisible = true, blocked = false, hasDiarizationModel = true, onProcessingChange, onComplete, dropTargetRef, modelId, useGpu }: Props) {
+export function MeetingRecordingImport({ compact = false, isVisible = true, blocked = false, hasDiarizationModel = true, onProcessingChange, onComplete, dropTargetRef, modelId, useGpu }: Props) {
   const [modalOpen, setModalOpen] = useState(false);
   const [sources, setSources] = useState<RecordingSource[]>([]);
   const [expectedSpeakers, setExpectedSpeakers] = useState("");
@@ -205,12 +206,12 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
     },
   };
   return <>
-    <div ref={zone} className={`meeting-import ${dragging && !modalOpen ? "meeting-import--dragging" : ""}`} data-testid="meeting-import-drop-zone" role="region" aria-label="Import meeting recordings" {...dropHandlers}>
+    <div ref={zone} className={`meeting-import ${compact ? "meeting-import--compact" : ""} ${importing ? "meeting-import--busy" : ""} ${dragging && !modalOpen ? "meeting-import--dragging" : ""}`} data-testid="meeting-import-drop-zone" role="region" aria-label="Import meeting recordings" {...dropHandlers}>
       <div className="meeting-import-launcher-icon"><IconFileText size={20} /></div>
       <div className="meeting-import-launcher-copy"><strong>{importing ? `Importing meetings · ${batchProgress.completed}/${batchProgress.total}` : sources.length ? `${sources.length} recording${sources.length === 1 ? "" : "s"} ready to import` : "Add a meeting recording"}</strong>
         {importing && <p>You can keep using the app.</p>}
       </div>
-      <button type="button" className="meeting-vault-btn" onClick={openModal} disabled={disabled} data-testid="meeting-import-open">{sources.length ? "Review import" : "Import recordings"}</button>
+      <button type="button" className="meeting-vault-btn" onClick={openModal} disabled={disabled} data-testid="meeting-import-open">{importing ? "Importing…" : sources.length ? "Review import" : compact ? "Import" : "Import recordings"}</button>
     </div>
     {error && !modalOpen && <p className="meeting-import-error" role="alert">{error} — choose Review import to retry.</p>}
     <ModalLayer>{modalOpen && <div className="meeting-import-overlay" data-testid="meeting-import-overlay" onClick={event => { if (event.target === event.currentTarget) closeModal(); }}>
@@ -224,11 +225,11 @@ export function MeetingRecordingImport({ isVisible = true, blocked = false, hasD
         </header>
         <div className="meeting-import-modal-body">
           <p id="meeting-import-dialog-description" className="meeting-import-description">Each file becomes a separate meeting unless you choose to combine it.</p>
-          <div className="meeting-import-add-files">
+          <div className={`meeting-import-add-files ${sources.length ? "meeting-import-add-files--selected" : ""}`}>
             <div><strong>{dragging ? "Drop to add recordings" : sources.length ? "Add more recordings" : "Drop your audio files here"}</strong>
               <p className="meeting-import-formats">WAV, MP3, M4A, AAC, FLAC, OGG · MP4/MOV audio</p>
             </div>
-            <button type="button" className="meeting-vault-btn" onClick={browse} disabled={disabled || inspecting} data-testid="meeting-import-browse">Choose recordings</button>
+            <button type="button" className="meeting-vault-btn" onClick={browse} disabled={disabled || inspecting} data-testid="meeting-import-browse">{sources.length ? "Add files" : "Choose recordings"}</button>
           </div>
           {inspecting && <p className="meeting-import-reading" role="status">Reading recording metadata…</p>}
           {sources.length > 0 && <>

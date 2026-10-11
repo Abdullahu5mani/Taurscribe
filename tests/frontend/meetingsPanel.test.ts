@@ -531,3 +531,71 @@ test("processing stage updates and completion clears the status", async () => {
     listeners.get("meeting-processing-finished")!({ payload: { meeting_id: 1, error: null } }); await view.settle();
     expect(byTest(view.handle.current, "meetings-processing-status")).toBeUndefined();
 });
+
+test("meeting tabs separate reading from speaker tools and reset for another meeting", async () => {
+    const view = render();
+    await view.settle();
+    const panel = (name: string) => nodes(view.handle.current).find(node => node.props?.id === `meetings-panel-${name}`);
+    expect(panel("transcript").props.hidden).toBe(false);
+    expect(panel("speakers").props.hidden).toBe(true);
+    byTest(view.handle.current, "meetings-tab-speakers").props.onClick();
+    await view.settle();
+    expect(panel("speakers").props.hidden).toBe(false);
+    expect(panel("transcript").props.hidden).toBe(true);
+    byTest(view.handle.current, "meetings-tab-tools").props.onClick();
+    await view.settle();
+    expect(panel("tools").props.hidden).toBe(false);
+    expect(nodes(panel("tools")).some(node => node.props?.["data-testid"] === "meetings-delete-btn")).toBe(true);
+    select(view.handle.current, 2);
+    await view.settle();
+    expect(panel("transcript").props.hidden).toBe(false);
+    view.unmount();
+});
+
+test("repeated transcript turns produce one speaker management card per person", async () => {
+    detail.turns = [
+        { speaker_id:"alex", speaker_name:"Alex", channel:1, start_ms:0, end_ms:1000, text:"One", snippet_path:"/alex.wav" },
+        { speaker_id:"alex", speaker_name:"Alex", channel:1, start_ms:2000, end_ms:3000, text:"Two", snippet_path:"/alex.wav" },
+        { speaker_id:"sam", speaker_name:"Sam", channel:1, start_ms:4000, end_ms:5000, text:"Three", snippet_path:"/sam.wav" },
+    ];
+    const view = render();
+    await view.settle();
+    expect(nodes(view.handle.current).filter(node => node.props?.className === "meeting-speaker-card").length).toBe(2);
+    const transcript = nodes(view.handle.current).find(node => node.props?.id === "meetings-panel-transcript");
+    expect(nodes(transcript).filter(node => String(node.props?.className).includes("turn-bubble")).length).toBe(2);
+    expect(textOf(transcript)).toContain("One");
+    expect(textOf(transcript)).toContain("Two");
+    expect(nodes(transcript).some(node => node.props?.["data-testid"]?.startsWith("meetings-rename-speaker-btn"))).toBe(false);
+    view.unmount();
+});
+
+test("leaving Meetings stops its audio and revokes stale media-button playback", async () => {
+    let visible = true;
+    const view = renderHook(() => MeetingsPanel({ ...props, isVisible:visible }));
+    await view.settle();
+    byTest(view.handle.current,"meetings-audio-play-btn").props.onClick();
+    await view.settle();
+    const audio = audios[audios.length-1];
+    expect(audio.paused).toBe(false);
+    visible=false;view.rerender();await view.settle();
+    expect(audio.paused).toBe(true);
+    audio.paused=false;(audio as any).onplay({});
+    expect(audio.paused).toBe(true);
+    view.unmount();
+});
+
+test("closing during a pending play request does not report the recording as missing", async () => {
+    let reject!: (error:Error)=>void;
+    playPlans.push(new Promise<void>((_,failure)=>{reject=failure;}));
+    let visible=true;
+    const view=renderHook(()=>MeetingsPanel({...props,isVisible:visible}));
+    await view.settle();
+    byTest(view.handle.current,"meetings-audio-play-btn").props.onClick();
+    visible=false;view.rerender();await view.settle();
+    reject(Object.assign(new Error("The play request was interrupted by pause"),{name:"AbortError"}));
+    await view.settle();
+    visible=true;view.rerender();await view.settle();
+    expect(byTest(view.handle.current,"meetings-audio-play-btn")).toBeDefined();
+    expect(textOf(view.handle.current)).not.toContain("Audio file missing");
+    view.unmount();
+});

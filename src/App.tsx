@@ -42,6 +42,7 @@ import { useSlidingIndicator } from "./hooks/useSlidingIndicator";
 import { useDismissOnOutside } from "./hooks/useDismissOnOutside";
 import { OverlayScrollbarsComponent } from "overlayscrollbars-react";
 import type { EventListeners } from "overlayscrollbars";
+import { installAudioPlaybackLifecycle, setAudioPlaybackVisible } from "./utils/audioPlayback";
 import { trackScrollState } from "./utils/scrollState";
 import type { CommandResult } from "./types/session";
 
@@ -92,6 +93,7 @@ const setTrayState = async (
 
 function App() {
   useWindowLayout();
+  useEffect(() => installAudioPlaybackLifecycle(), []);
   // M6 fix: containerBooting controls the CSS stagger class; cleared after
   // the boot animation completes so re-mounts don't re-trigger the stagger.
   const [containerBooting, setContainerBooting] = useState(true);
@@ -112,6 +114,7 @@ function App() {
   useEffect(() => {
     const unlisten = listen("window-hidden", () => {
       appHiddenRef.current = true;
+      setAudioPlaybackVisible(false);
       setIsSettingsOpen(false);
     });
     return () => { unlisten.then(fn => fn()); };

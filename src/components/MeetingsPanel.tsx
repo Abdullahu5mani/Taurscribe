@@ -1,4 +1,4 @@
-import { claimAudioPlayback } from "../utils/audioPlayback";
+import { claimAudioPlayback, releaseAudioPlayback } from "../utils/audioPlayback";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { SpeakerSuggestions } from "./SpeakerSuggestions";
@@ -39,6 +39,7 @@ import { levelToPercent } from "../utils/audioLevel";
 import { MeetingRecordingImport, recordingDate } from "./MeetingRecordingImport";
 import { conversationBlocks, spokenAt, speakerCountHint } from "../utils/meetingTimeline";
 import "./MeetingsPanel.css";
+import "./MeetingWorkspace.css";
 
 interface MeetingsPanelProps {
   modelId?: string | null;
@@ -153,6 +154,7 @@ export function MeetingsPanel({
   const manualScrollUntil = useRef(0);
   const scrolledBlock = useRef(-1);
   const [speakerHint, setSpeakerHint] = useState("");
+  const [detailView, setDetailView] = useState<"transcript" | "speakers" | "tools">("transcript");
   const [confirmPipeline, setConfirmPipeline] = useState(false);
   const [confirmReseparate, setConfirmReseparate] = useState(false);
   const [speakerBusy, setSpeakerBusy] = useState(false);
@@ -196,7 +198,7 @@ export function MeetingsPanel({
   // Speaker ids like "speaker_remote_1" repeat across meetings: close any open
   // rename field when another meeting is opened.
   useEffect(() => {
-    setRenamingSpeakerId(null); setSpeakerHint(""); setConfirmReseparate(false);
+    setRenamingSpeakerId(null); setSpeakerHint(""); setConfirmReseparate(false); setConfirmPipeline(false); setDetailView("transcript");
   }, [selectedMeetingId]);
   const [speakerNewName, setSpeakerNewName] = useState("");
   const [copiedTranscript, setCopiedTranscript] = useState(false);
@@ -400,10 +402,14 @@ export function MeetingsPanel({
     };
   }, []);
 
+  useEffect(() => {
+    if (!isVisible) { stopFullAudio(); stopSnippetAudio(); }
+  }, [isVisible]);
+
   // ── Full Audio Player Controls ──────────────────────────────────
   const stopFullAudio = () => {
     if (fullAudioRef.current) {
-      fullAudioRef.current.pause();
+      releaseAudioPlayback(fullAudioRef.current);
       fullAudioRef.current = null;
     }
     setIsPlayingAudio(false);
@@ -426,6 +432,7 @@ export function MeetingsPanel({
           fullAudioRef.current = null;
           setAudioFailed(true);
         };
+        audio.onplay = () => { if (fullAudioRef.current === audio) setIsPlayingAudio(true); };
         audio.playbackRate = playbackSpeed;
         audio.currentTime = seekTo ?? audioCurrentTime;
 
@@ -449,6 +456,8 @@ export function MeetingsPanel({
       audio.play().then(() => {
         if (fullAudioRef.current === audio && !audio.paused) setIsPlayingAudio(true);
       }).catch((error) => {
+        // Pausing or hiding the window cancels a pending play request normally.
+        if (error?.name === "AbortError") return;
         console.error("Meeting audio playback failed:", error);
         if (fullAudioRef.current === audio) {
           fullAudioRef.current = null;
@@ -483,7 +492,7 @@ export function MeetingsPanel({
   // ── Snippet Audio Player Controls (3s clip) ─────────────────────
   const stopSnippetAudio = () => {
     if (snippetAudioRef.current) {
-      snippetAudioRef.current.pause();
+      releaseAudioPlayback(snippetAudioRef.current);
       snippetAudioRef.current = null;
     }
     setPlayingSnippetSpeakerId(null);
@@ -535,7 +544,7 @@ export function MeetingsPanel({
     }
     speakerMutation.current = true; setSpeakerBusy(true);
     try {
-      const rerun = command === "reseparate_meeting_speakers";
+      const rerun = command === "reseparate_meeting_speakers" || command === "reprocess_meeting";
       if (rerun) { onImportProcessingChange?.(true); stopFullAudio(); }
       try { await invoke(command, { meetingId: id, ...args }); }
       finally { if (rerun) onImportProcessingChange?.(false); }
@@ -676,8 +685,47 @@ export function MeetingsPanel({
   const sysPercent = levelToPercent(dualLevels.system);
 
   return (
-    <div ref={meetingDropTargetRef} className="meetings-panel" data-testid="meetings-panel">
+    <div ref={meetingDropTargetRef} className="meetings-panel meetings-panel--workspace" data-testid="meetings-panel">
       {inPerson}
+      <div className="meeting-workspace-header">
+        <div><h1>Meetings</h1></div>
+        <div className="meeting-workspace-actions">
+          {onRecordInPerson && !inPerson && !isRecording && (
+            <button
+              id="meetings-record-in-person-btn"
+              data-testid="meetings-record-in-person-btn"
+              type="button"
+              className="meeting-vault-btn meeting-record-in-person-btn"
+              onClick={onRecordInPerson}
+              title="Record a meeting in the room on this computer's microphone"
+            >
+              <IconRecord size={12} />
+              <span className="vault-btn-text">Record in person</span>
+            </button>
+          )}
+
+          <button
+            id="meetings-vault-btn"
+            data-testid="meetings-vault-btn"
+            type="button"
+            className="meeting-vault-btn"
+            onClick={() => setIsVaultOpen(true)}
+            title="Manage identified speakers & voiceprints"
+          >
+            <IconUsers size={13} />
+            <span className="vault-btn-text">Speaker Vault</span>
+          </button>
+      <MeetingRecordingImport
+        compact isVisible={isVisible} modelId={modelId} useGpu={useGpu}
+        dropTargetRef={meetingDropTargetRef}
+        blocked={isRecording || !!processing || importBlocked || isVaultOpen || reviewMeetingId !== null}
+        hasDiarizationModel={hasDiarizationModel}
+        onProcessingChange={onImportProcessingChange}
+        onComplete={id => { setSelectedPlatform("All"); setSearchQuery(""); selectMeeting(id); void loadMeetings(); }}
+      />
+        </div>
+      </div>
+
       {/* ── Active Live Call Banner (If call is detected or recording) ─ */}
       {activeMeeting && (
         <div className={`meeting-live-banner ${isRecordingCall ? "recording" : ""} ${selectedMeetingId ? "meeting-live-banner--has-selection" : ""}`}>
@@ -695,7 +743,7 @@ export function MeetingsPanel({
               <span className="meeting-live-sub">
                 {isRecordingCall ? "Dual-channel recording in progress..." : "Live meeting detected"}
                 {" • "}
-                {activeMeeting.app_name} (PID {activeMeeting.pid})
+                {activeMeeting.app_name}
               </span>
             </div>
           </div>
@@ -732,7 +780,7 @@ export function MeetingsPanel({
       {(isRecordingCall || activeMeeting) && (
         <div className={`meeting-meters-card ${selectedMeetingId ? "meeting-meters-card--has-selection" : ""}`}>
           <div className="meeting-meters__header">
-            <h4 className="meeting-meters__title">Dual-Channel Audio Telemetry</h4>
+            <h4 className="meeting-meters__title">Audio levels</h4>
             <span className="meeting-meters__tag">48 kHz Lossless Stereo</span>
           </div>
           <div className="meeting-meters__track">
@@ -767,12 +815,16 @@ export function MeetingsPanel({
         </div>
       )}
 
-      <MeetingHistoryControls count={platformCounts.reduce((sum, platform) => sum + platform.count, 0)} onSelect={selectMeeting} />
       {/* ── Search & Filter Controls ─────────────────────────── */}
       {previewSpeaker && selectedMeeting && <SpeakerPreviewModal key={`${selectedMeeting.id}-${previewSpeaker.id}`} meetingId={selectedMeeting.id}
         speakerId={previewSpeaker.id} speakerName={previewSpeaker.name} initialPath={previewSpeaker.path} onClose={() => setPreviewSpeaker(null)} />}
-      <div className={`meeting-filter-bar ${selectedMeetingId ? "meeting-filter-bar--has-selection" : ""}`}>
-        <div className="meeting-search-row">
+
+
+
+      {/* ── 2-Column Master-Detail Catalog Layout ─────────────── */}
+      <div className={`meeting-catalog-layout ${selectedMeetingId ? "has-selected-meeting" : ""}`}>
+        <aside className="meeting-library" aria-label="Meeting library">
+<div className="meeting-filter-bar">
           <div className="meeting-search-input-wrap">
             <IconSearch size={15} className="meeting-search-icon" />
             <input
@@ -798,111 +850,15 @@ export function MeetingsPanel({
               </button>
             )}
           </div>
-
-          <div className="meeting-view-mode-toggle">
-            <button
-              id="meetings-view-recent-btn"
-              data-testid="meetings-view-recent-btn"
-              type="button"
-              className={`view-mode-btn ${!groupByPlatform ? "active" : ""}`}
-              onClick={() => setGroupByPlatform(false)}
-              title="Show meetings in chronological date order"
-            >
-              Recent
-            </button>
-            <button
-              id="meetings-view-platform-btn"
-              data-testid="meetings-view-platform-btn"
-              type="button"
-              className={`view-mode-btn ${groupByPlatform ? "active" : ""}`}
-              onClick={() => setGroupByPlatform(true)}
-              title="Organize meetings grouped under platform sections"
-            >
-              Platform
-            </button>
-          </div>
-
-          {onRecordInPerson && !inPerson && !isRecording && (
-            <button
-              id="meetings-record-in-person-btn"
-              data-testid="meetings-record-in-person-btn"
-              type="button"
-              className="meeting-vault-btn meeting-record-in-person-btn"
-              onClick={onRecordInPerson}
-              title="Record a meeting in the room on this computer's microphone"
-            >
-              <IconRecord size={12} />
-              <span className="vault-btn-text">Record in person</span>
-            </button>
-          )}
-
-          <button
-            id="meetings-vault-btn"
-            data-testid="meetings-vault-btn"
-            type="button"
-            className="meeting-vault-btn"
-            onClick={() => setIsVaultOpen(true)}
-            title="Manage identified speakers & voiceprints"
-          >
-            <IconUsers size={13} />
-            <span className="vault-btn-text">Speaker Vault</span>
-          </button>
-        </div>
-
-        {/* Platform Filter Pills */}
-        <div className="meeting-filter-pills-row">
-          <span className="filter-pill-label">Platform:</span>
-          <div className="meeting-pills-scroll">
-            {availablePlatforms.map((plat) => {
-              const isAll = plat === "All";
-              const meta = getPlatformMeta(plat);
-              const count = isAll
-                ? meetings.length
-                : platformCounts.find((c) => c.platform === plat)?.count;
-
-              return (
-                <button
-                  id={`meetings-platform-tab-${plat}`}
-                  data-testid={`meetings-platform-tab-${plat}`}
-                  key={plat}
-                  type="button"
-                  className={`platform-tab-btn ${selectedPlatform === plat ? "active" : ""}`}
-                  style={
-                    selectedPlatform === plat && !isAll
-                      ? { borderColor: meta.color, color: meta.color, background: meta.bg }
-                      : undefined
-                  }
-                  onClick={() => setSelectedPlatform(plat)}
-                >
-                  {!isAll && (
-                    <span
-                      className="platform-dot"
-                      style={{ backgroundColor: meta.color }}
-                    />
-                  )}
-                  <span>{meta.label}</span>
-                  {count !== undefined && count > 0 && (
-                    <span className="platform-tab-count">{count}</span>
-                  )}
-                </button>
-              );
-            })}
+          <div className="meeting-library-filters">
+            <select aria-label="Filter meetings by platform" value={selectedPlatform} onChange={e => setSelectedPlatform(e.target.value)}>
+              {availablePlatforms.map(platform => <option key={platform} value={platform}>{platform === "All" ? "All sources" : getPlatformMeta(platform).label}</option>)}
+            </select>
+            <select aria-label="Meeting list order" value={groupByPlatform ? "platform" : "recent"} onChange={e => setGroupByPlatform(e.target.value === "platform")}>
+              <option value="recent">Recent first</option><option value="platform">By source</option>
+            </select>
           </div>
         </div>
-      </div>
-
-      <MeetingRecordingImport
-        isVisible={isVisible} modelId={modelId} useGpu={useGpu}
-        dropTargetRef={meetingDropTargetRef}
-        blocked={isRecording || !!processing || importBlocked || isVaultOpen || reviewMeetingId !== null}
-        hasDiarizationModel={hasDiarizationModel}
-        onProcessingChange={onImportProcessingChange}
-        onComplete={id => { setSelectedPlatform("All"); setSearchQuery(""); selectMeeting(id); void loadMeetings(); }}
-      />
-
-      {/* ── 2-Column Master-Detail Catalog Layout ─────────────── */}
-      <div className={`meeting-catalog-layout ${selectedMeetingId ? "has-selected-meeting" : ""}`}>
-        {/* Left Column: Meeting Cards List */}
         <div className="meeting-cards-list">
           {processing && (
             <div
@@ -1103,6 +1059,9 @@ export function MeetingsPanel({
           {meetings.length >= historyPages * 100 && <button type="button" className="meeting-load-more" disabled={loadingList} onClick={() => setHistoryPages(pages => pages + 1)}>{loadingList ? "Loading…" : "Load more meetings"}</button>}
         </div>
 
+        <MeetingHistoryControls count={platformCounts.reduce((sum, platform) => sum + platform.count, 0)} onSelect={selectMeeting} />
+        </aside>
+
         {/* Right Column: Selected Meeting Deep-Dive Detail View */}
         <div className="meeting-detail-card"
           onPointerDown={() => { manualScrollUntil.current = Date.now() + 5000; scrolledBlock.current = -1; }}
@@ -1163,41 +1122,7 @@ export function MeetingsPanel({
                       <span>{exportedNotes ? "Exported" : "Export"}</span>
                     </button>
 
-                    {confirmDeleteMeetingId === selectedMeeting.id ? (
-                      <>
-                        <button
-                          id="meetings-delete-confirm-btn"
-                          data-testid="meetings-delete-confirm-btn"
-                          type="button"
-                          className="detail-tool-btn danger detail-tool-btn--confirm"
-                          onClick={handleDeleteMeeting}
-                          title="Delete this meeting and its recording permanently"
-                        >
-                          <IconTrash size={13} />
-                          <span>Delete meeting?</span>
-                        </button>
-                        <button
-                          id="meetings-delete-cancel-btn"
-                          data-testid="meetings-delete-cancel-btn"
-                          type="button"
-                          className="detail-tool-btn"
-                          onClick={() => setConfirmDeleteMeetingId(null)}
-                        >
-                          <span>Cancel</span>
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        id="meetings-delete-btn"
-                        data-testid="meetings-delete-btn"
-                        type="button"
-                        className="detail-tool-btn danger"
-                        onClick={handleDeleteMeeting}
-                        title="Delete this meeting recording"
-                      >
-                        <IconTrash size={13} />
-                      </button>
-                    )}
+
                   </div>
                 </div>
                 {toolbarError && (
@@ -1260,12 +1185,6 @@ export function MeetingsPanel({
                 </div>
               </div>
 
-              {/* "Speaker 2 sounds like Dana — is it?" */}
-              <SpeakerSuggestions
-                meetingId={selectedMeeting.id}
-                onLabelled={() => { loadMeetingDetail(selectedMeeting.id); loadMeetings(); }}
-              />
-
               {/* Recording file gone: say so; the transcript below is complete. */}
               {(selectedMeeting.audio_missing || audioFailed || (selectedMeeting.clips_missing ?? 0) > 0) && (
                 <div id="meeting-audio-missing" data-testid="meeting-audio-missing" className="meeting-audio-missing" role="status">
@@ -1273,21 +1192,6 @@ export function MeetingsPanel({
                     ? "Audio file missing — the recording was deleted or moved. The transcript is complete."
                     : `${selectedMeeting.clips_missing} speaker clip${selectedMeeting.clips_missing === 1 ? " is" : "s are"} missing — the transcript is complete.`}
                 </div>
-              )}
-
-              {!!selectedMeeting.recording_sources?.length && (
-                <details className="meeting-import-sources" data-testid="meeting-recording-sources">
-                  <summary>{selectedMeeting.recording_sources.length} imported recording{selectedMeeting.recording_sources.length === 1 ? "" : "s"} · original timeline</summary>
-                  <ol>{selectedMeeting.recording_sources.map((source, index) => <li key={`${source.path}-${index}`}>
-                    <button type="button" disabled={!selectedMeeting.audio_path || selectedMeeting.audio_missing || audioFailed}
-                      onClick={() => { handleToggleFullAudio(source.offset_ms / 1000, true); }}>
-                      {formatDurationMs(source.offset_ms)} · {source.name} · {recordingDate(source.recorded_start)}
-                      {source.recorded_end ? ` → ${recordingDate(source.recorded_end)}` : ""}
-                    </button>
-                    {source.timestamp_source && <p>{source.timestamp_source}</p>}
-                  </li>)}</ol>
-                  <p>Playback joins the files in your chosen order. Original timestamps retain gaps and overlaps.</p>
-                </details>
               )}
 
               {/* Audio Scrubber Bar (if recording audio exists) */}
@@ -1340,43 +1244,24 @@ export function MeetingsPanel({
                 </div>
               )}
 
+              <div className="meeting-detail-tabs" role="tablist" aria-label="Meeting view" onKeyDown={e => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+                e.preventDefault();
+                const views = ["transcript", "speakers", "tools"] as const;
+                const next = e.key === "Home" ? 0 : e.key === "End" ? 2 : (views.indexOf(detailView) + (e.key === "ArrowRight" ? 1 : 2)) % 3;
+                setDetailView(views[next]);
+                if (typeof document !== "undefined") document.getElementById(`meetings-tab-${views[next]}`)?.focus();
+              }}>
+                {(["transcript", "speakers", "tools"] as const).map(view => <button type="button" role="tab" key={view} id={`meetings-tab-${view}`} data-testid={`meetings-tab-${view}`} aria-controls={`meetings-panel-${view}`} aria-selected={detailView === view} tabIndex={detailView === view ? 0 : -1} onClick={() => setDetailView(view)}>
+                  {view === "transcript" ? "Transcript" : view === "speakers" ? `Speakers · ${meetingSpeakers.filter(person => person.speaker_id !== "background").length}` : "Tools"}
+                </button>)}
+              </div>
+              <div className="meeting-detail-scroll">
               {/* Diarized Conversation Turns */}
-              <div className="detail-turns-section">
-                <div className="detail-section-heading">
-                  <span>
-                    <IconUsers size={13} style={{ marginRight: 5, color: "#3b82f6" }} />
-                    Meeting Transcript ({selectedMeeting.turns.length} turns)
-                  </span>
-                </div>
-
-                <details className="meeting-repair-tools" key={selectedMeeting.id}>
-                  <summary>Repair transcript &amp; speakers</summary>
-                <div className="meeting-speaker-tools">
-                  <label>About how many people? <input type="number" min="1" max="32" step="1" value={speakerHint} aria-label="Speaker count hint" disabled={speakerBusy}
-                    onChange={e => setSpeakerHint(e.target.value)} /></label>
-                  <button type="button" className="turn-clip-btn" data-testid="meetings-reseparate-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
-                    onClick={() => { if (!confirmReseparate) { setConfirmReseparate(true); return; } setConfirmReseparate(false); void changeSpeakers("reseparate_meeting_speakers", { expectedSpeakers: speakerHint ? Number(speakerHint) : null, modelId, useGpu }); }}>
-                    {speakerBusy ? "Working…" : confirmReseparate ? "Confirm re-separation" : "Re-separate speakers"}
-                  </button>
-                  <button type="button" className="turn-clip-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
-                    onClick={() => { if (!confirmPipeline) { setConfirmPipeline(true); return; } setConfirmPipeline(false); void changeSpeakers("reprocess_meeting", { expectedSpeakers: speakerHint ? Number(speakerHint) : null, modelId, useGpu }); }}>
-                    {confirmPipeline ? "Confirm full reprocessing" : "Clean audio and rerun pipeline"}
-                  </button>
-                  {confirmPipeline && <><span>Rebuilds the transcript from cleaned audio. Separate mic/caller tracks allow echo cleanup; mixed recordings get noise cleanup. Manual turn labels and merge undo are replaced after success. Original audio, notes and tags are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmPipeline(false)}>Cancel</button></>}
-                  {confirmReseparate && <><span>Rebuilds turns and transcript; manual labels and merge undo are replaced after success. Notes and original recording are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmReseparate(false)}>Cancel</button></>}
-                </div>
-                </details>
-                {selectedMeeting.merges?.[0] && (
-                  <button type="button" className="turn-clip-btn" data-testid="meetings-undo-merge-btn" disabled={speakerBusy}
-                    onClick={() => changeSpeakers("undo_meeting_speaker_merge", { mergeId: selectedMeeting.merges![0].id })}>
-                    Undo merge: {selectedMeeting.merges[0].from_speaker_name} → {selectedMeeting.merges[0].into_speaker_name}
-                  </button>
-                )}
+              <section className="detail-turns-section" role="tabpanel" id="meetings-panel-transcript" aria-labelledby="meetings-tab-transcript" hidden={detailView !== "transcript"}>
                 <div className="turns-conversation-flow">
                   {blocks.map((t, idx) => {
                     const isYou = t.channel === 0;
-                    const isSnippetPlaying = playingSnippetSpeakerId === `${t.speaker_id}:${t.snippet_path ?? ""}`;
-                    const isRenaming = renamingSpeakerId === t.speaker_id;
 
                     return (
                       <div
@@ -1394,19 +1279,52 @@ export function MeetingsPanel({
                               {isYou ? "YOU" : t.speaker_name.slice(0, 2).toUpperCase()}
                             </div>
 
+                            <button type="button" className="turn-speaker-link" onClick={() => setDetailView("speakers")} aria-label={`Manage speaker ${t.speaker_name}`}>{t.speaker_name}</button>
+                            <button type="button" className="turn-time-stamp" aria-label={`Play from ${formatSeconds(t.start_ms / 1000)}`} disabled={!selectedMeeting.audio_path || !!selectedMeeting.audio_missing || audioFailed} onClick={() => handleToggleFullAudio(t.start_ms / 1000, true)}>{formatSeconds(Math.round(t.start_ms / 1000))}</button>
+                          </div>
+
+
+                        </div>
+
+                        <p className="turn-text" role={selectedMeeting.audio_path && !audioFailed ? "button" : undefined}
+                          tabIndex={selectedMeeting.audio_path && !audioFailed ? 0 : undefined}
+                          aria-label={`Jump to ${formatSeconds(t.start_ms / 1000)}: ${t.text}`}
+                          onClick={() => { if (selectedMeeting.audio_path && !audioFailed) handleToggleFullAudio(t.start_ms / 1000, true); }}
+                          onKeyDown={e => { if (selectedMeeting.audio_path && !audioFailed && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); handleToggleFullAudio(t.start_ms / 1000, true); } }}>{t.text}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+              <section className="meeting-speakers-panel" role="tabpanel" id="meetings-panel-speakers" aria-labelledby="meetings-tab-speakers" hidden={detailView !== "speakers"}>
+                <div className="meeting-panel-intro"><p>Play a sample, rename a speaker, or merge voices that belong to the same person.</p></div>
+              {/* "Speaker 2 sounds like Dana — is it?" */}
+              <SpeakerSuggestions
+                meetingId={selectedMeeting.id}
+                onLabelled={() => { loadMeetingDetail(selectedMeeting.id); loadMeetings(); }}
+              />
+
+                {selectedMeeting.merges?.[0] && (
+                  <button type="button" className="turn-clip-btn" data-testid="meetings-undo-merge-btn" disabled={speakerBusy}
+                    onClick={() => changeSpeakers("undo_meeting_speaker_merge", { mergeId: selectedMeeting.merges![0].id })}>
+                    Undo merge: {selectedMeeting.merges[0].from_speaker_name} → {selectedMeeting.merges[0].into_speaker_name}
+                  </button>
+                )}
+
+                <div className="meeting-speaker-cards">
+                  {meetingSpeakers.map((person, idx) => {
+                    const t = selectedMeeting.turns.find(turn => turn.speaker_id === person.speaker_id && turn.snippet_path) ?? person;
+                    const isYou = t.channel === 0;
+                    const isSnippetPlaying = playingSnippetSpeakerId === `${t.speaker_id}:${t.snippet_path ?? ""}`;
+                    const isRenaming = renamingSpeakerId === t.speaker_id;
+                    return <article className="meeting-speaker-card" key={t.speaker_id}>
+                      <div className="meeting-speaker-card-heading"><div className="turn-speaker-avatar">{t.speaker_name.slice(0, 2).toUpperCase()}</div>
                             {isRenaming ? (
                               <input
                                 id={`meetings-speaker-rename-input-${idx}`}
                                 data-testid={`meetings-speaker-rename-input-${idx}`}
                                 type="text"
-                                style={{
-                                  background: "#000",
-                                  border: "1px solid #3b82f6",
-                                  color: "#fff",
-                                  padding: "2px 6px",
-                                  borderRadius: 4,
-                                  fontSize: 12,
-                                }}
+
                                 aria-label="Speaker name (Enter to save, Escape to cancel)"
                                 value={speakerNewName}
                                 onChange={(e) => setSpeakerNewName(e.target.value)}
@@ -1417,15 +1335,13 @@ export function MeetingsPanel({
                                 autoFocus
                               />
                             ) : (
-                              <span className="turn-speaker-name">{t.speaker_name}</span>
+                              <strong className="turn-speaker-name">{t.speaker_name}</strong>
                             )}
 
-                            <span className="turn-time-stamp">
-                              {formatSeconds(Math.round(t.start_ms / 1000))}
-                            </span>
-                          </div>
 
-                          <div className="turn-actions">
+                        <span>{selectedMeeting.turns.filter(turn => turn.speaker_id === t.speaker_id).length} segments</span>
+                      </div>
+                          <div className="meeting-speaker-card-actions">
                             {!isYou && t.snippet_path && (
                               <button
                                 id={`meetings-play-snippet-btn-${idx}`}
@@ -1442,13 +1358,11 @@ export function MeetingsPanel({
                                 ) : (
                                   <IconPlay size={11} />
                                 )}
-                                <span>{isSnippetPlaying ? "Playing" : "3s Clip"}</span>
+                                <span>{isSnippetPlaying ? "Stop sample" : "Play sample"}</span>
                               </button>
                             )}
 
-                            <details className="turn-speaker-menu">
-                              <summary aria-label={`Speaker actions for ${t.speaker_name}`}>Speaker</summary>
-                              <div className="turn-speaker-menu-body">
+
                             {!isYou && t.speaker_id !== "background" && <button type="button" className="turn-clip-btn" aria-label={`Compare voice samples for ${t.speaker_name}`}
                               onClick={() => { stopSnippetAudio(); stopFullAudio(); setPreviewSpeaker({ id: t.speaker_id, name: t.speaker_name, path: t.snippet_path }); }}>Compare samples</button>}
 
@@ -1478,23 +1392,88 @@ export function MeetingsPanel({
                                 }}
                                 title="Rename speaker"
                               >
-                                {isRenaming ? <IconCheck size={11} /> : <IconEdit size={11} />}
+                                {isRenaming ? <IconCheck size={11} /> : <IconEdit size={11} />}<span>{isRenaming ? "Save name" : "Rename"}</span>
                               </button>
                             )}
-                              </div>
-                            </details>
-                          </div>
-                        </div>
 
-                        <p className="turn-text" role={selectedMeeting.audio_path && !audioFailed ? "button" : undefined}
-                          tabIndex={selectedMeeting.audio_path && !audioFailed ? 0 : undefined}
-                          aria-label={`Jump to ${formatSeconds(t.start_ms / 1000)}: ${t.text}`}
-                          onClick={() => { if (selectedMeeting.audio_path && !audioFailed) handleToggleFullAudio(t.start_ms / 1000, true); }}
-                          onKeyDown={e => { if (selectedMeeting.audio_path && !audioFailed && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); handleToggleFullAudio(t.start_ms / 1000, true); } }}>{t.text}</p>
-                      </div>
-                    );
+                          </div>
+                    </article>;
                   })}
                 </div>
+              </section>
+              <section className="meeting-tools-panel" role="tabpanel" id="meetings-panel-tools" aria-labelledby="meetings-tab-tools" hidden={detailView !== "tools"}>
+
+                <div className="meeting-maintenance-card meeting-danger-zone"><h3>Delete meeting</h3><p>Permanently remove this meeting and its recording.</p><div className="meeting-speaker-card-actions">                    {confirmDeleteMeetingId === selectedMeeting.id ? (
+                      <>
+                        <button
+                          id="meetings-delete-confirm-btn"
+                          data-testid="meetings-delete-confirm-btn"
+                          type="button"
+                          className="detail-tool-btn danger detail-tool-btn--confirm"
+                          onClick={handleDeleteMeeting}
+                          title="Delete this meeting and its recording permanently"
+                        >
+                          <IconTrash size={13} />
+                          <span>Delete meeting?</span>
+                        </button>
+                        <button
+                          id="meetings-delete-cancel-btn"
+                          data-testid="meetings-delete-cancel-btn"
+                          type="button"
+                          className="detail-tool-btn"
+                          onClick={() => setConfirmDeleteMeetingId(null)}
+                        >
+                          <span>Cancel</span>
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        id="meetings-delete-btn"
+                        data-testid="meetings-delete-btn"
+                        type="button"
+                        className="detail-tool-btn danger"
+                        onClick={handleDeleteMeeting}
+                        title="Delete this meeting recording"
+                      >
+                        <IconTrash size={13} /><span>Delete meeting</span>
+                      </button>
+                    )}
+                </div></div>
+                <div className="meeting-maintenance-card">
+                  <h3>Reprocess recording</h3>
+                  <p>Use the original recording to rebuild the transcript and speaker labels.</p>
+                <div className="meeting-speaker-tools">
+                  <label>About how many people? <input type="number" min="1" max="32" step="1" value={speakerHint} aria-label="Speaker count hint" disabled={speakerBusy}
+                    onChange={e => setSpeakerHint(e.target.value)} /></label>
+                  <button type="button" className="turn-clip-btn" data-testid="meetings-reseparate-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
+                    onClick={() => { if (!confirmReseparate) { setConfirmReseparate(true); return; } setConfirmReseparate(false); void changeSpeakers("reseparate_meeting_speakers", { expectedSpeakers: speakerHint ? Number(speakerHint) : null, modelId, useGpu }); }}>
+                    {speakerBusy ? "Working…" : confirmReseparate ? "Confirm re-separation" : "Re-separate speakers"}
+                  </button>
+                  <button type="button" className="turn-clip-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
+                    onClick={() => { if (!confirmPipeline) { setConfirmPipeline(true); return; } setConfirmPipeline(false); void changeSpeakers("reprocess_meeting", { expectedSpeakers: speakerHint ? Number(speakerHint) : null, modelId, useGpu }); }}>
+                    {confirmPipeline ? "Confirm full reprocessing" : "Clean audio and rerun pipeline"}
+                  </button>
+                  {confirmPipeline && <><span>Rebuilds the transcript from cleaned audio. Separate mic/caller tracks allow echo cleanup; mixed recordings get noise cleanup. Manual turn labels and merge undo are replaced after success. Original audio, notes and tags are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmPipeline(false)}>Cancel</button></>}
+                  {confirmReseparate && <><span>Rebuilds turns and transcript; manual labels and merge undo are replaced after success. Notes and original recording are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmReseparate(false)}>Cancel</button></>}
+                </div>
+                </div>
+              {!!selectedMeeting.recording_sources?.length && (
+                <details className="meeting-import-sources" data-testid="meeting-recording-sources">
+                  <summary>{selectedMeeting.recording_sources.length} imported recording{selectedMeeting.recording_sources.length === 1 ? "" : "s"} · original timeline</summary>
+                  <ol>{selectedMeeting.recording_sources.map((source, index) => <li key={`${source.path}-${index}`}>
+                    <button type="button" disabled={!selectedMeeting.audio_path || selectedMeeting.audio_missing || audioFailed}
+                      onClick={() => { handleToggleFullAudio(source.offset_ms / 1000, true); }}>
+                      {formatDurationMs(source.offset_ms)} · {source.name} · {recordingDate(source.recorded_start)}
+                      {source.recorded_end ? ` → ${recordingDate(source.recorded_end)}` : ""}
+                    </button>
+                    {source.timestamp_source && <p>{source.timestamp_source}</p>}
+                  </li>)}</ol>
+                  <p>Playback joins the files in your chosen order. Original timestamps retain gaps and overlaps.</p>
+                </details>
+              )}
+
+
+              </section>
               </div>
             </>
           )}
