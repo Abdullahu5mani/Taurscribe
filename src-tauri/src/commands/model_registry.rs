@@ -128,6 +128,18 @@ pub fn get_model_config(model_id: &str) -> Option<ModelConfig> {
                 sha1: "c28ef4168295b182fbf4b18b3c5743d649d39cbf7e0eee8b0e49a653f35bcb5e" }],
             subdirectory: Some("voice-separation"),
         }),
+        // Word timing for decoders without timestamps (Granite, Qwen3-ASR):
+        // wav2vec2-base-960h (Apache-2.0), int8 ONNX export by Xenova.
+        crate::word_align::MODEL_ID => Some(ModelConfig {
+            repo: "Xenova/wav2vec2-base-960h",
+            branch: "a19f851b3d42865797e410752b4c570c871e4825",
+            files: vec![ModelFile {
+                filename: crate::word_align::MODEL_FILE,
+                remote_path: "onnx/model_quantized.onnx",
+                sha1: "cd5040c147381580ed73258143dd8e0c28e800a09e74ee42ee2b3e8cb4d760a3",
+            }],
+            subdirectory: Some(crate::word_align::MODEL_DIR),
+        }),
         DIARIZATION_MODEL_ID => Some(diarization_model_config()),
         SPEAKER_MODEL_ID => Some(ModelConfig {
             repo: "github-release:k2-fsa/sherpa-onnx",

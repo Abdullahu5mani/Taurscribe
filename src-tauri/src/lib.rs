@@ -14,6 +14,8 @@ mod denoise;
 pub mod echo_cancel;
 pub mod diarization;
 pub mod neural_diarizer;
+pub mod diar_refine;
+pub mod word_align;
 pub mod meeting_continuation;
 pub mod mcp_server;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
