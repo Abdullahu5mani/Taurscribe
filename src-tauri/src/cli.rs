@@ -28,6 +28,15 @@ Files:
   transcribe <file>... [--json]
                            transcribe audio files with the active engine
 
+Meetings:
+  import-meeting <file|directory>... [--model ID] [--speakers N] [--json]
+                           import each recording as a separate meeting
+  import-meeting <file>... --combine --title Meeting-name
+                           join recordings into one meeting
+  stop-meeting             stop meeting processing and its pending batch
+  meeting-processing --json
+                           current stage and available draft
+
 Status:
   status [--json]          is the app running, recording, which model is loaded
   benchmark [--json]       time the loaded model on each GPU and the CPU
@@ -53,7 +62,7 @@ const EXIT_NOT_RUNNING: i32 = 3;
 pub fn is_cli_command(arg: &str) -> bool {
     matches!(
         arg,
-        "start" | "stop" | "toggle" | "transcribe" | "status" | "benchmark" | "history" | "search" | "show" | "meeting"
+        "start" | "stop" | "toggle" | "transcribe" | "status" | "benchmark" | "history" | "search" | "show" | "meeting" | "import-meeting" | "stop-meeting" | "meeting-processing"
             | "install-cli" | "uninstall-cli" | "help" | "--help" | "-h" | "--version" | "-V"
     )
 }
@@ -79,6 +88,12 @@ pub fn run(args: Vec<String>) -> i32 {
         "benchmark" => cmd_benchmark(&o),
         "start" | "stop" | "toggle" => cmd_dictate(cmd, &o),
         "transcribe" => cmd_transcribe(&o),
+        "import-meeting" => cmd_import_meeting(&o),
+        "stop-meeting" | "meeting-processing" => o.check().and_then(|()| {
+            if !o.pos.is_empty() || o.print || o.limit.is_some() || o.kind.is_some(){return Err(Fail::Usage("this command takes only --json".into()));}
+            let result=request(cmd,Value::Null,Some(Duration::from_secs(10)))?;
+            if o.json {println!("{result}");} else {println!("{}",if cmd=="stop-meeting" {if result["cancelled"]==true {"Stopping meeting processing…".into()} else {"No cancellable meeting is processing".into()}} else {result.to_string()});}Ok(())
+        }),
         "history" => cmd_history(&o),
         "search" => cmd_search(&o),
         "show" => cmd_show("get_transcript", &o),
@@ -126,16 +141,22 @@ struct Opts {
     limit: Option<i64>,
     kind: Option<String>,
     bad: Option<String>,
+    model: Option<String>, speakers: Option<usize>, title: Option<String>, combine: bool, cpu: bool,
 }
 
 impl Opts {
     fn parse(args: &[String]) -> Self {
-        let mut o = Opts { pos: Vec::new(), json: false, print: false, limit: None, kind: None, bad: None };
+        let mut o = Opts { pos: Vec::new(), json: false, print: false, limit: None, kind: None, bad: None, model:None,speakers:None,title:None,combine:false,cpu:false };
         let mut it = args.iter();
         while let Some(a) = it.next() {
             match a.as_str() {
                 "--json" => o.json = true,
                 "--print" => o.print = true,
+                "--combine"=>o.combine=true,
+                "--cpu"=>o.cpu=true,
+                "--model"=>match it.next(){Some(value)=>o.model=Some(value.clone()),None=>o.bad=Some("--model needs an ID".into())},
+                "--title"=>match it.next(){Some(value)=>o.title=Some(value.clone()),None=>o.bad=Some("--title needs a name".into())},
+                "--speakers"=>match it.next().and_then(|value|value.parse::<usize>().ok()).filter(|n|(1..=32).contains(n)){Some(n)=>o.speakers=Some(n),None=>o.bad=Some("--speakers needs a number from 1 to 32".into())},
                 "--limit" | "-n" => match it.next().and_then(|v| v.parse().ok()) {
                     Some(n) => o.limit = Some(n),
                     None => o.bad = Some("--limit needs a number".into()),
@@ -160,6 +181,7 @@ impl Opts {
         Ok(())
     }
     fn check(&self) -> Result<(), Fail> {
+        if self.model.is_some() || self.speakers.is_some() || self.title.is_some() || self.combine || self.cpu {return Err(Fail::Usage("meeting options require import-meeting".into()));}
         match &self.bad {
             Some(m) => Err(Fail::Usage(m.clone())),
             None => Ok(()),
@@ -412,6 +434,46 @@ fn wait_for_recording(want: bool) -> Result<(), Fail> {
     } else {
         "Taurscribe did not stop recording".into()
     }))
+}
+
+fn meeting_files(inputs:&[String])->Result<Vec<PathBuf>,String>{
+    fn visit(path:&Path,files:&mut Vec<PathBuf>)->Result<(),String>{
+        if path.is_dir(){
+            for entry in std::fs::read_dir(path).map_err(|e|format!("{}: {e}",path.display()))? {
+                let entry=entry.map_err(|e|e.to_string())?;
+                if !entry.file_type().map_err(|e|e.to_string())?.is_symlink(){visit(&entry.path(),files)?;}
+            }
+        }else if path.is_file(){
+            let ext=path.extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
+            if ["wav","mp3","m4a","aac","flac","ogg","opus","mp4","mov","mkv","webm"].contains(&ext.as_str()){files.push(std::path::absolute(path).map_err(|e|e.to_string())?);}
+        }else{return Err(format!("no such path: {}",path.display()));}Ok(())
+    }
+    let mut files=Vec::new();for input in inputs {visit(Path::new(input),&mut files)?;}files.sort();files.dedup();
+    if files.is_empty(){return Err("No supported meeting recordings found".into());}Ok(files)
+}
+fn cmd_import_meeting(o:&Opts)->Result<(),Fail>{
+    if let Some(bad)=o.bad.as_ref(){return Err(Fail::Usage(bad.clone()));}
+    if o.pos.is_empty() || o.print || o.limit.is_some() || o.kind.is_some(){return Err(Fail::Usage("import-meeting needs recording files or a directory".into()));}
+    let files=meeting_files(&o.pos)?;
+    if o.title.is_some() && !o.combine && files.len()>1 {return Err(Fail::Usage("--title requires one recording or --combine".into()));}
+    ensure_running()?;
+    let jobs:Vec<Vec<PathBuf>>=if o.combine {vec![files]}else{files.into_iter().map(|file|vec![file]).collect()};
+    let mut failed=0;
+    for(index,paths)in jobs.iter().enumerate(){
+        let title=o.title.clone().unwrap_or_else(||paths[0].file_stem().unwrap_or_default().to_string_lossy().into_owned());
+        eprintln!("Importing meeting {}/{}: {title}…",index+1,jobs.len());
+        let begin=Instant::now();
+        match request("import-meeting",json!({"paths":paths,"title":title,"model":o.model,"speakers":o.speakers,"use_gpu":if o.cpu{Some(false)}else{None}}),None){
+            Ok(result)=>if o.json{println!("{result}");}else{println!("Saved meeting {}: {} ({:.1}s)",result["meeting_id"],title,begin.elapsed().as_secs_f64());},
+            Err(Fail::Other(error))=>{
+                if o.json{println!("{}",json!({"title":title,"error":error,"processing_ms":begin.elapsed().as_millis()}));}
+                eprintln!("taurscribe: {title}: {error}");
+                if error.contains(crate::meeting_job::STOPPED){return Err(Fail::Other(format!("{}; remaining meetings were not started",crate::meeting_job::STOPPED)));}failed+=1;
+            }
+            Err(error)=>return Err(error),
+        }
+    }
+    if failed>0{return Err(Fail::Other(format!("{failed} of {} meeting imports failed",jobs.len())));}Ok(())
 }
 
 fn cmd_transcribe(o: &Opts) -> Result<(), Fail> {
@@ -784,7 +846,7 @@ mod tests {
 
     #[test]
     fn only_known_subcommands_run_the_cli() {
-        for c in ["start", "stop", "toggle", "transcribe", "status", "benchmark", "history", "search", "show", "meeting", "install-cli", "help", "--version"] {
+        for c in ["start", "stop", "toggle", "transcribe", "status", "benchmark", "history", "search", "show", "meeting", "import-meeting", "stop-meeting", "meeting-processing", "install-cli", "help", "--version"] {
             assert!(is_cli_command(c), "{c}");
         }
         // Anything else (no args, macOS -psn_ args, stray paths) still opens the app.
@@ -809,6 +871,21 @@ mod tests {
         assert!(opts(&["--help"]).check().is_err());
         assert!(opts(&["extra"]).check_bare().is_err());
         assert!(opts(&[]).check_bare().is_ok());
+    }
+
+    #[test]
+    fn imports_more_than_100_recordings_recursively_without_duplicates() {
+        let dir = std::env::temp_dir().join(format!("meeting-cli-test-{:032x}",rand::random::<u128>()));
+        std::fs::create_dir(&dir).unwrap();
+        let nested = dir.join("nested"); std::fs::create_dir(&nested).unwrap();
+        for index in 0..105 { std::fs::write(nested.join(format!("{index}.flac")), b"fixture").unwrap(); }
+        std::fs::write(nested.join("notes.txt"), b"not audio").unwrap();
+        let root=dir.to_string_lossy().into_owned();
+        assert_eq!(meeting_files(&[root.clone(),root]).unwrap().len(),105);
+        std::fs::remove_dir_all(dir).unwrap();
+        let o=opts(&["--model","granite-speech-5-nc","--speakers","2","--cpu","--json","input.wav"]);
+        assert_eq!(o.model.as_deref(),Some("granite-speech-5-nc"));
+        assert_eq!(o.speakers,Some(2)); assert!(o.cpu && o.json);
     }
 
     #[test]

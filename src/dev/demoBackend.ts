@@ -25,6 +25,8 @@ const now = Date.now();
 const at = (msAgo: number) => new Date(now - msAgo).toISOString();
 
 let nextId = 100;
+let demoImportStatus: Record<string, unknown> | null = null;
+let cancelDemoImport: (() => void) | null = null;
 const history: FileHistoryRecord[] = [
     { text: "Can you move the design review to Thursday at 3? Friday is packed with the launch prep.", engine: "granite", model: "granite-speech-5-nc", ago: 0.2 * HOUR, dur: 5200, proc: 410, llm: true },
     { text: "Remind me to send Priya the updated pricing sheet before the call tomorrow.", engine: "granite", model: "granite-speech-5-nc", ago: 1.1 * HOUR, dur: 3900, proc: 380, llm: true },
@@ -255,6 +257,7 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         }
 
         // Meetings
+        case "get_meeting_import_status": return demoImportStatus;
         case "plugin:dialog|open":
             return ["/demo/Meeting part 2.m4a", "/demo/Meeting part 1.wav"];
         case "inspect_meeting_recordings": {
@@ -266,15 +269,40 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
             });
             return { recordings, errors: [] };
         }
+        case "cancel_meeting_processing": {
+            if (!cancelDemoImport) return false;
+            cancelDemoImport(); return true;
+        }
         case "import_meeting_recordings": {
+            demoImportStatus = {title:args.title,platform:"Imported recording",running:true,startedAt:Date.now(),preview:null,error:null};
+            emitDemo("meeting-processing-started", { title: args.title, platform: "Imported recording" });
+            setTimeout(() => {
+                emitDemo("meeting-processing-progress", { stage: "Transcribing audio while GPU speaker labeling runs (demo)" });
+                const preview = { title: args.title, model_id: "granite-speech-5-nc", paragraphs: meetings[0].turns.map(t => ({start_ms:t.start_ms,end_ms:t.end_ms,text:t.text})), completed_ms:120000,total_ms:600000 };
+                if (demoImportStatus) {demoImportStatus.preview=preview;demoImportStatus.stage="Transcribing audio while GPU speaker labeling runs (demo)";}
+                emitDemo("meeting-processing-preview", preview);
+            }, 300);
             const sources = (handle("inspect_meeting_recordings", args) as { recordings: RecordingSource[] }).recordings;
             const id = nextId++;
             const imported = { ...meetings[0], id, session_id: `demo-import-${id}`, title: String(args.title), platform: "Imported recording", url: "", app_name: "Taurscribe",
                 created_at: sources[0].recorded_start!, duration_ms: sources.reduce((ms, s) => ms + s.duration_ms, 0),
                 recording_sources: sources.map((source, index) => ({ ...source, offset_ms: index * 600_000 })) };
-            meetings.unshift(imported);
-            emitDemo("meeting-processing-complete", { meeting_id: id });
-            return id;
+            return new Promise((resolve, reject) => {
+              const finishTimer=setTimeout(() => {
+                cancelDemoImport=null;
+                meetings.unshift(imported);
+                demoImportStatus=null;
+                emitDemo("meeting-processing-finished", {meeting_id:id,error:null});
+                emitDemo("meeting-processing-complete", { meeting_id: id, imported: true });
+                resolve(id);
+              }, 90000);
+              cancelDemoImport=()=>{
+                clearTimeout(finishTimer); cancelDemoImport=null;
+                if(demoImportStatus){demoImportStatus.running=false;demoImportStatus.error="Meeting processing stopped";}
+                emitDemo("meeting-processing-finished",{cancelled:true,error:"Meeting processing stopped"});
+                reject(new Error("Meeting processing stopped"));
+              };
+            });
         }
         case "suggest_speaker_names": return [];
         case "get_meeting_detection_status": return { is_watching: true, active_meetings_count: 0, active_meetings: [] };
@@ -293,10 +321,20 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "get_meeting_detail": {
             const m = meetings.find((x) => x.id === args.id || x.id === args.meetingId) ?? meetings[0];
             return {
-                ...m, audio_path: null, transcript_raw: m.turns.map((t) => `${t.speaker_name}: ${t.text}`).join("\n"),
+                ...m, turns: m.turns.map(t => ({ ...t })), turn_ids: m.turns.map((_, i) => m.id * 100000 + i), transcription_model: "granite-speech-5-nc", audio_path: null, transcript_raw: m.turns.map((t) => `${t.speaker_name}: ${t.text}`).join("\n"),
                 speaker_count: new Set(m.turns.map((t) => t.speaker_id)).size,
             };
         }
+        case "assign_meeting_turns": {
+            const m = meetings.find(m => m.id === args.meetingId);
+            if (!m) throw new Error("Meeting not found");
+            const existing = m.turns.find(t => t.speaker_id === args.speakerId);
+            const speaker = existing ?? { speaker_id: `manual_${Date.now()}`, speaker_name: String(args.newName ?? "") };
+            m.turns.forEach((t, i) => { if (Array.isArray(args.turnIds) && args.turnIds.includes(m.id * 100000 + i)) { t.speaker_id = speaker.speaker_id; t.speaker_name = speaker.speaker_name; } });
+            return null;
+        }
+        case "get_meeting_tags": return [];
+        case "set_meeting_tags": return args.tags;
         case "list_speaker_vault": return vault;
         case "get_audio_source_mode": return "mic";
         case "get_auto_record_meetings": return false;

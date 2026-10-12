@@ -1086,7 +1086,7 @@ function App() {
         isDualChannelRecording={isDualChannelRecording}
         onStartDualRecording={() => handleStartRecording(false, "dual_channel")}
       />
-      <div className={`app-body ${isRecording ? "app-body--recording" : ""} theme-${activeEngine}`}>
+      <div className={`app-body ${navMode === "meetings" ? "app-body--meetings" : ""} ${isRecording ? "app-body--recording" : ""} theme-${activeEngine}`}>
         <main className={`container${containerBooting ? " container--booting" : ""}`}>
           <div>
             {/* macOS fix: Show a warning banner when the hotkey pipeline is missing
@@ -1365,10 +1365,10 @@ function App() {
           )}
 
           <OverlayScrollbarsComponent
-            className="output-area output-area--feed"
+            className={`output-area output-area--feed${navMode === "meetings" ? " output-area--meetings" : ""}`}
             options={{
               scrollbars: { theme: "os-theme-pure", autoHide: "move", autoHideDelay: 400 },
-              overflow: { x: "hidden" },
+              overflow: { x: "hidden", y: navMode === "meetings" ? "hidden" : "scroll" },
             }}
             events={feedScrollEvents}
             defer
@@ -1386,7 +1386,7 @@ function App() {
                 onFileProcessingChange={setIsFileTranscribing}
               />
             </div>
-            <div style={{ display: navMode === "meetings" ? undefined : "none" }}>
+            <div className="meetings-view-frame" style={{ display: navMode === "meetings" ? "flex" : "none" }}>
               <MeetingsPanel
                 isVisible={navMode === "meetings"}
                 modelId={activeEngine === "whisper" ? currentModel : activeEngine === "granite" ? currentGraniteModel : currentQwen3Model}

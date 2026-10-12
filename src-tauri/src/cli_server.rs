@@ -224,6 +224,10 @@ async fn client_gone(rd: &mut tokio::net::tcp::OwnedReadHalf) {
 /// for nobody (and holding up the next job and dictation), then finish the
 /// batch it was part of so "unload after each use" still unloads.
 async fn abandon(app: &AppHandle, req: &CliRequest, job_id: &str, work: std::pin::Pin<&mut impl std::future::Future<Output = Result<Value, String>>>) {
+    if req.cmd == "import-meeting" {
+        let _ = crate::commands::cancel_meeting_processing(app.clone(),Some(job_id.to_string()));
+        let _ = work.await;return;
+    }
     if req.cmd != "transcribe" {
         let _ = work.await;
         return;
@@ -311,6 +315,20 @@ fn cli_model(state: &AudioState, engine: ASREngine) -> Option<String> {
 async fn handle(app: &AppHandle, cmd: &str, args: &Value, job_id: &str) -> Result<Value, String> {
     match cmd {
         "status" => Ok(status(app)),
+        "meeting-processing" => crate::commands::get_meeting_import_status().map(|status|json!(status)),
+        "stop-meeting" => crate::commands::cancel_meeting_processing(app.clone(),None).map(|cancelled|json!({"cancelled":cancelled})),
+        "import-meeting" => {
+            let paths:Vec<String>=serde_json::from_value(args.get("paths").cloned().ok_or("paths required")?).map_err(|e|e.to_string())?;
+            let title=args.get("title").and_then(Value::as_str).ok_or("title required")?.to_string();
+            let state=app.state::<AudioState>();
+            let engine=*state.active_engine.lock().map_err(|e|e.to_string())?;
+            let model=args.get("model").and_then(Value::as_str).map(str::to_string).or_else(||cli_model(&state,engine));
+            let expected=args.get("speakers").and_then(Value::as_u64).map(|n|n as usize);
+            let begin=std::time::Instant::now();
+            let id=crate::commands::import_meeting_recordings(app.clone(),state,paths,title,expected,model,Some(args.get("use_gpu").and_then(Value::as_bool).unwrap_or_else(use_gpu_setting)),Some(job_id.to_string())).await?;
+            let detail=crate::commands::get_meeting_detail(id).await?;
+            Ok(json!({"meeting_id":id,"title":detail.title,"duration_ms":detail.duration_ms,"processing_ms":begin.elapsed().as_millis(),"speaker_count":detail.speaker_count,"transcription_model":detail.transcription_model,"word_count":detail.transcript_raw.split_whitespace().count(),"transcript":detail.transcript_raw}))
+        }
         "benchmark" => {
             let result = crate::commands::benchmark_compute_devices(app.state::<AudioState>(), app.clone(), None, None, None, None, None).await?;
             match (result.data, result.error) {
