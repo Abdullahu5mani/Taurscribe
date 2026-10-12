@@ -15,7 +15,7 @@ const windowsConfigPath = join(process.cwd(), "src-tauri", "tauri.windows.conf.j
 
 // Expected DLL patterns to bundle
 const dllPatterns = [
-  /^llama\.dll$/,
+  /^llama.*\.dll$/,
   /^ggml.*\.dll$/,
   /^DirectML\.dll$/,
   /^onnxruntime.*\.dll$/,

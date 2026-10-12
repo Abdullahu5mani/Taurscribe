@@ -91,7 +91,8 @@ function stageLlamaDlls() {
     statSync(join(b, "llama.dll")).mtimeMs - statSync(join(a, "llama.dll")).mtimeMs
   )[0];
   for (const dll of readdirSync(sourceDir).filter((name) =>
-    /^llama\.dll$|^ggml.*\.dll$/i.test(name)
+    // llama.dll, llama-common.dll (split out of llama.dll in llama.cpp b8xxx+), ggml*.dll
+    /^llama.*\.dll$|^ggml.*\.dll$/i.test(name)
   )) {
     const source = join(sourceDir, dll);
     const destination = join(releaseDir, dll);
@@ -107,7 +108,7 @@ const windowsConfPath = join(srcTauri, "tauri.windows.conf.json");
 
 // DLL patterns to bundle
 const dllPatterns = [
-  /^llama\.dll$/,
+  /^llama.*\.dll$/,
   /^ggml.*\.dll$/,
   /^DirectML\.dll$/,
   /^onnxruntime.*\.dll$/,

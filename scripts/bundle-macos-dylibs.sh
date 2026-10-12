@@ -75,6 +75,10 @@ BINARY_DIR="$(dirname "$BINARY")"
 # target/<triple>/release/build/llama-cpp-sys-2-*/out/lib/, so they are not beside the binary.
 # Copy them into BINARY_DIR so dylibbundler can find them and avoid interactive "Please
 # specify the directory" prompts (which break CI).
+# Several llama-cpp-sys-2-<hash> build folders pile up (every dependency or flag
+# change makes a new one). Pick the newest that holds libllama.0.dylib: the first
+# one alphabetically can be a stale build from an older llama.cpp that lacks
+# libraries added since (libllama-common), and the app then crashes at launch.
 LLAMA_LIB_DIR=""
 for candidate in "$TARGET_DIR/$TARGET_TRIPLE/release/build/llama-cpp-sys-2-"*/out/lib "$TARGET_DIR/release/build/llama-cpp-sys-2-"*/out/lib; do
   if [ -d "$candidate" ]; then

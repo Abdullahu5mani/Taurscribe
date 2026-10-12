@@ -204,3 +204,26 @@
 .meetings-panel--workspace .meeting-list-empty { padding: 36px 16px; text-align: center; color: var(--text-muted); }
 
 
+/* ── Following a passage word by word ─────────────────── */
+.meetings-panel--workspace .turn-word { border-radius: 4px; cursor: pointer; transition: color 0.15s, background 0.15s; }
+.meetings-panel--workspace .turn-word--past { color: var(--text-secondary); }
+.meetings-panel--workspace .turn-word--active {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--tone) 30%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone) 30%, transparent);
+}
+.meetings-panel--workspace .turn-word:hover { background: color-mix(in srgb, var(--tone) 16%, transparent); }
+
+@media (max-width: 1000px) {
+  .meetings-panel--workspace .meeting-catalog-layout { grid-template-columns: 250px minmax(0, 1fr); }
+  .meetings-panel--workspace .meeting-detail-card { padding: 18px 20px 0; }
+  .meetings-panel--workspace .meeting-speaker-cards { grid-template-columns: 1fr; }
+}
+@media (max-width: 820px) {
+  .meetings-panel--workspace .turn-bubble { padding-left: 58px; }
+  .meetings-panel--workspace .detail-title-input { font-size: 22px; }
+  .meeting-transcript-search { width: 150px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .meetings-panel--workspace * { transition: none !important; }
+}
