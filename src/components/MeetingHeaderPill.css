@@ -263,3 +263,13 @@
   color: #f87171;
   font-weight: 500;
 }
+
+/* On macOS the pill sits at the right edge of the title bar. The popover is
+   320px wide and anchored to the pill's left edge, so it ran off the window and
+   was cut off. There it opens leftwards from the pill's right edge instead, and
+   never wider than the window. */
+.titlebar-side--end .meeting-header-pill__tooltip {
+  left: auto;
+  right: 0;
+  max-width: calc(100vw - 24px);
+}
