@@ -41,6 +41,7 @@ import { MeetingRecordingImport, recordingDate } from "./MeetingRecordingImport"
 import { conversationBlocks, spokenAt, speakerCountHint } from "../utils/meetingTimeline";
 import "./MeetingsPanel.css";
 import "./MeetingWorkspace.css";
+import "./MeetingStudio.css";
 
 interface MeetingsPanelProps {
   modelId?: string | null;
@@ -102,6 +103,18 @@ function getPlatformMeta(plat: string) {
 export function exportFileName(title: string, format: "markdown" | "text" | "json"): string {
   const base = title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").trim().replace(/\s+/g, "_") || "meeting";
   return `${base}_transcript.${format === "markdown" ? "md" : format === "json" ? "json" : "txt"}`;
+}
+
+/** "Today", "Yesterday", "This week", or the month, for the library's date headers. */
+export function dayBucket(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Earlier";
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return "This week";
+  return d.toLocaleDateString(undefined, { month: "long", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
 }
 
 export function MeetingsPanel({

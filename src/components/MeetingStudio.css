@@ -1,0 +1,206 @@
+/* Meetings visual layer: speaker colour, hierarchy and calmer chrome.
+   Loads after MeetingWorkspace.css and only restyles; behaviour lives in MeetingsPanel. */
+.meetings-panel--workspace {
+  --tone: #f2a65a;
+  --studio-radius: 12px;
+  --studio-row-hover: rgba(255, 255, 255, 0.03);
+}
+.meetings-panel--workspace [data-tone="0"] { --tone: #f2a65a; }
+.meetings-panel--workspace [data-tone="1"] { --tone: #3ecfa5; }
+.meetings-panel--workspace [data-tone="2"] { --tone: #6895d2; }
+.meetings-panel--workspace [data-tone="3"] { --tone: #b18cf2; }
+.meetings-panel--workspace [data-tone="4"] { --tone: #f27ca8; }
+.meetings-panel--workspace [data-tone="5"] { --tone: #8fd16a; }
+
+/* ── Header ───────────────────────────────────────────── */
+.meeting-workspace-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.meeting-workspace-title p { margin: 0; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* ── Shell ────────────────────────────────────────────── */
+.meetings-panel--workspace .meeting-catalog-layout {
+  grid-template-columns: 300px minmax(0, 1fr);
+  border-radius: var(--studio-radius);
+  background: rgba(255, 255, 255, 0.015);
+}
+.meetings-panel--workspace .meeting-library { background: rgba(255, 255, 255, 0.012); }
+
+/* ── Library ──────────────────────────────────────────── */
+.meetings-panel--workspace .meeting-filter-bar { padding: 14px 12px 10px; }
+.meetings-panel--workspace .meeting-cards-list { padding: 0 8px 12px; gap: 2px; }
+.meeting-date-header {
+  position: sticky; top: 0; z-index: 1;
+  padding: 14px 10px 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted);
+  background: linear-gradient(var(--bg-primary) 70%, transparent);
+}
+.meetings-panel--workspace .meeting-list-card {
+  position: relative;
+  padding: 11px 12px 11px 14px;
+  border: 0; border-radius: 9px;
+  transition: background 0.12s;
+}
+.meetings-panel--workspace .meeting-list-card::before {
+  content: ""; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 2px; border-radius: 2px;
+  background: transparent; transition: background 0.12s;
+}
+.meetings-panel--workspace .meeting-list-card:hover { background: var(--studio-row-hover); }
+.meetings-panel--workspace .meeting-list-card.selected {
+  background: rgba(255, 255, 255, 0.06); box-shadow: none; border: 0;
+}
+.meetings-panel--workspace .meeting-list-card.selected::before { background: var(--brand); }
+.meetings-panel--workspace .meeting-card-top-row { margin-bottom: 4px; justify-content: space-between; flex-wrap: nowrap; }
+.meetings-panel--workspace .meeting-card-date { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.meetings-panel--workspace .meeting-card-title { margin: 0 0 6px; font-size: 14px; font-weight: 500; line-height: 1.35; }
+.meetings-panel--workspace .meeting-card-bottom-row { gap: 12px; }
+.meetings-panel--workspace .meeting-card-duration,
+.meetings-panel--workspace .meeting-card-speakers-count { font-variant-numeric: tabular-nums; }
+
+/* ── Processing card ──────────────────────────────────── */
+.meetings-panel--workspace .meeting-processing-card {
+  margin: 8px 0 6px; padding: 12px 14px; border-radius: 10px;
+  background: rgba(242, 166, 90, 0.07); border: 1px solid rgba(242, 166, 90, 0.28);
+}
+.meeting-processing-progress { height: 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); overflow: hidden; margin: 8px 0 2px; }
+.meeting-processing-progress > span { display: block; height: 100%; background: var(--brand); border-radius: 4px; transition: width 0.4s var(--ease-smooth, ease); }
+
+/* ── Detail header ────────────────────────────────────── */
+.meetings-panel--workspace .meeting-detail-card { padding: 22px 32px 0; }
+.meetings-panel--workspace .detail-header { gap: 10px; padding: 0 0 16px; }
+.meetings-panel--workspace .detail-title-input { font-size: 26px; letter-spacing: -0.02em; line-height: 1.25; font-weight: 600; }
+.meetings-panel--workspace .detail-top-row { margin-bottom: 4px; }
+.meetings-panel--workspace .detail-tool-btn { border-radius: 8px; padding: 7px 11px; transition: background 0.12s, color 0.12s; }
+.meetings-panel--workspace .detail-tool-btn:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.meetings-panel--workspace .detail-meta-row { align-items: center; gap: 10px 14px; }
+.meetings-panel--workspace .detail-meta-badges { display: flex; align-items: center; gap: 8px; }
+.meetings-panel--workspace .detail-meta-stats { font-variant-numeric: tabular-nums; }
+.meetings-panel--workspace .detail-speaker-meta-pill { display: inline-flex; align-items: center; }
+.meetings-panel--workspace .meeting-transcription-model { margin: 0 0 12px; color: var(--text-muted); }
+
+/* Talk-time strip: who spoke how much, and a way into the Speakers tab. */
+.meeting-talkshare {
+  display: flex; flex-direction: column; gap: 7px; width: 100%;
+  padding: 0; margin-top: 6px; border: 0; background: none; cursor: pointer; text-align: left; color: inherit;
+}
+.meeting-talkshare-bar { display: flex; gap: 2px; height: 6px; border-radius: 6px; overflow: hidden; }
+.meeting-talkshare-bar > span { background: var(--tone); min-width: 3px; opacity: 0.9; transition: opacity 0.12s; }
+.meeting-talkshare:hover .meeting-talkshare-bar > span { opacity: 1; }
+.meeting-talkshare-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.meeting-talkshare-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.meeting-talkshare-legend i { width: 8px; height: 8px; border-radius: 50%; background: var(--tone); }
+
+/* ── Player ───────────────────────────────────────────── */
+.meetings-panel--workspace .meeting-audio-player {
+  padding: 10px 14px; border-radius: 12px; margin: 0 0 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+.meetings-panel--workspace .audio-play-toggle-btn {
+  width: 36px; height: 36px; background: var(--brand); color: var(--brand-ink);
+  transition: transform 0.12s var(--ease-pop, ease), filter 0.12s;
+}
+.meetings-panel--workspace .audio-play-toggle-btn:hover { background: var(--brand); filter: brightness(1.08); }
+.meetings-panel--workspace .audio-play-toggle-btn:active { transform: scale(0.94); }
+.meetings-panel--workspace .audio-time-label { font-family: var(--font-mono, "IBM Plex Mono", monospace); font-size: 11.5px; color: var(--text-secondary); }
+.meetings-panel--workspace .audio-scrubber-slider { accent-color: var(--brand); }
+.meetings-panel--workspace .audio-speed-btn { font-family: var(--font-mono, "IBM Plex Mono", monospace); font-size: 11.5px; min-width: 40px; }
+
+/* ── Tabs ─────────────────────────────────────────────── */
+.meeting-detail-tabs { align-items: center; gap: 22px; }
+.meeting-detail-tabs > button:last-child { margin-left: 0; }
+.meeting-detail-tabs > button { font-size: 13.5px; transition: color 0.12s; }
+.meeting-detail-tabs > button:hover { color: var(--meeting-ink); }
+.meeting-detail-tabs > button[aria-selected="true"] { border-bottom-color: var(--brand); }
+.meeting-transcript-search {
+  margin-left: auto; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 8px;
+  width: 220px; max-width: 45%;
+  padding: 0 10px; height: 30px;
+  border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-tertiary);
+  color: var(--text-muted); transition: border-color 0.12s;
+}
+.meeting-transcript-search:focus-within { border-color: var(--border-hover); color: var(--text-secondary); }
+.meeting-transcript-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; color: var(--text-primary); font-size: 13px; }
+.meeting-transcript-search input::-webkit-search-cancel-button { display: none; }
+.meeting-transcript-search span { font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.meeting-transcript-nomatch { margin: 28px 0; text-align: center; color: var(--text-muted); font-size: 13px; }
+
+/* ── Transcript ───────────────────────────────────────── */
+.meetings-panel--workspace .meeting-detail-scroll { padding: 8px 0 32px; }
+.meetings-panel--workspace .turn-bubble {
+  position: relative;
+  padding: 14px 16px 14px 66px;
+  border: 0; border-radius: 10px; margin: 0 0 2px;
+  transition: background 0.15s;
+}
+.meetings-panel--workspace .turn-bubble:hover { background: var(--studio-row-hover); }
+.meetings-panel--workspace .turn-bubble--spoken {
+  background: color-mix(in srgb, var(--tone) 9%, transparent);
+  box-shadow: inset 2px 0 var(--tone);
+  border-bottom: 0;
+}
+.meetings-panel--workspace .turn-header .turn-speaker-avatar {
+  display: grid; place-items: center;
+  position: absolute; left: 16px; top: 14px;
+  width: 36px; height: 36px; border-radius: 50%;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 38%, transparent);
+}
+.meetings-panel--workspace .turn-header { margin-bottom: 4px; min-height: 20px; }
+.meetings-panel--workspace .turn-speaker-badge-wrap { gap: 10px; align-items: baseline; }
+.meetings-panel--workspace .turn-speaker-link { color: var(--tone); font-size: 13.5px; font-weight: 600; }
+.meetings-panel--workspace .turn-speaker-link:hover { text-decoration: none; filter: brightness(1.15); }
+.meetings-panel--workspace button.turn-time-stamp {
+  font-family: var(--font-mono, "IBM Plex Mono", monospace); font-size: 11px; padding: 0;
+  color: var(--text-muted); transition: color 0.12s;
+}
+.meetings-panel--workspace button.turn-time-stamp:not(:disabled):hover { color: var(--text-primary); }
+.meetings-panel--workspace .turn-text { font-size: 15px; line-height: 1.7; max-width: 70ch; }
+.meetings-panel--workspace .turn-text[role="button"] { cursor: pointer; }
+.meetings-panel--workspace .turn-text mark {
+  background: rgba(242, 166, 90, 0.3); color: inherit; border-radius: 3px; padding: 0 1px;
+}
+/* The correction button stays out of the way until the passage is hovered or focused. */
+.meetings-panel--workspace .turn-assign-btn {
+  position: absolute; top: 12px; right: 12px; margin: 0;
+  padding: 3px 9px; min-height: 0; font-size: 12px;
+  opacity: 0; transition: opacity 0.12s, background 0.12s;
+}
+.meetings-panel--workspace .turn-bubble:hover .turn-assign-btn,
+.meetings-panel--workspace .turn-bubble:focus-within .turn-assign-btn,
+.meetings-panel--workspace .turn-assign-btn:focus-visible { opacity: 1; }
+@media (hover: none) { .meetings-panel--workspace .turn-assign-btn { opacity: 0.7; } }
+.meetings-panel--workspace .turn-assignment { margin: 8px 0 10px; background: var(--bg-tertiary); }
+
+/* ── Speakers ─────────────────────────────────────────── */
+.meetings-panel--workspace .meeting-speaker-cards { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.meetings-panel--workspace .meeting-speaker-card {
+  border: 1px solid var(--meeting-border); border-radius: 12px; padding: 16px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.meetings-panel--workspace .meeting-speaker-card-heading { margin-bottom: 10px; gap: 12px; }
+.meetings-panel--workspace .meeting-speaker-card-heading .turn-speaker-avatar {
+  display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%;
+  font-size: 11px; font-weight: 600;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 38%, transparent);
+}
+.meetings-panel--workspace .meeting-speaker-card-heading > span { font-variant-numeric: tabular-nums; }
+.meeting-speaker-share { height: 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.07); overflow: hidden; margin-bottom: 14px; }
+.meeting-speaker-share > span { display: block; height: 100%; background: var(--tone); border-radius: 4px; }
+
+/* ── Tools, drafts, empty states ──────────────────────── */
+.meetings-panel--workspace .meeting-maintenance-card { border-radius: 12px; background: rgba(255, 255, 255, 0.02); }
+.meetings-panel--workspace .meeting-draft-passage {
+  display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 0 12px;
+  padding: 12px 8px; border-bottom: 0; border-radius: 8px;
+}
+.meetings-panel--workspace .meeting-draft-passage:hover { background: var(--studio-row-hover); }
+.meetings-panel--workspace .meeting-draft-passage > span { font-family: var(--font-mono, "IBM Plex Mono", monospace); padding-top: 5px; }
+.meetings-panel--workspace .meeting-draft-passage p { margin: 0; font-size: 15px; line-height: 1.7; max-width: 70ch; }
+.meetings-panel--workspace .meeting-detail-empty { align-items: center; justify-content: center; text-align: center; }
+.meetings-panel--workspace .meeting-list-empty { padding: 36px 16px; text-align: center; color: var(--text-muted); }
+
+
