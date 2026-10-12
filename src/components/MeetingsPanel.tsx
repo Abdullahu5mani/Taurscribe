@@ -30,6 +30,7 @@ import {
   MeetingDetailRecord,
   PlatformCount,
 } from "../types/meetings";
+import { MODELS } from "./settings/types";
 import { MeetingTags } from "./MeetingTags";
 import { MeetingHistoryControls } from "./MeetingHistoryControls";
 import { SpeakerPreviewModal } from "./SpeakerPreviewModal";
@@ -154,6 +155,15 @@ export function MeetingsPanel({
   const manualScrollUntil = useRef(0);
   const scrolledBlock = useRef(-1);
   const [speakerHint, setSpeakerHint] = useState("");
+  const [assignBlock, setAssignBlock] = useState<number | null>(null);
+  const [assignPerson, setAssignPerson] = useState("");
+  const [assignName, setAssignName] = useState("");
+  const [assignAll, setAssignAll] = useState(false);
+  const transcriptScroll = useRef<HTMLDivElement>(null);
+  const scrollToPassage = (index: number) => {
+    const pane = transcriptScroll.current, node = timelineRefs.current.get(index);
+    if (pane && node) pane.scrollTo({ top: pane.scrollTop + node.getBoundingClientRect().top - pane.getBoundingClientRect().top - pane.clientHeight / 2 + node.clientHeight / 2, behavior: "smooth" });
+  };
   const [detailView, setDetailView] = useState<"transcript" | "speakers" | "tools">("transcript");
   const [confirmPipeline, setConfirmPipeline] = useState(false);
   const [confirmReseparate, setConfirmReseparate] = useState(false);
@@ -176,7 +186,7 @@ export function MeetingsPanel({
   useEffect(() => {
     if (isPlayingAudio && activeBlock >= 0 && scrolledBlock.current !== activeBlock && Date.now() >= manualScrollUntil.current) {
       scrolledBlock.current = activeBlock;
-      timelineRefs.current.get(activeBlock)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      scrollToPassage(activeBlock);
     }
   }, [activeBlock, isPlayingAudio, audioCurrentTime]);
 
@@ -190,15 +200,26 @@ export function MeetingsPanel({
   const [reviewMeetingId, setReviewMeetingId] = useState<number | null>(null);
   // A stopped call being transcribed + diarized (between the backend's
   // meeting-processing-started and meeting-processing-finished events).
-  const [processing, setProcessing] = useState<{ title: string; platform: string; startedAt: number; stage?: string } | null>(null);
+  const [processing, setProcessing] = useState<{ title: string; platform: string; startedAt: number; stage?: string; job_id?: string } | null>(null);
+  const [importPreview, setImportPreview] = useState<{ title: string; model_id?: string; paragraphs: { start_ms: number; end_ms: number; text: string }[]; completed_ms: number; total_ms: number } | null>(null);
+  const [showImportPreview, setShowImportPreview] = useState(false);
+  const previewOpenRef = useRef(false);
+  const openImportPreview = () => { stopFullAudio(); stopSnippetAudio(); previewOpenRef.current = true; setShowImportPreview(true); };
   const [processingError, setProcessingError] = useState<string | null>(null);
+  const [processingStopped, setProcessingStopped] = useState(false);
+  const [stoppingProcessing, setStoppingProcessing] = useState(false);
+  const stopProcessing = async () => {
+    setStoppingProcessing(true);
+    try { if (!await invoke<boolean>("cancel_meeting_processing", {jobId:processing?.job_id ?? null})) setStoppingProcessing(false); }
+    catch (error) { setStoppingProcessing(false); setProcessingError(String(error)); }
+  };
   const [processingElapsed, setProcessingElapsed] = useState(0);
   const [editingTitle, setEditingTitle] = useState("");
   const [renamingSpeakerId, setRenamingSpeakerId] = useState<string | null>(null);
   // Speaker ids like "speaker_remote_1" repeat across meetings: close any open
   // rename field when another meeting is opened.
   useEffect(() => {
-    setRenamingSpeakerId(null); setSpeakerHint(""); setConfirmReseparate(false); setConfirmPipeline(false); setDetailView("transcript");
+    setAssignBlock(null); setRenamingSpeakerId(null); setSpeakerHint(""); setConfirmReseparate(false); setConfirmPipeline(false); setDetailView("transcript");
   }, [selectedMeetingId]);
   const [speakerNewName, setSpeakerNewName] = useState("");
   const [copiedTranscript, setCopiedTranscript] = useState(false);
@@ -209,6 +230,7 @@ export function MeetingsPanel({
   const [toolbarError, setToolbarError] = useState("");
 
   const selectMeeting = (id: number | null) => {
+    previewOpenRef.current = false; setShowImportPreview(false);
     if (selectedMeetingIdRef.current !== id) {
       detailRequestRef.current += 1;
       selectedMeetingIdRef.current = id;
@@ -338,33 +360,51 @@ export function MeetingsPanel({
 
   // Processing indicator lifecycle
   useEffect(() => {
+    let disposed = false; let receivedEvent = false;
     const unlisteners: Promise<() => void>[] = [
-      listen<{ title: string; platform: string }>("meeting-processing-started", (event) => {
+      listen<{ title: string; platform: string; job_id?: string }>("meeting-processing-started", (event) => {
+        receivedEvent = true; setProcessingStopped(false); setStoppingProcessing(false);
         setProcessingError(null);
+        setImportPreview(null); previewOpenRef.current = false; setShowImportPreview(false);
         setProcessingElapsed(0);
         setProcessing({
           title: event.payload?.title || "Meeting",
           platform: event.payload?.platform || "",
-          startedAt: Date.now(),
+          startedAt: Date.now(), job_id:event.payload?.job_id,
         });
       }),
       listen<{ stage: string }>("meeting-processing-progress", event => {
+        receivedEvent = true;
         setProcessing(previous => previous ? { ...previous, stage: event.payload.stage } : previous);
       }),
-      listen<{ meeting_id: number | null; error: string | null }>("meeting-processing-finished", (event) => {
-        setProcessing(null);
-        if (event.payload?.error) {
+      listen<{ title: string; model_id?: string; paragraphs: { start_ms: number; end_ms: number; text: string }[]; completed_ms: number; total_ms: number }>("meeting-processing-preview", event => {
+        receivedEvent = true; setImportPreview(event.payload);
+      }),
+      listen<{ meeting_id: number | null; error: string | null; cancelled?: boolean }>("meeting-processing-finished", (event) => {
+        receivedEvent = true; setProcessing(null); setStoppingProcessing(false);
+        const stopped=!!event.payload?.cancelled || !!event.payload?.error?.includes("Meeting processing stopped");
+        setProcessingStopped(stopped);
+        if (stopped) {setProcessingError(null);} else if (event.payload?.error) {
           setProcessingError(event.payload.error);
         } else if (!event.payload?.meeting_id) {
           setProcessingError("Nothing was saved: no speech was transcribed from the recording.");
         }
         loadMeetings();
+        if (!event.payload?.error && event.payload?.meeting_id && previewOpenRef.current) {
+          selectMeeting(event.payload.meeting_id);
+        }
         if (!event.payload?.error && event.payload?.meeting_id && event.payload.meeting_id === selectedMeetingIdRef.current) {
           void loadMeetingDetail(event.payload.meeting_id);
         }
       }),
     ];
+    void Promise.all(unlisteners).then(() => invoke<any>("get_meeting_import_status")).then(status => {
+      if (disposed || receivedEvent || !status) return;
+      setImportPreview(status.preview); const stopped=!!status.error?.includes("Meeting processing stopped");setProcessingStopped(stopped);setProcessingError(stopped ? null : status.error);
+      if (status.running) setProcessing({title:status.title,platform:status.platform,startedAt:status.startedAt,stage:status.stage,job_id:status.job_id});
+    }).catch(() => {});
     return () => {
+      disposed = true;
       unlisteners.forEach((u) => u.then((fn) => fn()));
     };
   }, []);
@@ -475,7 +515,7 @@ export function MeetingsPanel({
     const next = blocks.findIndex(t => t.end_ms / 1000 > target);
     const index = next < 0 ? blocks.length - 1 : next;
     scrolledBlock.current = index;
-    timelineRefs.current.get(index)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    scrollToPassage(index);
     if (fullAudioRef.current) {
       fullAudioRef.current.currentTime = target;
     }
@@ -554,6 +594,23 @@ export function MeetingsPanel({
     } catch (error) {
       if (selectedMeetingIdRef.current === id) setToolbarError(String(error));
     } finally { speakerMutation.current = false; setSpeakerBusy(false); }
+  };
+
+  const assignPassage = async () => {
+    if (!selectedMeeting || assignBlock === null || speakerMutation.current) return;
+    const block = blocks[assignBlock];
+    if (!block) return;
+    const indices = assignAll ? selectedMeeting.turns.flatMap((turn, index) => turn.speaker_id === block.speaker_id ? [index] : []) : block.sourceIndices;
+    const ids = indices.map(index => selectedMeeting.turn_ids?.[index]);
+    if (ids.some(id => id === undefined)) { setToolbarError("Reopen this meeting before assigning a speaker."); return; }
+    const meetingId = selectedMeeting.id;
+    speakerMutation.current = true; setSpeakerBusy(true);
+    try {
+      await invoke("assign_meeting_turns", { meetingId, turnIds: ids, speakerId: assignPerson || null, newName: assignPerson ? null : assignName.trim() });
+      if (selectedMeetingIdRef.current === meetingId) { setAssignBlock(null); setToolbarError(""); await loadMeetingDetail(meetingId); }
+      void loadMeetings();
+    } catch (error) { if (selectedMeetingIdRef.current === meetingId) setToolbarError(String(error)); }
+    finally { speakerMutation.current = false; setSpeakerBusy(false); }
   };
 
   // ── Detail Updates ─────────────────────────────────────────────
@@ -822,9 +879,8 @@ export function MeetingsPanel({
 
 
       {/* ── 2-Column Master-Detail Catalog Layout ─────────────── */}
-      <div className={`meeting-catalog-layout ${selectedMeetingId ? "has-selected-meeting" : ""}`}>
+      <div className={`meeting-catalog-layout ${selectedMeetingId || showImportPreview ? "has-selected-meeting" : ""}`}>
         <aside className="meeting-library" aria-label="Meeting library">
-          <div className="meeting-library-heading">Library</div>
 <div className="meeting-filter-bar">
           <div className="meeting-search-input-wrap">
             <IconSearch size={15} className="meeting-search-icon" />
@@ -878,15 +934,24 @@ export function MeetingsPanel({
                 </div>
                 <h3 className="meeting-card-title">{processing.title}</h3>
                 <span className="meeting-processing-detail">{processing.stage || "Preparing meeting processing"}</span>
+                {!!importPreview?.paragraphs.length && <button className="detail-tool-btn" type="button" onClick={openImportPreview}>Read transcript · speaker labels pending</button>}
+                <button className="detail-tool-btn" type="button" data-testid="meeting-processing-stop" disabled={stoppingProcessing || processing.stage?.startsWith("Saving")} onClick={() => void stopProcessing()}>{stoppingProcessing ? "Stopping…" : "Stop processing"}</button>
               </div>
             </div>
           )}
+          {!processing && processingStopped && <div className="meeting-processing-card" role="status" data-testid="meeting-processing-stopped">
+            <div className="meeting-processing-body"><span>Meeting processing stopped</span><span className="meeting-processing-detail">Saved meetings and original recordings are unchanged.</span>
+              {!!importPreview?.paragraphs.length && <button className="detail-tool-btn" type="button" onClick={openImportPreview}>Read partial transcript</button>}
+              <button className="detail-tool-btn" type="button" onClick={() => setProcessingStopped(false)}>Dismiss</button>
+            </div>
+          </div>}
           {!processing && processingError && (
             <div id="meetings-processing-error" data-testid="meetings-processing-error" className="meeting-processing-card meeting-processing-card--error" role="alert">
               <span className="meeting-processing-dot meeting-processing-dot--error" aria-hidden="true" />
               <div className="meeting-processing-body">
                 <span className="meeting-processing-label">Meeting processing failed</span>
                 <span className="meeting-processing-detail">{processingError}</span>
+                {!!importPreview?.paragraphs.length && <button className="detail-tool-btn" type="button" onClick={openImportPreview}>Read partial transcript</button>}
               </div>
               <button
                 id="meetings-dismiss-processing-error-btn"
@@ -960,6 +1025,8 @@ export function MeetingsPanel({
                           <div
                             key={m.id}
                             className={`meeting-list-card ${isSelected ? "selected" : ""}`}
+                            role="button" tabIndex={0} aria-label={`Open meeting ${m.title}`}
+                            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectMeeting(m.id); } }}
                             onClick={() => selectMeeting(m.id)}
                           >
                             <div className="meeting-card-top-row">
@@ -1019,6 +1086,8 @@ export function MeetingsPanel({
                 <div
                   key={m.id}
                   className={`meeting-list-card ${isSelected ? "selected" : ""}`}
+                  role="button" tabIndex={0} aria-label={`Open meeting ${m.title}`}
+                  onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectMeeting(m.id); } }}
                   onClick={() => selectMeeting(m.id)}
                 >
                   <div className="meeting-card-top-row">
@@ -1069,7 +1138,23 @@ export function MeetingsPanel({
           onWheel={() => { manualScrollUntil.current = Date.now() + 5000; scrolledBlock.current = -1; }}
           onTouchMove={() => { manualScrollUntil.current = Date.now() + 5000; scrolledBlock.current = -1; }}
           onKeyDown={e => { if (["PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) { manualScrollUntil.current = Date.now() + 5000; scrolledBlock.current = -1; } }} key={selectedMeeting?.id ?? "none"}>
-          {loadingDetail ? (
+          {showImportPreview && importPreview ? (
+            <>
+              <div className="detail-header meeting-draft-header">
+                <button className="detail-tool-btn" type="button" onClick={() => { previewOpenRef.current = false; setShowImportPreview(false); }}>Back to meetings</button>
+                <h3>{importPreview.title}</h3>
+                <div className="meeting-transcription-model">Transcribed with <strong>{MODELS.find(model => model.id === importPreview.model_id)?.name || importPreview.model_id || "Selected speech model"}</strong></div>
+                <p role="status">{processingStopped ? "Partial draft · stopped · not saved" : processingError ? "Partial draft · processing failed · not saved" : "Draft transcript · speaker labels pending"}</p>
+                <p>{Math.round(importPreview.completed_ms / 1000)} / {Math.round(importPreview.total_ms / 1000)} seconds transcribed</p>
+              </div>
+              <div className="meeting-detail-scroll" data-testid="meeting-import-preview">
+                {importPreview.paragraphs.map((paragraph, index) => <div className="meeting-draft-passage" key={`${paragraph.start_ms}-${index}`}>
+                  <span>{Math.floor(paragraph.start_ms / 60000)}:{String(Math.floor(paragraph.start_ms / 1000) % 60).padStart(2, "0")}</span>
+                  <p>{paragraph.text}</p>
+                </div>)}
+              </div>
+            </>
+          ) : loadingDetail ? (
             <div className="meeting-detail-empty">Loading meeting transcript...</div>
           ) : !selectedMeeting ? (
             <div className="meeting-detail-empty">
@@ -1195,6 +1280,8 @@ export function MeetingsPanel({
                 </div>
               )}
 
+                <div className="meeting-transcription-model" data-testid="meeting-transcription-model">Transcribed with <strong>{MODELS.find(model => model.id === selectedMeeting.transcription_model)?.name || selectedMeeting.transcription_model || "Unknown (older meeting)"}</strong></div>
+
               {/* Audio Scrubber Bar (if recording audio exists) */}
               {selectedMeeting.audio_path && !selectedMeeting.audio_missing && !audioFailed && (
                 <div className="meeting-audio-player">
@@ -1257,7 +1344,7 @@ export function MeetingsPanel({
                   {view === "transcript" ? "Transcript" : view === "speakers" ? `Speakers · ${meetingSpeakers.filter(person => person.speaker_id !== "background").length}` : "Tools"}
                 </button>)}
               </div>
-              <div className="meeting-detail-scroll">
+              <div className="meeting-detail-scroll" ref={transcriptScroll}>
               {/* Diarized Conversation Turns */}
               <section className="detail-turns-section" role="tabpanel" id="meetings-panel-transcript" aria-labelledby="meetings-tab-transcript" hidden={detailView !== "transcript"}>
                 <div className="turns-conversation-flow">
@@ -1287,6 +1374,19 @@ export function MeetingsPanel({
 
                         </div>
 
+                        <button type="button" className="turn-clip-btn turn-assign-btn" aria-label={`Assign speaker for passage at ${formatSeconds(t.start_ms / 1000)}`} disabled={speakerBusy} onClick={() => { setAssignBlock(idx); setAssignPerson(""); setAssignName(""); setAssignAll(false); }}>Assign speaker</button>
+                        {assignBlock === idx && <form className="turn-assignment" aria-label="Assign passage speaker" onSubmit={e => { e.preventDefault(); void assignPassage(); }}>
+                          <label>Person<select value={assignPerson} onChange={e => setAssignPerson(e.target.value)} disabled={speakerBusy}>
+                            <option value="">New person…</option>
+                            {meetingSpeakers.filter(person => person.speaker_id !== "background").map(person => <option key={person.speaker_id} value={person.speaker_id}>{person.speaker_name}</option>)}
+                          </select></label>
+                          {!assignPerson && <label>Name<input autoFocus value={assignName} maxLength={200} onChange={e => setAssignName(e.target.value)} placeholder="Person’s name" disabled={speakerBusy} /></label>}
+                          <label><input type="checkbox" checked={assignAll} onChange={e => setAssignAll(e.target.checked)} disabled={speakerBusy} />Apply to every passage currently labeled {t.speaker_name}</label>
+                          <p>Otherwise, only this passage changes. Voice samples can be added in Speaker Vault.</p>
+                          {!!selectedMeeting.merges?.length && <p>Saving a correction clears earlier merge undo history.</p>}
+                          <button className="turn-clip-btn" type="submit" disabled={speakerBusy || (!assignPerson && !assignName.trim())}>{speakerBusy ? "Saving…" : "Save speaker"}</button>
+                          <button className="turn-clip-btn" type="button" disabled={speakerBusy} onClick={() => setAssignBlock(null)}>Cancel</button>
+                        </form>}
                         <p className="turn-text" role={selectedMeeting.audio_path && !audioFailed ? "button" : undefined}
                           tabIndex={selectedMeeting.audio_path && !audioFailed ? 0 : undefined}
                           aria-label={`Jump to ${formatSeconds(t.start_ms / 1000)}: ${t.text}`}
@@ -1298,7 +1398,7 @@ export function MeetingsPanel({
                 </div>
               </section>
               <section className="meeting-speakers-panel" role="tabpanel" id="meetings-panel-speakers" aria-labelledby="meetings-tab-speakers" hidden={detailView !== "speakers"}>
-                <div className="meeting-panel-intro"><h2>People in this meeting</h2><p>Listen to a voice, correct a name, or combine matching speakers.</p></div>
+                <div className="meeting-panel-intro"><p>Play a sample, rename a speaker, or merge voices that belong to the same person.</p></div>
               {/* "Speaker 2 sounds like Dana — is it?" */}
               <SpeakerSuggestions
                 meetingId={selectedMeeting.id}
@@ -1359,7 +1459,7 @@ export function MeetingsPanel({
                                 ) : (
                                   <IconPlay size={11} />
                                 )}
-                                <span>{isSnippetPlaying ? "Playing" : "3s Clip"}</span>
+                                <span>{isSnippetPlaying ? "Stop sample" : "Play sample"}</span>
                               </button>
                             )}
 
@@ -1403,7 +1503,7 @@ export function MeetingsPanel({
                 </div>
               </section>
               <section className="meeting-tools-panel" role="tabpanel" id="meetings-panel-tools" aria-labelledby="meetings-tab-tools" hidden={detailView !== "tools"}>
-                <div className="meeting-panel-intro"><h2>Recording tools</h2></div>
+
                 <div className="meeting-maintenance-card meeting-danger-zone"><h3>Delete meeting</h3><p>Permanently remove this meeting and its recording.</p><div className="meeting-speaker-card-actions">                    {confirmDeleteMeetingId === selectedMeeting.id ? (
                       <>
                         <button

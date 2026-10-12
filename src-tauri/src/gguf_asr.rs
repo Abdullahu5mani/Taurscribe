@@ -51,6 +51,43 @@ impl GgufAsr {
         }).map_err(|e| format!("transcribe: {e}"))
     }
 
+    pub fn transcribe_timed_cancellable(&mut self, pcm: &[f32], cancel: &Arc<AtomicBool>) -> Result<crate::meeting_transcript::TimedTranscript,String> {
+        crate::meeting_job::check(cancel)?;
+        let watch=crate::meeting_job::NativeCancelWatch::new(cancel.clone());
+        self.session.set_cancel_token(&watch.token);
+        let result=self.transcribe_timed(pcm);
+        self.session.clear_cancel_token();
+        crate::meeting_job::check(cancel)?;
+        result
+    }
+
+    pub fn transcribe_timed(&mut self, pcm: &[f32]) -> Result<crate::meeting_transcript::TimedTranscript, String> {
+        use crate::meeting_transcript::{TimedText, TimedTranscript};
+        let max_samples = self.session.limits().ok().and_then(|l| (l.effective_max_audio_ms > 0).then_some(l.effective_max_audio_ms as usize * 16));
+        let mut units = Vec::new();
+        let text = recover_decode_limits(pcm, max_samples, &mut |audio| {
+            let offset = (audio.as_ptr() as usize - pcm.as_ptr() as usize) / std::mem::size_of::<f32>() / 16;
+            let duration = audio.len() as u64 / 16;
+            run_with_minimum_audio(audio, self.minimum_samples, &mut |input| {
+                let out = self.session.run(input, &transcribe_cpp::RunOptions::default())?;
+                let rows: Vec<_> = if out.timestamp_kind == transcribe_cpp::TimestampKind::None {
+                    Vec::new()
+                } else if !out.words.is_empty() {
+                    out.words.into_iter().map(|w|(w.t0_ms,w.t1_ms,w.text)).collect()
+                } else { out.segments.into_iter().map(|w|(w.t0_ms,w.t1_ms,w.text)).collect() };
+                for (start,end,text) in rows {
+                    if start >= 0 && end > start && end as u64 <= duration {
+                        units.push(TimedText { start_ms:offset as u64 + start as u64, end_ms:offset as u64 + end as u64, text });
+                    }
+                }
+                Ok(out.text.trim().to_string())
+            })
+        }).map_err(|e| format!("transcribe: {e}"))?;
+        let mut result=TimedTranscript{text,units};
+        if !result.covers_text() { result.units.clear(); }
+        Ok(result)
+    }
+
     /// Transcribe, aborting mid-run once `cancel` is set. transcribe.cpp polls its
     /// own token between decode steps; a watcher thread mirrors `cancel` into it.
     /// Qwen3-ASR checks it only before a run starts, Granite also between its
@@ -346,6 +383,21 @@ impl GgufAsrManager {
     /// used by these models.
     pub fn transcribe_chunk(&mut self, samples: &[f32], sample_rate: u32, _prompt: Option<&str>) -> Result<String, String> {
         self.transcribe_inner(samples, sample_rate, None)
+    }
+
+    pub fn transcribe_timed(&mut self, pcm: &[f32]) -> Result<crate::meeting_transcript::TimedTranscript, String> {
+        let mut result = self.engine.as_mut().ok_or("Speech model not loaded")?.transcribe_timed(pcm)?;
+        result.text = strip_whitelisted_sound_captions(&result.text).trim().to_string();
+        if self.sentence_case { result.text = sentence_case(&result.text); }
+        if !result.covers_text() { result.units.clear(); }
+        Ok(result)
+    }
+
+    pub fn transcribe_timed_cancellable(&mut self, pcm: &[f32], cancel: &Arc<AtomicBool>) -> Result<crate::meeting_transcript::TimedTranscript,String> {
+        let mut result=self.engine.as_mut().ok_or("Speech model not loaded")?.transcribe_timed_cancellable(pcm,cancel)?;
+        result.text=strip_whitelisted_sound_captions(&result.text).trim().to_string();
+        if self.sentence_case {result.text=sentence_case(&result.text);}
+        if !result.covers_text(){result.units.clear();} Ok(result)
     }
 
     /// Like `transcribe_chunk`, but setting `cancel` aborts the run mid-inference

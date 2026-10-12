@@ -1724,7 +1724,15 @@ pub(super) fn meeting_turn_transcriber<'a>(
     gguf: Option<&'a Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,
 ) -> Option<Box<dyn FnMut(&[f32], u32) -> Result<String, String> + 'a>> {
     Some(Box::new(move |samples: &[f32], rate: u32| {
+        crate::meeting_job::check_current()?;
         let audio = audio_preprocess::resample_mono_to_16k(samples, rate)?;
+        if let Some(cancel)=crate::meeting_job::current_cancel(){
+            let text=match active_engine {
+                ASREngine::Whisper=>whisper_arc.lock().map_err(|e|e.to_string())?.transcribe_audio_data_timed_cancellable(&audio,None,Some(cancel))?.text,
+                _=>gguf.ok_or("Meeting's ASR engine is unavailable")?.lock().map_err(|e|e.to_string())?.transcribe_chunk_cancellable(&audio,16000,&cancel)?,
+            };
+            crate::meeting_job::check_current()?;return Ok(clean_transcript(&text));
+        }
         let text = match active_engine {
             ASREngine::Whisper => whisper_arc.lock().map_err(|e| e.to_string())?
                 .transcribe_audio_data(&audio, None)?,
@@ -1877,6 +1885,7 @@ impl Finishing<'_> {
                     self.active_engine,
                     self.whisper_arc,
                     self.gguf,
+                    self.model_id.as_deref(),
                 )?;
                 (id, HistoryOutcome::Skipped)
             }
@@ -1940,12 +1949,14 @@ fn process_and_save_meeting_if_applicable(
     active_engine: ASREngine,
     whisper_arc: &Arc<std::sync::Mutex<crate::whisper::WhisperManager>>,
     gguf: Option<&Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>,
+    transcription_model: Option<&str>,
 ) -> Result<Option<i64>, String> {
     // meeting_info is None for a dual-channel recording with no detected meeting;
     // it is saved under the "Direct Audio" label below.
     if !is_meeting {
         return Ok(None);
     }
+    crate::meeting_job::check_current()?;
     let src_path_str = last_recording_path.ok_or("Meeting recording path is missing")?;
     let src_path = std::path::Path::new(src_path_str);
     if !src_path.exists() {
@@ -2075,6 +2086,7 @@ fn process_and_save_meeting_if_applicable(
         )
     };
 
+    if let Some(cancel) = crate::meeting_job::current_cancel() { crate::meeting_job::finish(&cancel)?; }
     let saved = match &continued {
         Some(p) => crate::commands::meetings::replace_meeting_content(
             &conn,
@@ -2099,6 +2111,7 @@ fn process_and_save_meeting_if_applicable(
     };
     match saved {
         Ok(id) => {
+            crate::commands::meetings::save_transcription_model(&conn, id, transcription_model)?;
             // Keep the full stereo recording for a while so recording this call
             // again continues this meeting (before the WAV is swapped for playback).
             if let Some(key) = call_key.as_deref() {
@@ -2410,9 +2423,10 @@ pub async fn stop_recording(
         other => state.gguf_snapshot(other).and_then(|s| s.model_id),
     };
 
+    let meeting_job = if is_meeting { Some(crate::meeting_job::MeetingJob::begin(None)?) } else { None };
     // Transcription + diarization can take a while; let the meetings view show it.
     if is_meeting {
-        let payload = match active_meeting.as_ref() {
+        let mut payload = match active_meeting.as_ref() {
             Some(m) => {
                 serde_json::json!({ "title": m.title, "platform": m.platform, "app_name": m.app_name })
             }
@@ -2423,6 +2437,8 @@ pub async fn stop_recording(
                 serde_json::json!({ "title": "Direct Audio recording", "platform": "Direct Audio", "app_name": "Taurscribe" })
             }
         };
+        payload["job_id"] = serde_json::json!(meeting_job.as_ref().map(|job| &job.id));
+        super::remember_meeting_processing(payload.clone());
         let _ = app.emit("meeting-processing-started", payload);
     }
 
@@ -2435,6 +2451,7 @@ pub async fn stop_recording(
         let _operation = worker_operation;
         let _transition = worker_transition;
         let _file_priority = file_priority;
+        let _meeting_job = meeting_job;
         let result = stop_recording_blocking(
             recording,
             active_engine,
@@ -2452,6 +2469,7 @@ pub async fn stop_recording(
         crate::meeting_continuation::release_recording_claim();
         // Publish from the worker even when its command future was cancelled.
         if is_meeting {
+            super::finish_meeting_processing(result.as_ref().err().map(String::as_str));
             let _ = app_for_final.emit("meeting-processing-finished", meeting_finished_payload(&result));
             if let Ok(outcome) = &result {
                 if let Some(meeting_id) = outcome.meeting_id {

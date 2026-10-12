@@ -30,6 +30,7 @@ mock.module("@tauri-apps/api/core", () => ({
         calls.push({ cmd, args });
         const override = invokeOverride?.(cmd, args);
         if (override) return override;
+        if (cmd === "get_meeting_import_status") return null;
         if (cmd === "list_meetings") return [summary(1), summary(2)];
         if (cmd === "get_meeting_platform_counts") return [];
         if (cmd === "get_meeting_detail") {
@@ -259,7 +260,7 @@ test("late listener registrations are removed after unmount", async () => {
 test("strict effect replay leaves exactly one subscription per event", async () => {
     const view = renderHook(() => MeetingsPanel(props), { strictEffects: true });
     await view.settle();
-    expect([...subscriptions.values()].map(active => active.size)).toEqual([1, 1, 1, 1]);
+    expect([...subscriptions.values()].map(active => active.size)).toEqual([1, 1, 1, 1, 1]);
     detail = makeDetail(1, "After strict effect replay");
     listeners.get("meeting-processing-complete")!({ payload: { meeting_id: 1 } });
     await view.settle();
@@ -598,4 +599,92 @@ test("closing during a pending play request does not report the recording as mis
     expect(byTest(view.handle.current,"meetings-audio-play-btn")).toBeDefined();
     expect(textOf(view.handle.current)).not.toContain("Audio file missing");
     view.unmount();
+});
+
+test("a passage can become a new person without relabeling the whole speaker group", async () => {
+    detail.turn_ids = [101, 102, 103];
+    detail.turns = [0, 1500, 9000].map(start => ({ speaker_id: "speaker_1", speaker_name: "Speaker 1", start_ms: start, end_ms: start + 1000, channel: 1, text: "Words" }));
+    invokeOverride = (cmd) => cmd === "assign_meeting_turns" ? Promise.resolve() : undefined;
+    const view = render(); await view.settle();
+    nodes(view.handle.current).find(n => n.props?.["aria-label"] === "Assign speaker for passage at 0:00").props.onClick(); await view.settle();
+    const form = () => nodes(view.handle.current).find(n => n.props?.["aria-label"] === "Assign passage speaker");
+    nodes(form()).find(n => n.type === "input" && n.props.placeholder === "Person’s name").props.onChange({ target: { value: "Alice" } }); await view.settle();
+    form().props.onSubmit({ preventDefault() {} }); await view.settle();
+    expect(calls.find(c => c.cmd === "assign_meeting_turns")?.args).toEqual({ meetingId: 1, turnIds: [101, 102], speakerId: null, newName: "Alice" });
+    expect(form()).toBeUndefined();
+});
+
+test("explicit whole-group assignment uses an existing meeting person", async () => {
+    detail.turn_ids = [101, 102, 103];
+    detail.turns = [
+        { speaker_id: "speaker_1", speaker_name: "Speaker 1", start_ms: 0, end_ms: 1000, channel: 1, text: "First" },
+        { speaker_id: "alice", speaker_name: "Alice", start_ms: 5000, end_ms: 6000, channel: 1, text: "Second" },
+        { speaker_id: "speaker_1", speaker_name: "Speaker 1", start_ms: 9000, end_ms: 10000, channel: 1, text: "Third" },
+    ];
+    invokeOverride = cmd => cmd === "assign_meeting_turns" ? Promise.resolve() : undefined;
+    const view = render(); await view.settle();
+    nodes(view.handle.current).find(n => n.props?.["aria-label"] === "Assign speaker for passage at 0:00").props.onClick(); await view.settle();
+    let form = nodes(view.handle.current).find(n => n.props?.["aria-label"] === "Assign passage speaker");
+    nodes(form).find(n => n.type === "select").props.onChange({ target: { value: "alice" } });
+    nodes(form).find(n => n.type === "input" && n.props.type === "checkbox").props.onChange({ target: { checked: true } }); await view.settle();
+    form = nodes(view.handle.current).find(n => n.props?.["aria-label"] === "Assign passage speaker");
+    form.props.onSubmit({ preventDefault() {} }); await view.settle();
+    expect(calls.find(c => c.cmd === "assign_meeting_turns")?.args).toEqual({ meetingId: 1, turnIds: [101, 103], speakerId: "alice", newName: null });
+});
+
+test("model provenance is shown even if the recording is missing", async () => {
+    detail.transcription_model = "granite-speech-5-nc";
+    detail.audio_missing = true;
+    const view = render(); await view.settle();
+    expect(textOf(byTest(view.handle.current, "meeting-transcription-model"))).toContain("Granite Speech 5");
+});
+
+test("import draft is readable before completion and saved meetings remain navigable", async () => {
+    const view = render(); await view.settle();
+    listeners.get("meeting-processing-started")!({ payload: { title: "New import", platform: "Imported recording" } });
+    listeners.get("meeting-processing-preview")!({ payload: { title: "New import", model_id: "granite-speech-5-nc", paragraphs: [{start_ms:0,end_ms:30000,text:"Early text"}], completed_ms:30000,total_ms:90000 } });
+    await view.settle();
+    const read = nodes(view.handle.current).find(n => n.type === "button" && textOf(n).includes("Read transcript"));
+    expect(read).toBeDefined(); read.props.onClick(); await view.settle();
+    expect(textOf(byTest(view.handle.current, "meeting-import-preview"))).toContain("Early text");
+    expect(textOf(view.handle.current)).toContain("speaker labels pending");
+    select(view.handle.current, 2); await view.settle();
+    expect(byTest(view.handle.current, "meeting-import-preview")).toBeUndefined();
+    expect(textOf(view.handle.current)).toContain("Meeting 2");
+    read.props.onClick(); await view.settle();
+    finished(); await view.settle();
+    expect(byTest(view.handle.current, "meeting-import-preview")).toBeUndefined();
+    expect(textOf(view.handle.current)).toContain("Original transcript"); view.unmount();
+});
+
+test("failed import retains an explicitly partial unsaved draft", async () => {
+    const view = render(); await view.settle();
+    listeners.get("meeting-processing-started")!({payload:{title:"Import",platform:"Imported recording"}});
+    listeners.get("meeting-processing-preview")!({payload:{title:"Import",paragraphs:[{start_ms:0,end_ms:30000,text:"Partial text"}],completed_ms:30000,total_ms:90000}});
+    listeners.get("meeting-processing-finished")!({payload:{meeting_id:null,error:"Decode failed"}}); await view.settle();
+    nodes(view.handle.current).find(n => n.type === "button" && textOf(n).includes("Read partial transcript")).props.onClick(); await view.settle();
+    expect(textOf(view.handle.current)).toContain("Partial draft · processing failed · not saved");
+    expect(textOf(byTest(view.handle.current,"meeting-import-preview"))).toContain("Partial text"); view.unmount();
+});
+
+test("returning to Meetings restores an in-flight draft from the backend", async () => {
+    invokeOverride=(cmd)=>cmd==="get_meeting_import_status" ? Promise.resolve({title:"Restored import",platform:"Imported recording",startedAt:Date.now(),running:true,stage:"Labeling speakers",preview:{title:"Restored import",paragraphs:[{start_ms:0,end_ms:10000,text:"Retained draft"}],completed_ms:10000,total_ms:30000}}):undefined;
+    const view=render(); await view.settle();
+    expect(textOf(view.handle.current)).toContain("Labeling speakers");
+    nodes(view.handle.current).find(n=>n.type==="button" && textOf(n).includes("Read transcript")).props.onClick(); await view.settle();
+    expect(textOf(byTest(view.handle.current,"meeting-import-preview"))).toContain("Retained draft"); view.unmount();
+});
+
+test("Stop targets the displayed job and retains its unsaved draft", async () => {
+ invokeOverride=cmd=>cmd==="cancel_meeting_processing"?Promise.resolve(true):undefined;
+ const view=render();await view.settle();
+ listeners.get("meeting-processing-started")!({payload:{title:"Import",platform:"Imported recording",job_id:"owned-job"}});
+ listeners.get("meeting-processing-preview")!({payload:{title:"Import",paragraphs:[{start_ms:0,end_ms:30000,text:"Partial text"}],completed_ms:30000,total_ms:90000}});
+ await view.settle();await byTest(view.handle.current,"meeting-processing-stop").props.onClick();await view.settle();
+ expect(calls.find(c=>c.cmd==="cancel_meeting_processing")?.args.jobId).toBe("owned-job");
+ expect(byTest(view.handle.current,"meeting-processing-stop").props.disabled).toBe(true);
+ listeners.get("meeting-processing-finished")!({payload:{meeting_id:null,error:"Meeting processing stopped",cancelled:true}});await view.settle();
+ expect(textOf(view.handle.current)).toContain("Meeting processing stopped");
+ nodes(view.handle.current).find(n=>n.type==="button"&&textOf(n).includes("Read partial transcript")).props.onClick();await view.settle();
+ expect(textOf(view.handle.current)).toContain("Partial draft · stopped · not saved");view.unmount();
 });

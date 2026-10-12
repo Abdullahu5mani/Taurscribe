@@ -661,7 +661,7 @@ pub fn align_transcript_to_turns(
     sample_rate: u32,
     transcriber: Option<TurnTranscriber<'_>>,
 ) -> Result<Vec<DiarizedTurn>, String> {
-    align_turns(mic_turns, remote_turns, remote_profiles, raw_transcript, snippets_dir, meeting_id, mic_samples, sys_samples, sample_rate, transcriber, true)
+    align_turns(mic_turns, remote_turns, remote_profiles, raw_transcript, snippets_dir, meeting_id, mic_samples, sys_samples, sample_rate, transcriber, true, None)
 }
 
 /// `two_channels`: false for a one-track (in-person) recording, where both
@@ -679,7 +679,9 @@ fn align_turns(
     sample_rate: u32,
     transcriber: Option<TurnTranscriber<'_>>,
     two_channels: bool,
+    cached: Option<&crate::meeting_transcript::TimedTranscript>,
 ) -> Result<Vec<DiarizedTurn>, String> {
+    crate::meeting_job::check_current()?;
     let mut all_turns: Vec<(u64, u64, u8, String, String, Option<String>, Vec<String>)> = Vec::new();
 
     // 1. Process local mic turns (Channel 0 = You)
@@ -774,7 +776,11 @@ fn align_turns(
     if let Some(transcribe) = transcriber {
         let min_len = (sample_rate as usize) * 2 / 5; // 400 ms minimum ASR input
         let mut per_turn = Vec::new();
-        for t in &consolidated {
+        let intervals: Vec<_> = consolidated.iter().map(|t|(t.0,t.1)).collect();
+        let cached = cached.filter(|text| text.covers_text());
+        let mut reused_count = 0;
+        for (turn_index, t) in consolidated.iter().enumerate() {
+            crate::meeting_job::check_current()?;
             let source = if t.2 == 0 { mic_samples } else { sys_samples };
             let mut start_ms = t.0.saturating_sub(250);
             let mut end_ms = t.1.saturating_add(250);
@@ -810,7 +816,9 @@ fn align_turns(
                 if balanced.len() < min_len { balanced.resize(min_len, 0.0); }
                 &balanced[..]
             };
-            let text = transcribe(audio, sample_rate).map_err(|e| {
+            let reused = cached.and_then(|text| text.for_turn_validated(turn_index, &intervals));
+            if reused.is_some() { reused_count += 1; }
+            let text = reused.map(Ok).unwrap_or_else(|| transcribe(audio, sample_rate)).map_err(|e| {
                 format!("Could not transcribe {} at {}–{} ms: {e}", t.4, t.0, t.1)
             })?;
             {
@@ -831,7 +839,7 @@ fn align_turns(
             }
         }
         if !per_turn.is_empty() {
-            println!("[DIARIZE] Transcribed {} turns from their own channels", per_turn.len());
+            println!("[DIARIZE] {} turns: {} reused from timestamps, {} decoded per speaker", per_turn.len(), reused_count, consolidated.len().saturating_sub(reused_count));
             return Ok(per_turn);
         }
         println!("[DIARIZE] Per-turn transcription produced no text; falling back to transcript distribution");
@@ -956,6 +964,7 @@ fn split_remote_speakers_hint(sys_samples: &[f32], sample_rate: u32, expected: O
             Err(e) => eprintln!("[DIARIZE] Nemotron-3 failed ({e}); using acoustic clustering"),
         }
     }
+    if crate::meeting_job::check_current().is_err() { return (Vec::new(), Vec::new()); }
     let mut turns = detect_channel_speech_segments(sys_samples, sample_rate, 1, 0.015);
     let profiles = cluster_remote_turns(&mut turns, 0.40);
     if let Ok(pcm) = crate::audio_preprocess::resample_mono_to_16k(sys_samples, sample_rate) {
@@ -974,6 +983,7 @@ fn split_remote_speakers_hint(sys_samples: &[f32], sample_rate: u32, expected: O
 /// with the voiceprint check ([`crate::neural_diarizer::split_mixed_speakers`])
 /// that separates similar voices the separator heard as one person.
 fn split_room_speakers(samples: &[f32], sample_rate: u32, expected: Option<usize>) -> (Vec<AudioTurnSegment>, Vec<SpeakerProfile>) {
+    if crate::meeting_job::check_current().is_err() { return (Vec::new(), Vec::new()); }
     if samples.is_empty() || crate::neural_diarizer::model_path().is_none() {
         return split_remote_speakers(samples, sample_rate);
     }
@@ -1003,7 +1013,7 @@ fn refine_with_voiceprints(
     let engine = crate::speaker_embedding::get_speaker_engine();
     let neural = engine.lock().map(|e| e.uses_neural_model()).unwrap_or(false);
     let mut voiceprint = |audio: &[f32]| {
-        if !neural {
+        if !neural || crate::meeting_job::check_current().is_err() {
             return None;
         }
         engine.lock().ok()?.compute_embedding(audio, 16_000).ok()
@@ -1215,7 +1225,30 @@ fn diarize_in_person_recording_hint(
     for t in &mut you_turns {
         t.channel = 0;
     }
-    align_turns(&you_turns, &others, &profiles, raw_transcript, snippets_dir, meeting_id, samples, samples, sample_rate, transcriber, false)
+    align_turns(&you_turns, &others, &profiles, raw_transcript, snippets_dir, meeting_id, samples, samples, sample_rate, transcriber, false, None)
+}
+
+/// Finalize a transcript-first import using an already decoded room recording.
+/// A concurrent neural run is reused; ambiguous text is still decoded per speaker.
+pub fn finish_room_import(samples: &[f32], sample_rate: u32, snippets_dir: &Path, stamp: i64,
+    transcriber: TurnTranscriber<'_>, expected: Option<usize>, cached: &crate::meeting_transcript::TimedTranscript,
+    neural: Option<Result<Vec<crate::neural_diarizer::SpeakerTurn>, String>>,
+) -> Result<Vec<DiarizedTurn>, String> {
+    crate::meeting_job::check_current()?;
+    let (turns, mut profiles) = if let Some(Ok(turns)) = neural.filter(|r|r.as_ref().is_ok_and(|t| !t.is_empty())) {
+        let pcm = crate::audio_preprocess::resample_mono_to_16k(samples, sample_rate)?;
+        let turns = refine_with_voiceprints(turns, &pcm, true, expected);
+        turns_to_segments(&turns, samples, sample_rate)
+    } else { split_room_speakers(samples, sample_rate, expected) };
+    crate::meeting_job::check_current()?;
+    identify_speakers(&mut profiles, &turns, samples, &[], sample_rate, snippets_dir, stamp);
+    crate::meeting_job::check_current()?;
+    let me = crate::commands::meetings::open_connection().ok().and_then(|conn| crate::commands::my_voice_embedding(&conn));
+    let you = me.as_deref().and_then(|me| find_you(&profiles, me, crate::speaker_embedding::match_threshold()));
+    name_room_speakers(&mut profiles, you);
+    let (mut you_turns, others): (Vec<AudioTurnSegment>, Vec<AudioTurnSegment>) = turns.into_iter().partition(|t| Some(t.cluster_id) == you);
+    for turn in &mut you_turns { turn.channel = 0; }
+    align_turns(&you_turns, &others, &profiles, &cached.text, snippets_dir, stamp, samples, samples, sample_rate, Some(transcriber), false, Some(cached))
 }
 
 /// The speaker whose voiceprint is closest to the user's, if close enough.
@@ -1271,6 +1304,7 @@ fn identify_speakers(
 
     // Extract candidate snippets and compute embeddings for remote profiles
     for (idx, profile) in remote_profiles.iter_mut().enumerate() {
+        if crate::meeting_job::check_current().is_err() { break; }
         let cluster_turns: Vec<AudioTurnSegment> = remote_turns
             .iter()
             .filter(|t| t.cluster_id == idx)
@@ -1341,6 +1375,7 @@ fn identify_speakers(
 
     // Undo weaker links that a later, closer cluster took over.
     for (idx, profile) in remote_profiles.iter_mut().enumerate() {
+        if crate::meeting_job::check_current().is_err() { break; }
         if let Some((winner, _)) = vault_links.get(&profile.speaker_id) {
             if *winner != idx {
                 profile.speaker_id = format!("speaker_remote_{}", idx + 1);
@@ -1384,16 +1419,41 @@ mod tests {
         for duration in [800, 100] {
             let samples = [vec![0.2; duration], vec![-0.2; duration]].concat();
             let turns = align_turns(&[], &[segment(0, duration as u64, 0), segment(duration as u64, duration as u64 * 2, 1)], &profiles,
-                "", &dir, 1, &samples, &samples, 1000, Some(&mut recognized), false).unwrap();
+                "", &dir, 1, &samples, &samples, 1000, Some(&mut recognized), false, None).unwrap();
             assert_eq!(turns.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(), vec!["Alice", "Bob"]);
         }
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
+    fn timestamped_import_reuses_clear_turns_and_decodes_crossing_boundaries() {
+        use crate::meeting_transcript::{TimedText, TimedTranscript};
+        let segment = |start_ms, end_ms, cluster_id| AudioTurnSegment {
+            channel: 1, start_sample: start_ms as usize, end_sample: end_ms as usize,
+            start_ms, end_ms, features: AcousticFeatures::default(), cluster_id,
+        };
+        let turns = [segment(0, 1000, 0), segment(1000, 2000, 1)];
+        let profiles = [profile("Alice", vec![]), profile("Bob", vec![])];
+        let samples = vec![0.2; 2000];
+        let dir = std::env::temp_dir().join(format!("timestamp-reuse-{}",rand::random::<u64>()));
+        let mut calls = 0;
+        let cached = TimedTranscript { text: "Hello goodbye".into(), units: vec![TimedText {start_ms:100,end_ms:500,text:"Hello".into()},TimedText {start_ms:1100,end_ms:1500,text:"goodbye".into()}] };
+        let mut transcribe = |_: &[f32],_: u32| { calls += 1; Ok("fallback".into()) };
+        let result = align_turns(&[], &turns, &profiles, "", &dir, 1, &samples, &samples, 1000, Some(&mut transcribe), false, Some(&cached)).unwrap();
+        assert_eq!(calls,0);
+        assert_eq!(result.iter().map(|t|t.text.as_str()).collect::<Vec<_>>(),vec!["Hello","goodbye"]);
+        let mut crossing = cached.clone(); crossing.units[0].end_ms=1050;
+        let mut transcribe = |_: &[f32],_: u32| { calls += 1; Ok("fallback".into()) };
+        let result = align_turns(&[], &turns, &profiles, "", &dir, 2, &samples, &samples, 1000, Some(&mut transcribe), false, Some(&crossing)).unwrap();
+        assert_eq!(calls,2);
+        assert!(result.iter().all(|t|t.text=="fallback"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn room_without_acoustic_turns_does_not_assume_the_user_spoke() {
         let turns = align_turns(&[], &[], &[], "unattributed speech", Path::new("unused"), 1,
-            &[], &[], 16_000, None, false).unwrap();
+            &[], &[], 16_000, None, false, None).unwrap();
         assert_eq!(turns[0].speaker_name, "Speaker 1");
         assert_eq!(turns[0].channel, 1);
     }

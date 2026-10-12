@@ -40,6 +40,7 @@ export function MeetingRecordingImport({ compact = false, isVisible = true, bloc
   const [importing, setImporting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
+  const [stoppedNotice,setStoppedNotice] = useState("");
   const zone = useRef<HTMLDivElement>(null);
   const modal = useRef<HTMLDivElement>(null);
   const modalOpenRef = useRef(false);
@@ -165,20 +166,27 @@ export function MeetingRecordingImport({ compact = false, isVisible = true, bloc
     setBatchProgress({ completed: 0, total: jobs.length });
     const failed: RecordingSource[] = [], errors: string[] = [];
     let lastId: number | null = null;
+    let completed = 0; let stopped = false;
+    setStoppedNotice("");
     try {
       for (let index = 0; index < jobs.length; index++) {
         const job = jobs[index];
         const jobTitle = combineAll || sources.length === 1 ? title.trim() : job[0].name.replace(/\.[^.]+$/, "");
         try {
           lastId = await invoke<number>("import_meeting_recordings", { paths: job.map(s => s.path), title: jobTitle, expectedSpeakers: count, modelId, useGpu });
-        } catch (reason) { failed.push(...job); errors.push(`${job[0].name}: ${String(reason)}`); }
+          completed++;
+        } catch (reason) {
+          failed.push(...job); errors.push(`${job[0].name}: ${String(reason)}`);
+          if (String(reason).includes("Meeting processing stopped")) {failed.push(...jobs.slice(index+1).flat());stopped=true;break;}
+        }
         if (mounted.current) setBatchProgress({ completed: index + 1, total: jobs.length });
       }
       if (mounted.current) {
         setSources(failed);
         if (failed.length && !combineAll) setTitle(failed[0].name.replace(/\.[^.]+$/, ""));
         if (!failed.length) { setTitle(""); setExpectedSpeakers(""); manualOrder.current = false; setApprovedGroups(new Set()); }
-        if (errors.length) setError(`${jobs.length - errors.length} of ${jobs.length} meetings imported. Failed files are ready to retry.\n${errors.join("\n")}`);
+        if (stopped) {setError("");setStoppedNotice(`${completed} of ${jobs.length} meetings imported. Processing stopped. Remaining recordings are ready to retry.`);}
+        else if (errors.length) setError(`${completed} of ${jobs.length} meetings imported. Failed files are ready to retry.\n${errors.join("\n")}`);
         if (lastId !== null) callbacks.current.onComplete(lastId);
       }
     }
@@ -213,6 +221,7 @@ export function MeetingRecordingImport({ compact = false, isVisible = true, bloc
       </div>
       <button type="button" className="meeting-vault-btn" onClick={openModal} disabled={disabled} data-testid="meeting-import-open">{importing ? "Importing…" : sources.length ? "Review import" : compact ? "Import" : "Import recordings"}</button>
     </div>
+    {stoppedNotice && !modalOpen && <p className="meeting-import-notice" role="status">{stoppedNotice}</p>}
     {error && !modalOpen && <p className="meeting-import-error" role="alert">{error} — choose Review import to retry.</p>}
     <ModalLayer>{modalOpen && <div className="meeting-import-overlay" data-testid="meeting-import-overlay" onClick={event => { if (event.target === event.currentTarget) closeModal(); }}>
       <div ref={modal} className={`meeting-import-modal ${dragging ? "meeting-import--dragging" : ""}`} role="dialog" aria-modal="true" aria-labelledby="meeting-import-dialog-title" aria-describedby="meeting-import-dialog-description" tabIndex={-1} data-testid="meeting-import-modal" aria-busy={importing || inspecting} {...dropHandlers}>

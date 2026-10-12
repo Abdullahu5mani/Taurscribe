@@ -36,9 +36,11 @@ const JOIN_GAP_MS: u64 = 1_000;
 /// Diarizes 16 kHz mono PCM. Loads the model for this call only, so its memory
 /// is released afterwards (meetings are diarized once, after recording).
 pub fn diarize_16k(pcm: &[f32]) -> Result<Vec<SpeakerTurn>, String> {
+    crate::meeting_job::check_current()?;
     let path = model_path().ok_or("diarization model not installed")?;
     let t = std::time::Instant::now();
     let (raw, backend) = run_model(&path, pcm)?;
+    crate::meeting_job::check_current()?;
     let turns = tidy_turns(raw);
     println!(
         "[DIARIZE] Nemotron-3 on {backend}: {:.1}s of audio in {:.2}s, {} turns, {} speakers",

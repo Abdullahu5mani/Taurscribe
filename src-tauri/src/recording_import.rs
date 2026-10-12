@@ -253,6 +253,11 @@ pub fn inspect(path: &Path) -> Result<RecordingSource, String> {
 /// Keeps all audio, in the user-selected order, without inserting wall-clock gaps
 /// or trimming overlaps. Sources retain wall-clock dates plus playback offsets.
 pub fn join(paths: &[String], dest: &Path) -> Result<Vec<RecordingSource>, String> {
+    join_cancellable(paths, dest, || Ok(()))
+}
+
+pub fn join_cancellable(paths: &[String], dest: &Path, check: impl Fn() -> Result<(),String>) -> Result<Vec<RecordingSource>,String> {
+    check()?;
     if paths.is_empty() {
         return Err("Choose at least one recording".into());
     }
@@ -270,9 +275,11 @@ pub fn join(paths: &[String], dest: &Path) -> Result<Vec<RecordingSource>, Strin
     let result = (|| {
         let mut total_frames = 0u64;
         for source in &mut sources {
+            check()?;
             let start = total_frames;
             let mut resampler = None;
             let mut write = |samples: &[f32]| -> Result<(), String> {
+                check()?;
                 for &sample in samples {
                     if !sample.is_finite() {
                         return Err("Recording contains invalid audio samples".into());
@@ -328,6 +335,19 @@ pub fn unique_audio_path(dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stopped_join_removes_partial_output_and_preserves_original() {
+        let dir=std::env::temp_dir().join(format!("ts-import-stop-{:016x}",rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();let input=dir.join("original.wav");let dest=dir.join("partial.wav");
+        let spec=hound::WavSpec{channels:1,sample_rate:48000,bits_per_sample:16,sample_format:hound::SampleFormat::Int};
+        let mut writer=hound::WavWriter::create(&input,spec).unwrap();
+        for _ in 0..48000 {writer.write_sample(1000i16).unwrap();}writer.finalize().unwrap();
+        let before=std::fs::read(&input).unwrap();let checks=std::cell::Cell::new(0);
+        let result=join_cancellable(&[input.to_string_lossy().into_owned()],&dest,||{let n=checks.get()+1;checks.set(n);if n>=3{Err(crate::meeting_job::STOPPED.into())}else{Ok(())}});
+        assert!(result.unwrap_err().contains(crate::meeting_job::STOPPED));assert!(!dest.exists());assert_eq!(std::fs::read(&input).unwrap(),before);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn dates_need_time_and_do_not_use_copy_dates() {
         assert!(parse_date("2026").is_none());

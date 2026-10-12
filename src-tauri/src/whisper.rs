@@ -857,11 +857,23 @@ impl WhisperManager {
     ///
     /// `initial_prompt` — optional text injected before decoding to bias Whisper
     /// toward the vocabulary of the active application (e.g. the window title).
-    pub fn transcribe_audio_data(
+    pub fn transcribe_audio_data(&mut self, audio_data: &[f32], initial_prompt: Option<&str>) -> Result<String, String> {
+        self.transcribe_audio_data_timed(audio_data, initial_prompt).map(|out|out.text)
+    }
+
+    pub fn transcribe_audio_data_timed(
         &mut self,
         audio_data: &[f32],
         initial_prompt: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<crate::meeting_transcript::TimedTranscript, String> {
+        self.transcribe_audio_data_timed_cancellable(audio_data, initial_prompt, None)
+    }
+    pub fn transcribe_audio_data_timed_cancellable(
+        &mut self, audio_data: &[f32], initial_prompt: Option<&str>,
+        cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<crate::meeting_transcript::TimedTranscript,String> {
+        if let Some(cancel)=cancel.as_ref(){crate::meeting_job::check(cancel)?;}
+
         let ctx = self
             .context
             .as_mut()
@@ -904,6 +916,19 @@ impl WhisperManager {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_token_timestamps(false);
+        if let Some(flag)=cancel.as_ref() {
+            unsafe extern "C" fn abort(user_data: *mut std::ffi::c_void) -> bool {
+                // The owning Arc remains alive until the synchronous full() call returns.
+                unsafe { &*(user_data as *const std::sync::atomic::AtomicBool) }.load(std::sync::atomic::Ordering::Relaxed)
+            }
+            // The pinned whisper-rs safe wrapper casts a boxed trait object to
+            // the closure type. Pass a stable AtomicBool directly instead.
+            unsafe {
+                params.set_abort_callback(Some(abort));
+                params.set_abort_callback_user_data(std::sync::Arc::as_ptr(flag) as *mut std::ffi::c_void);
+            }
+        }
+
         // Timestamps are never shown, but whisper.cpp needs them to move through
         // audio longer than one 30 s window: without them it can stop a window
         // early after a pause and jump to the next, dropping the speech between.
@@ -924,12 +949,15 @@ impl WhisperManager {
         state
             .full(params, audio_data)
             .map_err(|e| format!("Transcription failed: {:?}", e))?;
+        if let Some(cancel)=cancel.as_ref(){crate::meeting_job::check(cancel)?;}
 
         // Extract
         let num_segments = state.full_n_segments();
         let mut transcript = String::new();
+        let mut units = Vec::new();
         for i in 0..num_segments {
             if let Some(segment) = state.get_segment(i) {
+                units.push(crate::meeting_transcript::TimedText { start_ms: segment.start_timestamp().max(0) as u64 * 10, end_ms: segment.end_timestamp().max(0) as u64 * 10, text: segment.to_string() });
                 transcript.push_str(&segment.to_string());
                 transcript.push(' ');
             }
@@ -945,7 +973,9 @@ impl WhisperManager {
             speedup
         );
 
-        Ok(strip_whitelisted_sound_captions(transcript.trim()))
+        let mut result = crate::meeting_transcript::TimedTranscript { text: strip_whitelisted_sound_captions(transcript.trim()), units };
+        if !result.covers_text() { result.units.clear(); }
+        Ok(result)
     }
 
     /// Helper: Load and prepare a WAV file for VAD/Whisper

@@ -7,6 +7,34 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, State};
 
+// Keep the in-flight draft available when the user visits Mic/Files and returns.
+static IMPORT_STATUS: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+#[tauri::command]
+pub fn get_meeting_import_status() -> Result<Option<serde_json::Value>, String> {
+    IMPORT_STATUS.lock().map(|status| status.clone()).map_err(|e|e.to_string())
+}
+fn update_import_status(update: impl FnOnce(&mut serde_json::Value)) {
+    if let Ok(mut status)=IMPORT_STATUS.lock() { if let Some(status)=status.as_mut(){update(status);} }
+}
+
+pub(crate) fn remember_meeting_processing(mut payload: serde_json::Value) {
+    payload["running"]=true.into();payload["startedAt"]=chrono::Utc::now().timestamp_millis().into();payload["error"]=serde_json::Value::Null;
+    if let Ok(mut status)=IMPORT_STATUS.lock(){*status=Some(payload);}
+}
+pub(crate) fn finish_meeting_processing(error: Option<&str>) {
+    if let Ok(mut status)=IMPORT_STATUS.lock(){
+        if let Some(error)=error {if let Some(status)=status.as_mut(){status["running"]=false.into();status["error"]=error.into();}}
+        else {*status=None;}
+    }
+}
+
+#[tauri::command]
+pub fn cancel_meeting_processing(app: AppHandle, job_id: Option<String>) -> Result<bool,String> {
+    let stopped=crate::meeting_job::cancel(job_id.as_deref())?;
+    if stopped {update_import_status(|status|status["stage"]="Stopping meeting processing…".into());let _=app.emit("meeting-processing-progress",serde_json::json!({"stage":"Stopping meeting processing…"}));}
+    Ok(stopped)
+}
+
 #[derive(serde::Serialize)]
 pub struct RecordingInspection {
     recordings: Vec<RecordingSource>,
@@ -65,52 +93,100 @@ pub async fn import_meeting_recordings(
     if state.engine_loading.load(Ordering::Acquire) {
         return Err("Wait for the speech model to finish loading".into());
     }
-    let engine = *state.active_engine.lock().map_err(|e| e.to_string())?;
+    let engine = model_id.as_deref().map(|id|if id.starts_with("granite-"){ASREngine::Granite}else if id.starts_with("qwen3-"){ASREngine::Qwen3}else{ASREngine::Whisper}).unwrap_or(*state.active_engine.lock().map_err(|e| e.to_string())?);
     let whisper = state.whisper.clone();
     let gguf = state.gguf_manager(engine);
     let activity = state.last_activity_timestamp.clone();
+    let job=crate::meeting_job::MeetingJob::begin(job_id)?;
+    let cancel=job.cancel.clone();
     let title = title.trim().to_string();
+    if let Ok(mut status)=IMPORT_STATUS.lock() {
+        *status=Some(serde_json::json!({"title":title,"platform":"Imported recording","job_id":job.id,"running":true,"startedAt":chrono::Utc::now().timestamp_millis(),"preview":null,"error":null}));
+    }
     let _ = app.emit(
         "meeting-processing-started",
-        serde_json::json!({"title": title, "platform": "Imported recording"}),
+        serde_json::json!({"title": title, "platform": "Imported recording", "job_id":job.id}),
     );
     let completion_app = app.clone();
     // The worker owns both gates even if its caller disappears or switches views.
     tauri::async_runtime::spawn_blocking(move || {
         let _transition = transition;
         let _models = models;
-        let progress = |stage: &str| { let _ = app.emit("meeting-processing-progress", serde_json::json!({"stage": stage})); };
+        let _job = job;
+        let progress = |stage: &str| { update_import_status(|status|status["stage"]=stage.into()); let _ = app.emit("meeting-processing-progress", serde_json::json!({"stage": stage})); };
         let result = (|| {
+            crate::meeting_job::check(&cancel)?;
             progress("Loading the selected speech model");
             load_import_engine(engine, &whisper, gguf.as_ref(), model_id.as_deref(), !use_gpu.unwrap_or(true))?;
             let actual_model = import_model_id(engine, &whisper, gguf.as_ref());
             let dir = super::meetings::get_meetings_dir()?;
             let wav = recording_import::unique_audio_path(&dir.join("audio"));
             progress("Converting and joining recordings");
-            let sources = recording_import::join(&paths, &wav)?;
+            let sources = recording_import::join_cancellable(&paths, &wav, ||crate::meeting_job::check(&cancel))?;
             let retained = |error: String| format!("{error}. Combined recording retained at {}. Your original files are unchanged.", wav.display());
             let stamp = chrono::Utc::now().timestamp_millis();
             let mut transcribe = super::recording::meeting_turn_transcriber(engine, &whisper, gguf.as_ref()).ok_or_else(|| retained("Speech engine is unavailable".into()))?;
-            // Imported stereo is mixed audio, not our mic/remote channel layout.
-            // Use the room pipeline: Nemotron + saved voice matching + per-turn ASR.
-            progress("Identifying speakers and transcribing speech");
-            let turns = crate::diarization::diarize_meeting_recording_with_hint(&wav, "", &dir.join("snippets"), stamp, Some(transcribe.as_mut()), true, expected_speakers).map_err(retained)?;
+            let (samples, rate) = crate::diarization::read_room_audio(&wav).map_err(retained)?;
+            let pcm = crate::audio_preprocess::resample_mono_to_16k(&samples, rate).map_err(retained)?;
+            let began = std::time::Instant::now();
+            let (cached, neural) = std::thread::scope(|scope| -> Result<_, String> {
+                let mut cached = crate::meeting_transcript::TimedTranscript::default();
+                let mut paragraphs = Vec::new();
+                let mut worker = None;
+                let overlap = use_gpu.unwrap_or(true) && crate::neural_diarizer::model_path().is_some();
+                for (index, (start, end)) in crate::meeting_transcript::chunk_ranges(&pcm).into_iter().enumerate() {
+                    crate::meeting_job::check(&cancel)?;
+                    progress(if worker.is_some() { "Transcribing audio while GPU speaker labeling runs" } else { "Transcribing audio — text appears as it is ready" });
+                    let part = match engine {
+                        ASREngine::Whisper => whisper.lock().map_err(|e| e.to_string())?.transcribe_audio_data_timed_cancellable(&pcm[start..end], None, Some(cancel.clone()))?,
+                        _ => gguf.as_ref().ok_or("Speech engine unavailable")?.lock().map_err(|e| e.to_string())?.transcribe_timed_cancellable(&pcm[start..end], &cancel)?,
+                    };
+                    let start_ms = start as u64 / 16;
+                    let end_ms = end as u64 / 16;
+                    if !part.text.trim().is_empty() {
+                        paragraphs.push(crate::meeting_transcript::TimedText { start_ms, end_ms, text: part.text.clone() });
+                    }
+                    cached.append(part, start_ms);
+                    let preview = serde_json::json!({"title":title,"model_id":actual_model,"paragraphs":paragraphs,"completed_ms":end_ms,"total_ms":pcm.len() as u64 / 16});
+                    update_import_status(|status|status["preview"]=preview.clone());
+                    let _ = app.emit("meeting-processing-preview", preview);
+                    if index == 0 {
+                        eprintln!("[IMPORT] First transcript chunk: {:.2}s", began.elapsed().as_secs_f64());
+                        if overlap && crate::meeting_transcript::can_overlap_diarization() {
+                            let audio = &pcm;
+                            worker = Some(scope.spawn(move || crate::neural_diarizer::diarize_16k(audio)));
+                        }
+                    }
+                }
+                progress("Finishing speaker labeling and aligning the transcript");
+                let neural = worker.map(|worker| worker.join().unwrap_or_else(|_| Err("GPU diarization worker failed; retrying sequentially".into())));
+                Ok((cached, neural))
+            }).map_err(retained)?;
+            let turns = crate::diarization::finish_room_import(&samples, rate, &dir.join("snippets"), stamp, transcribe.as_mut(), expected_speakers, &cached, neural).map_err(retained)?;
+            eprintln!("[IMPORT] Transcription and labeling: {:.2}s", began.elapsed().as_secs_f64());
+            crate::meeting_job::check(&cancel)?;
             let transcript = turns.iter().map(|t| t.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" ");
             if transcript.is_empty() { return Err(retained("No speech was transcribed; the meeting was not saved".into())); }
             let duration = hound::WavReader::open(&wav).map_err(|e| retained(e.to_string()))?.duration() as i64 * 1000 / 48_000;
             progress("Saving the meeting and preparing playback");
             let conn = super::meetings::open_connection().map_err(retained)?;
+            crate::meeting_job::finish(&cancel)?;
             let id = super::meetings::insert_meeting_with_sources(&conn, &title, "Imported recording", "Taurscribe", "", duration, Some(&wav.to_string_lossy()), &transcript, &turns, &sources).map_err(retained)?;
+            super::meetings::save_transcription_model(&conn, id, actual_model.as_deref()).map_err(retained)?;
             if let Err(error) = super::meetings::convert_meeting_audio(&conn, id, &wav) { eprintln!("[IMPORT] Keeping playable WAV: {error}"); }
             Ok(id)
-        })();
+        })().map_err(|error|if cancel.load(Ordering::Relaxed){format!("{}; original recordings are unchanged",crate::meeting_job::STOPPED)}else{error});
         activity.store(chrono::Utc::now().timestamp() as u64, Ordering::Relaxed);
         let (id, error) = match &result { Ok(id) => (Some(*id), None), Err(error) => (None, Some(error.as_str())) };
-        let _ = app.emit("meeting-processing-finished", serde_json::json!({"meeting_id": id, "error": error}));
+        if let Ok(mut status)=IMPORT_STATUS.lock() {
+            if error.is_none() { *status=None; } else if let Some(status)=status.as_mut(){status["running"]=false.into();status["error"]=serde_json::json!(error);}
+        }
+        let _ = app.emit("meeting-processing-finished", serde_json::json!({"meeting_id": id, "error": error,"cancelled":cancel.load(Ordering::Relaxed)}));
         if let Ok(id) = result.as_ref() { let _ = app.emit("meeting-processing-complete", serde_json::json!({"meeting_id": id, "imported": true})); }
         result
     }).await.map_err(|e| {
         let error = format!("Meeting import task failed: {e}");
+        update_import_status(|status|{status["running"]=false.into();status["error"]=error.clone().into();});
         let _ = completion_app.emit("meeting-processing-finished", serde_json::json!({"meeting_id": null, "error": error}));
         error
     })?
@@ -133,11 +209,11 @@ fn load_import_engine(engine: ASREngine, whisper: &std::sync::Arc<std::sync::Mut
     match engine {
         ASREngine::Whisper => {
             let mut model = whisper.lock().map_err(|e| e.to_string())?;
-            if super::file_transcription::file_model_needs_load(model_id, model.get_current_model().map(String::as_str))? { model.initialize(model_id, force_cpu)?; }
+            if super::file_transcription::file_model_needs_load(model_id, model.get_current_model().map(String::as_str))? || model.device_key()!=device_key { model.initialize(model_id, force_cpu)?; }
         }
         _ => {
             let mut model = gguf.ok_or("Speech engine unavailable")?.lock().map_err(|e| e.to_string())?;
-            if super::file_transcription::file_model_needs_load(model_id, model.get_status().model_id.as_deref())? { model.initialize(model_id, force_cpu)?; }
+            if super::file_transcription::file_model_needs_load(model_id, model.get_status().model_id.as_deref())? || model.device_key()!=device_key { model.initialize(model_id, force_cpu)?; }
         }
     }
     Ok(())
@@ -152,11 +228,16 @@ pub async fn reseparate_meeting_speakers(app: AppHandle, state: State<'_, AudioS
     let engine = *state.active_engine.lock().map_err(|e| e.to_string())?;
     let whisper = state.whisper.clone(); let gguf = state.gguf_manager(engine);
     let activity = state.last_activity_timestamp.clone();
-    let _ = app.emit("meeting-processing-started", serde_json::json!({"title":"Re-separating speakers", "platform":"Saved meeting"}));
+    let job=crate::meeting_job::MeetingJob::begin(None)?;
+    let cancel=job.cancel.clone();
+    let payload=serde_json::json!({"title":"Re-separating speakers", "platform":"Saved meeting","job_id":job.id});
+    remember_meeting_processing(payload.clone());
+    let _ = app.emit("meeting-processing-started",payload);
     tauri::async_runtime::spawn_blocking(move || {
-        let _transition = transition; let _models = models;
+        let _transition = transition; let _models = models;let _job=job;
         let result = (|| {
             let conn = super::meetings::open_connection()?;
+            crate::meeting_job::check(&cancel)?;
             let revision = super::meetings::turn_revision(&conn, meeting_id)?;
             let (audio, platform): (Option<String>, String) = conn.query_row("SELECT audio_path, platform FROM meetings WHERE id=?1", rusqlite::params![meeting_id], |r| Ok((r.get(0)?,r.get(1)?))).map_err(|e| e.to_string())?;
             let audio = audio.filter(|p| Path::new(p).exists()).ok_or("Meeting recording is missing; existing transcript is unchanged")?;
@@ -180,7 +261,7 @@ pub async fn reseparate_meeting_speakers(app: AppHandle, state: State<'_, AudioS
             if channels == 0 || channels > u16::MAX as u32 { return Err("Invalid meeting audio channel count".into()); }
             let spec = hound::WavSpec { channels: channels as u16, sample_rate: rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
             let mut writer = hound::WavWriter::create(&wav, spec).map_err(|e| e.to_string())?;
-            for sample in samples { writer.write_sample(sample).map_err(|e| e.to_string())?; }
+            for (index, sample) in samples.into_iter().enumerate() { if index % 48000 == 0 { crate::meeting_job::check(&cancel)?; } writer.write_sample(sample).map_err(|e| e.to_string())?; }
             writer.finalize().map_err(|e| e.to_string())?;
             let mut transcribe = super::recording::meeting_turn_transcriber(engine, &whisper, gguf.as_ref()).ok_or("Speech engine unavailable")?;
             let stamp = chrono::Utc::now().timestamp_millis();
@@ -188,10 +269,13 @@ pub async fn reseparate_meeting_speakers(app: AppHandle, state: State<'_, AudioS
             let turns = crate::diarization::diarize_meeting_recording_with_hint(&wav, "", &dir.join("snippets"), stamp, Some(transcribe.as_mut()), room, expected_speakers)?;
             if turns.is_empty() || turns.iter().all(|t| t.text.trim().is_empty()) { return Err("No speech was recovered; existing transcript is unchanged".into()); }
             let _ = app.emit("meeting-processing-progress", serde_json::json!({"stage":"Saving the rebuilt transcript"}));
-            super::meetings::replace_separated_turns(&conn, meeting_id, &turns, &revision)
+            crate::meeting_job::finish(&cancel)?;
+            super::meetings::replace_separated_turns(&conn, meeting_id, &turns, &revision)?;
+            super::meetings::save_transcription_model(&conn, meeting_id, import_model_id(engine, &whisper, gguf.as_ref()).as_deref())
         })();
         activity.store(chrono::Utc::now().timestamp() as u64, Ordering::Relaxed);
-        let _ = app.emit("meeting-processing-finished", serde_json::json!({"meeting_id":meeting_id,"error":result.as_ref().err()}));
+        finish_meeting_processing(result.as_ref().err().map(String::as_str));
+        let _ = app.emit("meeting-processing-finished", serde_json::json!({"meeting_id":meeting_id,"error":result.as_ref().err(),"cancelled":cancel.load(Ordering::Relaxed)}));
         result
     }).await.map_err(|e| e.to_string())?
 }

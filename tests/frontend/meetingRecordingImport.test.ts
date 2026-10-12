@@ -210,3 +210,17 @@ test("batch continues after a bad recording; retry excludes successful files", a
  expect(calls.filter(c=>c.cmd==="import_meeting_recordings").at(-1)?.args.paths).toEqual(["/audio/earlier.wav"]);
  expect(calls.filter(c=>c.cmd==="import_meeting_recordings")).toHaveLength(3);
 });
+
+test("stopping a batch leaves the current and remaining recordings ready to retry", async () => {
+ let reject!: (error: Error) => void;
+ importResult=new Promise((_,r)=>{reject=r;});
+ const view=fixture();await view.settle();
+ byTest(view.handle.current,"meeting-import-open").props.onClick();await view.settle();
+ await byTest(view.handle.current,"meeting-import-browse").props.onClick();await view.settle();
+ const pending=byTest(view.handle.current,"meeting-import-submit").props.onClick();await view.settle();
+ reject(new Error("Meeting processing stopped; original recordings are unchanged"));await pending;await view.settle();
+ expect(calls.filter(c=>c.cmd==="import_meeting_recordings")).toHaveLength(1);
+ expect(view.completed).toEqual([]);expect(view.busy).toEqual([true,false]);
+ byTest(view.handle.current,"meeting-import-open").props.onClick();await view.settle();
+ expect(content(view.handle.current)).toContain("earlier.wav");expect(content(view.handle.current)).toContain("later.wav");
+});

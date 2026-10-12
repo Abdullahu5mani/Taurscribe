@@ -3,6 +3,8 @@ mod asr_priority;
 mod audio;
 pub mod audio_decode;
 pub mod recording_import;
+pub mod meeting_transcript;
+pub mod meeting_job;
 pub mod audio_dual_channel;
 pub mod audio_preprocess;
 pub mod commands;
@@ -473,6 +475,8 @@ pub fn run() {
             commands::set_meeting_tags,
             commands::inspect_meeting_recordings,
             commands::import_meeting_recordings,
+            commands::get_meeting_import_status,
+            commands::cancel_meeting_processing,
             commands::reseparate_meeting_speakers,
             commands::reprocess_meeting,
             commands::get_meeting_platform_counts,
@@ -481,6 +485,7 @@ pub fn run() {
             commands::save_meeting_review,
             commands::delete_meeting,
             commands::rename_speaker,
+            commands::assign_meeting_turns,
             commands::merge_meeting_speakers,
             commands::undo_meeting_speaker_merge,
             commands::rename_vault_speaker,
