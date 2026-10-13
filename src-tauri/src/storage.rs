@@ -622,6 +622,31 @@ fn relocated_path(value: &str, old: &Path, new: &Path) -> Option<String> {
 
 /// Recordings keep absolute paths in the history database; point only paths
 /// inside the old directory at the new one. Update every column in one transaction.
+fn relocated_path_list(value: &str, old: &Path, new: &Path) -> Result<Option<String>, String> {
+    if value.trim().is_empty() { return Ok(None); }
+    let mut paths: Vec<String> = serde_json::from_str(value).map_err(|e| format!("Invalid sample paths: {e}"))?;
+    let mut changed = false;
+    for path in &mut paths {
+        if let Some(next) = relocated_path(path, old, new) { *path = next; changed = true; }
+    }
+    if changed { Ok(Some(serde_json::to_string(&paths).map_err(|e| e.to_string())?)) } else { Ok(None) }
+}
+
+fn relocated_merge_paths(value: &str, old: &Path, new: &Path) -> Result<Option<String>, String> {
+    let mut turns: Vec<serde_json::Value> = serde_json::from_str(value).map_err(|e| format!("Invalid merge snapshot: {e}"))?;
+    let mut changed = false;
+    for turn in &mut turns {
+        if let Some(path) = turn.get("snippet_path").and_then(|v| v.as_str()).and_then(|p| relocated_path(p, old, new)) {
+            turn["snippet_path"] = path.into(); changed = true;
+        }
+        // The undo record stores candidate_snippets as an encoded JSON string.
+        if let Some(paths) = turn.get("candidate_snippets").and_then(|v| v.as_str()) {
+            if let Some(next) = relocated_path_list(paths, old, new)? { turn["candidate_snippets"] = next.into(); changed = true; }
+        }
+    }
+    if changed { Ok(Some(serde_json::to_string(&turns).map_err(|e| e.to_string())?)) } else { Ok(None) }
+}
+
 fn rewrite_recording_paths_in_db(
     conn: &mut rusqlite::Connection,
     old: &Path,
@@ -630,13 +655,16 @@ fn rewrite_recording_paths_in_db(
     use rusqlite::OptionalExtension;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     let columns = [
-        ("meetings", "audio_path", false),
-        ("meeting_turns", "snippet_path", false),
-        ("meeting_turns", "candidate_snippets", true),
-        ("speaker_vault", "snippet_path", false),
-        ("speaker_vault", "candidate_snippets", true),
+        ("meetings", "audio_path", "path"),
+        ("meeting_turns", "snippet_path", "path"),
+        ("meeting_turns", "candidate_snippets", "paths"),
+        ("speaker_vault", "snippet_path", "path"),
+        ("speaker_vault", "candidate_snippets", "paths"),
+        ("speaker_voiceprints", "clip_path", "path"),
+        ("voice_file_prints", "path", "path"),
+        ("meeting_speaker_merges", "turns_json", "turns"),
     ];
-    for (table, column, is_json) in columns {
+    for (table, column, kind) in columns {
         let table_exists: Option<i64> = tx
             .query_row(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -676,28 +704,10 @@ fn rewrite_recording_paths_in_db(
             collected
         };
         for (rowid, value) in rows {
-            let replacement = if is_json {
-                if value.trim().is_empty() {
-                    None
-                } else {
-                    let mut paths: Vec<String> = serde_json::from_str(&value).map_err(|e| {
-                        format!("Invalid {table}.{column} JSON at row {rowid}: {e}")
-                    })?;
-                    let mut changed = false;
-                    for path in &mut paths {
-                        if let Some(next) = relocated_path(path, old, new) {
-                            *path = next;
-                            changed = true;
-                        }
-                    }
-                    if changed {
-                        Some(serde_json::to_string(&paths).map_err(|e| e.to_string())?)
-                    } else {
-                        None
-                    }
-                }
-            } else {
-                relocated_path(&value, old, new)
+            let replacement = match kind {
+                "paths" => relocated_path_list(&value, old, new)?,
+                "turns" => relocated_merge_paths(&value, old, new)?,
+                _ => relocated_path(&value, old, new),
             };
             if let Some(replacement) = replacement {
                 tx.execute(
@@ -1409,5 +1419,33 @@ mod tests {
         );
         drop(conn);
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod retained_path_tests {
+    use super::*;
+    #[test]
+    fn move_and_rollback_include_voiceprints_caches_and_nested_undo_paths() {
+        let mut conn=rusqlite::Connection::open_in_memory().unwrap();
+        crate::commands::meetings::ensure_meetings_schema(&conn).unwrap();
+        let old=Path::new("/old");let new=Path::new("/new");
+        let clip=old.join("voicebank/clip.wav").to_string_lossy().into_owned();
+        let voice=old.join("voicebank/clip_voice.wav").to_string_lossy().into_owned();
+        let expected=new.join("voicebank/clip.wav").to_string_lossy().into_owned();
+        conn.execute("INSERT INTO speaker_voiceprints(person_id,embedding_json,clip_path,created_at) VALUES('alice','[1]',?1,'')",[&clip]).unwrap();
+        conn.execute("INSERT INTO voice_file_prints(path,embedding_json) VALUES(?1,'[1]')",[&voice]).unwrap();
+        let turns=serde_json::json!([{"turn_id":1,"speaker_id":"guest","speaker_name":"Guest","channel":1,"snippet_path":clip,"candidate_snippets":serde_json::to_string(&vec![&clip,"/external/keep.wav"]).unwrap(),"current_snippet_idx":0}]);
+        conn.execute("INSERT INTO meeting_speaker_merges(meeting_id,from_speaker_id,from_speaker_name,into_speaker_id,into_speaker_name,turns_json,created_at) VALUES(1,'guest','Guest','alice','Alice',?1,'')",[turns.to_string()]).unwrap();
+        rewrite_recording_paths_in_db(&mut conn,old,new).unwrap();
+        assert_eq!(conn.query_row("SELECT clip_path FROM speaker_voiceprints",[],|r|r.get::<_,String>(0)).unwrap(),expected);
+        assert_eq!(conn.query_row("SELECT path FROM voice_file_prints",[],|r|r.get::<_,String>(0)).unwrap(),new.join("voicebank/clip_voice.wav").to_string_lossy());
+        let moved:serde_json::Value=serde_json::from_str(&conn.query_row("SELECT turns_json FROM meeting_speaker_merges",[],|r|r.get::<_,String>(0)).unwrap()).unwrap();
+        assert_eq!(moved[0]["snippet_path"],expected);
+        assert_eq!(serde_json::from_str::<Vec<String>>(moved[0]["candidate_snippets"].as_str().unwrap()).unwrap(),vec![expected,"/external/keep.wav".into()]);
+        rewrite_recording_paths_in_db(&mut conn,new,old).unwrap();
+        let restored:serde_json::Value=serde_json::from_str(&conn.query_row("SELECT turns_json FROM meeting_speaker_merges",[],|r|r.get::<_,String>(0)).unwrap()).unwrap();
+        assert_eq!(restored,turns);
+        assert_eq!(conn.query_row("SELECT clip_path FROM speaker_voiceprints",[],|r|r.get::<_,String>(0)).unwrap(),clip);
     }
 }

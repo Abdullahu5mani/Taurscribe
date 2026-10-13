@@ -86,6 +86,79 @@ fn unregister_cancel_flag(model_id: &str, flag: &Arc<AtomicBool>) {
     }
 }
 
+/// Download attempts own only their staging directory. Published models,
+/// including encoders shared by several variants, are never failure cleanup.
+struct StagedDownload(std::path::PathBuf);
+impl Drop for StagedDownload {
+    fn drop(&mut self) {
+        if let Err(error) = clean_download_staging(&self.0) { eprintln!("[DOWNLOAD] {error}"); }
+    }
+}
+fn clean_download_staging(path: &std::path::Path) -> Result<(), String> {
+    let previous = path.join(".previous");
+    if previous.exists() && std::fs::read_dir(&previous).map_err(|e| e.to_string())?.next().is_some() {
+        return Err(format!("Previous model files retained for recovery at {}", previous.display()));
+    }
+    if path.exists() { std::fs::remove_dir_all(path).map_err(|e| e.to_string())?; }
+    Ok(())
+}
+
+fn download_staging_dir(models: &std::path::Path, model_id: &str) -> std::path::PathBuf {
+    models.join(format!(".download-{model_id}"))
+}
+
+fn publish_staged_files(files: &[&super::model_registry::ModelFile], staging: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+    // Full/quantized/standalone downloads may publish the same encoder.
+    static PUBLISH: Mutex<()> = Mutex::new(());
+    let _publish = PUBLISH.lock().map_err(|e| e.to_string())?;
+    for file in files {
+        if !staging.join(file.filename).exists() { return Err(format!("Downloaded file is missing: {}", file.filename)); }
+    }
+    std::fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+    let backup = staging.join(".previous");
+    std::fs::create_dir_all(&backup).map_err(|e| e.to_string())?;
+    let mut installed: Vec<(std::path::PathBuf, Option<std::path::PathBuf>)> = Vec::new();
+    let result = (|| -> Result<(), String> {
+        for file in files {
+            let target = destination.join(file.filename);
+            let previous = if target.exists() {
+                let old = backup.join(file.filename);
+                std::fs::rename(&target, &old).map_err(|e| format!("Could not replace {}: {e}", target.display()))?;
+                Some(old)
+            } else { None };
+            installed.push((target.clone(), previous));
+            std::fs::rename(staging.join(file.filename), &target).map_err(|e| format!("Could not install {}: {e}", target.display()))?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for (target, previous) in installed.into_iter().rev() {
+            if target.is_dir() { let _ = std::fs::remove_dir_all(&target); } else { let _ = std::fs::remove_file(&target); }
+            if let Some(previous) = previous {
+                std::fs::rename(&previous, &target).map_err(|e| format!("Could not restore {}: {e}; previous copy retained at {}", target.display(), previous.display()))?;
+            }
+        }
+    }
+    if result.is_ok() { let _ = std::fs::remove_dir_all(&backup); }
+    result
+}
+
+fn verify_archive_hash(path: &std::path::Path, expected: &str, cancel: &AtomicBool) -> Result<(), String> {
+    if expected.is_empty() { return Ok(()); }
+    use sha2::{Digest, Sha256};
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut hash = Sha256::new();
+    let mut bytes = [0u8; 65536];
+    loop {
+        if cancel.load(Ordering::Relaxed) { return Err("Download cancelled by user".into()); }
+        let count = file.read(&mut bytes).map_err(|e| e.to_string())?;
+        if count == 0 { break; }
+        hash.update(&bytes[..count]);
+    }
+    if format!("{:x}", hash.finalize()) != expected { return Err("Download failed — archive hash mismatch".into()); }
+    Ok(())
+}
+
 /// Delete all files/directories belonging to a model (used on cancel or hash mismatch).
 fn delete_model_files(config: &ModelConfig, base_dir: &std::path::Path) {
     for fs in &config.files {
@@ -156,17 +229,8 @@ pub fn scan_and_clean_stale_downloads() {
             model_id
         );
         if let Some(config) = super::model_registry::get_model_config(model_id) {
-            let base_dir = if let Some(subdir) = config.subdirectory {
-                models_dir.join(subdir)
-            } else {
-                models_dir.clone()
-            };
-            delete_model_files(&config, &base_dir);
-            // Remove the stale verified.json entry if any
-            let mut store = load_verified_store();
-            if store.remove(model_id).is_some() {
-                save_verified_store(&store);
-            }
+            let _ = config;
+            let _ = clean_download_staging(&download_staging_dir(&models_dir, model_id));
         }
         let _ = std::fs::remove_file(&path);
         println!("[STARTUP] Cleaned up stale download for '{}'", model_id);
@@ -366,8 +430,7 @@ fn verify_installed_model_files(
 
         let file_path = base_dir.join(file_spec.filename);
         if file_path.is_dir() {
-            fingerprint_parts.push(expected_hash.to_string());
-            continue;
+            return Err(format!("Cannot verify {} without its original archive; download it again to verify", file_spec.filename));
         }
 
         let mut file = File::open(&file_path)
@@ -505,7 +568,7 @@ pub async fn get_download_status(
                     true
                 } else if store
                     .get(&id)
-                    .is_some_and(|entry| entry.fingerprint == expected_fp)
+                    .is_some_and(|entry| entry.fingerprint == expected_fp && (entry.archive_hashes_checked || !active.iter().any(|file| file.remote_path.ends_with(".zip"))))
                 {
                     true
                 } else {
@@ -550,22 +613,11 @@ pub async fn get_download_status(
 
 #[tauri::command]
 pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, String> {
+    get_model_config(&model_id).ok_or_else(|| format!("Unknown model ID: {model_id}"))?;
     let cancel_flag = register_cancel_flag(&model_id)?;
     write_download_lock(&model_id);
     let result = download_model_inner(&app, &model_id, &cancel_flag).await;
     let cancelled = begin_finish_cancel_flag(&model_id, &cancel_flag);
-    if cancelled {
-        if let (Some(config), Ok(models_dir)) =
-            (get_model_config(&model_id), crate::utils::get_models_dir())
-        {
-            let base_dir = config.subdirectory.map_or(models_dir.clone(), |subdir| models_dir.join(subdir));
-            delete_model_files(&config, &base_dir);
-            let mut store = load_verified_store();
-            if store.remove(&model_id).is_some() {
-                save_verified_store(&store);
-            }
-        }
-    }
     remove_download_lock(&model_id);
     let status = if cancelled { "cancelled" } else if result.is_ok() { "done" } else { "error" };
     if cancelled || result.is_ok() {
@@ -627,29 +679,11 @@ async fn download_model_inner(
     let models_dir =
         crate::utils::get_models_dir().map_err(|e| format!("Failed to get models dir: {}", e))?;
 
-    let base_dir = if let Some(subdir) = config.subdirectory {
-        models_dir.join(subdir)
-    } else {
-        models_dir.clone()
-    };
-
-    // Clean up any orphaned files from a previous partial/crashed download before
-    // starting fresh.  This covers the case where the app was force-quit after
-    // some files had already been written but before the lock was removed.
-    delete_model_files(&config, &base_dir);
-    // Also clear any stale verified.json entry so the UI won't flash "Verified"
-    // for a fraction of a second before the new download completes.
-    {
-        let mut store = load_verified_store();
-        if store.remove(model_id).is_some() {
-            save_verified_store(&store);
-        }
-    }
-
-    if !base_dir.exists() {
-        std::fs::create_dir_all(&base_dir)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
+    let destination = config.subdirectory.map_or(models_dir.clone(), |subdir| models_dir.join(subdir));
+    let base_dir = download_staging_dir(&models_dir, model_id);
+    clean_download_staging(&base_dir)?;
+    std::fs::create_dir_all(&base_dir).map_err(|e| e.to_string())?;
+    let _staging = StagedDownload(base_dir.clone());
 
     // Platform-active files only: the ANE companion is skipped off Apple
     // Silicon so other platforms never fetch an unusable ~1 GB bundle.
@@ -833,6 +867,14 @@ async fn download_model_inner(
         }
 
         if is_zip {
+            let expected = if !file_spec.sha1.is_empty() { file_spec.sha1.to_string() }
+                else if is_hf_repo { fetch_hf_lfs_sha256(&client, config.repo, config.branch, file_spec.remote_path).await.unwrap_or_default() }
+                else { String::new() };
+            verify_archive_hash(&download_path, &expected, cancel_flag)
+                .map_err(|e| emit_error(app, model_id, i, files_count, &e))?;
+        }
+
+        if is_zip {
             // Emit extraction-start event so the UI can show the purple bar.
             let _ = app.emit(
                 "download-progress",
@@ -915,7 +957,9 @@ async fn download_model_inner(
     // Only skip verification entirely for non-HuggingFace repos with no hashes.
     // HuggingFace entries without pinned hashes use live LFS pointer metadata.
     if fingerprint_is_empty(&expected_fp) && !is_hf_repo {
-        return Ok(format!("Downloaded to {:?}", base_dir));
+        if begin_finish_cancel_flag(model_id, cancel_flag) { return Err("Download cancelled by user".into()); }
+        publish_staged_files(&active, &base_dir, &destination)?;
+        return Ok(format!("Downloaded to {:?}", destination));
     }
 
     // Pre-calculate total bytes for progress reporting (all non-directory files).
@@ -978,8 +1022,8 @@ async fn download_model_inner(
             },
         );
 
-        // Directories (e.g. .mlmodelc CoreML bundles) can't be file-hashed.
-        // Trust the extraction; push the expected hash so the fingerprint matches.
+        // Archive bytes were checked before extracting directories. Record that
+        // verified archive hash rather than trying to hash the directory.
         if file_path.is_dir() {
             computed_fp_parts.push(expected_hash);
             continue;
@@ -1082,6 +1126,11 @@ async fn download_model_inner(
         computed_fp_parts.push(hash_hex);
     }
 
+    // Close cancellation before publishing. A late cancel must never delete a
+    // completed install or the previous version of a shared encoder.
+    if begin_finish_cancel_flag(model_id, cancel_flag) { return Err("Download cancelled by user".into()); }
+    publish_staged_files(&active, &base_dir, &destination)?;
+
     // All hashes matched — write to verified.json.
     let computed_fp = computed_fp_parts.join("+");
     let now = chrono::Utc::now().to_rfc3339();
@@ -1099,7 +1148,7 @@ async fn download_model_inner(
 
     println!("[VERIFY] {} — all files verified ✅", model_id);
 
-    Ok(format!("Downloaded and verified {:?}", base_dir))
+    Ok(format!("Downloaded and verified {:?}", destination))
 }
 
 fn encoder_has_other_weights(
