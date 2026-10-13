@@ -2995,3 +2995,28 @@ mod final_pass_cancellation_tests {
         assert_eq!(calls,4);assert_eq!(text,"chunk1 chunk2 chunk3 chunk4");
     }
 }
+
+#[cfg(test)]
+mod native_final_pass_tests {
+    use super::*;
+    #[test]
+    #[ignore = "Requires installed Granite model and the public JFK fixture"]
+    fn granite_final_pass_can_abort_native_inference_and_retry() {
+        let fixture=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../taurscribe-runtime/samples/jfk.wav");
+        let (pcm,rate)=crate::audio_decode::decode_audio_mono_f32(&fixture).unwrap();
+        let pcm=crate::audio_preprocess::resample_mono_to_16k(&pcm,rate).unwrap();
+        let mut engine=crate::gguf_asr::GgufAsrManager::granite();engine.initialize(Some("granite-speech-5-nc"),false).unwrap();
+        let manager=Arc::new(std::sync::Mutex::new(engine));
+        let cancel=Arc::new(std::sync::atomic::AtomicBool::new(false));let signal=cancel.clone();
+        let setter=std::thread::spawn(move || {std::thread::sleep(std::time::Duration::from_millis(50));signal.store(true,Ordering::Relaxed);});
+        let started=std::time::Instant::now();
+        let result=transcribe_final_pass(&manager,pcm.repeat(40),ASREngine::Granite,Some(&cancel));
+        setter.join().unwrap();
+        println!("GRANITE_FINAL_PASS_CANCEL seconds={:.3} result={result:?}",started.elapsed().as_secs_f64());
+        assert!(result.is_err());assert!(started.elapsed().as_secs_f64()<10.0);
+        let fresh=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let retry=transcribe_final_pass(&manager,pcm,ASREngine::Granite,Some(&fresh)).unwrap();
+        assert!(retry.to_lowercase().contains("country"),"retry: {retry}");
+        println!("GRANITE_FINAL_PASS_RETRY {retry}");
+    }
+}

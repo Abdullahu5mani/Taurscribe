@@ -159,7 +159,8 @@ fn verify_archive_hash(path: &std::path::Path, expected: &str, cancel: &AtomicBo
     Ok(())
 }
 
-/// Delete all files/directories belonging to a model (used on cancel or hash mismatch).
+/// Delete files from this attempt's staging directory on cancel/hash mismatch.
+/// Callers must never pass the published models directory here.
 fn delete_model_files(config: &ModelConfig, base_dir: &std::path::Path) {
     for fs in &config.files {
         let p = base_dir.join(fs.filename);
@@ -410,6 +411,38 @@ fn fingerprint_is_empty(fp: &str) -> bool {
     fp.split('+').all(|h| h.is_empty())
 }
 
+/// Sizes and modification times of a model's files: what a failed verification
+/// is remembered against, so it is retried only when the files change.
+fn files_signature(active: &[&ModelFile], base_dir: &std::path::Path) -> Vec<(u64, Option<std::time::SystemTime>)> {
+    active
+        .iter()
+        .map(|f| {
+            let meta = std::fs::metadata(base_dir.join(f.filename)).ok();
+            (
+                meta.as_ref().map_or(0, |m| m.len()),
+                meta.and_then(|m| m.modified().ok()),
+            )
+        })
+        .collect()
+}
+
+type FailedVerifications = HashMap<String, Vec<(u64, Option<std::time::SystemTime>)>>;
+
+fn failed_verifications() -> &'static Mutex<FailedVerifications> {
+    static FAILED: OnceLock<Mutex<FailedVerifications>> = OnceLock::new();
+    FAILED.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn failed_recently(id: &str, active: &[&ModelFile], base_dir: &std::path::Path) -> bool {
+    let signature = files_signature(active, base_dir);
+    failed_verifications().lock().unwrap().get(id) == Some(&signature)
+}
+
+fn remember_failed(id: &str, active: &[&ModelFile], base_dir: &std::path::Path) {
+    let signature = files_signature(active, base_dir);
+    failed_verifications().lock().unwrap().insert(id.to_string(), signature);
+}
+
 /// Verify an existing installation against the registry without downloading it
 /// again. This migrates models installed before verified.json receipts existed.
 fn verify_installed_model_files(
@@ -568,9 +601,18 @@ pub async fn get_download_status(
                     true
                 } else if store
                     .get(&id)
-                    .is_some_and(|entry| entry.fingerprint == expected_fp && (entry.archive_hashes_checked || !active.iter().any(|file| file.remote_path.ends_with(".zip"))))
+                    .is_some_and(|entry| entry.fingerprint == expected_fp)
                 {
+                    // A receipt written before archive hashes were checked is
+                    // still trusted: its .bin files were hashed, and the
+                    // extracted .mlmodelc can't be re-checked without its
+                    // archive. Rejecting it left those models "Unverified"
+                    // until downloaded again.
                     true
+                } else if failed_recently(&id, &active, &base_dir) {
+                    // Same files that failed last time: don't rehash (up to
+                    // ~3 GB) on every status poll.
+                    false
                 } else {
                     match verify_installed_model_files(&active, &base_dir) {
                         Ok(computed_fp) if computed_fp == expected_fp => {
@@ -586,9 +628,13 @@ pub async fn get_download_status(
                             store_changed = true;
                             true
                         }
-                        Ok(_) => false,
+                        Ok(_) => {
+                            remember_failed(&id, &active, &base_dir);
+                            false
+                        }
                         Err(err) => {
                             eprintln!("[VERIFY] Existing model {id} is unverified: {err}");
+                            remember_failed(&id, &active, &base_dir);
                             false
                         }
                     }
@@ -1422,5 +1468,68 @@ mod tests {
         assert!(verify_installed_model_files(&invalid_active, &dir).is_err());
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod download_integrity_tests {
+    use super::*;
+    fn root() -> std::path::PathBuf {
+        let root=std::env::temp_dir().join(format!("taurscribe-download-integrity-{:016x}",rand::random::<u64>()));
+        std::fs::create_dir_all(&root).unwrap();root
+    }
+    #[test]
+    fn abandoning_an_attempt_keeps_installed_weights_and_shared_encoder() {
+        let root=root();
+        let encoder=root.join("ggml-small.en-encoder.mlmodelc");std::fs::create_dir(&encoder).unwrap();
+        std::fs::write(encoder.join("model.mil"),b"installed encoder").unwrap();
+        for weights in ["ggml-small.en.bin","ggml-small.en-q5_1.bin"] {std::fs::write(root.join(weights),b"installed weights").unwrap();}
+        let stage=download_staging_dir(&root,"whisper-small-en");std::fs::create_dir(&stage).unwrap();
+        std::fs::write(stage.join("ggml-small.en.bin"),b"incomplete download").unwrap();
+        drop(StagedDownload(stage.clone()));
+        assert!(!stage.exists());
+        assert_eq!(std::fs::read(encoder.join("model.mil")).unwrap(),b"installed encoder");
+        for weights in ["ggml-small.en.bin","ggml-small.en-q5_1.bin"] {assert_eq!(std::fs::read(root.join(weights)).unwrap(),b"installed weights");}
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn publishing_installs_complete_files_and_rolls_back_on_failure() {
+        let root=root();let stage=root.join("staging");let destination=root.join("installed");
+        std::fs::create_dir_all(stage.join("nested")).unwrap();std::fs::create_dir_all(&destination).unwrap();
+        std::fs::write(stage.join("first.bin"),b"new").unwrap();std::fs::write(stage.join("nested/second.bin"),b"second").unwrap();
+        std::fs::write(destination.join("first.bin"),b"original").unwrap();std::fs::write(destination.join("nested"),b"blocks directory creation").unwrap();
+        let first=ModelFile{filename:"first.bin",remote_path:"first.bin",sha1:""};let second=ModelFile{filename:"nested/second.bin",remote_path:"second.bin",sha1:""};
+        assert!(publish_staged_files(&[&first,&second],&stage,&destination).is_err());
+        assert_eq!(std::fs::read(destination.join("first.bin")).unwrap(),b"original");
+        assert_eq!(std::fs::read(destination.join("nested")).unwrap(),b"blocks directory creation");
+        std::fs::write(stage.join("first.bin"),b"complete replacement").unwrap();
+        publish_staged_files(&[&first],&stage,&destination).unwrap();
+        assert_eq!(std::fs::read(destination.join("first.bin")).unwrap(),b"complete replacement");
+        drop(StagedDownload(stage));std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cleanup_retains_a_backup_that_could_not_be_restored() {
+        let root=root();let stage=root.join("staging");std::fs::create_dir_all(stage.join(".previous")).unwrap();
+        std::fs::write(stage.join(".previous/model.bin"),b"previous model").unwrap();
+        drop(StagedDownload(stage.clone()));
+        assert!(clean_download_staging(&stage).is_err());
+        assert_eq!(std::fs::read(stage.join(".previous/model.bin")).unwrap(),b"previous model");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn archives_require_matching_bytes_and_old_directory_receipts_are_not_trusted() {
+        use sha2::{Digest,Sha256};
+        let root=root();let archive=root.join("encoder.zip");
+        let bytes=b"approved archive bytes";let expected=format!("{:x}",Sha256::digest(bytes));
+        std::fs::write(&archive,bytes).unwrap();
+        verify_archive_hash(&archive,&expected,&AtomicBool::new(false)).unwrap();
+        std::fs::write(&archive,b"truncated or corrupted archive").unwrap();
+        assert!(verify_archive_hash(&archive,&expected,&AtomicBool::new(false)).unwrap_err().contains("hash mismatch"));
+        std::fs::create_dir(root.join("encoder.mlmodelc")).unwrap();
+        let file=ModelFile{filename:"encoder.mlmodelc",remote_path:"encoder.mlmodelc.zip",sha1:"expected-archive-hash"};
+        assert!(verify_installed_model_files(&[&file],&root).is_err());
+        let legacy:VerifiedEntry=serde_json::from_str(r#"{"fingerprint":"hash","verified_at":"yesterday"}"#).unwrap();
+        assert!(!legacy.archive_hashes_checked);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

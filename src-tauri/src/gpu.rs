@@ -570,10 +570,60 @@ impl Target {
     /// The matching llama.cpp device index (its own registry), if any.
     pub fn llama_device(&self) -> Option<usize> {
         let id = self.gpu_id()?;
-        llama_cpp_2::list_llama_ggml_backend_devices()
+        let devices: Vec<(usize, String)> = llama_cpp_2::list_llama_ggml_backend_devices()
             .into_iter()
-            .find(|d| device_id(&d.backend, &d.description) == id)
-            .map(|d| d.index)
+            .map(|d| (d.index, device_id(&llama_backend_kind(&d.backend), &d.description)))
+            .collect();
+        match_llama_device(&id, &devices)
+    }
+}
+
+/// llama.cpp names some backends differently from transcribe.cpp ("MTL" for
+/// Metal, "HIP" for ROCm); map them to transcribe.cpp's kind so ids compare.
+fn llama_backend_kind(backend: &str) -> String {
+    match backend.to_lowercase().as_str() {
+        "mtl" => "metal".into(),
+        "hip" => "rocm".into(),
+        other => other.into(),
+    }
+}
+
+/// Index of the llama.cpp device whose id (`<kind>:<description>`) is `id`.
+/// Falls back to the description alone when exactly one device has it, so a
+/// backend named differently in a future llama.cpp still matches.
+fn match_llama_device(id: &str, devices: &[(usize, String)]) -> Option<usize> {
+    if let Some((index, _)) = devices.iter().find(|(_, d)| d == id) {
+        return Some(*index);
+    }
+    let description = id.split_once(':').map_or(id, |(_, d)| d);
+    let mut same_name = devices
+        .iter()
+        .filter(|(_, d)| d.split_once(':').map_or(d.as_str(), |(_, x)| x) == description);
+    match (same_name.next(), same_name.next()) {
+        (Some((index, _)), None) => Some(*index),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod llama_device_tests {
+    use super::*;
+
+    #[test]
+    fn llama_backend_names_match_transcribe_ids() {
+        // On Apple Silicon llama.cpp reports "MTL"; transcribe.cpp "metal".
+        let devices = vec![(0, device_id(&llama_backend_kind("MTL"), "Apple M4"))];
+        assert_eq!(match_llama_device("metal:Apple M4", &devices), Some(0));
+        let devices = vec![(1, device_id(&llama_backend_kind("HIP"), "Radeon RX 7900"))];
+        assert_eq!(match_llama_device("rocm:Radeon RX 7900", &devices), Some(1));
+    }
+
+    #[test]
+    fn description_fallback_needs_a_unique_match() {
+        let devices = vec![(0, "newname:GPU A".to_string()), (1, "cuda:GPU B".to_string())];
+        assert_eq!(match_llama_device("vulkan:GPU A", &devices), Some(0));
+        let twins = vec![(0, "x:Same".to_string()), (1, "y:Same".to_string())];
+        assert_eq!(match_llama_device("vulkan:Same", &twins), None);
     }
 }
 

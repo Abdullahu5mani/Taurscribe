@@ -514,16 +514,16 @@ fn generate_sample_from_paths(conn: &Connection, person_id: &str, paths: Vec<Str
             if !voice.exists() { continue; }
             let (samples, rate) = match crate::audio_decode::decode_audio_mono_f32(&voice) { Ok(audio) => audio, Err(_) => continue };
             let pcm = crate::audio_preprocess::resample_mono_to_16k(&samples, rate)?;
-            if let Some(clip) = sample_from_pcm(conn, person_id, &pcm, dir, excluded)? { return Ok(clip); }
+            if let Some(clip) = sample_from_pcm(conn, person_id, &pcm, dir, excluded, 16000 * 5)? { return Ok(clip); }
         }
         Err("No new retained speech is available for this person. Use Find more to confirm them in another meeting, or add a recording of just their voice.".into())
 }
 
-fn sample_from_pcm(conn: &Connection, person_id: &str, pcm: &[f32], dir: &Path, excluded: &[String]) -> Result<Option<String>, String> {
+fn sample_from_pcm(conn: &Connection, person_id: &str, pcm: &[f32], dir: &Path, excluded: &[String], minimum_samples: usize) -> Result<Option<String>, String> {
     if excluded.len() > 32 { return Err("Close some previews before generating more".into()); }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
             for chunk in pcm.chunks(16000 * 15) {
-                if chunk.len() < 16000 * 5 { continue; }
+                if chunk.len() < minimum_samples { continue; }
                 let mut hasher = sha2::Sha256::new();
                 use sha2::Digest;
                 hasher.update(person_id.as_bytes());
@@ -542,6 +542,7 @@ fn sample_from_pcm(conn: &Connection, person_id: &str, pcm: &[f32], dir: &Path, 
 }
 
 pub(super) fn generate_meeting_sample_in(conn: &Connection, meeting_id: i64, speaker_id: &str, dir: &Path, excluded: &[String]) -> Result<String, String> {
+    if excluded.len() > 32 { return Err("Close some previews before generating more".into()); }
     let paths: Vec<String> = {
         let mut stmt = conn.prepare("SELECT DISTINCT snippet_path FROM meeting_turns WHERE meeting_id=?1 AND speaker_id=?2 AND snippet_path IS NOT NULL ORDER BY start_ms").map_err(|e| e.to_string())?;
         let rows = stmt.query_map(params![meeting_id,speaker_id], |r| r.get(0)).map_err(|e| e.to_string())?;
@@ -558,17 +559,36 @@ pub(super) fn generate_meeting_sample_in(conn: &Connection, meeting_id: i64, spe
     let mut stmt = conn.prepare("SELECT start_ms,end_ms FROM meeting_turns WHERE meeting_id=?1 AND speaker_id=?2 ORDER BY start_ms,end_ms").map_err(|e| e.to_string())?;
     let ranges = stmt.query_map(params![meeting_id,speaker_id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?;
     if ranges.is_empty() { return Err("This speaker is no longer in the meeting".into()); }
-    let (samples, rate, channels) = crate::audio_decode::decode_audio_interleaved_strict(Path::new(&audio))?;
-    let mono: Vec<f32> = samples.chunks_exact(channels as usize).map(|frame| frame.iter().sum::<f32>() / channels as f32).collect();
-    let mut speech = Vec::new();
-    let mut previous_end = 0;
-    for (start, end) in ranges {
-        let start = ((start.max(0) as u128 * rate as u128 / 1000).min(mono.len() as u128) as usize).max(previous_end);
-        let end = (end.max(0) as u128 * rate as u128 / 1000).min(mono.len() as u128) as usize;
-        if end > start { speech.extend_from_slice(&mono[start..end]); previous_end = end; }
+    let mut merged: Vec<(u64,u64)> = Vec::new();
+    for (start,end) in ranges {
+        let (start,end)=(start.max(0) as u64,end.max(0) as u64);
+        if end <= start { continue; }
+        if let Some(last) = merged.last_mut().filter(|last| start <= last.1) { last.1=last.1.max(end); }
+        else { merged.push((start,end)); }
     }
+    // Decode packets and retain only enough selected speech to offer a new
+    // preview. A multi-hour recording must not become several full PCM buffers.
+    let mut speech = Vec::new();
+    let mut offset=0usize;
+    let mut next=0usize;
+    let (_,rate)=crate::audio_decode::decode_audio_mono_stream_strict(Path::new(&audio), |part,rate,_,_| {
+        let packet_end=offset.saturating_add(part.len());
+        let cap=rate as usize * 15 * (excluded.len()+1);
+        while next < merged.len() && speech.len() < cap {
+            let (start,end)=merged[next];
+            let frame=|ms:u64| (ms as u128 * rate as u128 / 1000).min(usize::MAX as u128) as usize;
+            let (start,end)=(frame(start),frame(end));
+            if start>=packet_end { break; }
+            let from=start.max(offset);let to=end.min(packet_end).min(from.saturating_add(cap-speech.len()));
+            if to>from { speech.extend_from_slice(&part[from-offset..to-offset]); }
+            if end<=packet_end { next+=1; } else { break; }
+        }
+        offset=packet_end;Ok(())
+    })?;
     let pcm = crate::audio_preprocess::resample_mono_to_16k(&speech, rate)?;
-    sample_from_pcm(conn, &identity, &pcm, dir, excluded)?.ok_or_else(|| "No new retained speech is available for this speaker".into())
+    // Listening previews can be shorter than the five seconds required for
+    // enrolling a voiceprint. Enrollment keeps its separate speech-length check.
+    sample_from_pcm(conn, &identity, &pcm, dir, excluded, 1)?.ok_or_else(|| "No new retained speech is available for this speaker".into())
 }
 
 /// A listening preview from another retained section of this meeting speaker.

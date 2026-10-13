@@ -1016,9 +1016,10 @@ fn custom_reset_manifest() -> Result<ResetManifest, String> {
         if !models.exists(){return Err("Reconnect the custom models drive before resetting app data".into());}
         for entry in fs::read_dir(&models).map_err(|e|e.to_string())? {
             let entry=entry.map_err(|e|e.to_string())?;let name=entry.file_name().to_string_lossy().into_owned();
-            let id=if name.starts_with("ggml-") {format!("whisper-{}",name.trim_start_matches("ggml-").trim_end_matches(".bin"))} else {name.clone()};
-            let known=crate::commands::model_registry::get_model_config(&id).is_some()
-                || matches!(name.as_str(),"flowscribe_v3"|"speaker"|"diarization-nemotron3")
+            let known=whisper_file_model_id(&name).is_some()
+                || (!name.starts_with("ggml-") && crate::commands::model_registry::get_model_config(&name).is_some())
+                || matches!(name.as_str(),"flowscribe_v3"|"speaker"|"diarization-nemotron3"|"verified.json")
+                || name.ends_with(".downloading")
                 || (name.starts_with("ggml-") && name.ends_with("-encoder.mlmodelc"));
             if known {managed_files.push(entry.path());}
         }
@@ -1588,6 +1589,17 @@ pub fn get_mcp_setup() -> Result<McpSetup, String> {
 #[cfg(test)]
 mod factory_reset_tests {
     use super::*;
+
+    #[test]
+    fn english_only_whisper_files_are_recognised_as_app_managed() {
+        assert_eq!(whisper_file_model_id("ggml-base.en-q5_1.bin").as_deref(), Some("whisper-base-en-q5_1"));
+        assert_eq!(whisper_file_model_id("ggml-small.en.bin").as_deref(), Some("whisper-small-en"));
+        assert_eq!(whisper_file_model_id("ggml-tiny.bin").as_deref(), Some("whisper-tiny"));
+        assert_eq!(whisper_file_model_id("ggml-large-v3-turbo-q5_0.bin").as_deref(), Some("whisper-large-v3-turbo-q5_0"));
+        // Not a file the registry lists: the user's own file stays.
+        assert_eq!(whisper_file_model_id("ggml-my-finetune.bin"), None);
+        assert_eq!(whisper_file_model_id("notes.txt"), None);
+    }
 
     /// A fresh folder, deleted when dropped.
     struct Scratch(std::path::PathBuf);

@@ -127,6 +127,32 @@ pub async fn cancel_file_transcription(path: String, job_id: Option<String>) -> 
     Ok(())
 }
 
+/// Longest a file job waits for a busy engine before giving up.
+const FILE_SLOT_WAIT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Takes the model gate and the recording-transition gate together, retrying
+/// while either is busy. Nothing is held between attempts, so a waiting file job
+/// never blocks the recording, load or import it is waiting for.
+async fn wait_for_file_slot(
+    state: &AudioState,
+) -> Result<(crate::state::ModelOperationGuard, crate::state::RecordingTransitionGuard), String> {
+    let deadline = std::time::Instant::now() + FILE_SLOT_WAIT;
+    loop {
+        let attempt = state.begin_model_operation().and_then(|operation| {
+            if state.engine_loading.load(Ordering::Acquire) {
+                return Err("ASR model is still loading; wait until the engine is ready before transcribing a file".to_string());
+            }
+            let transition = state.begin_recording_transition()?;
+            Ok((operation, transition))
+        });
+        match attempt {
+            Ok(slot) => return Ok(slot),
+            Err(error) if std::time::Instant::now() >= deadline => return Err(error),
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+        }
+    }
+}
+
 /// Transcribe an audio file using the currently active ASR engine.
 ///
 /// macOS: wrapped in spawn_blocking because speech inference
@@ -142,19 +168,17 @@ pub async fn transcribe_file(
     defer_auto_unload: Option<bool>,
     use_gpu: Option<bool>,
 ) -> Result<FileTranscriptionResult, String> {
-    let model_operation = Arc::new(state.begin_model_operation()?);
-    if state.engine_loading.load(Ordering::Acquire) {
-        return Err(
-            "ASR model is still loading; wait until the engine is ready before transcribing a file"
-                .to_string(),
-        );
-    }
-
-    // New file requests wait behind capture; per-chunk priority protects the shared engine.
     if crate::storage::move_in_progress() {
         return Err("A storage folder is being moved (Settings → Storage); try again when the move finishes".into());
     }
-    let transition = state.begin_recording_transition()?;
+
+    // New file requests wait behind a recording that is starting or stopping
+    // (including a meeting's final pass), a model load or a meeting import,
+    // instead of failing: the Files queue advances the moment one job ends, so
+    // failing here would fail every remaining queued file at once. Per-chunk
+    // priority then protects the live recording on the shared engine.
+    let (model_operation, transition) = wait_for_file_slot(&state).await?;
+    let model_operation = Arc::new(model_operation);
     let cancel = register_cancel_flag(&path, job_id)?;
     drop(transition);
     let whisper = state.whisper.clone();

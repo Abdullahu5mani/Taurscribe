@@ -127,9 +127,15 @@ pub fn ensure_meetings_schema(conn: &Connection) -> Result<(), String> {
     // Recordings joined into this meeting (restarting the same call continues it).
     let _ = conn.execute("ALTER TABLE meetings ADD COLUMN parts INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("ALTER TABLE meetings ADD COLUMN recording_sources TEXT", []);
-    // Older versions did not track review saves. Preserve their metadata rather
-    // than risking loss of edits that cannot be distinguished from generated notes.
-    let _ = conn.execute("ALTER TABLE meetings ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 1", []);
+    // Older versions did not track review saves. Mark their existing meetings
+    // reviewed, preserving metadata rather than risking loss of edits that cannot
+    // be distinguished from generated notes. The column's default stays 0 so
+    // meetings saved from now on start unreviewed; only the rows present when
+    // the column is first added are marked.
+    if conn.execute("ALTER TABLE meetings ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0", []).is_ok() {
+        conn.execute("UPDATE meetings SET reviewed = 1", [])
+            .map_err(|e| format!("Failed to migrate meeting reviews: {}", e))?;
+    }
 
     super::voice_bank::ensure_voice_bank_schema(conn)
 
@@ -644,8 +650,9 @@ pub(super) fn insert_meeting_with_sources(
         r#"
         INSERT INTO meetings (
             session_id, title, platform, app_name, url, created_at, duration_ms,
-            audio_path, transcript_raw, summary, action_items, category, speaker_count
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            audio_path, transcript_raw, summary, action_items, category, speaker_count,
+            reviewed
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0)
         "#,
         params![
             session_id,
@@ -2137,10 +2144,26 @@ mod tests {
     }
 
     #[test]
+    fn meetings_saved_after_the_migration_start_unreviewed() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        // A database from before the column existed, already holding a meeting.
+        let legacy = meeting_with(&conn, &[turn("speaker_you", "You", 0, 0)]);
+        conn.execute_batch("ALTER TABLE meetings DROP COLUMN reviewed;").unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        ensure_meetings_schema(&conn).unwrap(); // later launches must not re-mark rows
+        let new = meeting_with(&conn, &[turn("speaker_you", "You", 0, 0)]);
+        let reviewed = |id: i64| -> bool {
+            conn.query_row("SELECT reviewed FROM meetings WHERE id=?1", [id], |r| r.get(0)).unwrap()
+        };
+        assert!(reviewed(legacy), "meetings from before the column existed keep their notes");
+        assert!(!reviewed(new), "new meetings are not reviewed until the user saves a review");
+    }
+
+    #[test]
     fn legacy_meeting_reviews_are_preserved_by_migration() {
         let conn = Connection::open_in_memory().unwrap();
         ensure_meetings_schema(&conn).unwrap();
-        conn.execute_batch("ALTER TABLE meetings DROP COLUMN reviewed;").unwrap();
         let id = meeting_with(&conn, &[turn("speaker_you", "You", 0, 0)]);
         conn.execute_batch("ALTER TABLE meetings DROP COLUMN reviewed;").unwrap();
         conn.execute("UPDATE meetings SET summary='[\"Legacy approved summary\"]', category='Planning', action_items='[]' WHERE id=?1", [id]).unwrap();
@@ -2805,6 +2828,9 @@ mod audit_retention_tests {
             assert_eq!(rate,16000);assert_eq!(samples.len(),16000*6);
             assert!(samples.iter().all(|x|(*x-expected).abs()<0.00001),"preview contains another speaker's interval");
         }
+        conn.execute("UPDATE meeting_turns SET end_ms=start_ms+2000 WHERE meeting_id=1",[]).unwrap();
+        let short=super::super::voice_bank::generate_meeting_sample_in(&conn,1,&alice,&root.join("voicebank"),&[]).unwrap();
+        assert_eq!(hound::WavReader::open(short).unwrap().duration(),16000*2,"a short corrected passage is still playable");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

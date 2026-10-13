@@ -336,8 +336,14 @@ impl LLMEngine {
             if let Some(index) = target.llama_device() {
                 println!("[LLM] Using llama.cpp device #{index}");
                 model_params = model_params.with_devices(&[index]).map_err(|e| Error::msg(e.to_string()))?;
-            } else if device_id.is_some() {
-                return Err(Error::msg("The selected GPU is not available to FlowScribe in this build"));
+            } else {
+                // No exact match (a CPU-only build has no GPU at all, or llama.cpp
+                // lacks the chosen backend): let llama.cpp use its default device.
+                // A failed GPU load still falls back to the CPU below.
+                println!(
+                    "[LLM] No llama.cpp device matches {:?} (requested {:?}); using llama.cpp's default",
+                    target, device_id
+                );
             }
         }
 

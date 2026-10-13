@@ -132,7 +132,7 @@ where
         // Symphonia demuxes Ogg Opus but has no Opus decoder. Reuse the
         // libopus already bundled for meeting playback, with gapless trimming.
         drop(format);
-        return decode_opus_packets(path, on_packet);
+        return decode_opus_packets(path, strict, on_packet);
     }
 
     let track_id = track.id;
@@ -253,7 +253,7 @@ where
 /// Header pre-skip and the final granule count remove encoder delay/padding.
 /// Symphonia's first buffered page can lack packet trims, especially in short
 /// files, so apply those bounds to decoded positions rather than packet flags.
-fn decode_opus_packets<F>(path: &Path, mut on_packet: F) -> Result<(u64, u32, u32), String>
+fn decode_opus_packets<F>(path: &Path, strict: bool, mut on_packet: F) -> Result<(u64, u32, u32), String>
 where
     F: FnMut(&[f32], usize, u32, u64, Option<u64>) -> Result<(), String>,
 {
@@ -301,6 +301,18 @@ where
         if base.denom==0 {return Err("Invalid Opus container time base".into());}
         Some(u64::try_from(ticks as u128 * base.numer as u128 * 48_000 / base.denom as u128).map_err(|_|"Opus duration is too large")?)
     } else { None }; // Streaming WebM can omit its duration; decode every packet.
+    // How far short of `expected_frames` a complete file can decode. Ogg's final
+    // granule is sample-exact. Matroska's Duration is only as precise as its
+    // time base (usually 1 ms) and ignores DiscardPadding, so a complete WebM
+    // can decode up to one Opus packet (120 ms max) plus a tick short of it.
+    let length_tolerance = if ogg_granules {
+        0
+    } else {
+        let tick_frames = time_base
+            .filter(|base| base.denom != 0)
+            .map_or(48, |base| (base.numer as u64 * 48_000).div_ceil(base.denom as u64));
+        5_760 + tick_frames
+    };
     let expected_end=expected_frames.map(|frames|frames.checked_add(pre_skip).ok_or("Opus duration is too large")).transpose()?;
     let channels = header[9] as usize;
     let (streams, coupled, mapping) = match header[18] {
@@ -378,7 +390,9 @@ where
         return Err("Opus audio file contains no decoded samples".into());
     }
     if let Some(expected)=expected_frames {
-        if total != expected {return Err(format!("Opus audio ended early: decoded {total} of {expected} frames"));}
+        if strict && total.saturating_add(length_tolerance) < expected {
+            return Err(format!("Opus audio ended early: decoded {total} of {expected} frames"));
+        }
     }
     Ok((total, 48_000, channels as u32))
 }

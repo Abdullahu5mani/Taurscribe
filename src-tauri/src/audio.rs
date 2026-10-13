@@ -83,9 +83,8 @@ impl CaptureLoss {
     pub fn warnings(&self) -> Vec<String> {
         let file = self.file_frames.load(Ordering::Relaxed);
         let input = self.input_frames.load(Ordering::Relaxed);
-        let gaps = self.gap_frames.load(Ordering::Relaxed);
-        if file == 0 && input == 0 && gaps == 0 { return Vec::new(); }
-        vec![format!("Recording is incomplete: {file} frames could not be written, {input} input frames were lost, and {gaps} frames were replaced with silence.")]
+        if file == 0 && input == 0 { return Vec::new(); }
+        vec![format!("Recording is incomplete: {file} frames could not be written and {input} input frames were lost.")]
     }
 }
 
@@ -180,6 +179,13 @@ mod tests {
     }
 
     #[test]
+    fn silence_filled_for_a_quiet_track_is_not_audio_loss() {
+        let loss = CaptureLoss::default();
+        loss.gap_frames.store(96_000, Ordering::Relaxed);
+        assert!(loss.warnings().is_empty());
+    }
+
+        #[test]
     fn disconnected_writer_is_audio_loss_but_recoverable_preview_loss_is_not() {
         let loss = CaptureLoss::default();
         loss.preview_frames.store(5000, Ordering::Relaxed);
