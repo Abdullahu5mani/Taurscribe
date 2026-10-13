@@ -389,7 +389,7 @@ impl GgufAsrManager {
         let mut result = self.engine.as_mut().ok_or("Speech model not loaded")?.transcribe_timed(pcm)?;
         result.text = strip_whitelisted_sound_captions(&result.text).trim().to_string();
         if self.sentence_case { result.text = sentence_case(&result.text); }
-        if !result.covers_text() { result.units.clear(); }
+        fill_word_times(&mut result, pcm);
         Ok(result)
     }
 
@@ -397,7 +397,7 @@ impl GgufAsrManager {
         let mut result=self.engine.as_mut().ok_or("Speech model not loaded")?.transcribe_timed_cancellable(pcm,cancel)?;
         result.text=strip_whitelisted_sound_captions(&result.text).trim().to_string();
         if self.sentence_case {result.text=sentence_case(&result.text);}
-        if !result.covers_text(){result.units.clear();} Ok(result)
+        fill_word_times(&mut result,pcm); Ok(result)
     }
 
     /// Like `transcribe_chunk`, but setting `cancel` aborts the run mid-inference
@@ -483,6 +483,30 @@ pub fn gguf_in(dir: &Path) -> Option<PathBuf> {
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("gguf")));
     let first = found.next()?;
     found.next().is_none().then_some(first)
+}
+
+
+/// These decoders return one span for a whole clip, not word times. Align the
+/// transcript to the audio with the CTC word aligner so speakers can be assigned
+/// word by word; without the model (or when the audio and text do not line up)
+/// the units stay empty and the caller keeps its per-speaker decode path.
+fn fill_word_times(result: &mut crate::meeting_transcript::TimedTranscript, pcm: &[f32]) {
+    if result.covers_text() {
+        return;
+    }
+    result.units.clear();
+    // Opt-in: measured on Granite, alignment costs ~1.4 s per 30 s chunk (several
+    // times the decoder) and does not improve the transcript, because re-decoding
+    // a speaker's turn is already cheap. Kept for decoders that are slow per turn.
+    if result.text.trim().is_empty() || std::env::var("TAURSCRIBE_WORD_ALIGN").as_deref() != Ok("1") {
+        return;
+    }
+    if let Some(units) = crate::word_align::align_transcript(pcm, &result.text) {
+        result.units = units;
+        if !result.covers_text() {
+            result.units.clear();
+        }
+    }
 }
 
 #[cfg(test)]

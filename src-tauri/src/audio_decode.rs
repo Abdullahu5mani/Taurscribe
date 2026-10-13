@@ -146,6 +146,7 @@ where
         .map(|c| c.count() as u32)
         .unwrap_or(0);
     let declared_frames = track.codec_params.n_frames;
+    let is_mp3 = track.codec_params.codec == symphonia::core::codecs::CODEC_TYPE_MP3;
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())

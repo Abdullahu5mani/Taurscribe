@@ -193,6 +193,8 @@ pub async fn start_recording(
     audio_source: Option<String>,
     model_id: Option<String>,
     use_gpu: Option<bool>,
+    engine: Option<String>,
+    background_load: Option<bool>,
 ) -> Result<CommandResult<String>, String> {
     let _recording_transition = Arc::new(state.begin_recording_transition()?);
     let _model_operation = Arc::new(state.begin_model_operation()?);
@@ -223,25 +225,38 @@ pub async fn start_recording(
     let worker_operation = _model_operation.clone();
     let worker_transition = _recording_transition.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let _operation = worker_operation;
+        let _operation = worker_operation.clone();
         let _transition = worker_transition;
         let worker_state = state.clone();
         file_priority.wait_for_file_chunk();
         let result = (|| {
+            let target_engine = engine.as_deref().and_then(parse_engine).unwrap_or(*state.active_engine.lock().unwrap());
             if let Some(id) = model_id.as_deref() {
-                match *state.active_engine.lock().unwrap() {
-                    ASREngine::Whisper => {
-                        let mut model = state.whisper.lock().unwrap();
-                        if super::file_transcription::file_model_needs_load(Some(id), model.get_current_model().map(String::as_str))? {
-                            model.initialize(Some(id), !use_gpu.unwrap_or(true))?;
+                let cpu = !use_gpu.unwrap_or(true);
+                if background_load.unwrap_or(false) && model_is_unloaded(&state, target_engine, id)? {
+                    // Start listening now and load the model beside the recording:
+                    // the live transcriber waits on the model's lock, the audio is
+                    // already being written, and the final pass uses the whole file.
+                    *state.active_engine.lock().unwrap() = target_engine;
+                    spawn_background_model_load(&app_handle, &state, target_engine, id.to_string(), cpu, worker_operation.clone())?;
+                } else {
+                    match target_engine {
+                        ASREngine::Whisper => {
+                            let mut model = state.whisper.lock().unwrap();
+                            if super::file_transcription::file_model_needs_load(Some(id), model.get_current_model().map(String::as_str))? {
+                                model.initialize(Some(id), cpu)?;
+                            }
+                        }
+                        engine => {
+                            let manager = state.gguf_manager(engine).unwrap();
+                            let mut model = manager.lock().unwrap();
+                            if super::file_transcription::file_model_needs_load(Some(id), model.get_status().model_id.as_deref())? {
+                                model.initialize(Some(id), cpu)?;
+                            }
                         }
                     }
-                    engine => {
-                        let manager = state.gguf_manager(engine).unwrap();
-                        let mut model = manager.lock().unwrap();
-                        if super::file_transcription::file_model_needs_load(Some(id), model.get_status().model_id.as_deref())? {
-                            model.initialize(Some(id), !use_gpu.unwrap_or(true))?;
-                        }
+                    if engine.is_some() {
+                        *state.active_engine.lock().unwrap() = target_engine;
                     }
                 }
             }
@@ -284,6 +299,104 @@ pub async fn start_recording(
             }
         })
         .map_err(|e| format!("start_recording task failed: {}", e))
+}
+
+fn parse_engine(name: &str) -> Option<ASREngine> {
+    match name.to_ascii_lowercase().as_str() {
+        "whisper" => Some(ASREngine::Whisper),
+        "granite" => Some(ASREngine::Granite),
+        "qwen3" => Some(ASREngine::Qwen3),
+        _ => None,
+    }
+}
+
+/// True when `model_id` is not the model loaded for `engine`. Reads the status
+/// snapshots, so it never waits on a load that is already running.
+fn model_is_unloaded(state: &AudioState, engine: ASREngine, model_id: &str) -> Result<bool, String> {
+    let loaded = match engine {
+        ASREngine::Whisper => state.whisper_snapshot().model,
+        other => state.gguf_snapshot(other).and_then(|s| if s.loaded { s.model_id } else { None }),
+    };
+    super::file_transcription::file_model_needs_load(Some(model_id), loaded.as_deref())
+}
+
+/// Loads `model_id` for `engine` on its own thread while a recording is already
+/// capturing. Returns once the thread owns the engine's lock, so the live
+/// transcriber (started right after) queues behind the load instead of finding
+/// an empty model. The UI hears `recording-model-loading` when it is done or
+/// has failed.
+fn spawn_background_model_load(
+    app: &AppHandle,
+    state: &AudioState,
+    engine: ASREngine,
+    model_id: String,
+    force_cpu: bool,
+    hold: Arc<crate::state::ModelOperationGuard>,
+) -> Result<(), String> {
+    if state
+        .engine_loading
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return Err("A model is already loading — please wait".into());
+    }
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel::<()>();
+    let (app, state) = (app.clone(), state.clone());
+    let _ = app.emit("recording-model-loading", serde_json::json!({ "loading": true, "model_id": model_id }));
+    std::thread::Builder::new()
+        .name("model-load-during-recording".into())
+        .spawn(move || {
+            let _hold = hold; // no exclusive model operation may start meanwhile
+            let result: Result<String, String> = (|| {
+                println!("[INFO] Loading {engine:?} model '{model_id}' while recording");
+                match engine {
+                    ASREngine::Whisper => {
+                        let mut whisper = state.whisper.lock().map_err(|e| e.to_string())?;
+                        let _ = locked_tx.send(());
+                        for other in [ASREngine::Granite, ASREngine::Qwen3] {
+                            if let Some(m) = state.gguf_manager(other) {
+                                m.lock().map_err(|e| e.to_string())?.unload();
+                            }
+                        }
+                        whisper.initialize(Some(&model_id), force_cpu)
+                    }
+                    gguf => {
+                        let target = state.gguf_manager(gguf).ok_or("unknown engine")?;
+                        let mut target = target.lock().map_err(|e| e.to_string())?;
+                        let _ = locked_tx.send(());
+                        state.whisper.lock().map_err(|e| e.to_string())?.unload();
+                        for other in [ASREngine::Granite, ASREngine::Qwen3].into_iter().filter(|e| *e != gguf) {
+                            if let Some(m) = state.gguf_manager(other) {
+                                m.lock().map_err(|e| e.to_string())?.unload();
+                            }
+                        }
+                        target.initialize(Some(&model_id), force_cpu)
+                    }
+                }
+            })();
+            let _ = locked_tx.send(()); // never leave the starter waiting
+            state.engine_loading.store(false, Ordering::Relaxed);
+            match result {
+                Ok(_) => {
+                    state.model_loaded.store(true, Ordering::Relaxed);
+                    state.touch_activity();
+                    crate::tray::update_tray_model_item(&app, true);
+                    let _ = app.emit("recording-model-loading", serde_json::json!({ "loading": false, "model_id": model_id }));
+                }
+                Err(error) => {
+                    eprintln!("[ERROR] Model load during recording failed: {error}");
+                    crate::tray::reconcile_model_loaded_tray(&app, &state);
+                    let _ = app.emit(
+                        "recording-model-loading",
+                        serde_json::json!({ "loading": false, "model_id": model_id, "error": error }),
+                    );
+                }
+            }
+        })
+        .map_err(|e| format!("could not start the model loader: {e}"))?;
+    locked_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .map_err(|_| "The model loader did not start".to_string())
 }
 
 /// A microphone stream to open: the device and the configuration (with its
@@ -2211,6 +2324,8 @@ fn stop_recording_blocking(
         || (active_engine == ASREngine::Qwen3 && kind == RecordingKind::Dictation && preview_incomplete) {
         match (gguf.as_ref(), last_recording_path.as_ref()) {
             (Some(granite), Some(path)) => {
+                let cancel = if kind == RecordingKind::Meeting { crate::meeting_job::current_cancel() } else { None };
+                if let Some(cancel) = &cancel { crate::meeting_job::check(cancel)?; }
                 match load_recording_for_final_pass(path)
                     .and_then(|audio| transcribe_final_pass(granite, audio, active_engine))
                 {
@@ -2224,6 +2339,7 @@ fn stop_recording_blocking(
                         return finishing.conclude(final_text, false);
                     }
                     Err(e) => {
+                        if let Some(cancel) = &cancel { crate::meeting_job::check(cancel)?; }
                         finishing.warnings.push(format!("Final transcription failed; live text may be incomplete: {e}"));
                         eprintln!("[ERROR] Final pass failed; using the live transcript: {e}");
                     },
@@ -2339,6 +2455,7 @@ fn stop_recording_blocking(
                 finishing.conclude(final_text, false)
             }
             Err(e) => {
+                if kind == RecordingKind::Meeting { crate::meeting_job::check_current()?; }
                 finishing.warnings.push(format!("Final transcription failed; live text may be incomplete: {e}"));
                 eprintln!("[ERROR] Final transcription failed: {}", e);
                 let live = session_transcript.lock().unwrap().clone();

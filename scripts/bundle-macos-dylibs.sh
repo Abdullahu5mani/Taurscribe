@@ -51,7 +51,17 @@ BINARY_HOST="$TARGET_DIR/release/taurscribe"
 BINARY_CROSS="$TARGET_DIR/$TARGET_TRIPLE/release/taurscribe"
 DYLIB_DIR="$SRC_TAURI/macos-dylibs"
 
-if [ -f "$BINARY_CROSS" ]; then
+# Only TAURI_BUILD_TARGET counts: tauri sets TAURI_ENV_TARGET_TRIPLE to the host
+# triple even for a plain build. (A CI `--target` build has no host binary, so it
+# falls through to the cross path below.)
+EXPLICIT_TARGET="${TAURI_BUILD_TARGET:-}"
+if [ -z "$EXPLICIT_TARGET" ] && [ -f "$BINARY_HOST" ]; then
+  # A plain `tauri build` packages target/release/taurscribe. An old --target build
+  # can still sit beside it (and bundling for that one leaves the app without the
+  # libraries the packaged binary needs), so the host binary wins unless a target
+  # triple was asked for.
+  BINARY="$BINARY_HOST"
+elif [ -f "$BINARY_CROSS" ]; then
   BINARY="$BINARY_CROSS"
 elif [ -f "$BINARY_HOST" ]; then
   BINARY="$BINARY_HOST"
@@ -80,8 +90,14 @@ BINARY_DIR="$(dirname "$BINARY")"
 # one alphabetically can be a stale build from an older llama.cpp that lacks
 # libraries added since (libllama-common), and the app then crashes at launch.
 LLAMA_LIB_DIR=""
-for candidate in "$TARGET_DIR/$TARGET_TRIPLE/release/build/llama-cpp-sys-2-"*/out/lib "$TARGET_DIR/release/build/llama-cpp-sys-2-"*/out/lib; do
-  if [ -d "$candidate" ]; then
+for candidate in $(ls -dt "$TARGET_DIR/$TARGET_TRIPLE/release/build/llama-cpp-sys-2-"*/out/lib "$TARGET_DIR/release/build/llama-cpp-sys-2-"*/out/lib 2>/dev/null); do
+  # (newest first; the first that has libllama and every library the binary needs wins)
+  need_ok=1
+  for need in $(otool -L "$BINARY" | awk '/@rpath\/libllama.*\.dylib/ {print $1}' | sed 's#@rpath/##'); do
+    [ -e "$candidate/$need" ] || need_ok=0
+  done
+  [ "$need_ok" = "1" ] || continue
+  if [ -d "$candidate" ] && ls "$candidate"/libllama.*dylib >/dev/null 2>&1; then
     LLAMA_LIB_DIR="$candidate"
     break
   fi
@@ -149,6 +165,17 @@ for f in "$DYLIB_DIR"/*.dylib; do
     (cd "$DYLIB_DIR" && ln -sf "$bn" "$name.$major.dylib" && ln -sf "$name.$major.dylib" "$name.dylib")
   fi
 done
+
+# Every @rpath library the binary asks for must now be in the bundle directory;
+# a missing one is a launch-time crash (dyld "Library not loaded"), so stop here.
+MISSING=0
+for need in $(otool -L "$BINARY" | awk '/@rpath\/lib.*\.dylib/ {print $1}' | sed 's#@rpath/##'); do
+  if [ ! -e "$DYLIB_DIR/$need" ]; then
+    echo "bundle-macos-dylibs: ERROR - $need is required by the binary but was not bundled"
+    MISSING=1
+  fi
+done
+if [ "$MISSING" = "1" ]; then exit 1; fi
 
 # Generate tauri.macos.conf.json with framework paths (Tauri validates these at build time;
 # we create this file here so it only exists when dylibs exist, avoiding "Library not found").

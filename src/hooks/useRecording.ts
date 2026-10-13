@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { ModelInfo, GraniteModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
-import { ensureEngineModel } from "../utils/engineLoader";
+import { isEngineModelLoaded } from "../utils/engineLoader";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
 import type { CommandResult, RecordingOutcome, SessionNotice } from "../types/session";
 
@@ -354,17 +354,17 @@ export function useRecording({
         if (!engineSetup.selected) engineSetup.select?.(targetModel);
         const fileHasPriority = isFileTranscribingRef?.current === true;
         if (fileHasPriority) setHeaderStatus("Pausing file transcription at the next chunk…", 60_000);
+        // The model is not loaded yet (first use, or it was unloaded to save
+        // memory): do not make the user wait. Recording starts at once and the
+        // backend loads the model beside it; what is said meanwhile is kept and
+        // transcribed as soon as the model is ready.
+        let backgroundLoad = false;
         try {
-            const outcome = fileHasPriority ? "ready" : await ensureEngineModel(currentEngine, targetModel, asrBackend === "gpu", () => {
+            if (!fileHasPriority && !(await isEngineModelLoaded(currentEngine, targetModel))) {
                 if (!isCurrent()) throw new Error("Recording request superseded");
-                setHeaderStatus(`Loading ${engineSetup.label}...`, 60_000);
+                backgroundLoad = true;
+                setHeaderStatus(`Loading ${engineSetup.label}… you can start talking`, 60_000);
                 setSessionPhase?.("loading_model");
-            });
-            if (!isCurrent()) return;
-            if (outcome === "loaded") {
-                setLoadedEngine(currentEngine);
-                setHeaderStatus(`${engineSetup.label} loaded`);
-                showNotice(null);
             }
         } catch (e) {
             if (!isCurrent()) return;
@@ -390,6 +390,7 @@ export function useRecording({
             const result = await invoke<CommandResult<string>>("start_recording", {
                 denoise: enableDenoiseRef.current,
                 modelId: targetModel, useGpu: asrBackend === "gpu",
+                engine: currentEngine, backgroundLoad,
                 audioSource: isDual ? "dual_channel" : isInPerson ? "in_person" : "mic",
             });
             if (!isCurrent()) return;
@@ -409,6 +410,10 @@ export function useRecording({
             setIsInPersonRecording(isInPerson);
             setSessionPhase?.("recording");
             showNotice(null);
+            if (backgroundLoad) {
+                modelLoadingInBackgroundRef.current = true;
+                setHeaderStatus(`Loading ${engineSetup.label}… keep talking`, 60_000);
+            }
             if (fromHotkey) {
                 clearPendingOverlayHide();
                 if (enableOverlayRef.current) {
@@ -457,6 +462,30 @@ export function useRecording({
             }
         }
     };
+
+    // A recording that started while its model was still loading.
+    const modelLoadingInBackgroundRef = useRef(false);
+    const cancelRecordingRef = useRef<(() => Promise<void>) | null>(null);
+    useEffect(() => {
+        const unlistenPromise = listen<{ loading: boolean; model_id?: string; error?: string }>(
+            "recording-model-loading",
+            ({ payload }) => {
+                if (payload.loading) return;
+                modelLoadingInBackgroundRef.current = false;
+                if (payload.error) {
+                    setHeaderStatus(`Failed to load the model: ${payload.error}`, 6000);
+                    showNotice(commandErrorToNotice({ code: "model_load_failed", message: payload.error }, "Model failed to load"));
+                    // Nothing can transcribe this recording: discard it.
+                    if (isRecordingRef.current) void cancelRecordingRef.current?.();
+                    return;
+                }
+                setLoadedEngine(activeEngineRef.current);
+                if (isRecordingRef.current) setHeaderStatus("Model loaded — transcribing", 2500);
+            },
+        );
+        return () => { unlistenPromise.then((fn) => fn()).catch(() => {}); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // One start at a time: a second start request (a duplicate tray/hotkey event
     // arriving while the first is still loading a model or opening devices) used
@@ -934,6 +963,8 @@ export function useRecording({
             }
         }
     };
+
+    cancelRecordingRef.current = handleCancelRecording;
 
     const handleTranscriptionChunk = (chunkText: string) => {
         // Accept chunks when actively recording OR during the processing window

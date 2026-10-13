@@ -445,7 +445,7 @@ fn meeting_files(inputs:&[String])->Result<Vec<PathBuf>,String>{
             }
         }else if path.is_file(){
             let ext=path.extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
-            if ["wav","mp3","m4a","aac","flac","ogg","opus","mp4","mov","mkv","webm"].contains(&ext.as_str()){files.push(std::path::absolute(path).map_err(|e|e.to_string())?);}
+            if crate::recording_import::EXTENSIONS.contains(&ext.as_str()){files.push(std::path::absolute(path).map_err(|e|e.to_string())?);}
         }else{return Err(format!("no such path: {}",path.display()));}Ok(())
     }
     let mut files=Vec::new();for input in inputs {visit(Path::new(input),&mut files)?;}files.sort();files.dedup();

@@ -1023,7 +1023,20 @@ fn refine_with_voiceprints(
     } else {
         turns
     };
-    crate::neural_diarizer::merge_voices_with_hint(turns, pcm, &mut voiceprint, expected)
+    let turns = crate::neural_diarizer::merge_voices_with_hint(turns, pcm, &mut voiceprint, expected);
+    if !crate::diar_refine::enabled() {
+        return turns;
+    }
+    // Second pass: pooled voiceprints catch the speakers the first pass could not
+    // print (many short turns) and fold true fragments into their neighbours.
+    let (turns, report) = crate::diar_refine::refine(turns, pcm, &mut voiceprint, &crate::diar_refine::RefineOptions { expected });
+    if report.speakers_in != report.speakers_out {
+        println!(
+            "[DIARIZE] Re-clustering: {} -> {} speakers ({} merged, {} folded in)",
+            report.speakers_in, report.speakers_out, report.merged.len(), report.absorbed.len()
+        );
+    }
+    turns
 }
 
 /// Builds channel-1 turn segments and one profile per speaker from neural turns.

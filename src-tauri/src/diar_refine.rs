@@ -123,6 +123,27 @@ fn pooled_audio(turns: &[SpeakerTurn], speaker: usize, pcm: &[f32]) -> (Vec<f32>
     (audio, ms)
 }
 
+/// Each speaker's normalised pooled voiceprint and the speech it came from
+/// (diagnostics and tuning; `refine` builds the same prints).
+pub fn pooled_prints(
+    turns: &[SpeakerTurn],
+    pcm: &[f32],
+    voiceprint: &mut dyn FnMut(&[f32]) -> Option<Vec<f32>>,
+) -> BTreeMap<usize, (Vec<f32>, u64)> {
+    let ids: std::collections::BTreeSet<usize> = turns.iter().map(|t| t.speaker).collect();
+    ids.into_iter()
+        .filter_map(|id| {
+            let (audio, ms) = pooled_audio(turns, id, pcm);
+            (ms >= MIN_PRINT_MS).then(|| voiceprint(&audio).and_then(|e| normalized(&e)).map(|p| (id, (p, ms)))).flatten()
+        })
+        .collect()
+}
+
+/// Cosine similarity of two normalised prints.
+pub fn print_similarity(a: &[f32], b: &[f32]) -> f32 {
+    cosine(a, b)
+}
+
 /// Merges over-split speakers and folds orphans. See the module docs.
 pub fn refine(
     mut turns: Vec<SpeakerTurn>,

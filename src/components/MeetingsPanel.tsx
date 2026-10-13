@@ -38,7 +38,7 @@ import { SpeakerVaultModal } from "./SpeakerVaultModal";
 import { MeetingReviewModal } from "./MeetingReviewModal";
 import { levelToPercent } from "../utils/audioLevel";
 import { MeetingRecordingImport, recordingDate } from "./MeetingRecordingImport";
-import { conversationBlocks, spokenAt, speakerCountHint } from "../utils/meetingTimeline";
+import { conversationBlocks, spokenAt, speakerCountHint, interpolateWords } from "../utils/meetingTimeline";
 import "./MeetingsPanel.css";
 import "./MeetingWorkspace.css";
 import "./MeetingStudio.css";
@@ -105,6 +105,16 @@ export function exportFileName(title: string, format: "markdown" | "text" | "jso
   return `${base}_transcript.${format === "markdown" ? "md" : format === "json" ? "json" : "txt"}`;
 }
 
+/** Speaker colours cycle through six tones; "You" is always tone 0. */
+const SPEAKER_TONE_COUNT = 6;
+
+function speakerInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  if (/^speaker\s*\d+$/i.test(name.trim())) return `S${words[1]}`;
+  return (words.length === 1 ? words[0].slice(0, 2) : words[0][0] + words[words.length - 1][0]).toUpperCase();
+}
+
 /** "Today", "Yesterday", "This week", or the month, for the library's date headers. */
 export function dayBucket(iso: string, now: Date = new Date()): string {
   const d = new Date(iso);
@@ -115,6 +125,22 @@ export function dayBucket(iso: string, now: Date = new Date()): string {
   if (days === 1) return "Yesterday";
   if (days < 7) return "This week";
   return d.toLocaleDateString(undefined, { month: "long", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+}
+
+/** Wraps case-insensitive matches of `query` in <mark>; returns the plain text when there is no query. */
+function highlightMatches(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const lower = text.toLowerCase(), needle = q.toLowerCase();
+  const out: React.ReactNode[] = [];
+  let from = 0;
+  for (let at = lower.indexOf(needle); at !== -1; at = lower.indexOf(needle, from)) {
+    if (at > from) out.push(text.slice(from, at));
+    out.push(<mark key={at}>{text.slice(at, at + needle.length)}</mark>);
+    from = at + needle.length;
+  }
+  if (from < text.length) out.push(text.slice(from));
+  return out;
 }
 
 export function MeetingsPanel({
@@ -184,7 +210,52 @@ export function MeetingsPanel({
   const speakerMutation = useRef(false);
   const blocks = useMemo(() => conversationBlocks(selectedMeeting?.turns ?? []), [selectedMeeting?.turns]);
   const meetingSpeakers = useMemo(() => Array.from(new Map((selectedMeeting?.turns ?? []).map(turn => [turn.speaker_id, turn])).values()), [selectedMeeting?.turns]);
+  const [transcriptQuery, setTranscriptQuery] = useState("");
+  // Colour and talk time per speaker, in order of first appearance.
+  const speakerStats = useMemo(() => {
+    const stats = new Map<string, { tone: number; talkMs: number; share: number }>();
+    let next = 1, total = 0;
+    for (const turn of selectedMeeting?.turns ?? []) {
+      let entry = stats.get(turn.speaker_id);
+      if (!entry) {
+        entry = { tone: turn.channel === 0 ? 0 : next++ % SPEAKER_TONE_COUNT || 1, talkMs: 0, share: 0 };
+        stats.set(turn.speaker_id, entry);
+      }
+      const ms = Math.max(0, turn.end_ms - turn.start_ms);
+      entry.talkMs += ms;
+      total += ms;
+    }
+    for (const entry of stats.values()) entry.share = total > 0 ? entry.talkMs / total : 0;
+    return stats;
+  }, [selectedMeeting?.turns]);
+  const toneOf = (speakerId: string) => speakerStats.get(speakerId)?.tone ?? 0;
+  const visibleBlocks = useMemo(() => {
+    const q = transcriptQuery.trim().toLowerCase();
+    const all = blocks.map((block, index) => ({ block, index }));
+    return q ? all.filter(({ block }) => block.text.toLowerCase().includes(q) || block.speaker_name.toLowerCase().includes(q)) : all;
+  }, [blocks, transcriptQuery]);
+  useEffect(() => { setTranscriptQuery(""); }, [selectedMeetingId]);
   const activeBlock = blocks.findIndex(t => spokenAt(t.intervals, audioCurrentTime));
+  const turnsOfMeeting = selectedMeeting?.turns;
+  // Word times are estimates inside each source turn, so a long merged passage
+  // is followed word by word while it plays.
+  const blockWords = useMemo(
+    () => blocks.map(b => b.sourceIndices.flatMap(i => {
+      const turn = turnsOfMeeting?.[i];
+      return turn ? interpolateWords(turn.text, turn.start_ms, turn.end_ms) : [];
+    })),
+    [blocks, turnsOfMeeting],
+  );
+  const activeWord = (() => {
+    if (activeBlock < 0) return -1;
+    const words = blockWords[activeBlock] ?? [];
+    const ms = audioCurrentTime * 1000;
+    let found = -1;
+    for (let i = 0; i < words.length; i++) {
+      if (words[i].start_ms <= ms) found = i; else break;
+    }
+    return found;
+  })();
   useEffect(() => {
     if (!isPlayingAudio || typeof requestAnimationFrame === "undefined") return;
     let frame = 0;
@@ -202,6 +273,20 @@ export function MeetingsPanel({
       scrollToPassage(activeBlock);
     }
   }, [activeBlock, isPlayingAudio, audioCurrentTime]);
+
+  // A passage can be taller than the pane. While it plays, keep the word being
+  // spoken in a comfortable band instead of centring the whole passage.
+  useEffect(() => {
+    if (!isPlayingAudio || activeWord < 0 || Date.now() < manualScrollUntil.current) return;
+    const pane = transcriptScroll.current;
+    const word = pane?.querySelector<HTMLElement>("[data-word-active=\"true\"]");
+    if (!pane || !word) return;
+    const p = pane.getBoundingClientRect(), w = word.getBoundingClientRect();
+    const from = p.top + p.height * 0.25, to = p.top + p.height * 0.62;
+    if (w.top < from || w.bottom > to) {
+      pane.scrollTo({ top: pane.scrollTop + (w.top - p.top) - p.height * 0.38, behavior: "smooth" });
+    }
+  }, [activeWord, activeBlock, isPlayingAudio]);
 
   // Speaker Snippet Preview Playback
   const [previewSpeaker, setPreviewSpeaker] = useState<{ id: string; name: string; path?: string | null } | null>(null);
@@ -265,6 +350,8 @@ export function MeetingsPanel({
 
   // Fetch list of meetings and platform counts
   const [historyPages, setHistoryPages] = useState(1);
+  const historyPagesRef = useRef(historyPages);
+  historyPagesRef.current = historyPages;
   const loadMeetings = async () => {
     const request = ++listRequestRef.current;
     setLoadingList(true);
@@ -758,7 +845,10 @@ export function MeetingsPanel({
     <div ref={meetingDropTargetRef} className="meetings-panel meetings-panel--workspace" data-testid="meetings-panel">
       {inPerson}
       <div className="meeting-workspace-header">
-        <div><h1>Meetings</h1></div>
+        <div className="meeting-workspace-title">
+          <h1>Meetings</h1>
+          <p>{platformCounts.reduce((sum, platform) => sum + platform.count, 0) || meetings.length} saved · {formatDurationMs(meetings.reduce((sum, m) => sum + m.duration_ms, 0))} listed</p>
+        </div>
         <div className="meeting-workspace-actions">
           {onRecordInPerson && !inPerson && !isRecording && (
             <button
@@ -947,6 +1037,12 @@ export function MeetingsPanel({
                 </div>
                 <h3 className="meeting-card-title">{processing.title}</h3>
                 <span className="meeting-processing-detail">{processing.stage || "Preparing meeting processing"}</span>
+                {!!importPreview && importPreview.total_ms > 0 && (
+                  <div className="meeting-processing-progress" role="progressbar" aria-label="Transcription progress"
+                    aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(importPreview.completed_ms / importPreview.total_ms * 100))}>
+                    <span style={{ width: `${Math.min(100, importPreview.completed_ms / importPreview.total_ms * 100)}%` }} />
+                  </div>
+                )}
                 {!!importPreview?.paragraphs.length && <button className="detail-tool-btn" type="button" onClick={openImportPreview}>Read transcript · speaker labels pending</button>}
                 <button className="detail-tool-btn" type="button" data-testid="meeting-processing-stop" disabled={stoppingProcessing || processing.stage?.startsWith("Saving")} onClick={() => void stopProcessing()}>{stoppingProcessing ? "Stopping…" : "Stop processing"}</button>
               </div>
@@ -983,7 +1079,7 @@ export function MeetingsPanel({
           ) : meetings.length === 0 && processing ? null : meetings.length === 0 ? (
             <div className="meeting-list-empty">
               <IconVideo size={28} style={{ opacity: 0.3 }} />
-              <p>No recorded calls found.</p>
+              <p>{selectedPlatform !== "All" || searchQuery ? "No meetings match." : "No meetings yet."}</p>
               <span style={{ fontSize: "11px" }}>
                 {selectedPlatform !== "All" || searchQuery
                   ? "Try clearing search or platform filters to see other calls."
@@ -1083,8 +1179,10 @@ export function MeetingsPanel({
               );
             })
           ) : (
-            meetings.map((m) => {
+            meetings.flatMap((m, position) => {
               const isSelected = selectedMeetingId === m.id;
+              const bucket = dayBucket(m.created_at);
+              const showBucket = position === 0 || dayBucket(meetings[position - 1].created_at) !== bucket;
               const d = new Date(m.created_at);
               const dateStr = `${d.toLocaleDateString(undefined, {
                 month: "short",
@@ -1095,7 +1193,8 @@ export function MeetingsPanel({
               })}`;
               const meta = getPlatformMeta(m.platform);
 
-              return (
+              return [
+                showBucket ? <div key={`bucket-${bucket}-${m.id}`} className="meeting-date-header">{bucket}</div> : null,
                 <div
                   key={m.id}
                   className={`meeting-list-card ${isSelected ? "selected" : ""}`}
@@ -1135,8 +1234,8 @@ export function MeetingsPanel({
                     </span>
                     {m.audio_missing && <span className="meeting-card-audio-missing" title="The recording file is gone; the transcript is still here">Audio missing</span>}
                   </div>
-                </div>
-              );
+                </div>,
+              ];
             })
           )}
           {meetings.length >= historyPages * 100 && <button type="button" className="meeting-load-more" disabled={loadingList} onClick={() => setHistoryPages(pages => pages + 1)}>{loadingList ? "Loading…" : "Load more meetings"}</button>}
@@ -1282,6 +1381,23 @@ export function MeetingsPanel({
                     </span>
                   </div>
                 </div>
+                {meetingSpeakers.filter(person => person.speaker_id !== "background").length > 1 && speakerStats.size > 0 && (
+                  <button type="button" className="meeting-talkshare" data-testid="meeting-talkshare" onClick={() => setDetailView("speakers")}
+                    aria-label="Talk time by speaker. Open speakers.">
+                    <span className="meeting-talkshare-bar" aria-hidden="true">
+                      {meetingSpeakers.filter(person => person.speaker_id !== "background").map(person => {
+                        const stat = speakerStats.get(person.speaker_id);
+                        return stat && stat.share > 0 ? <span key={person.speaker_id} data-tone={stat.tone} style={{ flexGrow: stat.share }} title={`${person.speaker_name} · ${Math.round(stat.share * 100)}%`} /> : null;
+                      })}
+                    </span>
+                    <span className="meeting-talkshare-legend">
+                      {meetingSpeakers.filter(person => person.speaker_id !== "background").slice(0, 4).map(person => {
+                        const stat = speakerStats.get(person.speaker_id);
+                        return <span key={person.speaker_id} data-tone={stat?.tone ?? 0}><i />{person.speaker_name} {Math.round((stat?.share ?? 0) * 100)}%</span>;
+                      })}
+                    </span>
+                  </button>
+                )}
               </div>
 
               {/* Recording file gone: say so; the transcript below is complete. */}
@@ -1356,12 +1472,24 @@ export function MeetingsPanel({
                 {(["transcript", "speakers", "tools"] as const).map(view => <button type="button" role="tab" key={view} id={`meetings-tab-${view}`} data-testid={`meetings-tab-${view}`} aria-controls={`meetings-panel-${view}`} aria-selected={detailView === view} tabIndex={detailView === view ? 0 : -1} onClick={() => setDetailView(view)}>
                   {view === "transcript" ? "Transcript" : view === "speakers" ? `Speakers · ${meetingSpeakers.filter(person => person.speaker_id !== "background").length}` : "Tools"}
                 </button>)}
+                {detailView === "transcript" && blocks.length > 0 && (
+                  <label className="meeting-transcript-search">
+                    <IconSearch size={13} />
+                    <input type="search" aria-label="Search this transcript" data-testid="meetings-transcript-search" placeholder="Search transcript"
+                      value={transcriptQuery} onChange={e => setTranscriptQuery(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Escape") setTranscriptQuery(""); }} />
+                    {transcriptQuery.trim() && <span aria-live="polite">{visibleBlocks.length} of {blocks.length}</span>}
+                  </label>
+                )}
               </div>
               <div className="meeting-detail-scroll" ref={transcriptScroll}>
               {/* Diarized Conversation Turns */}
               <section className="detail-turns-section" role="tabpanel" id="meetings-panel-transcript" aria-labelledby="meetings-tab-transcript" hidden={detailView !== "transcript"}>
                 <div className="turns-conversation-flow">
-                  {blocks.map((t, idx) => {
+                  {transcriptQuery.trim() && visibleBlocks.length === 0 && (
+                    <p className="meeting-transcript-nomatch" role="status">No passage mentions “{transcriptQuery.trim()}”.</p>
+                  )}
+                  {visibleBlocks.map(({ block: t, index: idx }) => {
                     const isYou = t.channel === 0;
 
                     return (
@@ -1370,6 +1498,7 @@ export function MeetingsPanel({
                         ref={node => { if (node) timelineRefs.current.set(idx, node); else timelineRefs.current.delete(idx); }}
                         data-testid={`meetings-turn-${idx}`}
                         aria-current={spokenAt(t.intervals, audioCurrentTime) ? "true" : undefined}
+                        data-tone={toneOf(t.speaker_id)}
                         className={`turn-bubble ${spokenAt(t.intervals, audioCurrentTime) ? "turn-bubble--spoken " : ""}${
                           isYou ? "turn-bubble--you" : "turn-bubble--remote"
                         }`}
@@ -1377,7 +1506,7 @@ export function MeetingsPanel({
                         <div className="turn-header">
                           <div className="turn-speaker-badge-wrap">
                             <div className="turn-speaker-avatar">
-                              {isYou ? "YOU" : t.speaker_name.slice(0, 2).toUpperCase()}
+                              {isYou ? "YOU" : speakerInitials(t.speaker_name)}
                             </div>
 
                             <button type="button" className="turn-speaker-link" onClick={() => setDetailView("speakers")} aria-label={`Manage speaker ${t.speaker_name}`}>{t.speaker_name}</button>
@@ -1404,7 +1533,15 @@ export function MeetingsPanel({
                           tabIndex={selectedMeeting.audio_path && !audioFailed ? 0 : undefined}
                           aria-label={`Jump to ${formatSeconds(t.start_ms / 1000)}: ${t.text}`}
                           onClick={() => { if (selectedMeeting.audio_path && !audioFailed) handleToggleFullAudio(t.start_ms / 1000, true); }}
-                          onKeyDown={e => { if (selectedMeeting.audio_path && !audioFailed && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); handleToggleFullAudio(t.start_ms / 1000, true); } }}>{t.text}</p>
+                          onKeyDown={e => { if (selectedMeeting.audio_path && !audioFailed && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); handleToggleFullAudio(t.start_ms / 1000, true); } }}>{
+                          idx === activeBlock && isPlayingAudio && !transcriptQuery.trim() && (blockWords[idx]?.length ?? 0) > 0
+                            ? blockWords[idx].map((w, wi) => (
+                                <span key={wi} className={`turn-word${wi < activeWord ? " turn-word--past" : ""}${wi === activeWord ? " turn-word--active" : ""}`}
+                                  data-word-active={wi === activeWord ? "true" : undefined}
+                                  onClick={e => { e.stopPropagation(); handleToggleFullAudio(w.start_ms / 1000, true); }}>{w.text}{" "}</span>
+                              ))
+                            : highlightMatches(t.text, transcriptQuery)
+                        }</p>
                       </div>
                     );
                   })}
@@ -1431,8 +1568,9 @@ export function MeetingsPanel({
                     const isYou = t.channel === 0;
                     const isSnippetPlaying = playingSnippetSpeakerId === `${t.speaker_id}:${t.snippet_path ?? ""}`;
                     const isRenaming = renamingSpeakerId === t.speaker_id;
-                    return <article className="meeting-speaker-card" key={t.speaker_id}>
-                      <div className="meeting-speaker-card-heading"><div className="turn-speaker-avatar">{t.speaker_name.slice(0, 2).toUpperCase()}</div>
+                    const stat = speakerStats.get(t.speaker_id);
+                    return <article className="meeting-speaker-card" key={t.speaker_id} data-tone={stat?.tone ?? 0}>
+                      <div className="meeting-speaker-card-heading"><div className="turn-speaker-avatar">{isYou ? "YOU" : speakerInitials(t.speaker_name)}</div>
                             {isRenaming ? (
                               <input
                                 id={`meetings-speaker-rename-input-${idx}`}
@@ -1453,8 +1591,9 @@ export function MeetingsPanel({
                             )}
 
 
-                        <span>{selectedMeeting.turns.filter(turn => turn.speaker_id === t.speaker_id).length} segments</span>
+                        <span>{selectedMeeting.turns.filter(turn => turn.speaker_id === t.speaker_id).length} segments{stat ? ` · ${formatDurationMs(stat.talkMs)}` : ""}</span>
                       </div>
+                      {stat && <div className="meeting-speaker-share" aria-label={`${Math.round(stat.share * 100)}% of talk time`}><span style={{ width: `${Math.max(2, stat.share * 100)}%` }} /></div>}
                           <div className="meeting-speaker-card-actions">
                             {!isYou && t.snippet_path && (
                               <button

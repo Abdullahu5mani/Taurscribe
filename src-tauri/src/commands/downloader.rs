@@ -286,6 +286,8 @@ struct VerifiedEntry {
     /// Matches against the current registry hashes to detect stale records.
     fingerprint: String,
     verified_at: String,
+    #[serde(default)]
+    archive_hashes_checked: bool,
 }
 
 type VerifiedStore = HashMap<String, VerifiedEntry>;
@@ -515,6 +517,7 @@ pub async fn get_download_status(
                                 VerifiedEntry {
                                     fingerprint: computed_fp,
                                     verified_at: chrono::Utc::now().to_rfc3339(),
+                                    archive_hashes_checked: false,
                                 },
                             );
                             store_changed = true;
@@ -1089,6 +1092,7 @@ async fn download_model_inner(
         VerifiedEntry {
             fingerprint: computed_fp,
             verified_at: now,
+            archive_hashes_checked: true,
         },
     );
     save_verified_store(&store);
@@ -1132,7 +1136,7 @@ fn encoder_has_standalone_owner(encoder_name: &str, deleting_id: &str) -> bool {
 /// Models a finishing recording reads (speaker separation and recognition).
 fn meeting_needs_model(model_id: &str) -> bool {
     use crate::commands::model_registry::{DIARIZATION_MODEL_ID, SPEAKER_MODEL_ID};
-    model_id == DIARIZATION_MODEL_ID || model_id == SPEAKER_MODEL_ID
+    model_id == DIARIZATION_MODEL_ID || model_id == SPEAKER_MODEL_ID || model_id == crate::word_align::MODEL_ID
 }
 
 #[tauri::command]

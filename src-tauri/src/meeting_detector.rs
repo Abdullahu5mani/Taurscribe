@@ -168,6 +168,27 @@ fn is_catalogued_app(name: &str, bundle_id: &str) -> bool {
     (!bundle.is_empty() && BUNDLES.iter().any(|b| bundle.starts_with(b))) || EXES.contains(&exe.as_str())
 }
 
+/// Audio utilities: volume mixers, virtual devices and routers. They keep an
+/// audio tap (which the OS reports as microphone use) open while playing other
+/// apps' sound, so they look exactly like a call to the "other apps" heuristic.
+/// Matched on the app's display name or bundle id, case-insensitively.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn is_audio_utility(app_name: &str, bundle_id: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "finetune", "soundsource", "audio hijack", "loopback", "background music", "eqmac", "boom 3d",
+        "blackhole", "soundflower", "ishowu audio", "sound control", "volume mixer", "voicemeeter",
+        "equalizer apo", "obs", "krisp", "airfoil", "audio midi setup",
+    ];
+    const BUNDLES: &[&str] = &[
+        "com.rogueamoeba.", "com.finetuneapp.", "com.nickzman.", "com.bearisdriving.", "com.eqmac",
+        "com.existential.", "com.globaldelight.", "com.krisp.", "com.obsproject.", "com.apple.audio.",
+    ];
+    let name = app_name.to_lowercase();
+    let bundle = bundle_id.to_lowercase();
+    NAMES.iter().any(|n| name == *n || name.starts_with(&format!("{n} ")))
+        || BUNDLES.iter().any(|b| bundle.starts_with(b))
+}
+
 /// The name to show for a call in an app outside the catalogue, or `None` when
 /// the process is part of the OS rather than an app the user runs: on macOS
 /// only `.app` bundles count (FaceTime and phone calls run in `avconferenced`),
@@ -343,6 +364,9 @@ mod platform_impl {
                 continue;
             }
             let Some(name) = super::other_call_app_name(&p.name, &app, &exe) else { continue };
+            if super::is_audio_utility(&name, &p.bundle_id) {
+                continue;
+            }
             let entry = apps.entry(app).or_insert((p.pid, name, false, false));
             entry.2 |= p.is_using_mic;
             entry.3 |= p.is_playing_audio;
@@ -794,6 +818,20 @@ mod tests {
         // OS daemons and bare executables on macOS are not apps the user runs.
         let daemon = Path::new("/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd");
         assert_eq!(other_call_app_name("corespeechd", daemon, daemon), None);
+    }
+
+    #[test]
+    fn volume_mixers_and_audio_routers_are_not_calls() {
+        assert!(is_audio_utility("FineTune", "com.finetuneapp.FineTune"));
+        assert!(is_audio_utility("FineTune", ""));
+        assert!(is_audio_utility("SoundSource", "com.rogueamoeba.soundsource"));
+        assert!(is_audio_utility("Audio Hijack", ""));
+        assert!(is_audio_utility("BlackHole 2ch", ""));
+        assert!(!is_audio_utility("Signal", "org.whispersystems.signal-desktop"));
+        assert!(!is_audio_utility("WhatsApp", "net.whatsapp.WhatsApp"));
+        assert!(!is_audio_utility("FaceTime", "com.apple.FaceTime"));
+        // A name that merely starts with a utility's letters is not that utility.
+        assert!(!is_audio_utility("Finetuned Calls", ""));
     }
 
     #[cfg(windows)]

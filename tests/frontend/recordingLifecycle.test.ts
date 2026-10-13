@@ -278,3 +278,39 @@ test("recording during a file skips the conflicting UI model load and supplies t
     expect(h.headers).toContain("Pausing file transcription at the next chunk…");
     expect(h.handle.current.isRecordingRef.current).toBe(true);
 });
+
+test("an unloaded model does not delay Start: recording begins at once and the backend loads it", async () => {
+    responses.set("get_granite_status", () => ({ loaded: false, model_id: null }));
+    const h = fixture();
+    await h.handle.current.handleStartRecording();
+    await h.settle();
+    expect(calls).not.toContain("init_granite");
+    expect(calls).toContain("start_recording");
+    expect(argumentsByCommand.get("start_recording")).toMatchObject({
+        modelId: "granite-test", engine: "granite", backgroundLoad: true,
+    });
+    expect(h.handle.current.isRecording).toBe(true);
+    // The backend reports the model ready: no failure, recording continues.
+    fire("recording-model-loading", { loading: false, model_id: "granite-test" });
+    await h.settle();
+    expect(h.handle.current.isRecording).toBe(true);
+    expect(calls).not.toContain("cancel_recording");
+});
+
+test("a model that fails to load during a recording discards it and says why", async () => {
+    responses.set("get_granite_status", () => ({ loaded: false, model_id: null }));
+    const h = fixture();
+    await h.handle.current.handleStartRecording();
+    await h.settle();
+    fire("recording-model-loading", { loading: false, model_id: "granite-test", error: "model file is corrupt" });
+    await h.settle();
+    expect(calls).toContain("cancel_recording");
+    expect(h.headers.some(m => m.includes("model file is corrupt"))).toBe(true);
+});
+
+test("a loaded model keeps the normal start: no background load requested", async () => {
+    const h = fixture();
+    await h.handle.current.handleStartRecording();
+    await h.settle();
+    expect(argumentsByCommand.get("start_recording")).toMatchObject({ backgroundLoad: false });
+});
