@@ -77,6 +77,8 @@ export function useHotkeyListeners({
         let unlistenAudioFallback: (() => void) | undefined;
         let unlistenAudioDisconnect: (() => void) | undefined;
         let unlistenWriteError: (() => void) | undefined;
+        let unlistenAudioDropped: (() => void) | undefined;
+        let unlistenLengthLimit: (() => void) | undefined;
         let unlistenModelUnloaded: (() => void) | undefined;
         let unlistenAudioLevel: (() => void) | undefined;
 
@@ -231,6 +233,27 @@ export function useHotkeyListeners({
                 }
             });
 
+            // A brief disk stall dropped some audio but capture is still running:
+            // tell the user, don't end the recording.
+            const unsubAudioDropped = await listen<string>("recording-audio-dropped", (event) => {
+                setHeaderStatusRef.current?.(event.payload, 10000);
+            });
+
+            // The recording file is full: stop so what was saved gets processed.
+            const unsubLengthLimit = await listen<string>("recording-length-limit", (event) => {
+                setHeaderStatusRef.current?.(event.payload, 15000);
+                if (isRecordingRef.current && !stopInProgressRef.current) {
+                    stopInProgressRef.current = true;
+                    const stop = handleStopRecordingRef.current;
+                    if (stop) void stop().finally(() => {
+                        stopInProgressRef.current = false;
+                    });
+                    else stopInProgressRef.current = false;
+                }
+            });
+
+            // The writer itself failed (disk full, file error): nothing more can
+            // be saved, so stop and keep what was written.
             const unsubWriteError = await listen<string>("recording-write-error", (event) => {
                 setHeaderStatusRef.current?.(event.payload, 10000);
                 if (isRecordingRef.current && !stopInProgressRef.current) {
@@ -280,6 +303,8 @@ export function useHotkeyListeners({
                 unlistenAudioFallback = unsub5;
                 unlistenAudioDisconnect = unsub6;
                 unlistenWriteError = unsubWriteError;
+                unlistenAudioDropped = unsubAudioDropped;
+                unlistenLengthLimit = unsubLengthLimit;
                 unlistenModelUnloaded = unsub8;
                 unlistenAudioLevel = unsub9;
                 // Lets the `taurscribe` CLI know dictation events will now be heard.
@@ -302,6 +327,8 @@ export function useHotkeyListeners({
             unlistenAudioFallback?.();
             unlistenAudioDisconnect?.();
             unlistenWriteError?.();
+            unlistenAudioDropped?.();
+            unlistenLengthLimit?.();
             unlistenModelUnloaded?.();
             unlistenAudioLevel?.();
         };
