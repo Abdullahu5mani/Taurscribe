@@ -497,6 +497,7 @@ pub fn replace_meeting_content(
     transcript_raw: &str,
     turns: &[DiarizedTurn],
 ) -> Result<(), String> {
+    let vault_audio = retained_vault_audio(conn)?;
     let old_turns = stored_turns(conn, meeting_id);
     let old_audio: Option<String> = conn
         .query_row("SELECT audio_path FROM meetings WHERE id = ?1", params![meeting_id], |r| r.get(0))
@@ -576,20 +577,13 @@ pub fn replace_meeting_content(
         .iter()
         .flat_map(|t| t.snippet_path.iter().chain(t.candidate_snippets.iter()).cloned())
         .collect();
-    if let Ok(mut stmt) = conn.prepare("SELECT snippet_path, candidate_snippets FROM speaker_vault") {
-        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?))) {
-            for (sel, cands) in rows.filter_map(Result::ok) {
-                keep.extend(sel);
-                keep.extend(cands.and_then(|j| serde_json::from_str::<Vec<String>>(&j).ok()).unwrap_or_default());
-            }
-        }
-    }
+    keep.extend(vault_audio);
+    protect_voice_companions(&mut keep);
     for (_, _, _, _, _, snip, cands) in &old_turns {
         let mut paths: Vec<String> = cands.as_deref().and_then(|c| serde_json::from_str(c).ok()).unwrap_or_default();
         paths.extend(snip.clone());
         for p in paths.into_iter().filter(|p| !keep.contains(p)) {
-            let _ = std::fs::remove_file(crate::diarization::voice_sample_path(&p));
-            let _ = std::fs::remove_file(&p);
+            remove_unused_speaker_clip(&p, &keep);
         }
     }
     if let Some(old) = old_audio.filter(|a| Some(a.as_str()) != audio_path) {
@@ -1067,6 +1061,37 @@ pub async fn delete_meeting(meeting_id: i64) -> Result<(), String> {
     .map_err(|e| format!("Task failed: {}", e))?
 }
 
+/// Both primary previews and independently enrolled samples own their audio.
+/// Candidates can share a voice companion, so protect companions separately.
+fn retained_vault_audio(conn: &Connection) -> Result<std::collections::HashSet<String>, String> {
+    let mut keep = std::collections::HashSet::new();
+    let mut stmt = conn.prepare("SELECT snippet_path, candidate_snippets FROM speaker_vault").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?))).map_err(|e| e.to_string())?;
+    for row in rows {
+        let (selected, candidates) = row.map_err(|e| e.to_string())?;
+        keep.extend(selected);
+        if let Some(json) = candidates {
+            keep.extend(serde_json::from_str::<Vec<String>>(&json).map_err(|e| format!("Invalid vault sample paths: {e}"))?);
+        }
+    }
+    let mut stmt = conn.prepare("SELECT clip_path FROM speaker_voiceprints WHERE clip_path IS NOT NULL").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    for row in rows { keep.insert(row.map_err(|e| e.to_string())?); }
+    protect_voice_companions(&mut keep);
+    Ok(keep)
+}
+
+fn protect_voice_companions(paths: &mut std::collections::HashSet<String>) {
+    let companions: Vec<_> = paths.iter().map(|p| crate::diarization::voice_sample_path(p).to_string_lossy().into_owned()).collect();
+    paths.extend(companions);
+}
+
+fn remove_unused_speaker_clip(path: &str, keep: &std::collections::HashSet<String>) {
+    let companion = crate::diarization::voice_sample_path(path);
+    if !keep.contains(companion.to_string_lossy().as_ref()) { let _ = std::fs::remove_file(companion); }
+    if !keep.contains(path) { let _ = std::fs::remove_file(path); }
+}
+
 fn delete_meeting_internal(conn: &Connection, meeting_id: i64) -> Result<(), String> {
         // Collect paths first, but only remove files after the database rows
         // are gone. Vault profiles may still use clips from this meeting.
@@ -1094,20 +1119,7 @@ fn delete_meeting_internal(conn: &Connection, meeting_id: i64) -> Result<(), Str
         }
         drop(stmt);
 
-        let mut vault_stmt = conn.prepare("SELECT snippet_path, candidate_snippets FROM speaker_vault")
-            .map_err(|e| e.to_string())?;
-        let vault_rows = vault_stmt.query_map([], |row| {
-            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
-        }).map_err(|e| e.to_string())?;
-        let mut vault_clips = std::collections::HashSet::new();
-        for row in vault_rows {
-            let (selected, candidates) = row.map_err(|e| e.to_string())?;
-            if let Some(path) = selected { vault_clips.insert(path); }
-            if let Some(json) = candidates {
-                vault_clips.extend(serde_json::from_str::<Vec<String>>(&json).unwrap_or_default());
-            }
-        }
-        drop(vault_stmt);
+        let vault_clips = retained_vault_audio(conn)?;
 
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM meeting_turns WHERE meeting_id = ?1", params![meeting_id])
@@ -1120,9 +1132,8 @@ fn delete_meeting_internal(conn: &Connection, meeting_id: i64) -> Result<(), Str
 
         if let Some(path) = audio_path { let _ = std::fs::remove_file(path); }
         crate::meeting_continuation::forget_meeting(meeting_id);
-        for path in meeting_clips.difference(&vault_clips) {
-            let _ = std::fs::remove_file(crate::diarization::voice_sample_path(path));
-            let _ = std::fs::remove_file(path);
+        for path in meeting_clips {
+            remove_unused_speaker_clip(&path, &vault_clips);
         }
 
     Ok(())
@@ -2728,5 +2739,71 @@ mod manual_passage_tests {
         assert_eq!(conn.query_row("SELECT transcription_model FROM meetings WHERE id=1",[],|r|r.get::<_,Option<String>>(0)).unwrap(),None);
         save_transcription_model(&conn,1,Some("granite-speech-5-nc")).unwrap();
         assert_eq!(conn.query_row("SELECT transcription_model FROM meetings WHERE id=1",[],|r|r.get::<_,String>(0)).unwrap(),"granite-speech-5-nc");
+    }
+}
+
+#[cfg(test)]
+mod audit_retention_tests {
+    use super::*;
+    fn fixture() -> (Connection, PathBuf, String, String) {
+        let root = std::env::temp_dir().join(format!("taurscribe-retention-{:016x}",rand::random::<u64>()));
+        std::fs::create_dir_all(&root).unwrap();
+        let kept = root.join("speaker.wav").to_string_lossy().into_owned();
+        let candidate = root.join("speaker_cand_1.wav").to_string_lossy().into_owned();
+        for path in [PathBuf::from(&kept),PathBuf::from(&candidate),crate::diarization::voice_sample_path(&kept)] {std::fs::write(path,b"retained audio").unwrap();}
+        let conn=Connection::open_in_memory().unwrap();ensure_meetings_schema(&conn).unwrap();
+        conn.execute("INSERT INTO meetings(id,session_id,title,platform,app_name,url,created_at,duration_ms,transcript_raw,category) VALUES(1,'audit','Meeting','','','','',12000,'words','General')",[]).unwrap();
+        conn.execute("INSERT INTO meeting_turns(meeting_id,speaker_id,speaker_name,start_ms,end_ms,channel,text,snippet_path,candidate_snippets) VALUES(1,'alice','Alice',0,6000,1,'words',?1,?2)",params![kept,serde_json::to_string(&vec![&kept,&candidate]).unwrap()]).unwrap();
+        conn.execute("INSERT INTO speaker_vault(id,name,created_at,last_seen) VALUES('alice','Alice','','')",[]).unwrap();
+        (conn,root,kept,candidate)
+    }
+    #[test]
+    fn meeting_deletion_keeps_secondary_enrolled_audio_and_shared_voice_companion() {
+        let (conn,root,kept,candidate)=fixture();
+        conn.execute("INSERT INTO speaker_voiceprints(person_id,embedding_json,clip_path,created_at) VALUES('alice','[1]',?1,'')",[&kept]).unwrap();
+        delete_meeting_internal(&conn,1).unwrap();
+        assert!(Path::new(&kept).exists());
+        assert!(crate::diarization::voice_sample_path(&kept).exists());
+        assert!(!Path::new(&candidate).exists());
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM speaker_voiceprints",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn primary_vault_clip_keeps_its_voice_when_an_unenrolled_candidate_is_deleted() {
+        let (conn,root,kept,candidate)=fixture();
+        conn.execute("UPDATE speaker_vault SET snippet_path=?1",[&kept]).unwrap();
+        delete_meeting_internal(&conn,1).unwrap();
+        assert!(crate::diarization::voice_sample_path(&kept).exists());
+        assert!(!Path::new(&candidate).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn continued_meeting_preserves_independently_enrolled_samples() {
+        let (conn,root,kept,candidate)=fixture();
+        conn.execute("INSERT INTO speaker_voiceprints(person_id,embedding_json,clip_path,created_at) VALUES('alice','[1]',?1,'')",[&kept]).unwrap();
+        replace_meeting_content(&conn,1,16000,None,"new words",&[]).unwrap();
+        assert!(Path::new(&kept).exists());
+        assert!(crate::diarization::voice_sample_path(&kept).exists());
+        assert!(!Path::new(&candidate).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn manual_assignment_previews_use_corrected_audio_ranges() {
+        let conn=Connection::open_in_memory().unwrap();ensure_meetings_schema(&conn).unwrap();
+        let root=std::env::temp_dir().join(format!("taurscribe-corrected-preview-{:016x}",rand::random::<u64>()));std::fs::create_dir_all(&root).unwrap();
+        let audio=root.join("recording.wav");
+        let mut writer=hound::WavWriter::create(&audio,hound::WavSpec{channels:1,sample_rate:16000,bits_per_sample:32,sample_format:hound::SampleFormat::Float}).unwrap();
+        for i in 0..16000*12 {writer.write_sample(if i<16000*6 {0.2_f32}else{-0.2_f32}).unwrap();}writer.finalize().unwrap();
+        conn.execute("INSERT INTO meetings(id,session_id,title,platform,app_name,url,created_at,duration_ms,audio_path,transcript_raw,category) VALUES(1,'preview','Meeting','','','','',12000,?1,'words','General')",[audio.to_string_lossy().as_ref()]).unwrap();
+        for start in [0,6000] {conn.execute("INSERT INTO meeting_turns(meeting_id,speaker_id,speaker_name,start_ms,end_ms,channel,text,snippet_path) VALUES(1,'guest','Guest',?1,?2,1,'words','/old/group.wav')",params![start,start+6000]).unwrap();}
+        assign_meeting_turns_internal(&conn,1,&[1],None,Some("Alice")).unwrap();
+        let alice:String=conn.query_row("SELECT speaker_id FROM meeting_turns WHERE id=1",[],|r|r.get(0)).unwrap();
+        for (speaker,expected) in [(&*alice,0.2_f32),("guest",-0.2_f32)] {
+            let preview=super::super::voice_bank::generate_meeting_sample_in(&conn,1,speaker,&root.join("voicebank"),&[]).unwrap();
+            let (samples,rate)=crate::audio_decode::decode_audio_mono_f32(Path::new(&preview)).unwrap();
+            assert_eq!(rate,16000);assert_eq!(samples.len(),16000*6);
+            assert!(samples.iter().all(|x|(*x-expected).abs()<0.00001),"preview contains another speaker's interval");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

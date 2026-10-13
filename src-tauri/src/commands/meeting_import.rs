@@ -204,16 +204,20 @@ fn import_model_id(engine: ASREngine, whisper: &std::sync::Arc<std::sync::Mutex<
     }
 }
 
+fn import_model_needs_load(requested: Option<&str>, loaded: Option<&str>) -> bool {
+    loaded.is_none() || requested.is_some_and(|id| Some(id) != loaded)
+}
+
 fn load_import_engine(engine: ASREngine, whisper: &std::sync::Arc<std::sync::Mutex<crate::whisper::WhisperManager>>, gguf: Option<&std::sync::Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>>, model_id: Option<&str>, force_cpu: bool) -> Result<(), String> {
     let device_key=crate::gpu::Target::resolve(force_cpu).key();
     match engine {
         ASREngine::Whisper => {
             let mut model = whisper.lock().map_err(|e| e.to_string())?;
-            if super::file_transcription::file_model_needs_load(model_id, model.get_current_model().map(String::as_str))? || model.device_key()!=device_key { model.initialize(model_id, force_cpu)?; }
+            if import_model_needs_load(model_id, model.get_current_model().map(String::as_str)) || model.device_key()!=device_key { model.initialize(model_id, force_cpu)?; }
         }
         _ => {
             let mut model = gguf.ok_or("Speech engine unavailable")?.lock().map_err(|e| e.to_string())?;
-            if super::file_transcription::file_model_needs_load(model_id, model.get_status().model_id.as_deref())? || model.device_key()!=device_key { model.initialize(model_id, force_cpu)?; }
+            if import_model_needs_load(model_id, model.get_status().model_id.as_deref()) || model.device_key()!=device_key { model.initialize(model_id, force_cpu)?; }
         }
     }
     Ok(())
@@ -372,5 +376,20 @@ mod import_batch_tests {
         let result = super::inspect_recording_paths(&paths);
         assert!(result.recordings.is_empty());
         assert_eq!(result.errors.len(), paths.len());
+    }
+}
+
+#[cfg(test)]
+mod explicit_model_selection_tests {
+    use super::*;
+    #[test]
+    fn explicit_import_switches_models_but_default_reuses_the_loaded_one() {
+        assert!(import_model_needs_load(Some("whisper-tiny"),Some("whisper-base")));
+        assert!(import_model_needs_load(Some("whisper-tiny"),None));
+        assert!(import_model_needs_load(None,None));
+        assert!(!import_model_needs_load(None,Some("whisper-base")));
+        assert!(!import_model_needs_load(Some("whisper-base"),Some("whisper-base")));
+        // Keep the queue guard strict: its request is an identity promise.
+        assert!(super::super::file_transcription::file_model_needs_load(Some("whisper-tiny"),Some("whisper-base")).is_err());
     }
 }

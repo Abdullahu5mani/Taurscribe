@@ -970,6 +970,16 @@ struct ResetManifest { managed_files: Vec<PathBuf> }
 
 /// Custom storage may be shared with other files. Capture only the paths owned
 /// by our database and model catalogue before resetting the storage mapping.
+/// The registry id of a Whisper weights file, if the app manages it.
+/// Registry ids use dashes where file names use dots ("ggml-base.en-q5_1.bin"
+/// is "whisper-base-en-q5_1"), and the file must be one the model lists.
+fn whisper_file_model_id(name: &str) -> Option<String> {
+    let stem = name.strip_prefix("ggml-")?.strip_suffix(".bin")?;
+    let id = format!("whisper-{}", stem.replace('.', "-"));
+    let config = crate::commands::model_registry::get_model_config(&id)?;
+    config.files.iter().any(|file| file.filename == name).then_some(id)
+}
+
 fn custom_reset_manifest() -> Result<ResetManifest, String> {
     let mut managed_files=Vec::new();
     let recordings=crate::storage::current_dir(crate::storage::Area::Recordings)?;

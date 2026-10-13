@@ -93,7 +93,17 @@ fn now() -> u64 {
 }
 
 fn load() -> Option<Pending> {
-    serde_json::from_str(&std::fs::read_to_string(state_file()?).ok()?).ok()
+    load_in(&dir()?)
+}
+
+fn load_in(directory: &Path) -> Option<Pending> {
+    let mut pending: Pending = serde_json::from_str(&std::fs::read_to_string(directory.join("pending.json")).ok()?).ok()?;
+    // The metadata is copied with this directory during a storage move. Resolve
+    // its owned WAV against the current location, not an obsolete absolute root.
+    if pending.wav.parent()?.file_name()? == "continuation" {
+        pending.wav = directory.join(pending.wav.file_name()?);
+    }
+    Some(pending)
 }
 
 /// Deletes the kept recording.
@@ -484,5 +494,22 @@ mod tests {
             assert_eq!(turns[0].speaker_name, "Ann");
             assert_eq!(turns[0].speaker_id, "person_ann");
         }
+    }
+}
+
+#[cfg(test)]
+mod relocated_continuation_tests {
+    use super::*;
+    #[test]
+    fn relocated_metadata_resolves_the_kept_wav_in_its_current_directory() {
+        let root=std::env::temp_dir().join(format!("taurscribe-relocated-{:016x}",rand::random::<u64>()));
+        let directory=root.join("new/continuation");std::fs::create_dir_all(&directory).unwrap();
+        let pending=Pending{meeting_id:42,call_key:"call".into(),wav:root.join("old/continuation/meeting_42.wav"),ended_at:now(),duration_ms:1000};
+        std::fs::write(directory.join("pending.json"),serde_json::to_vec(&pending).unwrap()).unwrap();
+        std::fs::write(directory.join("meeting_42.wav"),b"retained stereo recording").unwrap();
+        let relocated=load_in(&directory).unwrap();
+        assert_eq!(relocated.wav,directory.join("meeting_42.wav"));
+        assert!(!should_discard(&relocated,false,now(),10));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

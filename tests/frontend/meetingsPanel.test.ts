@@ -688,3 +688,20 @@ test("Stop targets the displayed job and retains its unsaved draft", async () =>
  nodes(view.handle.current).find(n=>n.type==="button"&&textOf(n).includes("Read partial transcript")).props.onClick();await view.settle();
  expect(textOf(view.handle.current)).toContain("Partial draft · stopped · not saved");view.unmount();
 });
+
+test("both completion events preserve expanded history and Load more", async () => {
+    invokeOverride = (cmd, args) => cmd === "list_meetings"
+        ? Promise.resolve(Array.from({ length: Math.min(args.limit, 300) }, (_, i) => summary(i + 1))) : undefined;
+    const { handle, settle } = render();
+    await settle();
+    const more = () => nodes(handle.current).find(n => n.props?.className === "meeting-load-more");
+    more().props.onClick();
+    await settle();
+    expect(calls.filter(c => c.cmd === "list_meetings").at(-1)?.args.limit).toBe(200);
+    for (const event of ["meeting-processing-finished", "meeting-processing-complete"]) {
+        listeners.get(event)!({ payload: { meeting_id: 1, error: null } });
+        await settle();
+        expect(calls.filter(c => c.cmd === "list_meetings").at(-1)?.args.limit).toBe(200);
+        expect(more()).toBeDefined();
+    }
+});

@@ -514,6 +514,14 @@ fn generate_sample_from_paths(conn: &Connection, person_id: &str, paths: Vec<Str
             if !voice.exists() { continue; }
             let (samples, rate) = match crate::audio_decode::decode_audio_mono_f32(&voice) { Ok(audio) => audio, Err(_) => continue };
             let pcm = crate::audio_preprocess::resample_mono_to_16k(&samples, rate)?;
+            if let Some(clip) = sample_from_pcm(conn, person_id, &pcm, dir, excluded)? { return Ok(clip); }
+        }
+        Err("No new retained speech is available for this person. Use Find more to confirm them in another meeting, or add a recording of just their voice.".into())
+}
+
+fn sample_from_pcm(conn: &Connection, person_id: &str, pcm: &[f32], dir: &Path, excluded: &[String]) -> Result<Option<String>, String> {
+    if excluded.len() > 32 { return Err("Close some previews before generating more".into()); }
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
             for chunk in pcm.chunks(16000 * 15) {
                 if chunk.len() < 16000 * 5 { continue; }
                 let mut hasher = sha2::Sha256::new();
@@ -528,10 +536,39 @@ fn generate_sample_from_paths(conn: &Connection, person_id: &str, paths: Vec<Str
                 let mut writer = hound::WavWriter::create(&clip, spec).map_err(|e| e.to_string())?;
                 for &sample in chunk { writer.write_sample(sample).map_err(|e| e.to_string())?; }
                 writer.finalize().map_err(|e| e.to_string())?;
-                return Ok(clip);
+                return Ok(Some(clip));
             }
-        }
-        Err("No new retained speech is available for this person. Use Find more to confirm them in another meeting, or add a recording of just their voice.".into())
+    Ok(None)
+}
+
+pub(super) fn generate_meeting_sample_in(conn: &Connection, meeting_id: i64, speaker_id: &str, dir: &Path, excluded: &[String]) -> Result<String, String> {
+    let paths: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT DISTINCT snippet_path FROM meeting_turns WHERE meeting_id=?1 AND speaker_id=?2 AND snippet_path IS NOT NULL ORDER BY start_ms").map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(params![meeting_id,speaker_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        rows.collect::<Result<_,_>>().map_err(|e| e.to_string())?
+    };
+    let identity = format!("meeting-{meeting_id}-{speaker_id}");
+    if paths.iter().any(|p| crate::diarization::voice_sample_path(p).exists()) {
+        return generate_sample_from_paths(conn, &identity, paths, dir, excluded);
+    }
+    // A manual correction invalidates old group clips. Reconstruct only this
+    // person's corrected intervals from the retained recording on demand.
+    let audio: Option<String> = conn.query_row("SELECT audio_path FROM meetings WHERE id=?1", [meeting_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let audio = audio.ok_or("No retained recording is available for this meeting")?;
+    let mut stmt = conn.prepare("SELECT start_ms,end_ms FROM meeting_turns WHERE meeting_id=?1 AND speaker_id=?2 ORDER BY start_ms,end_ms").map_err(|e| e.to_string())?;
+    let ranges = stmt.query_map(params![meeting_id,speaker_id], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))).map_err(|e| e.to_string())?.collect::<Result<Vec<_>,_>>().map_err(|e| e.to_string())?;
+    if ranges.is_empty() { return Err("This speaker is no longer in the meeting".into()); }
+    let (samples, rate, channels) = crate::audio_decode::decode_audio_interleaved_strict(Path::new(&audio))?;
+    let mono: Vec<f32> = samples.chunks_exact(channels as usize).map(|frame| frame.iter().sum::<f32>() / channels as f32).collect();
+    let mut speech = Vec::new();
+    let mut previous_end = 0;
+    for (start, end) in ranges {
+        let start = ((start.max(0) as u128 * rate as u128 / 1000).min(mono.len() as u128) as usize).max(previous_end);
+        let end = (end.max(0) as u128 * rate as u128 / 1000).min(mono.len() as u128) as usize;
+        if end > start { speech.extend_from_slice(&mono[start..end]); previous_end = end; }
+    }
+    let pcm = crate::audio_preprocess::resample_mono_to_16k(&speech, rate)?;
+    sample_from_pcm(conn, &identity, &pcm, dir, excluded)?.ok_or_else(|| "No new retained speech is available for this speaker".into())
 }
 
 /// A listening preview from another retained section of this meeting speaker.
@@ -540,11 +577,7 @@ fn generate_sample_from_paths(conn: &Connection, person_id: &str, paths: Vec<Str
 pub async fn generate_meeting_speaker_preview(meeting_id: i64, speaker_id: String, excluded_paths: Option<Vec<String>>) -> Result<String, String> {
     blocking(move |conn| {
         let _samples = sample_operations().lock().map_err(|e| e.to_string())?;
-        let mut stmt = conn.prepare("SELECT DISTINCT snippet_path FROM meeting_turns WHERE meeting_id=?1 AND speaker_id=?2 AND snippet_path IS NOT NULL ORDER BY start_ms").map_err(|e| e.to_string())?;
-        let rows = stmt.query_map(params![meeting_id,speaker_id], |r| r.get(0)).map_err(|e| e.to_string())?;
-        let paths: Vec<String> = rows.collect::<Result<_,_>>().map_err(|e| e.to_string())?;
-        if paths.is_empty() { return Err("No retained speaker audio is available for this meeting".into()); }
-        generate_sample_from_paths(conn, &format!("meeting-{meeting_id}-{speaker_id}"), paths, &super::meetings::get_meetings_dir()?.join("voicebank"), &excluded_paths.unwrap_or_default())
+        generate_meeting_sample_in(conn, meeting_id, &speaker_id, &super::meetings::get_meetings_dir()?.join("voicebank"), &excluded_paths.unwrap_or_default())
     }).await
 }
 

@@ -218,6 +218,11 @@ where
     if total_frames == 0 {
         return Err("Audio file is empty or could not be decoded".to_string());
     }
+    // MPEG frame counts include encoder delay/padding on some files. Permit
+    // two frames of padding, but never accept a large shortfall as a full import.
+    if strict && is_mp3 && declared_frames.is_some_and(|expected| total_frames.saturating_add(2304) < expected) {
+        return Err(format!("MP3 ended early: decoded {total_frames} of {} frames", declared_frames.unwrap_or(0)));
+    }
     if path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -527,5 +532,22 @@ mod tests {
         let (frames, _) = decode_audio_mono_stream(&path, |_, _, _, _| Ok(())).unwrap();
         assert!(frames > 0 && frames < 16_000, "{frames}");
         let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(test)]
+mod mp3_integrity_tests {
+    use super::*;
+    #[test]
+    fn strict_mp3_decode_rejects_a_truncated_file_with_a_complete_header() {
+        let original=Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audit-full.mp3");
+        let (frames,rate)=decode_audio_mono_stream_strict(&original,|_,_,_,_|Ok(())).unwrap();
+        assert!(frames>rate as u64*9);
+        let bytes=std::fs::read(&original).unwrap();
+        let path=std::env::temp_dir().join(format!("taurscribe-truncated-{:016x}.mp3",rand::random::<u64>()));
+        std::fs::write(&path,&bytes[..bytes.len()/2]).unwrap();
+        let error=decode_audio_mono_stream_strict(&path,|_,_,_,_|Ok(())).unwrap_err();
+        assert!(error.contains("MP3 ended early"),"{error}");
+        std::fs::remove_file(path).unwrap();
     }
 }

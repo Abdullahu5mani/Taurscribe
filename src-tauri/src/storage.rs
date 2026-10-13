@@ -1436,6 +1436,8 @@ mod retained_path_tests {
         conn.execute("INSERT INTO speaker_voiceprints(person_id,embedding_json,clip_path,created_at) VALUES('alice','[1]',?1,'')",[&clip]).unwrap();
         conn.execute("INSERT INTO voice_file_prints(path,embedding_json) VALUES(?1,'[1]')",[&voice]).unwrap();
         let turns=serde_json::json!([{"turn_id":1,"speaker_id":"guest","speaker_name":"Guest","channel":1,"snippet_path":clip,"candidate_snippets":serde_json::to_string(&vec![&clip,"/external/keep.wav"]).unwrap(),"current_snippet_idx":0}]);
+        // The merge row references a meeting (foreign key), so create meeting 1.
+        conn.execute("INSERT INTO meetings(id,session_id,title,platform,app_name,url,created_at,duration_ms,transcript_raw,category) VALUES(1,'s','t','p','a','','',0,'','general')",[]).unwrap();
         conn.execute("INSERT INTO meeting_speaker_merges(meeting_id,from_speaker_id,from_speaker_name,into_speaker_id,into_speaker_name,turns_json,created_at) VALUES(1,'guest','Guest','alice','Alice',?1,'')",[turns.to_string()]).unwrap();
         rewrite_recording_paths_in_db(&mut conn,old,new).unwrap();
         assert_eq!(conn.query_row("SELECT clip_path FROM speaker_voiceprints",[],|r|r.get::<_,String>(0)).unwrap(),expected);

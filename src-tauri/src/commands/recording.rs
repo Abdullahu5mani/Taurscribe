@@ -122,15 +122,22 @@ fn transcribe_final_pass(
     manager: &Arc<std::sync::Mutex<crate::gguf_asr::GgufAsrManager>>,
     audio: Vec<f32>,
     engine: ASREngine,
+    cancel: Option<&Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<String, String> {
-    println!(
-        "[FINAL_PASS] Transcribing saved recording ({:.2}s)...",
-        audio.len() as f32 / 16000.0
-    );
-    let mut manager = manager
-        .lock()
-        .map_err(|_| "ASR lock poisoned".to_string())?;
+    let mut manager = manager.lock().map_err(|_| "ASR lock poisoned".to_string())?;
+    transcribe_final_pass_chunks(&audio, engine, cancel.map(Arc::as_ref), |chunk| {
+        match cancel {
+            Some(cancel) => manager.transcribe_chunk_cancellable(chunk, 16000, cancel),
+            None => manager.transcribe_chunk(chunk, 16000, None),
+        }
+    })
+}
 
+fn transcribe_final_pass_chunks(
+    audio: &[f32], engine: ASREngine,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    mut transcribe: impl FnMut(&[f32]) -> Result<String, String>,
+) -> Result<String, String> {
     let chunk_samples = if engine == ASREngine::Qwen3 {
         16_000 * 30
     } else {
@@ -141,21 +148,26 @@ fn transcribe_final_pass(
     } else {
         FINAL_PASS_FULL_MAX_SAMPLES
     };
+    if let Some(cancel) = cancel { crate::meeting_job::check(cancel)?; }
     if audio.len() <= full_max {
-        return manager.transcribe_chunk(&audio, 16000, None);
+        let text = transcribe(audio)?;
+        if let Some(cancel) = cancel { crate::meeting_job::check(cancel)?; }
+        return Ok(text);
     }
 
     let mut merged = String::new();
     let mut start = 0usize;
     while start < audio.len() {
+        if let Some(cancel) = cancel { crate::meeting_job::check(cancel)?; }
         let end = (start + chunk_samples).min(audio.len());
-        let text = manager.transcribe_chunk(&audio[start..end], 16000, None)?;
+        let text = transcribe(&audio[start..end])?;
         append_transcript_with_word_overlap(&mut merged, &text);
         if end == audio.len() {
             break;
         }
         start = end.saturating_sub(FINAL_PASS_OVERLAP_SAMPLES);
     }
+    if let Some(cancel) = cancel { crate::meeting_job::check(cancel)?; }
     Ok(merged)
 }
 
@@ -2327,7 +2339,7 @@ fn stop_recording_blocking(
                 let cancel = if kind == RecordingKind::Meeting { crate::meeting_job::current_cancel() } else { None };
                 if let Some(cancel) = &cancel { crate::meeting_job::check(cancel)?; }
                 match load_recording_for_final_pass(path)
-                    .and_then(|audio| transcribe_final_pass(granite, audio, active_engine))
+                    .and_then(|audio| transcribe_final_pass(granite, audio, active_engine, cancel.as_ref()))
                 {
                     Ok(raw_text) => {
                         let cleaned = clean_transcript(&raw_text);
@@ -2443,7 +2455,8 @@ fn stop_recording_blocking(
 
         let result = {
             let mut whisper = whisper_arc.lock().unwrap();
-            whisper.transcribe_audio_data(&clean, prompt.as_deref())
+            let cancel = if kind == RecordingKind::Meeting { crate::meeting_job::current_cancel() } else { None };
+            whisper.transcribe_audio_data_timed_cancellable(&clean, prompt.as_deref(), cancel).map(|result| result.text)
         };
 
         match result {
@@ -2956,5 +2969,29 @@ mod tests {
         assert_eq!(live_chunk_samples(ASREngine::Qwen3, 16_000), 16_000 * 15);
         assert_eq!(live_chunk_samples(ASREngine::Granite, 16_000), 16_000 * 6);
         assert_eq!(live_chunk_samples(ASREngine::Whisper, 48_000), 48_000 * 6);
+    }
+}
+
+#[cfg(test)]
+mod final_pass_cancellation_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    #[test]
+    fn stopping_final_pass_prevents_every_later_chunk_and_the_short_result() {
+        for seconds in [10,600] {
+            let cancel=AtomicBool::new(false);let mut calls=0;
+            let result=transcribe_final_pass_chunks(&vec![0.;16000*seconds],ASREngine::Granite,Some(&cancel),|_| {
+                calls+=1;cancel.store(true,Ordering::Relaxed);Ok("some words".into())
+            });
+            assert_eq!(calls,1);assert_eq!(result.unwrap_err(),crate::meeting_job::STOPPED);
+        }
+        let cancel=AtomicBool::new(true);
+        assert!(transcribe_final_pass_chunks(&[0.;16],ASREngine::Granite,Some(&cancel),|_|panic!("cancelled job reached native inference")).is_err());
+    }
+    #[test]
+    fn ordinary_final_pass_keeps_all_chunks_and_overlap_merging() {
+        let mut calls=0;
+        let text=transcribe_final_pass_chunks(&vec![0.;16000*600],ASREngine::Granite,None,|_|{calls+=1;Ok(format!("chunk{calls}"))}).unwrap();
+        assert_eq!(calls,4);assert_eq!(text,"chunk1 chunk2 chunk3 chunk4");
     }
 }

@@ -361,7 +361,7 @@ export function MeetingsPanel({
           search: searchQueryRef.current.trim() || null,
           category: null,
           platform: selectedPlatformRef.current === "All" ? null : selectedPlatformRef.current,
-          limit: historyPages * 100,
+          limit: historyPagesRef.current * 100,
           offset: 0,
         }),
         invoke<PlatformCount[]>("get_meeting_platform_counts").catch(() => []),

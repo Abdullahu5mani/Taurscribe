@@ -24,8 +24,8 @@ const WHISPER_LANGUAGES: { value: WhisperLanguage; label: string; description: s
 ];
 /** What multilingual Whisper models are told the speech is (settings key `whisper_language`, read by whisper.rs). */
 const SPOKEN_LANGUAGES: { value: string; label: string }[] = [
-    { value: 'system', label: 'Same as my computer' },
     { value: 'auto', label: 'Detect automatically' },
+    { value: 'system', label: 'Same as my computer' },
     { value: 'en', label: 'English' }, { value: 'es', label: 'Spanish' }, { value: 'fr', label: 'French' },
     { value: 'de', label: 'German' }, { value: 'it', label: 'Italian' }, { value: 'pt', label: 'Portuguese' },
     { value: 'nl', label: 'Dutch' }, { value: 'pl', label: 'Polish' }, { value: 'ru', label: 'Russian' },
@@ -129,7 +129,8 @@ export function ModelsTab({ models, downloadProgress, onDownload, onDelete, onCa
     const [sysInfo, setSysInfo] = useState<SystemInfo | null>(null);
     const [useCase, setUseCase] = useState<OnboardingUseCase>('quick_notes');
     const [autoUnloadTimeout, setAutoUnloadTimeout] = useState<number>(1800);
-    const [spokenLanguage, setSpokenLanguage] = useState('system');
+    // Unset means detect (whisper.rs), so that is what the picker shows.
+    const [spokenLanguage, setSpokenLanguage] = useState('auto');
     const hydratedTierRef = useRef(false);
     const [pulseModelIds, setPulseModelIds] = useState<Set<string>>(new Set());
     const whisperGroupRef = useRef<HTMLDivElement>(null);

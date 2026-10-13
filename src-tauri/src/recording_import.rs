@@ -11,7 +11,7 @@ use symphonia::core::{
     probe::Hint,
 };
 
-pub const EXTENSIONS: &[&str] = &["wav", "mp3", "m4a", "aac", "flac", "ogg", "mp4", "mov"];
+pub const EXTENSIONS: &[&str] = &["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "mp4", "mov", "mkv", "webm"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingSource {
@@ -161,7 +161,7 @@ pub fn inspect(path: &Path) -> Result<RecordingSource, String> {
         .to_ascii_lowercase();
     if !EXTENSIONS.contains(&ext.as_str()) {
         return Err(format!(
-            "Unsupported recording: {}. Use WAV, MP3, M4A, AAC, FLAC, OGG, MP4 or MOV.",
+            "Unsupported recording: {}. Use WAV, MP3, M4A, AAC, FLAC, OGG, OPUS, MP4, MOV, MKV or WebM.",
             path.display()
         ));
     }
@@ -519,5 +519,37 @@ mod tests {
         assert!(!dest.exists());
         assert!(path.exists());
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod offered_format_tests {
+    use super::*;
+    #[test]
+    fn every_new_picker_format_can_be_inspected_and_imported_without_changing_originals() {
+        let fixtures=Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let root=std::env::temp_dir().join(format!("taurscribe-formats-{:016x}",rand::random::<u64>()));std::fs::create_dir_all(&root).unwrap();
+        for (source,extension) in [("opus-1ch.ogg","opus"),("audit-opus.webm","webm"),("audit-opus.webm","mkv")] {
+            let input=root.join(format!("original.{extension}"));std::fs::copy(fixtures.join(source),&input).unwrap();
+            let before=std::fs::read(&input).unwrap();
+            assert!(inspect(&input).unwrap().duration_ms>0);
+            let output=root.join(format!("joined-{extension}.wav"));
+            let result=join_cancellable(&[input.to_string_lossy().into_owned()],&output,||Ok(())).unwrap();
+            assert_eq!(result.len(),1);assert!(result[0].duration_ms>0);
+            assert!(hound::WavReader::open(output).unwrap().duration()>0);
+            assert_eq!(std::fs::read(&input).unwrap(),before);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn corrupt_mp3_import_removes_partial_join_and_keeps_the_original() {
+        let source=Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audit-full.mp3");
+        let root=std::env::temp_dir().join(format!("taurscribe-corrupt-import-{:016x}",rand::random::<u64>()));std::fs::create_dir_all(&root).unwrap();
+        let bytes=std::fs::read(source).unwrap();let truncated=&bytes[..bytes.len()/2];
+        let input=root.join("broken.mp3");std::fs::write(&input,truncated).unwrap();
+        let output=root.join("joined.wav");
+        assert!(join_cancellable(&[input.to_string_lossy().into_owned()],&output,||Ok(())).unwrap_err().contains("MP3 ended early"));
+        assert!(!output.exists());assert_eq!(std::fs::read(&input).unwrap(),truncated);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -116,132 +116,114 @@ export function usePersonalization() {
     useEffect(() => { dictionaryRef.current = dictionary; }, [dictionary]);
     useEffect(() => { snippetsRef.current = snippets; }, [snippets]);
 
+    type Values = {
+        custom_dictionary: DictEntry[];
+        snippets: SnippetEntry[];
+        custom_vocabulary: string[];
+        context_bias_enabled: boolean;
+    };
+    type Key = keyof Values;
+    type Edit = (values: Values) => Values;
+    const valuesRef = useRef<Values>({ custom_dictionary: [], snippets: [], custom_vocabulary: [], context_bias_enabled: true });
+    const pendingRef = useRef<{ key: Key; edit: Edit }[]>([]);
+    const readyRef = useRef(false);
     const storeRef = useRef<Store | null>(null);
+    const writesRef = useRef<Promise<void>>(Promise.resolve());
 
-    // ── Load from store on mount ─────────────────────────────────────────
+    const display = useCallback((values: Values) => {
+        valuesRef.current = values;
+        dictionaryRef.current = values.custom_dictionary;
+        snippetsRef.current = values.snippets;
+        setDictionaryState(values.custom_dictionary);
+        setSnippetsState(values.snippets);
+        setCustomVocabularyState(values.custom_vocabulary);
+        setContextBiasEnabledState(values.context_bias_enabled);
+    }, []);
+    const persist = useCallback((key: Key, value: Values[Key]) => {
+        const store = storeRef.current;
+        if (!store) return;
+        // Serialize writes so a slower earlier save cannot replace a later edit.
+        writesRef.current = writesRef.current.then(async () => {
+            await store.set(key, value);
+            await store.save();
+        }).catch(console.error);
+    }, []);
+    const mutate = useCallback(<K extends Key,>(key: K, update: (value: Values[K]) => Values[K]) => {
+        const edit: Edit = values => ({ ...values, [key]: update(values[key]) });
+        const next = edit(valuesRef.current);
+        display(next);
+        if (!readyRef.current) pendingRef.current.push({ key, edit });
+        else persist(key, next[key]);
+    }, [display, persist]);
+
     useEffect(() => {
-        Store.load("settings.json")
-            .then(async (store) => {
-                storeRef.current = store;
-
-                const savedDict = await store.get<DictEntry[]>("custom_dictionary");
-                const savedSnippets = await store.get<SnippetEntry[]>("snippets");
-                const savedVocab = await store.get<string[]>("custom_vocabulary");
-                const savedBias = await store.get<boolean>("context_bias_enabled");
-
-                if (savedDict && Array.isArray(savedDict)) setDictionaryState(savedDict);
-                if (savedSnippets && Array.isArray(savedSnippets)) setSnippetsState(savedSnippets);
-                if (savedVocab && Array.isArray(savedVocab)) setCustomVocabularyState(savedVocab);
-                if (savedBias !== null && savedBias !== undefined) setContextBiasEnabledState(Boolean(savedBias));
-
-                setLoaded(true);
-            })
-            .catch((err) => {
+        let disposed = false;
+        Store.load("settings.json").then(async store => {
+            const [savedDict, savedSnippets, savedVocab, savedBias] = await Promise.all([
+                store.get<DictEntry[]>("custom_dictionary"), store.get<SnippetEntry[]>("snippets"),
+                store.get<string[]>("custom_vocabulary"), store.get<boolean>("context_bias_enabled"),
+            ]);
+            if (disposed) return;
+            storeRef.current = store;
+            let values: Values = {
+                custom_dictionary: Array.isArray(savedDict) ? savedDict : [],
+                snippets: Array.isArray(savedSnippets) ? savedSnippets : [],
+                custom_vocabulary: Array.isArray(savedVocab) ? savedVocab : [],
+                context_bias_enabled: savedBias == null ? true : Boolean(savedBias),
+            };
+            // Replay user actions over the saved state, including edits made
+            // while get() was pending. Never replace saved entries with [] + edit.
+            const pending = pendingRef.current;
+            for (const { edit } of pending) values = edit(values);
+            pendingRef.current = [];
+            readyRef.current = true;
+            display(values);
+            for (const key of new Set(pending.map(edit => edit.key))) persist(key, values[key]);
+            setLoaded(true);
+        }).catch(err => {
+            if (!disposed) {
                 console.error("Failed to load personalization settings:", err);
                 setLoaded(true);
-            });
-    }, []);
+            }
+        });
+        return () => { disposed = true; };
+    }, [display, persist]);
 
-    // ── Persist helper ───────────────────────────────────────────────────
-    const persist = useCallback((key: string, value: unknown) => {
-        if (!storeRef.current) return;
-        storeRef.current
-            .set(key, value)
-            .then(() => storeRef.current?.save())
-            .catch(console.error);
-    }, []);
-
-    // ── Dictionary operations ────────────────────────────────────────────
     const addDictEntry = useCallback((entry: Omit<DictEntry, "id">) => {
-        setDictionaryState((prev) => {
-            const next = [...prev, { ...entry, id: genId() }];
-            persist("custom_dictionary", next);
-            return next;
-        });
-    }, [persist]);
-
+        const item = { ...entry, id: genId() };
+        mutate("custom_dictionary", prev => [...prev, item]);
+    }, [mutate]);
     const updateDictEntry = useCallback((id: string, updates: Partial<Omit<DictEntry, "id">>) => {
-        setDictionaryState((prev) => {
-            const next = prev.map((e) => (e.id === id ? { ...e, ...updates } : e));
-            persist("custom_dictionary", next);
-            return next;
-        });
-    }, [persist]);
-
+        mutate("custom_dictionary", prev => prev.map(e => e.id === id ? { ...e, ...updates } : e));
+    }, [mutate]);
     const removeDictEntry = useCallback((id: string) => {
-        setDictionaryState((prev) => {
-            const next = prev.filter((e) => e.id !== id);
-            persist("custom_dictionary", next);
-            return next;
-        });
-    }, [persist]);
-
-    // ── Snippet operations ───────────────────────────────────────────────
+        mutate("custom_dictionary", prev => prev.filter(e => e.id !== id));
+    }, [mutate]);
     const addSnippet = useCallback((entry: Omit<SnippetEntry, "id">) => {
-        setSnippetsState((prev) => {
-            const next = [...prev, { ...entry, id: genId() }];
-            persist("snippets", next);
-            return next;
-        });
-    }, [persist]);
-
+        const item = { ...entry, id: genId() };
+        mutate("snippets", prev => [...prev, item]);
+    }, [mutate]);
     const updateSnippet = useCallback((id: string, updates: Partial<Omit<SnippetEntry, "id">>) => {
-        setSnippetsState((prev) => {
-            const next = prev.map((e) => (e.id === id ? { ...e, ...updates } : e));
-            persist("snippets", next);
-            return next;
-        });
-    }, [persist]);
-
+        mutate("snippets", prev => prev.map(e => e.id === id ? { ...e, ...updates } : e));
+    }, [mutate]);
     const removeSnippet = useCallback((id: string) => {
-        setSnippetsState((prev) => {
-            const next = prev.filter((e) => e.id !== id);
-            persist("snippets", next);
-            return next;
-        });
-    }, [persist]);
-
-    // ── Custom Vocabulary operations ────────────────────────────────────
+        mutate("snippets", prev => prev.filter(e => e.id !== id));
+    }, [mutate]);
     const addVocabWord = useCallback((rawWord: string) => {
         const word = rawWord.trim();
-        if (!word) return;
-        setCustomVocabularyState((prev) => {
-            if (prev.some((w) => w.toLowerCase() === word.toLowerCase())) return prev;
-            const next = [...prev, word];
-            persist("custom_vocabulary", next);
-            return next;
-        });
-    }, [persist]);
-
-    const removeVocabWord = useCallback((wordToRemove: string) => {
-        setCustomVocabularyState((prev) => {
-            const next = prev.filter((w) => w !== wordToRemove);
-            persist("custom_vocabulary", next);
-            return next;
-        });
-    }, [persist]);
-
+        if (word) mutate("custom_vocabulary", prev => prev.some(w => w.toLowerCase() === word.toLowerCase()) ? prev : [...prev, word]);
+    }, [mutate]);
+    const removeVocabWord = useCallback((word: string) => {
+        mutate("custom_vocabulary", prev => prev.filter(w => w !== word));
+    }, [mutate]);
     const addVocabPreset = useCallback((category: keyof typeof VOCAB_PRESETS) => {
-        const presetWords = VOCAB_PRESETS[category] || [];
-        setCustomVocabularyState((prev) => {
-            const existingLower = new Set(prev.map((w) => w.toLowerCase()));
-            const toAdd = presetWords.filter((w) => !existingLower.has(w.toLowerCase()));
-            if (toAdd.length === 0) return prev;
-            const next = [...prev, ...toAdd];
-            persist("custom_vocabulary", next);
-            return next;
+        mutate("custom_vocabulary", prev => {
+            const existing = new Set(prev.map(w => w.toLowerCase()));
+            return [...prev, ...(VOCAB_PRESETS[category] || []).filter(w => !existing.has(w.toLowerCase()))];
         });
-    }, [persist]);
-
-    const clearVocab = useCallback(() => {
-        setCustomVocabularyState([]);
-        persist("custom_vocabulary", []);
-    }, [persist]);
-
-    const setContextBiasEnabled = useCallback((enabled: boolean) => {
-        setContextBiasEnabledState(enabled);
-        persist("context_bias_enabled", enabled);
-    }, [persist]);
+    }, [mutate]);
+    const clearVocab = useCallback(() => mutate("custom_vocabulary", () => []), [mutate]);
+    const setContextBiasEnabled = useCallback((enabled: boolean) => mutate("context_bias_enabled", () => enabled), [mutate]);
 
     return {
         // Dictionary
