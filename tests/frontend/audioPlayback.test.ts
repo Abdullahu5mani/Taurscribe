@@ -64,3 +64,35 @@ test("headset play resumes the selected visible player but is ignored after clos
   setAudioPlaybackVisible(true);
  }
 });
+
+test("a hidden page (minimised or covered window) keeps playing; becoming visible re-allows after tray close", async () => {
+ const { installAudioPlaybackLifecycle, setAudioPlaybackVisible } = await import("../../src/utils/audioPlayback");
+ const oldDocument=globalThis.document, oldWindow=globalThis.window;
+ const navDescriptor=Object.getOwnPropertyDescriptor(globalThis,"navigator");
+ const listeners=new Map<string,()=>void>();
+ const doc={visibilityState:"visible",addEventListener(name:string,fn:()=>void){listeners.set(name,fn);},removeEventListener(){}};
+ (globalThis as any).document=doc;
+ (globalThis as any).window={addEventListener(name:string,fn:()=>void){listeners.set("window:"+name,fn);},removeEventListener(){}};
+ Object.defineProperty(globalThis,"navigator",{configurable:true,value:{}});
+ try {
+  setAudioPlaybackVisible(true);
+  const cleanup=installAudioPlaybackLifecycle();
+  const audio={pauses:0,onpause:null as any,onplay:null as any,pause(){this.pauses++;this.onpause?.({});}};
+  claimAudioPlayback(audio as any);
+  doc.visibilityState="hidden";
+  listeners.get("visibilitychange")!();
+  expect(audio.pauses).toBe(0);
+  setAudioPlaybackVisible(false); // closed to tray
+  expect(audio.pauses).toBe(1);
+  doc.visibilityState="visible";
+  listeners.get("visibilitychange")!();
+  const again={pauses:0,onpause:null as any,onplay:null as any,pause(){this.pauses++;this.onpause?.({});}};
+  claimAudioPlayback(again as any);
+  expect(again.pauses).toBe(0);
+  cleanup();
+ } finally {
+  (globalThis as any).document=oldDocument;(globalThis as any).window=oldWindow;
+  if(navDescriptor)Object.defineProperty(globalThis,"navigator",navDescriptor);else delete (globalThis as any).navigator;
+  setAudioPlaybackVisible(true);
+ }
+});

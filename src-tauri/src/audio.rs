@@ -76,6 +76,10 @@ impl CaptureLoss {
             && self.file_frames.fetch_add(frames as u64, Ordering::Relaxed) == 0
     }
 
+    /// Audio that was lost. Silence recorded for a track that delivered nothing
+    /// (`gap_frames`) is not loss: a process tap can simply go quiet while the
+    /// call app plays nothing, and counting it kept the stereo WAV and marked the
+    /// meeting incomplete. It stays in the capture diagnostics.
     pub fn warnings(&self) -> Vec<String> {
         let file = self.file_frames.load(Ordering::Relaxed);
         let input = self.input_frames.load(Ordering::Relaxed);

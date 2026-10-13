@@ -2142,6 +2142,7 @@ mod tests {
         ensure_meetings_schema(&conn).unwrap();
         conn.execute_batch("ALTER TABLE meetings DROP COLUMN reviewed;").unwrap();
         let id = meeting_with(&conn, &[turn("speaker_you", "You", 0, 0)]);
+        conn.execute_batch("ALTER TABLE meetings DROP COLUMN reviewed;").unwrap();
         conn.execute("UPDATE meetings SET summary='[\"Legacy approved summary\"]', category='Planning', action_items='[]' WHERE id=?1", [id]).unwrap();
         ensure_meetings_schema(&conn).unwrap();
         replace_meeting_content(&conn, id, 10000, None, "Continued speech", &[turn("speaker_you", "You", 0, 0)]).unwrap();

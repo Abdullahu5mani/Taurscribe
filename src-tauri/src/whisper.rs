@@ -41,17 +41,19 @@ fn decode_language(model_id: Option<&str>) -> Option<String> {
 }
 
 /// English-only models (`*.en`) are always told the speech is English. For
-/// multilingual models `setting` is a Whisper code ("de"), "auto" (detect on
-/// every chunk: an extra encoder pass, and short clips can be misread), or
-/// "system"/unset: the OS language, detecting only when Whisper doesn't know it.
+/// multilingual models `setting` is a Whisper code ("de"), "system" (the OS
+/// language, detecting only when Whisper doesn't know it), or "auto"/unset:
+/// detect on every chunk. Unset means detect so existing installs keep the
+/// behaviour they had: someone who picked a multilingual model to dictate
+/// Spanish on an English computer must not suddenly get English output.
 fn decode_language_with(model_id: Option<&str>, setting: Option<&str>) -> Option<String> {
     if model_id.is_some_and(|id| id.contains(".en")) {
         return Some("en".into());
     }
     match setting.map(str::trim) {
-        Some("auto") => None,
-        Some(code) if !code.is_empty() && code != "system" => whisper_language_of_locale(code),
-        _ => system_language().map(str::to_string),
+        Some("system") => system_language().map(str::to_string),
+        Some(code) if !code.is_empty() && code != "auto" => whisper_language_of_locale(code),
+        _ => None,
     }
 }
 
@@ -1015,8 +1017,8 @@ mod tests {
         // English-only models are English whatever the setting says.
         assert_eq!(lang(Some("tiny.en-q5_1"), Some("de")).as_deref(), Some("en"));
         assert_eq!(lang(Some("medium.en"), None).as_deref(), Some("en"));
-        // Multilingual models: unset / "system" → OS language; "auto" → detect; a code → that code.
-        assert_eq!(lang(Some("large-v3-turbo-q5_0"), None), system);
+        // Multilingual models: unset / "auto" → detect; "system" → OS language; a code → that code.
+        assert_eq!(lang(Some("large-v3-turbo-q5_0"), None), None);
         assert_eq!(lang(Some("base-q5_1"), Some("system")), system);
         assert_eq!(lang(Some("base-q5_1"), Some("auto")), None);
         assert_eq!(lang(Some("large-v3-turbo"), Some("en")).as_deref(), Some("en"));

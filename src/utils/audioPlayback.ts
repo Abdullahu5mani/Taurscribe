@@ -22,8 +22,16 @@ export function setAudioPlaybackVisible(visible: boolean) {
 }
 
 export function installAudioPlaybackLifecycle() {
-    const visibility = () => setAudioPlaybackVisible(document.visibilityState !== "hidden");
-    const focus = () => setAudioPlaybackVisible(document.visibilityState !== "hidden");
+    // Only closing to the tray revokes playback (App.tsx calls
+    // setAudioPlaybackVisible(false) on the backend's "window-hidden" event).
+    // The page also reports "hidden" when the window is minimised, hidden with
+    // Cmd-H or fully covered by another window, and listening to a meeting
+    // while working in another app must keep playing. Becoming visible again
+    // (or focused) re-allows playback after a close to tray.
+    const visibility = () => {
+        if (document.visibilityState !== "hidden") setAudioPlaybackVisible(true);
+    };
+    const focus = visibility;
     document.addEventListener("visibilitychange", visibility);
     window.addEventListener("focus", focus);
     visibility();
