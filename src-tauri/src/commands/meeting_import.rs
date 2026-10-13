@@ -109,7 +109,7 @@ pub async fn import_meeting_recordings(
     );
     let completion_app = app.clone();
     // The worker owns both gates even if its caller disappears or switches views.
-    tauri::async_runtime::spawn_blocking(move || {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _transition = transition;
         let _models = models;
         let _job = job;
@@ -189,7 +189,18 @@ pub async fn import_meeting_recordings(
         update_import_status(|status|{status["running"]=false.into();status["error"]=error.clone().into();});
         let _ = completion_app.emit("meeting-processing-finished", serde_json::json!({"meeting_id": null, "error": error}));
         error
-    })?
+    });
+    after_import_model_use(&completion_app, &state);
+    outcome?
+}
+
+/// An import or re-separation may have loaded a speech model. Keep the
+/// "model loaded" flag (which the auto-unload watchdog checks) and the tray in
+/// step, and honour "unload immediately", as file transcription does. Runs
+/// after the job's exclusive model gate is released.
+fn after_import_model_use(app: &AppHandle, state: &AudioState) {
+    crate::tray::reconcile_model_loaded_tray(app, state);
+    super::file_transcription::maybe_unload_after_file_batch(app, state);
 }
 
 fn validate_speaker_hint(count: Option<usize>) -> Result<(), String> {
@@ -237,7 +248,8 @@ pub async fn reseparate_meeting_speakers(app: AppHandle, state: State<'_, AudioS
     let payload=serde_json::json!({"title":"Re-separating speakers", "platform":"Saved meeting","job_id":job.id});
     remember_meeting_processing(payload.clone());
     let _ = app.emit("meeting-processing-started",payload);
-    tauri::async_runtime::spawn_blocking(move || {
+    let completion_app = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         let _transition = transition; let _models = models;let _job=job;
         let result = (|| {
             let conn = super::meetings::open_connection()?;
@@ -281,7 +293,9 @@ pub async fn reseparate_meeting_speakers(app: AppHandle, state: State<'_, AudioS
         finish_meeting_processing(result.as_ref().err().map(String::as_str));
         let _ = app.emit("meeting-processing-finished", serde_json::json!({"meeting_id":meeting_id,"error":result.as_ref().err(),"cancelled":cancel.load(Ordering::Relaxed)}));
         result
-    }).await.map_err(|e| e.to_string())?
+    }).await.map_err(|e| e.to_string());
+    after_import_model_use(&completion_app, &state);
+    outcome?
 }
 
 

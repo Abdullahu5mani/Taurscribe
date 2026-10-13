@@ -5,8 +5,10 @@
 !macro NSIS_HOOK_PREINSTALL
   !ifdef TAURSCRIBE_REPAIR_LAUNCHER
     ; The public launcher waits for the app; closing it alone would leave the
-    ; actual app's files locked during upgrades.
-    !insertmacro CheckIfAppIsRunning "$INSTDIR\taurscribe-core.exe" "${PRODUCTNAME}"
+    ; actual app's files locked during upgrades. The check matches a process's
+    ; executable name only (nsis_tauri_utils FindProcess compares szExeFile),
+    ; so pass the bare name: a full path never matches.
+    !insertmacro CheckIfAppIsRunning "taurscribe-core.exe" "${PRODUCTNAME}"
   !endif
   !ifdef TAURSCRIBE_ONLINE_CUDA
     !ifdef TAURSCRIBE_CUDA_RUNTIME_KIB
@@ -57,7 +59,7 @@
 
 !macro NSIS_HOOK_PREUNINSTALL
   !ifdef TAURSCRIBE_REPAIR_LAUNCHER
-    !insertmacro CheckIfAppIsRunning "$INSTDIR\taurscribe-core.exe" "${PRODUCTNAME}"
+    !insertmacro CheckIfAppIsRunning "taurscribe-core.exe" "${PRODUCTNAME}"
   !endif
 !macroend
 

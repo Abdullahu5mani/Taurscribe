@@ -58,17 +58,73 @@ fn string_attribute(element: &CFType, name: &str) -> Option<String> {
     attribute(element, name)?.downcast::<CFString>().map(|s| s.to_string())
 }
 
+/// Attributes that make Chromium-based (AXManualAccessibility) and other
+/// (AXEnhancedUserInterface) browsers expose their page contents.
+const ACCESSIBILITY_KEYS: [&str; 2] = ["AXManualAccessibility", "AXEnhancedUserInterface"];
+/// How long after the last observation the browser's settings are put back.
+const RESTORE_AFTER_IDLE: Duration = Duration::from_secs(10);
+
+/// Browsers whose accessibility attributes this module turned on, the keys it
+/// changed, and when they were last needed.
+static ENABLED: LazyLock<Mutex<HashMap<u32, (Instant, Vec<&'static str>)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn set_flag(app: &CFType, key: &str, on: bool) {
+    let value = if on { CFBoolean::true_value() } else { CFBoolean::false_value() };
+    unsafe {
+        AXUIElementSetAttributeValue(app.as_CFTypeRef() as AXUIElementRef, CFString::new(key).as_concrete_TypeRef(), value.as_CFTypeRef());
+    }
+}
+
+/// Turns the browser's page accessibility on while Meet tabs are being read.
+/// Left on, it makes the browser build accessibility trees for every page for
+/// the rest of its life (CPU, memory) and AXEnhancedUserInterface upsets window
+/// managers; so only attributes that were off are turned on, and a watcher
+/// turns them back off once nothing has observed this browser for a while.
+fn enable_accessibility(pid: u32, app: &CFType) {
+    let Ok(mut enabled) = ENABLED.lock() else { return };
+    if let Some((last_used, _)) = enabled.get_mut(&pid) {
+        *last_used = Instant::now();
+        return;
+    }
+    let changed: Vec<&'static str> = ACCESSIBILITY_KEYS
+        .into_iter()
+        .filter(|key| {
+            let on = attribute(app, key).and_then(|v| v.downcast::<CFBoolean>()).map(bool::from);
+            on != Some(true)
+        })
+        .collect();
+    for key in &changed {
+        set_flag(app, key, true);
+    }
+    enabled.insert(pid, (Instant::now(), changed));
+    drop(enabled);
+    let _ = std::thread::Builder::new().name("meet-ax-restore".into()).spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(5));
+        let Ok(mut enabled) = ENABLED.lock() else { return };
+        let idle = enabled.get(&pid).map_or(true, |(last_used, _)| last_used.elapsed() >= RESTORE_AFTER_IDLE);
+        if !idle { continue; }
+        let Some((_, changed)) = enabled.remove(&pid) else { return };
+        drop(enabled);
+        let raw = unsafe { AXUIElementCreateApplication(pid as i32) };
+        if raw.is_null() { return; }
+        let app = unsafe { CFType::wrap_under_create_rule(raw as _) };
+        for key in changed {
+            set_flag(&app, key, false);
+        }
+        return;
+    });
+}
+
 fn observe(pid: u32) -> Rooms {
     let mut rooms = HashMap::new();
     let app = unsafe {
         let raw = AXUIElementCreateApplication(pid as i32);
         if raw.is_null() { return rooms; }
         AXUIElementSetMessagingTimeout(raw, 0.1);
-        for key in ["AXManualAccessibility", "AXEnhancedUserInterface"] {
-            AXUIElementSetAttributeValue(raw, CFString::new(key).as_concrete_TypeRef(), CFBoolean::true_value().as_CFTypeRef());
-        }
         CFType::wrap_under_create_rule(raw as _)
     };
+    enable_accessibility(pid, &app);
     let deadline = Instant::now() + Duration::from_millis(800);
     let mut queue = vec![(app, None::<String>, 0)];
     let mut buttons: HashMap<String, Vec<String>> = HashMap::new();
