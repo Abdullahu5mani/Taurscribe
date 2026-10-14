@@ -20,7 +20,7 @@ interface UseRecordingParams {
     asrBackend: "gpu" | "cpu";
     isFileTranscribingRef?: React.RefObject<boolean>;
     setCurrentModel: (id: string) => void;
-    setLoadedEngine: (engine: ASREngine) => void;
+    setLoadedEngine: (engine: ASREngine | null) => void;
     enableGrammarLMRef: React.RefObject<boolean>;
     enableDenoiseRef: React.RefObject<boolean>;
     enableOverlayRef: React.RefObject<boolean>;
@@ -396,7 +396,9 @@ export function useRecording({
             if (!isCurrent()) return;
             if (!result.ok) throw result.error ?? new Error("Failed to start recording");
             if (fileHasPriority) playStart?.();
-            setLoadedEngine(currentEngine);
+            // With a background load the model isn't in memory yet; the
+            // "recording-model-loading" result decides (it can still fail).
+            if (!backgroundLoad) setLoadedEngine(currentEngine);
             // The command reports the temp file path; users only need to know it started.
             setHeaderStatus("Recording started");
             // A backend event may already have established this session's clock.
@@ -473,9 +475,26 @@ export function useRecording({
                 if (payload.loading) return;
                 modelLoadingInBackgroundRef.current = false;
                 if (payload.error) {
+                    // Nothing is in memory: don't show the engine as loaded, and let
+                    // a later download auto-load it.
+                    setLoadedEngine(null);
+                    if (isRecordingRef.current && meetingSessionRef.current) {
+                        // A meeting can't be redone: keep capturing. On stop the
+                        // audio is kept (the final pass reports the missing model)
+                        // so it can be transcribed with another model later.
+                        setHeaderStatus("The speech model didn't load — the meeting keeps recording and its audio will be kept", 10000);
+                        showNotice({
+                            level: "warning",
+                            code: "model_load_failed",
+                            title: "Model failed to load",
+                            message: `${payload.error}. The meeting is still being recorded; when you stop, its audio is kept so you can transcribe it with another model.`,
+                            sticky: true,
+                        });
+                        return;
+                    }
                     setHeaderStatus(`Failed to load the model: ${payload.error}`, 6000);
                     showNotice(commandErrorToNotice({ code: "model_load_failed", message: payload.error }, "Model failed to load"));
-                    // Nothing can transcribe this recording: discard it.
+                    // A dictation can't be transcribed or pasted: discard it.
                     if (isRecordingRef.current) void cancelRecordingRef.current?.();
                     return;
                 }

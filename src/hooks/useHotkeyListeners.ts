@@ -311,7 +311,7 @@ export function useHotkeyListeners({
                 invoke("cli_ui_ready").catch(() => {});
             } else {
                 unsub1(); unsub2(); unsubToggle(); unsub3(); unsub4();
-                unsub5(); unsub6(); unsubWriteError(); unsub8(); unsub9();
+                unsub5(); unsub6(); unsubWriteError(); unsubAudioDropped(); unsubLengthLimit(); unsub8(); unsub9();
             }
         };
 

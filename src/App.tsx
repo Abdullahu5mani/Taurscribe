@@ -397,6 +397,11 @@ function App() {
     setSessionLatency,
   });
 
+  // Covers banner, tray, auto-record, hotkey and external/native starts alike.
+  useEffect(() => {
+    if (isRecording && (isDualChannelRecording || isInPersonRecording)) setNavMode("meetings");
+  }, [isRecording, isDualChannelRecording, isInPersonRecording]);
+
   const captureBusyRef = useSyncedRef(isRecording || isVoiceEnrolling);
   const {
     activeEngine, setActiveEngine, activeEngineRef,

@@ -568,12 +568,18 @@ pub(super) fn generate_meeting_sample_in(conn: &Connection, meeting_id: i64, spe
     }
     // Decode packets and retain only enough selected speech to offer a new
     // preview. A multi-hour recording must not become several full PCM buffers.
+    // Decoding stops as soon as the speech is collected (or the speaker's last
+    // interval has passed) instead of running to the end of a long recording.
+    const ENOUGH: &str = "\u{0}preview-speech-collected";
     let mut speech = Vec::new();
     let mut offset=0usize;
     let mut next=0usize;
-    let (_,rate)=crate::audio_decode::decode_audio_mono_stream_strict(Path::new(&audio), |part,rate,_,_| {
+    let mut seen_rate=None;
+    let decoded=crate::audio_decode::decode_audio_mono_stream_strict(Path::new(&audio), |part,rate,_,_| {
+        seen_rate=Some(rate);
         let packet_end=offset.saturating_add(part.len());
         let cap=rate as usize * 15 * (excluded.len()+1);
+        if next >= merged.len() || speech.len() >= cap { return Err(ENOUGH.into()); }
         while next < merged.len() && speech.len() < cap {
             let (start,end)=merged[next];
             let frame=|ms:u64| (ms as u128 * rate as u128 / 1000).min(usize::MAX as u128) as usize;
@@ -584,7 +590,12 @@ pub(super) fn generate_meeting_sample_in(conn: &Connection, meeting_id: i64, spe
             if end<=packet_end { next+=1; } else { break; }
         }
         offset=packet_end;Ok(())
-    })?;
+    });
+    let rate = match decoded {
+        Ok((_, rate)) => rate,
+        Err(error) if error.contains(ENOUGH) => seen_rate.ok_or("Recording has no audio")?,
+        Err(error) => return Err(error),
+    };
     let pcm = crate::audio_preprocess::resample_mono_to_16k(&speech, rate)?;
     // Listening previews can be shorter than the five seconds required for
     // enrolling a voiceprint. Enrollment keeps its separate speech-length check.

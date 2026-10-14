@@ -280,6 +280,8 @@ pub fn join_cancellable(paths: &[String], dest: &Path, check: impl Fn() -> Resul
             let mut resampler = None;
             let mut write = |samples: &[f32]| -> Result<(), String> {
                 check()?;
+                // Fail clearly instead of writing a WAV whose length wraps.
+                crate::audio::ensure_wav_fits(&spec, total_frames + samples.len() as u64, "The combined recording")?;
                 for &sample in samples {
                     if !sample.is_finite() {
                         return Err("Recording contains invalid audio samples".into());

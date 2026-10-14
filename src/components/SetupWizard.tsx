@@ -917,6 +917,8 @@ function StepPermissions({
   const isMac = platform === 'macos';
 
   const [micStatus, setMicStatus] = useState<string>('checking');
+  const [audioStatus, setAudioStatus] = useState<string>('checking');
+  const [audioRequesting, setAudioRequesting] = useState(false);
   const [accGranted, setAccGranted] = useState<boolean | null>(null);
   const [inputGranted, setInputGranted] = useState<boolean | null>(null);
   const [restartNeeded, setRestartNeeded] = useState(false);
@@ -963,14 +965,26 @@ function StepPermissions({
   const micOk = micStatus === 'granted';
   const accOk = accGranted === true;
   const inputOk = inputGranted === true;
+  const audioOk = audioStatus === 'granted' || audioStatus === 'not_required';
+  const allGranted = micOk && audioOk && accOk && inputOk;
 
   // Auto-advance once the initial status check confirms everything is already granted.
   // This avoids showing the permissions step at all on repeat launches.
   useEffect(() => {
-    if (initialCheckDone && micOk && accOk && inputOk) {
+    if (initialCheckDone && allGranted) {
       onNext();
     }
-  }, [initialCheckDone, micOk, accOk, inputOk, onNext]);
+  }, [initialCheckDone, allGranted, onNext]);
+
+  const requestAudio = async () => {
+    setAudioRequesting(true);
+    try {
+      if (audioStatus === 'denied') await invoke('open_system_audio_settings');
+      else await invoke('request_system_audio_permission');
+    } catch { setAudioStatus('error'); }
+    setAudioRequesting(false);
+    await checkStatuses();
+  };
 
   const requestMic = async () => {
     setMicRequesting(true);
@@ -1015,7 +1029,7 @@ function StepPermissions({
     <>
       <p className="setup-eyebrow">Step 8 of {totalSteps}</p>
       <h2 className="setup-heading">Permissions</h2>
-      <p className="setup-sub">Three permissions needed for recording, hotkeys, and typing text system-wide.</p>
+      <p className="setup-sub">Permissions for your microphone, meeting audio, hotkeys, and typing text into other apps.</p>
 
       <div className="perm-list">
         {/* ── Microphone ─────────────────────────────── */}
@@ -1058,6 +1072,27 @@ function StepPermissions({
                       {micRequesting ? 'Requesting…' : 'Grant Access'}
                     </button>
             }
+          </div>
+        </div>
+
+        <div className={`perm-row${audioOk ? ' perm-row--granted' : ''}`}>
+          <div className="perm-icon" aria-hidden="true">♪</div>
+          <div className="perm-info">
+            <div className="perm-name">System Audio Recording</div>
+            <div className="perm-desc">Record other participants in browser and app meetings.
+              {audioStatus === 'denied' && ' Enable Taurscribe in Screen & System Audio Recording, then quit and reopen it.'}
+              {audioStatus === 'unsupported' && ' Requires macOS 14.2 or later.'}
+              {audioStatus === 'error' && ' Could not check access. Retry before recording a meeting.'}
+            </div>
+          </div>
+          <div className="perm-action">
+            {audioOk ? <span data-testid="wizard-perm-audio-ok" className="perm-badge perm-badge--ok" role="status">Granted</span>
+              : audioStatus === 'unsupported' ? <span className="perm-badge perm-badge--denied" role="status">Update macOS</span>
+              : <button type="button" data-testid="wizard-perm-audio-grant-btn" className="setup-btn setup-btn--primary perm-btn"
+                  onClick={requestAudio} disabled={audioRequesting}
+                  aria-label={audioStatus === 'denied' ? 'Open System Audio Recording Settings' : 'Grant System Audio Recording Access'}>
+                  {audioRequesting ? 'Requesting…' : audioStatus === 'denied' ? 'Open Settings' : 'Grant Access'}
+                </button>}
           </div>
         </div>
 
@@ -1155,9 +1190,9 @@ function StepPermissions({
           data-testid="wizard-perm-next-btn"
           className="setup-btn setup-btn--primary"
           onClick={onNext}
-          aria-label={micOk && accOk && inputOk ? 'Continue to next step' : 'Skip permissions for now'}
+          aria-label={allGranted ? 'Continue to next step' : 'Skip permissions for now'}
         >
-          {micOk && accOk && inputOk ? 'Continue →' : 'Skip for now →'}
+          {allGranted ? 'Continue →' : 'Skip for now →'}
         </button>
       </div>
     </>

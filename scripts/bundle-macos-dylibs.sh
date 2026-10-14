@@ -90,7 +90,9 @@ BINARY_DIR="$(dirname "$BINARY")"
 # one alphabetically can be a stale build from an older llama.cpp that lacks
 # libraries added since (libllama-common), and the app then crashes at launch.
 LLAMA_LIB_DIR=""
-for candidate in $(ls -dt "$TARGET_DIR/$TARGET_TRIPLE/release/build/llama-cpp-sys-2-"*/out/lib "$TARGET_DIR/release/build/llama-cpp-sys-2-"*/out/lib 2>/dev/null); do
+# One path per line (read -r, not $(...) word splitting): build paths can contain
+# spaces, e.g. a checkout under "Code Projects".
+while IFS= read -r candidate; do
   # (newest first; the first that has libllama and every library the binary needs wins)
   need_ok=1
   for need in $(otool -L "$BINARY" | awk '/@rpath\/libllama.*\.dylib/ {print $1}' | sed 's#@rpath/##'); do
@@ -101,7 +103,7 @@ for candidate in $(ls -dt "$TARGET_DIR/$TARGET_TRIPLE/release/build/llama-cpp-sy
     LLAMA_LIB_DIR="$candidate"
     break
   fi
-done
+done < <(ls -dt "$TARGET_DIR/$TARGET_TRIPLE/release/build/llama-cpp-sys-2-"*/out/lib "$TARGET_DIR/release/build/llama-cpp-sys-2-"*/out/lib 2>/dev/null)
 if [ -n "$LLAMA_LIB_DIR" ]; then
   echo "bundle-macos-dylibs: Copying llama-cpp dylibs from $LLAMA_LIB_DIR to $BINARY_DIR"
   cp -f "$LLAMA_LIB_DIR"/*.dylib "$BINARY_DIR/" 2>/dev/null || true

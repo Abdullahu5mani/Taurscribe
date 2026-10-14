@@ -476,7 +476,7 @@ pub fn start_dual_channel_capture(
 
                     let before = loss.file_frames.load(Ordering::Relaxed);
                     if loss.send_file(&file_tx, interleaved, 2) {
-                        let _ = app_handle.emit("recording-write-error", "Meeting recording queue overflowed; audio is incomplete and will be retained.");
+                        let _ = app_handle.emit("recording-audio-dropped", "The disk fell behind and a moment of meeting audio was lost. Recording continues; the recording will be kept.");
                     }
                     dropped_file_samples += loss.file_frames.load(Ordering::Relaxed) - before;
                     if whisper_tx.try_send(mono_mix).is_err() {
@@ -536,7 +536,7 @@ pub fn start_dual_channel_capture(
         if remaining > 0 {
             let before = loss.file_frames.load(Ordering::Relaxed);
             if loss.send_file(&file_tx, interleaved, 2) {
-                let _ = app_handle.emit("recording-write-error", "Meeting recording tail could not be written; audio is incomplete and will be retained.");
+                let _ = app_handle.emit("recording-audio-dropped", "The last moment of the meeting audio could not be saved; the recording will be kept.");
             }
             dropped_file_samples += loss.file_frames.load(Ordering::Relaxed) - before;
             if whisper_tx.try_send(mono_mix).is_err() {

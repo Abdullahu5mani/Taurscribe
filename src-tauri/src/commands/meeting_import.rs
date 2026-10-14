@@ -276,6 +276,7 @@ pub async fn reseparate_meeting_speakers(app: AppHandle, state: State<'_, AudioS
             } else { (samples, rate, channels) };
             if channels == 0 || channels > u16::MAX as u32 { return Err("Invalid meeting audio channel count".into()); }
             let spec = hound::WavSpec { channels: channels as u16, sample_rate: rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+            crate::audio::ensure_wav_fits(&spec, samples.len() as u64, "This meeting's recording")?;
             let mut writer = hound::WavWriter::create(&wav, spec).map_err(|e| e.to_string())?;
             for (index, sample) in samples.into_iter().enumerate() { if index % 48000 == 0 { crate::meeting_job::check(&cancel)?; } writer.write_sample(sample).map_err(|e| e.to_string())?; }
             writer.finalize().map_err(|e| e.to_string())?;

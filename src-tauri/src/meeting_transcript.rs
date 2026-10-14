@@ -211,8 +211,14 @@ pub fn chunk_ranges(pcm: &[f32]) -> Vec<(usize, usize)> {
             ((target - 2 * 16000)..=(target + 2 * 16000))
                 .step_by(1600)
                 .min_by(|a, b| {
-                    let energy =
-                        |i: usize| pcm[i - 800..i + 800].iter().map(|s| s * s).sum::<f32>();
+                    // Clamped: a candidate can sit within 50 ms of the end
+                    // (a remainder of 32.00–32.05 s after `start`).
+                    let energy = |i: usize| {
+                        pcm[i.saturating_sub(800)..(i + 800).min(pcm.len())]
+                            .iter()
+                            .map(|s| s * s)
+                            .sum::<f32>()
+                    };
                     energy(*a).total_cmp(&energy(*b))
                 })
                 .unwrap_or(target)
@@ -221,4 +227,21 @@ pub fn chunk_ranges(pcm: &[f32]) -> Vec<(usize, usize)> {
         start = end;
     }
     ranges
+}
+
+#[cfg(test)]
+mod chunk_range_tests {
+    use super::chunk_ranges;
+
+    #[test]
+    fn a_cut_near_the_end_does_not_read_past_the_audio() {
+        // 32.03 s: the last candidate cut is 30 ms before the end.
+        for len in [512_400usize, 512_000 + 1, 512_799, 990_400] {
+            let pcm = vec![0.1f32; len];
+            let ranges = chunk_ranges(&pcm);
+            assert_eq!(ranges.first().map(|r| r.0), Some(0));
+            assert_eq!(ranges.last().map(|r| r.1), Some(len));
+            assert!(ranges.windows(2).all(|w| w[0].1 == w[1].0), "contiguous: {ranges:?}");
+        }
+    }
 }

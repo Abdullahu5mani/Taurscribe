@@ -88,6 +88,30 @@ impl CaptureLoss {
     }
 }
 
+/// Most samples one WAV written through hound can hold. Its data length is a
+/// u32 that wraps silently past 4 GiB, and a wrapped header makes every reader
+/// see only part of the file (a 3.5-hour stereo call read back as ~24 minutes).
+/// A little room is left for the header chunks counted in the RIFF size.
+pub fn wav_sample_capacity(spec: &hound::WavSpec) -> u64 {
+    let bytes_per_sample = (spec.bits_per_sample as u64).div_ceil(8).max(1);
+    (u32::MAX as u64 - 4096) / bytes_per_sample
+}
+
+/// The capacity of `spec` as a length people understand ("about 3.1 hours").
+pub fn wav_capacity_label(spec: &hound::WavSpec) -> String {
+    let frames = wav_sample_capacity(spec) / spec.channels.max(1) as u64;
+    let hours = frames as f64 / spec.sample_rate.max(1) as f64 / 3600.0;
+    format!("about {:.1} hours", (hours * 10.0).floor() / 10.0)
+}
+
+/// Error for a WAV that would hold more than `wav_sample_capacity` samples.
+pub fn ensure_wav_fits(spec: &hound::WavSpec, samples: u64, what: &str) -> Result<(), String> {
+    if samples > wav_sample_capacity(spec) {
+        return Err(format!("{what} is longer than a single recording file can hold ({})", wav_capacity_label(spec)));
+    }
+    Ok(())
+}
+
 /// Sample formats `build_input_stream_f32` can open (everything it converts).
 pub fn is_supported_input_format(format: cpal::SampleFormat) -> bool {
     use cpal::SampleFormat as F;
@@ -168,6 +192,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wav_capacity_matches_the_u32_data_length() {
+        let call = hound::WavSpec { channels: 2, sample_rate: 48_000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+        assert!(wav_sample_capacity(&call) * 4 <= u32::MAX as u64);
+        assert_eq!(wav_capacity_label(&call), "about 3.1 hours");
+        let import = hound::WavSpec { channels: 1, ..call };
+        assert_eq!(wav_capacity_label(&import), "about 6.2 hours");
+        assert!(ensure_wav_fits(&import, wav_sample_capacity(&import), "Import").is_ok());
+        assert!(ensure_wav_fits(&import, wav_sample_capacity(&import) + 1, "Import").is_err());
+    }
+
+        #[test]
     fn full_file_queue_counts_frames_and_notifies_once() {
         let loss = CaptureLoss::default();
         let (tx, _rx) = crossbeam_channel::bounded(1);

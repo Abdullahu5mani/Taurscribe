@@ -185,6 +185,8 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         case "is_apple_silicon": return !DEMO_WINDOWS;
         case "get_system_info": return { cpu_name: "Apple M4", cpu_cores: 10, ram_total_gb: 16, gpu_name: "Apple M4", cuda_available: false, vram_gb: null, backend_hint: "Metal" };
         case "check_microphone_permission": return "granted";
+        case "check_meeting_permissions": return { microphone: "granted", system_audio: "granted" };
+        case "request_system_audio_permission": return "granted";
         case "check_accessibility_permission":
         case "check_input_monitoring_permission": return true;
         case "list_input_devices": return ["MacBook Air Microphone", "AirPods Pro"];

@@ -683,8 +683,12 @@ impl MeetingDetectorManager {
                     }
                 }
 
-                // 2. Periodic reconciliation with real OS scan
-                let scanned = platform_impl::scan_meetings();
+                // 2. Periodic reconciliation with real OS scan. It can walk a
+                // browser's accessibility tree and run osascript, so it runs on a
+                // blocking thread rather than an async-runtime worker.
+                let scanned = tauri::async_runtime::spawn_blocking(platform_impl::scan_meetings)
+                    .await
+                    .unwrap_or_default();
                 let mut closed_meetings = Vec::new();
                 let mut adopted_meetings = Vec::new();
                 {

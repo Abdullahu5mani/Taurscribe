@@ -163,10 +163,27 @@ test("a missing chosen mic falls back to another device with a notice", async ()
 test("a failing recording writer stops the recording and keeps the message up", async () => {
     refs.isRecordingRef.current = true;
     await mount();
-    await fire("recording-write-error", "Recording queue overflowed; audio is incomplete and will be retained.");
+    await fire("recording-write-error", "Could not write recording /tmp/r.wav: disk full");
     await wait(0);
     expect(events).toEqual(["stop"]);
-    expect(statuses[0]).toContain("audio is incomplete and will be retained");
+    expect(statuses[0]).toContain("disk full");
+});
+
+test("a brief disk stall that drops audio warns but keeps recording", async () => {
+    refs.isRecordingRef.current = true;
+    await mount();
+    await fire("recording-audio-dropped", "The disk fell behind and a moment of audio was lost. Recording continues; the recording will be kept.");
+    await wait(0);
+    expect(events).toEqual([]);
+    expect(statuses[0]).toContain("Recording continues");
+});
+
+test("a full recording file stops the recording so the saved part is processed", async () => {
+    refs.isRecordingRef.current = true;
+    await mount();
+    await fire("recording-length-limit", "Recording reached the longest a single recording can be (about 3.1 hours).");
+    await wait(0);
+    expect(events).toEqual(["stop"]);
 });
 
 test("unmounting removes every listener", async () => {

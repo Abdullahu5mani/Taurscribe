@@ -255,14 +255,15 @@ pub async fn start_recording(
                     match target_engine {
                         ASREngine::Whisper => {
                             let mut model = state.whisper.lock().unwrap();
-                            if super::file_transcription::file_model_needs_load(Some(id), model.get_current_model().map(String::as_str))? {
+                            if recording_model_needs_load(id, model.get_current_model().map(String::as_str)) {
                                 model.initialize(Some(id), cpu)?;
                             }
                         }
                         engine => {
                             let manager = state.gguf_manager(engine).unwrap();
                             let mut model = manager.lock().unwrap();
-                            if super::file_transcription::file_model_needs_load(Some(id), model.get_status().model_id.as_deref())? {
+                            let status = model.get_status();
+                            if recording_model_needs_load(id, status.loaded.then_some(status.model_id.as_deref()).flatten()) {
                                 model.initialize(Some(id), cpu)?;
                             }
                         }
@@ -329,7 +330,15 @@ fn model_is_unloaded(state: &AudioState, engine: ASREngine, model_id: &str) -> R
         ASREngine::Whisper => state.whisper_snapshot().model,
         other => state.gguf_snapshot(other).and_then(|s| if s.loaded { s.model_id } else { None }),
     };
-    super::file_transcription::file_model_needs_load(Some(model_id), loaded.as_deref())
+    Ok(recording_model_needs_load(model_id, loaded.as_deref()))
+}
+
+/// Whether starting a recording with `requested` must load it. Unlike a queued
+/// file job (which must not silently run on a different model), a dictation
+/// asks for the model the UI has selected: if another model of the same engine
+/// is loaded (a CLI import swapped it, say), load the selected one.
+fn recording_model_needs_load(requested: &str, loaded: Option<&str>) -> bool {
+    loaded != Some(requested)
 }
 
 /// Loads `model_id` for `engine` on its own thread while a recording is already
@@ -640,12 +649,26 @@ fn spawn_writer_thread(
     std::thread::spawn(move || -> Result<(), String> {
         let mut writer = writer;
         let write_err = |e: hound::Error| format!("Could not write recording {}: {e}", path.display());
+        // Stop at the WAV size limit with a valid header instead of letting the
+        // length wrap (which loses all but the last part of a long recording).
+        let spec = writer.spec();
+        let capacity = crate::audio::wav_sample_capacity(&spec);
+        let mut written = 0u64;
+        let mut full = false;
         let result = (|| -> Result<(), String> {
             loop {
                 match file_rx.recv_timeout(std::time::Duration::from_millis(50)) {
                     Ok(samples) => {
                         for sample in samples {
+                            if written >= capacity {
+                                full = true;
+                                break;
+                            }
                             writer.write_sample(sample).map_err(write_err)?;
+                            written += 1;
+                        }
+                        if full {
+                            break;
                         }
                         // macOS fix: CoreAudio may keep the audio callback alive
                         // briefly after Stream::drop() when called from a non-main
@@ -667,13 +690,34 @@ fn spawn_writer_thread(
             // Drain samples already captured before the stop signal.
             while let Ok(samples) = file_rx.try_recv() {
                 for sample in samples {
+                    if written >= capacity {
+                        full = true;
+                        break;
+                    }
                     writer.write_sample(sample).map_err(write_err)?;
+                    written += 1;
                 }
             }
             writer
                 .finalize()
                 .map_err(|e| format!("Could not finalize recording {}: {e}", path.display()))
         })();
+        if full && result.is_ok() {
+            // The file is complete up to the limit. Ask the UI to stop (which
+            // processes what was saved) and discard anything still arriving.
+            let message = format!(
+                "Recording reached the longest a single recording can be ({}). It was stopped and everything up to this point is saved.",
+                crate::audio::wav_capacity_label(&spec)
+            );
+            eprintln!("[WARN] {message}");
+            let _ = app.emit("recording-length-limit", message);
+            while !stop.load(Ordering::Relaxed) {
+                match file_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(_) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        }
         match &result {
             Ok(()) => println!("WAV file saved."),
             Err(message) => {
@@ -910,7 +954,7 @@ fn start_mic_stream(app_handle: &AppHandle, mic: MicConfig, sinks: CaptureSinks)
         move |data: &[f32]| {
             // File writer always gets raw (unprocessed) audio
             if capture_loss.send_file(&file_tx, data.to_vec(), channels) {
-                let _ = app_for_capture.emit("recording-write-error", "Recording queue overflowed; audio is incomplete and will be retained.");
+                let _ = app_for_capture.emit("recording-audio-dropped", "The disk fell behind and a moment of audio was lost. Recording continues; the recording will be kept.");
             }
 
             let mono_data: Vec<f32> = if channels > 1 {
@@ -2993,6 +3037,18 @@ mod final_pass_cancellation_tests {
         let mut calls=0;
         let text=transcribe_final_pass_chunks(&vec![0.;16000*600],ASREngine::Granite,None,|_|{calls+=1;Ok(format!("chunk{calls}"))}).unwrap();
         assert_eq!(calls,4);assert_eq!(text,"chunk1 chunk2 chunk3 chunk4");
+    }
+}
+
+#[cfg(test)]
+mod recording_model_tests {
+    use super::recording_model_needs_load;
+
+    #[test]
+    fn a_different_model_of_the_same_engine_is_replaced_not_an_error() {
+        assert!(recording_model_needs_load("whisper-large-v3-turbo", Some("whisper-small-en")));
+        assert!(recording_model_needs_load("whisper-large-v3-turbo", None));
+        assert!(!recording_model_needs_load("whisper-large-v3-turbo", Some("whisper-large-v3-turbo")));
     }
 }
 

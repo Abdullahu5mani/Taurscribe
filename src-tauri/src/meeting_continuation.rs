@@ -217,8 +217,11 @@ pub fn join_wavs(first: &Path, second: &Path, out: &Path) -> Result<(), String> 
     if b.spec() != spec {
         return Err(format!("recordings differ ({:?} vs {:?})", spec, b.spec()));
     }
-    let mut w = hound::WavWriter::create(out, spec).map_err(|e| e.to_string())?;
     let gap = (spec.sample_rate as f32 * GAP_SECONDS) as usize * spec.channels as usize;
+    // Both parts must fit one WAV; otherwise the caller saves a separate meeting
+    // rather than writing a joined file whose length wraps.
+    crate::audio::ensure_wav_fits(&spec, a.len() as u64 + gap as u64 + b.len() as u64, "The continued meeting")?;
+    let mut w = hound::WavWriter::create(out, spec).map_err(|e| e.to_string())?;
     match spec.sample_format {
         hound::SampleFormat::Float => {
             for s in a.into_samples::<f32>() {

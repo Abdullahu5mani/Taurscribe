@@ -1747,7 +1747,12 @@ fn render_meeting_notes(detail: &MeetingDetailRecord, format: &str) -> Result<St
 pub async fn scan_active_meetings(
     state: State<'_, AudioState>,
 ) -> Result<Vec<MeetingInfo>, String> {
-    Ok(state.meeting_detector.scan())
+    // Scanning blocks (browser accessibility walk, osascript): keep it off the
+    // async runtime's workers.
+    let detector = state.meeting_detector.clone();
+    tauri::async_runtime::spawn_blocking(move || detector.scan())
+        .await
+        .map_err(|e| format!("scan_active_meetings task failed: {e}"))
 }
 
 #[tauri::command]
