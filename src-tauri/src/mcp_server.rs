@@ -123,10 +123,17 @@ fn strip_bom(path: &std::path::Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
+/// settings.json as JSON. It may start with a byte-order mark: this process (the
+/// MCP server) never runs `strip_settings_bom`, and the app reads some settings
+/// before it does.
+pub fn parse_settings(text: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(text.strip_prefix('\u{feff}').unwrap_or(text)).ok()
+}
+
 fn enabled() -> bool {
     settings_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|s| parse_settings(&s))
         .and_then(|v| v.get(ENABLED_KEY).and_then(Value::as_bool))
         .unwrap_or(false)
 }
@@ -308,7 +315,8 @@ fn search(db: &Connection, query: &str, kind: Option<&str>, from: Option<String>
             .map_err(|e| e.to_string())?;
         for (id, at, k, text, src) in rows.filter_map(Result::ok) {
             let from_file = if k == "file" { format!(" · {}", src.unwrap_or_default()) } else { String::new() };
-            out.push(format!("- {k} #{id} · {}{from_file}\n  {}", &at[..16.min(at.len())], snippet(&text, words[0])));
+            let line = format!("- {k} #{id} · {}{from_file}\n  {}", &at[..16.min(at.len())], snippet(&text, words[0]));
+            out.push((at, line));
         }
     }
 
@@ -327,10 +335,15 @@ fn search(db: &Connection, query: &str, kind: Option<&str>, from: Option<String>
             .query_map(params_from_iter(args), |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?)))
             .map_err(|e| e.to_string())?;
         for (id, at, title, platform, text) in rows.filter_map(Result::ok) {
-            out.push(format!("- meeting #{id} · {} · {title} ({platform})\n  {}", &at[..16.min(at.len())], snippet(&text, words[0])));
+            let line = format!("- meeting #{id} · {} · {title} ({platform})\n  {}", &at[..16.min(at.len())], snippet(&text, words[0]));
+            out.push((at, line));
         }
     }
 
+    // Each kind was limited on its own: keep the newest `limit` of both.
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.truncate(limit.max(0) as usize);
+    let out: Vec<String> = out.into_iter().map(|(_, line)| line).collect();
     Ok(if out.is_empty() { format!("Nothing matched “{query}”.") } else { format!("{} result(s) for “{query}”:\n{}", out.len(), out.join("\n")) })
 }
 
@@ -552,6 +565,24 @@ mod tests {
         assert!(dated.contains("file #2") && !dated.contains("#1 ") && !dated.contains("meeting"), "{dated}");
         assert!(search(&d, "budget sarah", None, None, None, 20).unwrap().contains("dictation #1"));
         assert!(search(&d, "100%", None, None, None, 20).unwrap().starts_with("Nothing"));
+    }
+
+    #[test]
+    fn search_limit_counts_every_kind_and_keeps_the_newest() {
+        let d = db();
+        let two = search(&d, "budget", None, None, None, 2).unwrap();
+        assert!(two.starts_with("2 result(s)"), "{two}");
+        assert!(two.contains("meeting #7") && two.contains("file #2") && !two.contains("dictation #1"), "{two}");
+        assert!(two.find("meeting #7") < two.find("file #2"), "newest first: {two}");
+    }
+
+    #[test]
+    fn settings_saved_with_a_byte_order_mark_still_parse() {
+        // The MCP server runs in its own process: the app's startup strip may never have run.
+        let on = parse_settings("\u{feff}{\"mcp_enabled\": true}");
+        assert_eq!(on.and_then(|v| v.get(ENABLED_KEY).and_then(Value::as_bool)), Some(true));
+        assert!(parse_settings("{\"mcp_enabled\": false}").is_some());
+        assert!(parse_settings("not json").is_none());
     }
 
     #[test]
