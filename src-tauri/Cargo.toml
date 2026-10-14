@@ -311,6 +311,7 @@ whisper-rs = { git = "https://codeberg.org/tazz4843/whisper-rs.git" }
 ort = { version = "2.0.0-rc.12", features = ["download-binaries", "xnnpack", "half"] }
 
 [dev-dependencies]
+proptest = "1"
 
 # Speed up dev builds by optimizing dependencies but not your code
 [profile.dev]
