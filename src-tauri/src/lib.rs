@@ -488,6 +488,7 @@ pub fn run() {
             commands::get_meeting_platform_counts,
             commands::get_meeting_detail,
             commands::update_meeting,
+            commands::update_meeting_title,
             commands::save_meeting_review,
             commands::delete_meeting,
             commands::rename_speaker,

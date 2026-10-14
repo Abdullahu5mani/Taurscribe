@@ -73,12 +73,13 @@ fn parse(json: &str) -> Option<Vec<f32>> {
 }
 
 /// Keeps one more voiceprint for a person (a clip already kept is ignored).
-pub(crate) fn add_voiceprint(conn: &Connection, person_id: &str, embedding: &[f32], clip: Option<&str>, meeting_id: Option<i64>) {
-    let Ok(json) = serde_json::to_string(embedding) else { return };
-    let _ = conn.execute(
+pub(crate) fn add_voiceprint(conn: &Connection, person_id: &str, embedding: &[f32], clip: Option<&str>, meeting_id: Option<i64>) -> Result<(), String> {
+    let json = serde_json::to_string(embedding).map_err(|e| e.to_string())?;
+    conn.execute(
         "INSERT OR IGNORE INTO speaker_voiceprints (person_id, embedding_json, clip_path, meeting_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![person_id, json, clip, meeting_id, Utc::now().to_rfc3339()],
-    );
+    ).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Every voiceprint of every person (one entry per sample), for matching.
@@ -292,9 +293,16 @@ pub(crate) fn find_voice_samples_in(conn: &Connection, person_id: &str, limit: u
 /// Links a meeting speaker to a vault person: their turns get the person's
 /// name, and their voice becomes one more voiceprint of the person.
 pub(crate) fn accept_voice_sample_in(conn: &Connection, person_id: &str, meeting_id: i64, speaker_id: &str) -> Result<(), String> {
+    if conn.is_autocommit() {
+        let tx=conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        accept_voice_sample_in(&tx,person_id,meeting_id,speaker_id)?;
+        return tx.commit().map_err(|e| e.to_string());
+    }
     let name: String = conn
         .query_row("SELECT name FROM speaker_vault WHERE id = ?1", params![person_id], |r| r.get(0))
         .map_err(|_| "That person is no longer in the Speaker Vault.".to_string())?;
+    let already_present: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM meeting_turns WHERE meeting_id=?1 AND speaker_id=?2)",params![meeting_id,person_id],|r|r.get(0))
+        .map_err(|e|e.to_string())?;
     let clip: Option<String> = conn
         .query_row(
             "SELECT MAX(snippet_path) FROM meeting_turns WHERE meeting_id = ?1 AND speaker_id = ?2",
@@ -313,18 +321,19 @@ pub(crate) fn accept_voice_sample_in(conn: &Connection, person_id: &str, meeting
     if changed == 0 {
         return Err("That speaker is no longer in the meeting.".into());
     }
-    let _ = conn.execute(
+    conn.execute(
         "DELETE FROM speaker_rejections WHERE person_id = ?1 AND meeting_id = ?2 AND speaker_id = ?3",
         params![person_id, meeting_id, speaker_id],
-    );
+    ).map_err(|e|e.to_string())?;
     if let Some(emb) = clip.as_deref().and_then(|c| voice_file_print(conn, &crate::diarization::voice_sample_path(c))) {
-        add_voiceprint(conn, person_id, &emb, clip.as_deref(), Some(meeting_id));
+        add_voiceprint(conn, person_id, &emb, clip.as_deref(), Some(meeting_id))?;
         refresh_average(conn, person_id)?;
     }
-    let _ = conn.execute(
-        "UPDATE speaker_vault SET meeting_count = meeting_count + 1, last_seen = ?2 WHERE id = ?1",
-        params![person_id, Utc::now().to_rfc3339()],
-    );
+    conn.execute(
+        "UPDATE speaker_vault SET meeting_count = meeting_count + ?3, last_seen = ?2 WHERE id = ?1",
+        params![person_id, Utc::now().to_rfc3339(), i64::from(!already_present)],
+    ).map_err(|e|e.to_string())?;
+    super::meetings::recount_speakers(conn,meeting_id)?;
     Ok(())
 }
 
@@ -770,7 +779,7 @@ mod tests {
     fn a_person_matches_by_their_closest_sample_not_a_blurred_average() {
         let conn = db();
         person(&conn, "p_dana", "Dana", &DANA);
-        add_voiceprint(&conn, "p_dana", &DANA_PHONE, Some("/clips/phone.wav"), None);
+        add_voiceprint(&conn, "p_dana", &DANA_PHONE, Some("/clips/phone.wav"), None).unwrap();
         let prints = load_voiceprints(&conn);
         // Her phone voice matches her exactly; the average of laptop + phone would score ~0.71.
         let (id, _, sim) = best_person(&DANA_PHONE, &prints, &[], 0.6).unwrap();
@@ -784,10 +793,10 @@ mod tests {
         let conn = db();
         person(&conn, "p_dana", "Dana", &DANA);
         for (i, v) in [[0.98, 0.0, 0.2, 0.0], [0.97, 0.0, 0.0, 0.24], [0.96, 0.0, 0.14, 0.24]].iter().enumerate() {
-            add_voiceprint(&conn, "p_dana", v, Some(&format!("/clips/d{i}.wav")), None);
+            add_voiceprint(&conn, "p_dana", v, Some(&format!("/clips/d{i}.wav")), None).unwrap();
         }
         // A wrongly added sample that is really Sam.
-        add_voiceprint(&conn, "p_dana", &SAM, Some("/clips/oops.wav"), None);
+        add_voiceprint(&conn, "p_dana", &SAM, Some("/clips/oops.wav"), None).unwrap();
         let prints = load_voiceprints(&conn);
         assert_eq!(samples_averaged(5), 2);
         assert!(best_person(&SAM, &prints, &[], 0.6).is_none(), "the odd sample alone scores ~0.5 with two averaged");
@@ -834,6 +843,32 @@ mod tests {
         assert_eq!(found[0].preview, "Budget is fine");
         assert!(found[0].similarity > found[1].similarity);
         assert_eq!(find_voice_samples_in(&conn, "p_dana", 1).unwrap().len(), 1, "limit");
+    }
+
+    #[test]
+    fn accepting_two_groups_counts_one_person_and_one_meeting() {
+        let conn=db();person(&conn,"p_dana","Dana",&DANA);meeting(&conn,2,"Planning");
+        speaker(&conn,2,"one",1,&DANA_PHONE,"First speech");speaker(&conn,2,"two",1,&DANA_PHONE,"Second speech");
+        accept_voice_sample_in(&conn,"p_dana",2,"one").unwrap();accept_voice_sample_in(&conn,"p_dana",2,"two").unwrap();
+        let (speakers,meetings):(i64,i64)=conn.query_row("SELECT m.speaker_count,v.meeting_count FROM meetings m,speaker_vault v WHERE m.id=2 AND v.id='p_dana'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!((speakers,meetings),(1,1));
+    }
+
+    #[test]
+    fn failed_sample_acceptance_rolls_back_labels_samples_and_counts() {
+        for trigger in [
+            "CREATE TRIGGER reject_sample BEFORE INSERT ON speaker_voiceprints BEGIN SELECT RAISE(ABORT,'blocked'); END;",
+            "CREATE TRIGGER reject_count BEFORE UPDATE ON speaker_vault BEGIN SELECT RAISE(ABORT,'blocked'); END;",
+        ] {
+            let conn=db();person(&conn,"p_dana","Dana",&DANA);meeting(&conn,2,"Planning");
+            speaker(&conn,2,"remote",1,&DANA_PHONE,"Budget speech");
+            let before_prints=prints_of(&conn,"p_dana");
+            conn.execute_batch(trigger).unwrap();
+            assert!(accept_voice_sample_in(&conn,"p_dana",2,"remote").is_err());
+            let id:String=conn.query_row("SELECT speaker_id FROM meeting_turns WHERE meeting_id=2",[],|r|r.get(0)).unwrap();
+            assert_eq!(id,"remote");assert_eq!(prints_of(&conn,"p_dana"),before_prints);
+            let count:i64=conn.query_row("SELECT meeting_count FROM speaker_vault WHERE id='p_dana'",[],|r|r.get(0)).unwrap();assert_eq!(count,0);
+        }
     }
 
     #[test]
@@ -885,7 +920,7 @@ mod tests {
     fn samples_can_be_removed_but_never_the_last_one() {
         let conn = db();
         person(&conn, "p_dana", "Dana", &DANA);
-        add_voiceprint(&conn, "p_dana", &DANA_PHONE, Some("/clips/phone.wav"), Some(4));
+        add_voiceprint(&conn, "p_dana", &DANA_PHONE, Some("/clips/phone.wav"), Some(4)).unwrap();
         let list = list_voiceprints_in(&conn, "p_dana").unwrap();
         assert_eq!(list.len(), 2);
         let phone = list.iter().find(|v| v.meeting_id == Some(4)).unwrap().id;

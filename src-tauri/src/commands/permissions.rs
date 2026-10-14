@@ -8,8 +8,8 @@ pub struct MeetingPermissions {
 
 #[cfg(any(target_os = "macos", test))]
 fn supports_audio_taps(version: &str) -> bool {
-    let mut parts = version.trim().split('.').filter_map(|p| p.parse::<u32>().ok());
-    match (parts.next(), parts.next()) {
+    let mut parts = version.trim().split('.');
+    match (parts.next().and_then(|p| p.parse::<u32>().ok()), parts.next().and_then(|p| p.parse::<u32>().ok())) {
         (Some(major), minor) => major > 14 || (major == 14 && minor.unwrap_or(0) >= 2),
         _ => false,
     }

@@ -48,6 +48,7 @@
     "resources": [],
     "macOS": {
       "minimumSystemVersion": "14.0",
+      "signingIdentity": "-",
       "entitlements": "Entitlements.plist",
       "infoPlist": "Info.plist"
     }

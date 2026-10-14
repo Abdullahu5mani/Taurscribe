@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { MeetingPermissions } from '../../utils/meetingPermissions';
 
@@ -7,9 +7,18 @@ export function MeetingAudioPermissions() {
     const [permissions, setPermissions] = useState<MeetingPermissions | null>(null);
     const [error, setError] = useState('');
     const [requesting, setRequesting] = useState(false);
+    const refreshVersion = useRef(0);
     const refresh = async () => {
-        try { setPermissions(await invoke<MeetingPermissions>('check_meeting_permissions')); setError(''); }
-        catch { setError('Could not verify audio permissions. Try again before recording.'); }
+        const version = ++refreshVersion.current;
+        try {
+            const result = await invoke<MeetingPermissions>('check_meeting_permissions');
+            if (version !== refreshVersion.current) return;
+            setPermissions(result); setError('');
+        } catch {
+            if (version !== refreshVersion.current) return;
+            setPermissions(null);
+            setError('Could not verify audio permissions. Try again before recording.');
+        }
     };
     useEffect(() => {
         let disposed = false;
@@ -20,12 +29,16 @@ export function MeetingAudioPermissions() {
             void refresh();
             timer = setInterval(refresh, 1500);
         }).catch(() => {});
-        return () => { disposed = true; clearInterval(timer); };
+        return () => { disposed = true; refreshVersion.current++; clearInterval(timer); };
     }, []);
     if (!isMac) return null;
     const audio = permissions?.system_audio;
     const audioOk = audio === 'granted' || audio === 'not_required';
     const micOk = permissions?.microphone === 'granted';
+    const label = (status?: string) => ({
+        granted: 'Granted', not_required: 'Granted', denied: 'Blocked',
+        restricted: 'Restricted by policy', undetermined: 'Not enabled', unsupported: 'Unavailable',
+    }[status ?? ''] ?? 'Checking…');
     const request = async () => {
         setRequesting(true);
         try {
@@ -35,7 +48,7 @@ export function MeetingAudioPermissions() {
             } else if (audio === 'denied') await invoke('open_system_audio_settings');
             else await invoke('request_system_audio_permission');
             await refresh();
-        } catch (e) { setError(String(e)); }
+        } catch { setError('Could not request recording access. Open Privacy & Security in System Settings and enable Taurscribe.'); }
         finally { setRequesting(false); }
     };
     return <div className="setting-card" data-testid="meeting-audio-permissions" style={{ marginBottom: 12 }}>
@@ -43,7 +56,7 @@ export function MeetingAudioPermissions() {
             <div className="setting-card-label"><span>Meeting audio permissions</span></div>
             <span role="status">{audioOk && micOk ? 'Ready' : 'Needs attention'}</span>
         </div>
-        <p className="setting-card-desc">Microphone: {micOk ? 'Granted' : permissions?.microphone ?? 'Checking…'} · Call audio: {audioOk ? 'Granted' : audio ?? 'Checking…'}</p>
+        <p className="setting-card-desc">Microphone: {label(permissions?.microphone)} · Call audio: {label(audio)}</p>
         {audio === 'unsupported' ? <p className="setting-card-desc">Meeting audio requires macOS 14.2 or later.</p> :
             !(audioOk && micOk) && <>
                 <p className="setting-card-desc">Allow Taurscribe in Privacy & Security → Microphone and Screen & System Audio Recording. After changing system audio access, quit and reopen Taurscribe.</p>

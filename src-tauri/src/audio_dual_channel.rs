@@ -186,6 +186,10 @@ pub fn capture_diagnostics() -> Option<CaptureDiagnostics> {
     DIAGNOSTICS.lock().ok().and_then(|d| d.clone())
 }
 
+pub fn mark_system_fallback() {
+    update_diagnostics(|d| d.fell_back_to_system = true);
+}
+
 fn update_diagnostics(f: impl FnOnce(&mut CaptureDiagnostics)) {
     if let Ok(mut guard) = DIAGNOSTICS.lock() {
         f(guard.get_or_insert_with(CaptureDiagnostics::default));
@@ -347,7 +351,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
     Ok(CaptureRig { session, mic_rx, sys_rx, mic_thread: Some(mic_thread), sys_thread: Some(sys_thread), mic_stop })
 }
 
-/// (pid, owning app bundle path) of every process currently doing audio IO.
+/// (pid, owning app bundle path) of every process currently producing output.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn current_audio_processes(sys: &mut sysinfo::System) -> Vec<(u32, std::path::PathBuf)> {
     let pids: Vec<u32> = meeting_record::meetings::audio_processes().into_iter().filter(|p| p.is_playing_audio).map(|p| p.pid).collect();
@@ -387,6 +391,13 @@ pub fn start_dual_channel_capture(
     }).unwrap_or_default();
     SYSTEM_AUDIO_RETRY.store(false, Ordering::Release);
     let rig = start_rig(target, &stop_signal, mic_device.as_deref(), loss.clone())?;
+    *DIAGNOSTICS.lock().unwrap() = Some(CaptureDiagnostics {
+        active: true,
+        target: format!("{:?}", target),
+        watchdog_app: meeting_app.as_ref().map(|a| a.display().to_string()),
+        tapped_pids: initial_tapped.iter().copied().collect(),
+        ..Default::default()
+    });
 
     let stop_combiner = stop_signal.clone();
     let stop_for_rig = stop_signal.clone();
@@ -407,6 +418,7 @@ pub fn start_dual_channel_capture(
         let mut call_health = CallAudioHealth::default();
         let mut current_target = target;
         let mut health_retries = 0;
+        let mut recovery_waiting = false;
         let mut last_call_packet = std::time::Instant::now();
         let mut last_health_check = std::time::Instant::now();
 
@@ -422,13 +434,6 @@ pub fn start_dual_channel_capture(
             }
             _ => {}
         }
-        *DIAGNOSTICS.lock().unwrap() = Some(CaptureDiagnostics {
-            active: true,
-            target: format!("{:?}", target),
-            watchdog_app: meeting_app.as_ref().map(|a| a.display().to_string()),
-            tapped_pids: tapped.iter().copied().collect(),
-            ..Default::default()
-        });
 
         let mut last_level_emit = std::time::Instant::now();
         let mut mic_sum_sq = 0.0f32;
@@ -454,7 +459,14 @@ pub fn start_dual_channel_capture(
             // Drain incoming system audio packets
             while let Ok(frames) = rig.sys_rx.try_recv() {
                 got_anything = true;
-                if !frames.is_empty() { last_call_packet = std::time::Instant::now(); }
+                if !frames.is_empty() {
+                    last_call_packet = std::time::Instant::now();
+                    if recovery_waiting {
+                        recovery_waiting = false;
+                        health_retries = 0;
+                        emit_call_audio_status(&app_handle, "restored", "Meeting audio capture reconnected.");
+                    }
+                }
                 if call_health.observe(&frames) {
                     emit_call_audio_status(&app_handle, "restored", "Call audio is coming through.");
                 }
@@ -477,13 +489,14 @@ pub fn start_dual_channel_capture(
             if stop_combiner.load(Ordering::Relaxed) { break; }
             // Absence of packets while the call app has active output is a
             // stalled tap. Delivered silent packets are ordinary quiet time.
-            let stalled = if last_health_check.elapsed() >= AUDIO_PROCESS_CHECK {
+            let check_health = last_health_check.elapsed() >= AUDIO_PROCESS_CHECK;
+            let stalled = if check_health {
                 last_health_check = std::time::Instant::now();
                 last_call_packet.elapsed() >= std::time::Duration::from_secs(5)
                     && meeting_app.as_deref().is_some_and(|app| current_audio_processes(&mut sys).iter().any(|(_, path)| path.as_path() == app))
             } else { false };
 
-            if stalled || rig.session.failure().is_some()
+            if stalled || (check_health && rig.session.failure().is_some())
                 || rig.mic_thread.as_ref().is_some_and(|t| t.is_finished())
                 || rig.sys_thread.as_ref().is_some_and(|t| t.is_finished())
             {
@@ -495,13 +508,14 @@ pub fn start_dual_channel_capture(
                     break;
                 }
                 health_retries += 1;
+                recovery_waiting = true;
                 emit_call_audio_status(&app_handle, "recovering", "Meeting audio capture was interrupted. Reconnecting…");
                 let retry_target = if health_retries == 1 { current_target } else { DualChannelTarget::System };
                 let (mic_tail, sys_tail) = restart_rig(&mut rig, retry_target, &stop_for_rig, mic_device.as_deref(), &app_handle, loss.clone());
                 mic_deque.extend(mic_tail.try_iter().flatten());
                 sys_deque.extend(sys_tail.try_iter().flatten());
                 current_target = if capture_diagnostics().is_some_and(|d| d.fell_back_to_system) { DualChannelTarget::System } else { retry_target };
-                update_diagnostics(|d| { d.tap_restarts += 1; d.target = format!("{:?}", current_target); });
+                update_diagnostics(|d| { d.tap_restarts += 1; d.target = format!("{:?}", current_target); d.fell_back_to_system |= current_target == DualChannelTarget::System; });
                 last_call_packet = std::time::Instant::now();
                 if stop_combiner.load(Ordering::Relaxed) { break; }
             }
@@ -526,8 +540,10 @@ pub fn start_dual_channel_capture(
                             mic_deque.extend(frames);
                         }
                         while let Ok(frames) = old_sys_rx.try_recv() {
+                            call_health.observe(&frames);
                             sys_deque.extend(frames);
                         }
+                        last_call_packet = std::time::Instant::now();
                         // Keep the pre-start snapshot; a helper starting during
                         // restart must remain eligible for the next check.
                         tapped.extend(new_pids);
@@ -906,6 +922,27 @@ mod tests {
     use super::{app_bundle_path, untapped_meeting_audio_pids};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn zero_packets_warn_once_and_quiet_speech_clears_the_warning() {
+        let mut health = super::CallAudioHealth::default();
+        assert!(!health.observe(&[0.0, f32::NAN]));
+        assert!(!health.needs_warning(std::time::Duration::from_secs(14)));
+        assert!(health.needs_warning(std::time::Duration::from_secs(15)));
+        assert!(!health.needs_warning(std::time::Duration::from_secs(30)));
+        assert!(health.observe(&[0.00001]));
+        assert!(health.seen);
+        assert!(!health.needs_warning(std::time::Duration::from_secs(600)));
+        assert!(!health.observe(&[0.0]));
+    }
+
+    #[test]
+    fn caller_warning_does_not_change_the_recorded_samples() {
+        let mut mic = vec![0.1, 0.2, 0.3].into();
+        let mut sys = vec![0.0, 0.0, 0.0].into();
+        let (stereo, _) = super::interleave_and_mix(&mut mic, &mut sys, 3);
+        assert_eq!(stereo, vec![0.1, 0.0, 0.2, 0.0, 0.3, 0.0]);
+    }
 
     #[test]
     fn shutdown_drains_full_queues_before_join_and_preserves_the_tail() {

@@ -594,6 +594,12 @@ mod platform_impl {
 /// before it is reported as ended.
 const REAPER_MISSES_BEFORE_END: u32 = 2;
 
+fn prioritize_meetings(meetings: &mut [MeetingInfo]) {
+    // A known call takes precedence over apps that merely hold a microphone
+    // and play audio (for example a remote desktop audio bridge).
+    meetings.sort_by_key(|m| (!m.should_record, std::cmp::Reverse(m.confidence)));
+}
+
 pub struct MeetingDetectorManager {
     active_meetings: Arc<Mutex<Vec<MeetingInfo>>>,
     watcher_handle: Arc<Mutex<Option<platform_impl::WatcherHandle>>>,
@@ -626,6 +632,7 @@ impl MeetingDetectorManager {
                 cache.push(tm.clone());
             }
         }
+        prioritize_meetings(&mut cache);
         cache.clone()
     }
 
@@ -765,7 +772,8 @@ impl MeetingDetectorManager {
     }
 
     pub fn get_status(&self) -> MeetingDetectionStatus {
-        let cache = self.active_meetings.lock().unwrap().clone();
+        let mut cache = self.active_meetings.lock().unwrap().clone();
+        prioritize_meetings(&mut cache);
         MeetingDetectionStatus {
             is_watching: self.is_watching.load(Ordering::SeqCst),
             supported: cfg!(any(target_os = "macos", target_os = "windows")),
@@ -798,6 +806,18 @@ impl MeetingDetectorManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_known_meeting_precedes_an_unrelated_audio_bridge() {
+        let bridge = super::MeetingInfo {
+            pid: 1, app_name: "Jump Desktop Connect".into(), title: "".into(), url: "".into(),
+            platform: "other".into(), confidence: 90, should_record: false,
+            is_using_mic: true, is_playing_audio: true,
+        };
+        let call = super::MeetingInfo { pid: 2, platform: "meet".into(), should_record: true, confidence: 80, ..bridge.clone() };
+        let mut meetings = vec![bridge, call];
+        super::prioritize_meetings(&mut meetings);
+        assert_eq!(meetings[0].pid, 2);
+    }
     use super::*;
     use std::path::Path;
 

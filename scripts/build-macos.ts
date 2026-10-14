@@ -67,3 +67,10 @@ console.log(`build-macos: Creating app bundle${targetTriple ? ` for ${targetTrip
 // (--skip-jenkins), which fails in non-interactive or restricted macOS sessions.
 run("bun", tauriArgs, { cwd: root, env: buildEnv });
 
+// Core Audio permission requests belong to the signed app bundle. A signed
+// executable copied into an unsigned bundle can leave Info.plist unbound.
+const appBundle = join(root, "src-tauri", "target", ...(targetTriple ? [targetTriple] : []), "release", "bundle", "macos", "Taurscribe.app");
+console.log("build-macos: Verifying app signature and meeting audio permission metadata...");
+run("codesign", ["--verify", "--deep", "--strict", appBundle]);
+run("plutil", ["-extract", "NSAudioCaptureUsageDescription", "raw", "-o", "/dev/null", join(appBundle, "Contents", "Info.plist")]);
+

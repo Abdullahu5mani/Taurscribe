@@ -705,3 +705,66 @@ test("both completion events preserve expanded history and Load more", async () 
         expect(more()).toBeDefined();
     }
 });
+for (const event of ["meeting-processing-started", "meeting-processing-finished"]) {
+    test(`${event} during hydration supersedes the stale snapshot`, async () => {
+        let snapshot!: (status: any) => void;
+        invokeOverride = cmd => cmd === "get_meeting_import_status" ? new Promise(resolve => { snapshot = resolve; }) : undefined;
+        const view = render(); await view.settle();
+        listeners.get(event)!({ payload: event.endsWith("started") ? { title: "New job", platform: "meet" } : { meeting_id: 1, error: null } });
+        snapshot({ title: "Old job", running: true, startedAt: Date.now(), preview: null }); await view.settle();
+        expect(textOf(view.handle.current)).not.toContain("Old job");
+        expect(!!byTest(view.handle.current, "meetings-processing-status")).toBe(event.endsWith("started"));
+    });
+}
+
+test("title saves run in order, preserve notes, and deduplicate Enter plus blur", async () => {
+    const writes: { args: any; resolve: () => void }[] = [];
+    invokeOverride = (cmd, args) => cmd === "update_meeting_title" ? new Promise<void>(resolve => { writes.push({ args, resolve }); }) : undefined;
+    const view = render(); await view.settle();
+    const input = () => byTest(view.handle.current, "meetings-detail-title-input");
+    input().props.onChange({ target: { value: "First" } }); await view.settle();
+    const first = input().props.onBlur(); await view.settle();
+    input().props.onChange({ target: { value: "Latest" } }); await view.settle();
+    const last = input().props.onBlur(); void input().props.onBlur(); await view.settle();
+    expect(writes).toHaveLength(1); expect(writes[0].args).toEqual({ meetingId: 1, title: "First" });
+    writes[0].resolve(); await first; await view.settle();
+    expect(writes).toHaveLength(2); expect(writes[1].args).toEqual({ meetingId: 1, title: "Latest" });
+    writes[1].resolve(); await last; await view.settle();
+    expect(input().props.value).toBe("Latest");
+    expect(calls.filter(c => c.cmd === "update_meeting")).toHaveLength(0);
+});
+
+test("reverting to the original title while a save is pending persists the reversal", async () => {
+    const writes: { args: any; resolve: () => void }[] = [];
+    invokeOverride = (cmd, args) => cmd === "update_meeting_title" ? new Promise<void>(resolve => { writes.push({ args, resolve }); }) : undefined;
+    const view = render(); await view.settle(); const input = () => byTest(view.handle.current, "meetings-detail-title-input");
+    input().props.onChange({ target: { value: "Changed" } }); await view.settle();
+    const first = input().props.onBlur(); await view.settle();
+    input().props.onChange({ target: { value: "Meeting 1" } }); await view.settle();
+    const second = input().props.onBlur();
+    writes[0].resolve(); await first; await view.settle();
+    expect(writes[1].args.title).toBe("Meeting 1");
+    writes[1].resolve(); await second;
+});
+
+test("a rejected title save is visible, retryable, and does not block the next title", async () => {
+    let count = 0;
+    invokeOverride = cmd => cmd === "update_meeting_title" ? (++count === 1 ? Promise.reject(new Error("database busy")) : Promise.resolve()) : undefined;
+    const view = render(); await view.settle(); const input = () => byTest(view.handle.current, "meetings-detail-title-input");
+    input().props.onChange({ target: { value: "Retry title" } }); await view.settle();
+    await input().props.onBlur(); await view.settle();
+    expect(textOf(byTest(view.handle.current, "meetings-toolbar-error"))).toContain("database busy");
+    await input().props.onBlur(); await view.settle(); expect(count).toBe(2);
+    expect(byTest(view.handle.current, "meetings-toolbar-error")).toBeUndefined();
+});
+
+test("a saved title from another meeting cannot replace the current title or show a stale error", async () => {
+    let reject!: (error: Error) => void;
+    invokeOverride = cmd => cmd === "update_meeting_title" ? new Promise<void>((_, fail) => { reject = fail; }) : undefined;
+    const view = render(); await view.settle();
+    byTest(view.handle.current, "meetings-detail-title-input").props.onChange({ target: { value: "Old view title" } }); await view.settle();
+    const pending = byTest(view.handle.current, "meetings-detail-title-input").props.onBlur(); await view.settle();
+    select(view.handle.current, 2); await view.settle(); reject(new Error("old view failed")); await pending; await view.settle();
+    expect(byTest(view.handle.current, "meetings-detail-title-input").props.value).toBe("Meeting 2");
+    expect(byTest(view.handle.current, "meetings-toolbar-error")).toBeUndefined();
+});

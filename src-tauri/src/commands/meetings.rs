@@ -186,29 +186,28 @@ fn new_vault_id() -> String {
 }
 
 /// Adds one meeting's voice sample to an existing vault person.
-fn record_vault_appearance(conn: &Connection, vault_id: &str, snippet: Option<&str>, candidates_json: Option<&str>, meeting_id: Option<i64>) {
+fn record_vault_appearance(conn: &Connection, vault_id: &str, snippet: Option<&str>, candidates_json: Option<&str>, meeting_id: Option<i64>, new_meeting: bool) -> Result<(), String> {
     let now = Utc::now().to_rfc3339();
-    let existing: Option<(Option<String>, i64)> = conn
+    let (emb_json, samples): (Option<String>, i64) = conn
         .query_row(
             "SELECT embedding_json, sample_count FROM speaker_vault WHERE id = ?1",
             params![vault_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .ok();
-    let Some((emb_json, samples)) = existing else { return };
+        .map_err(|e| e.to_string())?;
     let new_emb = snippet.and_then(embedding_from_wav);
     if let Some(new) = &new_emb {
-        super::voice_bank::add_voiceprint(conn, vault_id, new, snippet, meeting_id);
+        super::voice_bank::add_voiceprint(conn, vault_id, new, snippet, meeting_id)?;
     }
     let (emb_json, samples) = match (new_emb, emb_json.and_then(|j| serde_json::from_str::<Vec<f32>>(&j).ok())) {
         (Some(new), Some(cur)) => (Some(average_embedding(&cur, samples, &new)), samples + 1),
         (Some(new), None) => (Some(new), 1),
         (None, cur) => (cur, samples),
     };
-    let _ = conn.execute(
+    conn.execute(
         r#"
         UPDATE speaker_vault SET
-            meeting_count = meeting_count + 1,
+            meeting_count = meeting_count + ?7,
             sample_count = ?2,
             last_seen = ?3,
             embedding_json = COALESCE(?4, embedding_json),
@@ -222,9 +221,11 @@ fn record_vault_appearance(conn: &Connection, vault_id: &str, snippet: Option<&s
             now,
             emb_json.map(|e| serde_json::to_string(&e).unwrap_or_default()),
             snippet,
-            candidates_json
+            candidates_json,
+            i64::from(new_meeting)
         ],
-    );
+    ).map_err(|e|e.to_string())?;
+    Ok(())
 }
 
 pub fn load_vault_embeddings_internal(
@@ -458,7 +459,7 @@ fn insert_turns(tx: &Connection, meeting_id: i64, turns: &[DiarizedTurn]) -> Res
 /// Vault: only callers the diarizer linked to an enrolled person (their turns
 /// carry that person's vault id) update the vault, once per meeting. People in
 /// `already_counted` were counted for this meeting before (a continued call).
-fn record_vault_appearances(tx: &Connection, meeting_id: i64, turns: &[DiarizedTurn], already_counted: &std::collections::HashSet<String>) {
+fn record_vault_appearances(tx: &Connection, meeting_id: i64, turns: &[DiarizedTurn], already_counted: &std::collections::HashSet<String>) -> Result<(), String> {
     let mut seen = std::collections::HashSet::new();
     for t in turns.iter().filter(|t| t.channel == 1 && speaker_model_installed()) {
         if already_counted.contains(&t.speaker_id) || !seen.insert(t.speaker_id.clone()) {
@@ -469,9 +470,10 @@ fn record_vault_appearances(tx: &Connection, meeting_id: i64, turns: &[DiarizedT
             .unwrap_or(false);
         if enrolled {
             let cand_json = serde_json::to_string(&t.candidate_snippets).ok();
-            record_vault_appearance(tx, &t.speaker_id, t.snippet_path.as_deref(), cand_json.as_deref(), Some(meeting_id));
+            record_vault_appearance(tx, &t.speaker_id, t.snippet_path.as_deref(), cand_json.as_deref(), Some(meeting_id), true)?;
         }
     }
+    Ok(())
 }
 
 /// A saved meeting's turns as (speaker_id, speaker_name, start_ms, end_ms, channel,
@@ -575,7 +577,7 @@ pub fn replace_meeting_content(
         .map_err(|e| format!("Failed to clear speaker merges: {}", e))?;
     insert_turns(&tx, meeting_id, turns)?;
     let counted: std::collections::HashSet<String> = old_turns.iter().map(|t| t.0.clone()).collect();
-    record_vault_appearances(&tx, meeting_id, turns, &counted);
+    record_vault_appearances(&tx, meeting_id, turns, &counted)?;
     tx.commit().map_err(|e| format!("Failed to commit meeting: {}", e))?;
 
     // Files the old version used and neither the new one nor the vault uses.
@@ -679,7 +681,7 @@ pub(super) fn insert_meeting_with_sources(
     }
 
     insert_turns(&tx, meeting_id, turns)?;
-    record_vault_appearances(&tx, meeting_id, turns, &std::collections::HashSet::new());
+    record_vault_appearances(&tx, meeting_id, turns, &std::collections::HashSet::new())?;
 
     tx.commit().map_err(|e| format!("Failed to commit meeting: {}", e))?;
     Ok(meeting_id)
@@ -1008,6 +1010,21 @@ pub struct SpeakerRename {
     new_name: String,
 }
 
+#[tauri::command]
+pub async fn update_meeting_title(meeting_id: i64, title: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || update_meeting_title_in(&open_connection()?, meeting_id, &title))
+        .await.map_err(|e| e.to_string())?
+}
+
+fn update_meeting_title_in(conn: &Connection, meeting_id: i64, title: &str) -> Result<(), String> {
+    let title = title.trim();
+    if title.is_empty() { return Err("Meeting title cannot be empty".into()); }
+    let changed = conn.execute("UPDATE meetings SET title=?1 WHERE id=?2", params![title, meeting_id])
+        .map_err(|e| e.to_string())?;
+    if changed != 1 { return Err("Meeting no longer exists".into()); }
+    Ok(())
+}
+
 /// Save a completed meeting review as one database change. A failed speaker
 /// rename or meeting update rolls back every edit in this review.
 #[tauri::command]
@@ -1158,12 +1175,17 @@ pub async fn rename_vault_speaker(speaker_id: String, new_name: String) -> Resul
 
 fn rename_vault_speaker_internal(conn: &Connection, speaker_id: &str, name: &str) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let changed = tx.execute("UPDATE speaker_vault SET name = ?1 WHERE id = ?2", params![name, speaker_id])
+    rename_vault_speaker_in(&tx, speaker_id, name)?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+fn rename_vault_speaker_in(conn: &Connection, speaker_id: &str, name: &str) -> Result<(), String> {
+    let changed = conn.execute("UPDATE speaker_vault SET name = ?1, last_seen=?3 WHERE id = ?2", params![name, speaker_id, Utc::now().to_rfc3339()])
         .map_err(|e| e.to_string())?;
     if changed == 0 { return Err("Speaker not found in vault".into()); }
-    tx.execute("UPDATE meeting_turns SET speaker_name = ?1 WHERE speaker_id = ?2", params![name, speaker_id])
+    conn.execute("UPDATE meeting_turns SET speaker_name = ?1 WHERE speaker_id = ?2", params![name, speaker_id])
         .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
+    Ok(())
 }
 
 /// Manual labels affect only the explicitly selected stored turns. They do not
@@ -1238,14 +1260,29 @@ pub(crate) fn rename_speaker_internal(
     new_name: &str,
     update_vault: bool,
 ) -> Result<(), String> {
-    conn.execute(
+    // Review saves already own a transaction; standalone renames need the same
+    // all-or-nothing behavior for local turns, vault identity and linked turns.
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        rename_speaker_internal(&tx, meeting_id, speaker_id, new_name, update_vault)?;
+        return tx.commit().map_err(|e| e.to_string());
+    }
+    let new_name = new_name.trim();
+    if new_name.is_empty() { return Err("Speaker name cannot be empty".into()); }
+    let changed = conn.execute(
         "UPDATE meeting_turns SET speaker_name = ?1 WHERE meeting_id = ?2 AND speaker_id = ?3",
         params![new_name, meeting_id, speaker_id],
     )
     .map_err(|e| format!("Failed to rename speaker: {}", e))?;
+    if changed == 0 { return Err("That speaker is no longer in this meeting".into()); }
 
     if !update_vault {
         return Ok(());
+    }
+    let is_person: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM speaker_vault WHERE id=?1)", params![speaker_id], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if is_person {
+        return rename_vault_speaker_in(conn, speaker_id, new_name);
     }
     // Voiceprints need the speaker recognition model (Settings → Models); without
     // it the rename applies to this meeting only.
@@ -1271,18 +1308,6 @@ pub(crate) fn rename_speaker_internal(
     }
 
     let now = Utc::now().to_rfc3339();
-    let is_person: bool = conn
-        .query_row("SELECT 1 FROM speaker_vault WHERE id = ?1", params![speaker_id], |_| Ok(true))
-        .unwrap_or(false);
-    if is_person {
-        conn.execute(
-            "UPDATE speaker_vault SET name = ?1, last_seen = ?2 WHERE id = ?3",
-            params![new_name, now, speaker_id],
-        )
-        .map_err(|e| format!("Failed to rename vault speaker: {}", e))?;
-        return Ok(());
-    }
-
     // A per-meeting caller: link to an existing person with that name, or enroll.
     let existing: Option<String> = conn
         .query_row(
@@ -1293,7 +1318,9 @@ pub(crate) fn rename_speaker_internal(
         .ok();
     let person_id = match existing {
         Some(id) => {
-            record_vault_appearance(conn, &id, snippet.as_deref(), candidates.as_deref(), Some(meeting_id));
+            let already_present: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM meeting_turns WHERE meeting_id=?1 AND speaker_id=?2)", params![meeting_id, id], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            record_vault_appearance(conn, &id, snippet.as_deref(), candidates.as_deref(), Some(meeting_id), !already_present)?;
             id
         }
         None => {
@@ -1310,7 +1337,7 @@ pub(crate) fn rename_speaker_internal(
             )
             .map_err(|e| format!("Failed to enroll speaker: {}", e))?;
             if let Some(emb) = &emb {
-                super::voice_bank::add_voiceprint(conn, &id, emb, snippet.as_deref(), Some(meeting_id));
+                super::voice_bank::add_voiceprint(conn, &id, emb, snippet.as_deref(), Some(meeting_id))?;
             }
             id
         }
@@ -1320,6 +1347,7 @@ pub(crate) fn rename_speaker_internal(
         params![person_id, meeting_id, speaker_id],
     )
     .map_err(|e| format!("Failed to link speaker to vault: {}", e))?;
+    recount_speakers(conn, meeting_id)?;
     Ok(())
 }
 
@@ -1366,7 +1394,7 @@ fn speaker_merges(conn: &Connection, meeting_id: i64) -> Result<Vec<SpeakerMerge
     rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
 }
 
-fn recount_speakers(conn: &Connection, meeting_id: i64) -> Result<(), String> {
+pub(crate) fn recount_speakers(conn: &Connection, meeting_id: i64) -> Result<(), String> {
     conn.execute(
         "UPDATE meetings SET speaker_count = (SELECT COUNT(DISTINCT speaker_id) FROM meeting_turns WHERE meeting_id = ?1 AND speaker_id != 'background') WHERE id = ?1",
         params![meeting_id],
@@ -2322,6 +2350,48 @@ mod tests {
         // Next meeting: the diarizer recognized Alice in three turns.
         meeting_with(&conn, &[turn(&alice, "Alice", 1, 0), turn(&alice, "Alice", 1, 3000), turn(&alice, "Alice", 1, 6000)]);
         assert_eq!(vault_rows(&conn)[0].2, 2);
+    }
+
+    #[test]
+    fn title_only_save_preserves_notes_actions_category_and_review_state() {
+        let conn=Connection::open_in_memory().unwrap();ensure_meetings_schema(&conn).unwrap();
+        let id=meeting_with(&conn,&[turn("you","You",0,0)]);
+        conn.execute("UPDATE meetings SET summary='[\"New notes\"]',action_items='[\"New tasks\"]',category='Planning',reviewed=0 WHERE id=?1",[id]).unwrap();
+        update_meeting_title_in(&conn,id,"  Correct title  ").unwrap();
+        let saved:(String,String,String,String,bool)=conn.query_row("SELECT title,summary,action_items,category,reviewed FROM meetings WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).unwrap();
+        assert_eq!(saved,("Correct title".into(),"[\"New notes\"]".into(),"[\"New tasks\"]".into(),"Planning".into(),false));
+        assert!(update_meeting_title_in(&conn,id,"  ").is_err());
+        assert!(update_meeting_title_in(&conn,id+100,"Missing").is_err());
+    }
+
+    #[test]
+    fn meeting_rename_updates_all_linked_turns_and_rolls_back_any_failure() {
+        let conn=Connection::open_in_memory().unwrap();ensure_meetings_schema(&conn).unwrap();
+        let first=meeting_with(&conn,&[turn("remote","Speaker 1",1,0)]);
+        rename_speaker_internal(&conn,first,"remote","Alice",true).unwrap();
+        let person=vault_rows(&conn)[0].0.clone();
+        let second=meeting_with(&conn,&[turn(&person,"Alice",1,0)]);
+        rename_speaker_internal(&conn,first,&person,"Alicia",true).unwrap();
+        assert_eq!(speakers_of(&conn,first)[0].1,"Alicia");assert_eq!(speakers_of(&conn,second)[0].1,"Alicia");
+        assert_eq!(vault_rows(&conn)[0].1,"Alicia");
+        conn.execute_batch("CREATE TRIGGER reject_person_name BEFORE UPDATE OF name ON speaker_vault BEGIN SELECT RAISE(ABORT,'blocked'); END;").unwrap();
+        assert!(rename_speaker_internal(&conn,first,&person,"Lost name",true).is_err());
+        assert_eq!(speakers_of(&conn,first)[0].1,"Alicia");assert_eq!(vault_rows(&conn)[0].1,"Alicia");
+        conn.execute_batch("DROP TRIGGER reject_person_name;").unwrap();
+        conn.execute_batch(&format!("CREATE TRIGGER reject_linked_name BEFORE UPDATE OF speaker_name ON meeting_turns WHEN NEW.meeting_id={second} BEGIN SELECT RAISE(ABORT,'blocked'); END;")).unwrap();
+        assert!(rename_speaker_internal(&conn,first,&person,"Other lost name",true).is_err());
+        assert_eq!(speakers_of(&conn,first)[0].1,"Alicia");assert_eq!(speakers_of(&conn,second)[0].1,"Alicia");assert_eq!(vault_rows(&conn)[0].1,"Alicia");
+    }
+
+    #[test]
+    fn linking_two_groups_to_one_person_recounts_speakers_without_counting_the_meeting_twice() {
+        let conn=Connection::open_in_memory().unwrap();ensure_meetings_schema(&conn).unwrap();
+        let id=meeting_with(&conn,&[turn("one","Speaker 1",1,0),turn("two","Speaker 2",1,3000)]);
+        rename_speaker_internal(&conn,id,"one","Alice",true).unwrap();
+        rename_speaker_internal(&conn,id,"two","Alice",true).unwrap();
+        assert_eq!(speaker_count_of(&conn,id),1);
+        assert_eq!(vault_rows(&conn).len(),1);assert_eq!(vault_rows(&conn)[0].2,1);
+        assert_eq!(speakers_of(&conn,id)[0].0,speakers_of(&conn,id)[1].0);
     }
 
     #[test]

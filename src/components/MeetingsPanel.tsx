@@ -1,4 +1,5 @@
 import { claimAudioPlayback, releaseAudioPlayback } from "../utils/audioPlayback";
+import { serialTasks } from "../utils/serialTasks";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { SpeakerSuggestions } from "./SpeakerSuggestions";
@@ -313,6 +314,9 @@ export function MeetingsPanel({
   };
   const [processingElapsed, setProcessingElapsed] = useState(0);
   const [editingTitle, setEditingTitle] = useState("");
+  const titleWrites = useRef(serialTasks());
+  const titleRequests = useRef(new Map<number, { revision: number; title: string }>());
+  const titleRevision = useRef(0);
   const [renamingSpeakerId, setRenamingSpeakerId] = useState<string | null>(null);
   // Speaker ids like "speaker_remote_1" repeat across meetings: close any open
   // rename field when another meeting is opened.
@@ -460,10 +464,13 @@ export function MeetingsPanel({
 
   // Processing indicator lifecycle
   useEffect(() => {
-    let disposed = false; let receivedEvent = false;
+    let disposed = false; let receivedLifecycleEvent = false;
+    let pendingStage: string | undefined;
+    let pendingPreview: typeof importPreview | undefined;
     const unlisteners: Promise<() => void>[] = [
       listen<{ title: string; platform: string; job_id?: string }>("meeting-processing-started", (event) => {
-        receivedEvent = true; setProcessingStopped(false); setStoppingProcessing(false);
+        if (disposed) return;
+        receivedLifecycleEvent = true; setProcessingStopped(false); setStoppingProcessing(false);
         setProcessingError(null);
         setImportPreview(null); previewOpenRef.current = false; setShowImportPreview(false);
         setProcessingElapsed(0);
@@ -474,14 +481,17 @@ export function MeetingsPanel({
         });
       }),
       listen<{ stage: string }>("meeting-processing-progress", event => {
-        receivedEvent = true;
+        if (disposed) return;
+        pendingStage = event.payload.stage;
         setProcessing(previous => previous ? { ...previous, stage: event.payload.stage } : previous);
       }),
       listen<{ title: string; model_id?: string; paragraphs: { start_ms: number; end_ms: number; text: string }[]; completed_ms: number; total_ms: number }>("meeting-processing-preview", event => {
-        receivedEvent = true; setImportPreview(event.payload);
+        if (disposed) return;
+        pendingPreview = event.payload; setImportPreview(event.payload);
       }),
       listen<{ meeting_id: number | null; error: string | null; cancelled?: boolean }>("meeting-processing-finished", (event) => {
-        receivedEvent = true; setProcessing(null); setStoppingProcessing(false);
+        if (disposed) return;
+        receivedLifecycleEvent = true; setProcessing(null); setStoppingProcessing(false);
         const stopped=!!event.payload?.cancelled || !!event.payload?.error?.includes("Meeting processing stopped");
         setProcessingStopped(stopped);
         if (stopped) {setProcessingError(null);} else if (event.payload?.error) {
@@ -499,9 +509,9 @@ export function MeetingsPanel({
       }),
     ];
     void Promise.all(unlisteners).then(() => invoke<any>("get_meeting_import_status")).then(status => {
-      if (disposed || receivedEvent || !status) return;
-      setImportPreview(status.preview); const stopped=!!status.error?.includes("Meeting processing stopped");setProcessingStopped(stopped);setProcessingError(stopped ? null : status.error);
-      if (status.running) setProcessing({title:status.title,platform:status.platform,startedAt:status.startedAt,stage:status.stage,job_id:status.job_id});
+      if (disposed || receivedLifecycleEvent || !status) return;
+      setImportPreview(pendingPreview ?? status.preview); const stopped=!!status.error?.includes("Meeting processing stopped");setProcessingStopped(stopped);setProcessingError(stopped ? null : status.error);
+      if (status.running) setProcessing({title:status.title,platform:status.platform,startedAt:status.startedAt,stage:pendingStage ?? status.stage,job_id:status.job_id});
     }).catch(() => {});
     return () => {
       disposed = true;
@@ -715,25 +725,30 @@ export function MeetingsPanel({
 
   // ── Detail Updates ─────────────────────────────────────────────
   const handleSaveTitle = async () => {
-    if (!selectedMeeting || !editingTitle.trim() || editingTitle === selectedMeeting.title) {
+    if (!selectedMeeting || !editingTitle.trim()) {
       return;
     }
     const meetingId = selectedMeeting.id;
     const newTitle = editingTitle.trim();
+    const previous = titleRequests.current.get(meetingId);
+    if (previous?.title === newTitle || (!previous && newTitle === selectedMeeting.title)) return;
+    const revision = ++titleRevision.current;
+    titleRequests.current.set(meetingId, { revision, title: newTitle });
     try {
-      await invoke("update_meeting", {
-        meetingId,
-        title: newTitle,
-        category: selectedMeeting.category,
-        summary: selectedMeeting.summary,
-        actionItems: selectedMeeting.action_items,
-      });
+      await titleWrites.current(() => invoke("update_meeting_title", { meetingId, title: newTitle }));
+      if (titleRequests.current.get(meetingId)?.revision !== revision) return;
+      titleRequests.current.delete(meetingId);
       if (selectedMeetingIdRef.current === meetingId) {
         setSelectedMeeting((prev) => (prev?.id === meetingId ? { ...prev, title: newTitle } : prev));
+        setToolbarError("");
       }
       loadMeetings();
     } catch (err) {
       console.error("Failed to update meeting title:", err);
+      if (titleRequests.current.get(meetingId)?.revision === revision) {
+        titleRequests.current.delete(meetingId);
+        if (selectedMeetingIdRef.current === meetingId) setToolbarError(`Couldn't save the title: ${err}`);
+      }
     }
   };
 

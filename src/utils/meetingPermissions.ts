@@ -39,7 +39,7 @@ export async function ensureMeetingPermissions(isCurrent: () => boolean): Promis
         await invoke('request_system_audio_permission');
         for (let attempt = 0; attempt < 20 && isCurrent(); attempt++) {
             p = await invoke<MeetingPermissions>('check_meeting_permissions');
-            if (p.system_audio !== 'undetermined') break;
+            if (p?.system_audio !== 'undetermined') break;
             await new Promise(resolve => setTimeout(resolve, 500));
         }
     }
