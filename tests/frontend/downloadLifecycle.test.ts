@@ -1,3 +1,93 @@
+import { beforeEach, expect, mock, test } from "bun:test";
+import { renderHook } from "./hookHarness";
+
+const listeners = new Set<(event: any) => void>();
+const registrations: (() => void)[] = [];
+const calls: { command: string; args: any }[] = [];
+let delayRegistration = false;
+let commandResult: Promise<unknown>;
+let cancelResult: Promise<boolean>;
+const realEvent = { ...(await import("@tauri-apps/api/event")) };
+mock.module("@tauri-apps/api/event", () => ({ ...realEvent, listen: async (_name: string, cb: (event: any) => void) => {
+    listeners.add(cb);
+    if (delayRegistration) await new Promise<void>(resolve => registrations.push(resolve));
+    return () => listeners.delete(cb);
+} }));
+const realCore = { ...(await import("@tauri-apps/api/core")) };
+mock.module("@tauri-apps/api/core", () => ({ ...realCore, invoke: async (command: string, args: any) => {
+    calls.push({ command, args });
+    if (command === "download_model") return commandResult;
+    if (command === "cancel_download") return cancelResult;
+    throw new Error(command);
+} }));
+// Avoid loading Sonner's CSS injector into other tests' partial document fixtures.
+mock.module("sonner", () => ({ Toaster: () => null, toast: { info: () => {}, success: () => {}, error: () => {} } }));
+const { useDownloads } = await import("../../src/hooks/useDownloads");
+const emit = (status: string, bytes = 0) => {
+    for (const cb of listeners) cb({ payload: { model_id: "whisper-base", status, total_bytes: 100, downloaded_bytes: bytes } });
+};
+beforeEach(() => {
+    listeners.clear(); registrations.length = 0; calls.length = 0; delayRegistration = false;
+    commandResult = new Promise(() => {}); cancelResult = Promise.resolve(true);
+});
+
+test("StrictMode replay disposes late listeners and completes a download once", async () => {
+    delayRegistration = true;
+    let completed = 0;
+    const r = renderHook(() => useDownloads(() => { completed++; }), { strictEffects: true });
+    registrations.forEach(resolve => resolve()); await r.settle();
+    expect(listeners.size).toBe(1);
+    emit("done", 100); await r.settle();
+    expect(completed).toBe(1);
+    r.unmount(); expect(listeners.size).toBe(0);
+});
+
+test("unmount before listener registration removes it and suppresses callbacks", async () => {
+    delayRegistration = true;
+    let completed = 0;
+    const r = renderHook(() => useDownloads(() => { completed++; }));
+    r.unmount(); emit("done", 100);
+    registrations.forEach(resolve => resolve()); await r.settle();
+    expect(completed).toBe(0); expect(listeners.size).toBe(0);
+});
+
+async function withClock(run: (advance: (ms: number) => void, tick: () => void) => Promise<void>) {
+    const realNow = Date.now, realSet = globalThis.setInterval, realClear = globalThis.clearInterval;
+    let now = 1_000_000;
+    let tick: (() => void) | undefined;
+    Date.now = () => now;
+    (globalThis as any).setInterval = (cb: () => void) => { tick = cb; return 777; };
+    (globalThis as any).clearInterval = () => {};
+    try { await run(ms => { now += ms; }, () => tick!()); }
+    finally { Date.now = realNow; globalThis.setInterval = realSet; globalThis.clearInterval = realClear; }
+}
+
+for (const phase of ["extracting", "verifying", "copying"]) {
+    test(`healthy ${phase} lasting over 35 seconds is not cancelled as a network stall`, async () => {
+        await withClock(async (advance, tick) => {
+            const r = renderHook(() => useDownloads(() => {}));
+            try {
+                await r.settle(); void r.handle.current.handleDownload("whisper-base", "Base"); await r.settle();
+                emit(phase); await r.settle(); advance(36_000); tick(); await r.settle();
+                expect(calls.filter(c => c.command === "cancel_download")).toHaveLength(0);
+            } finally { r.unmount(); }
+        });
+    });
+}
+
+test("a stalled network request is still cancelled, while slow byte progress keeps it alive", async () => {
+    await withClock(async (advance, tick) => {
+        const r = renderHook(() => useDownloads(() => {}));
+        try {
+            await r.settle(); void r.handle.current.handleDownload("whisper-base", "Base"); await r.settle();
+            for (let i = 1; i <= 5; i++) { advance(20_000); emit("downloading", i); tick(); await r.settle(); }
+            expect(calls.filter(c => c.command === "cancel_download")).toHaveLength(0);
+            advance(36_000); tick(); await r.settle();
+            expect(calls.filter(c => c.command === "cancel_download")).toHaveLength(1);
+        } finally { r.unmount(); }
+    });
+});
+
 test("duplicate done events and a successful command reply share one completion", async () => {
     let reply!: () => void, finish!: () => void, completed = 0;
     commandResult = new Promise<void>(resolve => { reply = resolve; });
