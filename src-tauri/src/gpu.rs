@@ -197,15 +197,31 @@ fn detect() -> Vec<GpuDevice> {
     let mut out = platform_devices();
     // nvidia-smi knows the VRAM, which the OS listings often don't.
     if let Some(smi) = nvidia_smi() {
-        for (name, vram) in smi {
-            match out.iter_mut().find(|d| d.vendor == Vendor::Nvidia) {
-                Some(d) if d.vram_gb.is_none() => d.vram_gb = Some(vram),
-                Some(_) => {}
-                None => out.push(GpuDevice { name, vendor: Vendor::Nvidia, discrete: true, vram_gb: Some(vram) }),
-            }
-        }
+        merge_nvidia_smi(&mut out, smi);
     }
     out
+}
+
+/// Gives each nvidia-smi row's VRAM to the listed NVIDIA GPU of that name, then
+/// the other rows to the remaining ones in order (lspci names never match
+/// nvidia-smi's). Rows beyond the listed NVIDIA GPUs are GPUs the OS missed.
+fn merge_nvidia_smi(out: &mut Vec<GpuDevice>, smi: Vec<(String, f32)>) {
+    let rows = smi.len();
+    let open = |d: &GpuDevice| d.vendor == Vendor::Nvidia && d.vram_gb.is_none();
+    let mut unmatched = Vec::new();
+    for (name, vram) in smi {
+        match out.iter().position(|d| open(d) && d.name == name) {
+            Some(at) => out[at].vram_gb = Some(vram),
+            None => unmatched.push((name, vram)),
+        }
+    }
+    for (name, vram) in unmatched {
+        if let Some(at) = out.iter().position(open) {
+            out[at].vram_gb = Some(vram);
+        } else if out.iter().filter(|d| d.vendor == Vendor::Nvidia).count() < rows {
+            out.push(GpuDevice { name, vendor: Vendor::Nvidia, discrete: true, vram_gb: Some(vram) });
+        }
+    }
 }
 
 fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Command {
@@ -249,14 +265,21 @@ fn platform_devices() -> Vec<GpuDevice> {
             let vendor = if cfg!(target_arch = "aarch64") { Vendor::Apple } else { vendor_from_name(&name) };
             // Apple Silicon's GPU counts as "discrete": it is the fast path there.
             let discrete = cfg!(target_arch = "aarch64") || g["sppci_bus"].as_str() == Some("spdisplays_pcie_device") || vendor == Vendor::Amd;
-            let vram_gb = g["spdisplays_vram"]
-                .as_str()
-                .or(g["_spdisplays_vram"].as_str())
-                .and_then(|s| s.split_whitespace().next()?.parse::<f32>().ok())
-                .map(|x| x / 1024.0);
+            let vram_gb = g["spdisplays_vram"].as_str().or(g["_spdisplays_vram"].as_str()).and_then(parse_vram_gb);
             GpuDevice { name, vendor, discrete, vram_gb }
         })
         .collect()
+}
+
+/// system_profiler gives "1536 MB" for some GPUs and "8 GB" for others.
+#[cfg(any(target_os = "macos", test))]
+fn parse_vram_gb(text: &str) -> Option<f32> {
+    let mut parts = text.split_whitespace();
+    let value = parts.next()?.parse::<f32>().ok()?;
+    match parts.next() {
+        Some(unit) if unit.eq_ignore_ascii_case("GB") => Some(value),
+        _ => Some(value / 1024.0),
+    }
 }
 
 #[cfg(windows)]
@@ -745,6 +768,51 @@ mod tests {
         assert_eq!(vendor_from_name("Intel(R) UHD Graphics 630"), Vendor::Intel);
         assert_eq!(vendor_from_name("Qualcomm(R) Adreno(TM) X1-85 GPU"), Vendor::Qualcomm);
         assert_eq!(vendor_from_name("Apple M4"), Vendor::Apple);
+    }
+
+    #[test]
+    fn mac_vram_is_read_in_megabytes_or_gigabytes() {
+        assert_eq!(parse_vram_gb("1536 MB"), Some(1.5));
+        assert_eq!(parse_vram_gb("8 GB"), Some(8.0));
+        assert_eq!(parse_vram_gb("4 gb"), Some(4.0));
+        assert_eq!(parse_vram_gb("unknown"), None);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn gigabytes_are_not_scaled_as_megabytes(gb in 1u32..256) {
+            let text = format!("{gb} GB");
+            proptest::prop_assert_eq!(parse_vram_gb(&text), Some(gb as f32));
+            let mb_text = format!("{} MB", gb * 1024);
+            proptest::prop_assert_eq!(parse_vram_gb(&mb_text), Some(gb as f32));
+        }
+    }
+
+    #[test]
+    fn every_nvidia_gpu_gets_its_own_vram() {
+        let nvidia = |name: &str| GpuDevice { name: name.into(), vendor: Vendor::Nvidia, discrete: true, vram_gb: None };
+        let vram = |out: &[GpuDevice]| out.iter().map(|d| (d.name.clone(), d.vram_gb)).collect::<Vec<_>>();
+        let smi = |rows: &[(&str, f32)]| rows.iter().map(|(n, v)| (n.to_string(), *v)).collect::<Vec<_>>();
+
+        // Windows: the same names, but nvidia-smi lists the cards in another order.
+        let mut out = vec![dev(Vendor::Intel, false), nvidia("NVIDIA GeForce RTX 4090"), nvidia("NVIDIA GeForce RTX 3060")];
+        merge_nvidia_smi(&mut out, smi(&[("NVIDIA GeForce RTX 3060", 12.0), ("NVIDIA GeForce RTX 4090", 24.0)]));
+        assert_eq!(vram(&out), vec![(String::new(), None), ("NVIDIA GeForce RTX 4090".into(), Some(24.0)), ("NVIDIA GeForce RTX 3060".into(), Some(12.0))]);
+
+        // Linux: lspci names never match nvidia-smi's, so rows go in order.
+        let mut out = vec![nvidia("NVIDIA Corporation GA102 [GeForce RTX 3090]"), nvidia("NVIDIA Corporation GA102 [GeForce RTX 3090]")];
+        merge_nvidia_smi(&mut out, smi(&[("NVIDIA GeForce RTX 3090", 24.0), ("NVIDIA GeForce RTX 3090", 24.0)]));
+        assert_eq!(out.iter().map(|d| d.vram_gb).collect::<Vec<_>>(), vec![Some(24.0), Some(24.0)]);
+
+        // The OS listing found none of them.
+        let mut out = Vec::new();
+        merge_nvidia_smi(&mut out, smi(&[("NVIDIA A100", 80.0), ("NVIDIA A100", 80.0)]));
+        assert_eq!(vram(&out), vec![("NVIDIA A100".into(), Some(80.0)), ("NVIDIA A100".into(), Some(80.0))]);
+
+        // One card: its row lands on it whatever either tool calls it.
+        let mut out = vec![nvidia("NVIDIA Corporation GA106 [GeForce RTX 3060]")];
+        merge_nvidia_smi(&mut out, smi(&[("NVIDIA GeForce RTX 3060", 12.0)]));
+        assert_eq!(out.iter().map(|d| d.vram_gb).collect::<Vec<_>>(), vec![Some(12.0)]);
     }
 
     #[test]

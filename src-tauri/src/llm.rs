@@ -163,13 +163,11 @@ fn ordered_numbers(text: &str) -> Vec<u64> {
         let next = tokens.get(i + 1).map(String::as_str).unwrap_or("");
         if w.starts_with(|c: char| c.is_ascii_digit()) {
             flush(&mut values, &mut cur, &mut total, &mut active);
-            let cleaned = w.replace(',', "");
-            let (int_part, frac) = cleaned.split_once('.').unwrap_or((&cleaned, ""));
-            if let Ok(v) = int_part.parse() {
-                values.push(v);
-            }
-            if let Ok(v) = frac.parse() {
-                values.push(v);
+            // "4.50" is two numbers; a version or address ("2.3.1") is one per group.
+            for group in w.replace(',', "").split('.') {
+                if let Ok(v) = group.parse() {
+                    values.push(v);
+                }
             }
             last_tens = false;
             last_scale = false;
@@ -237,14 +235,13 @@ pub fn numbers_supported(output: &str, input: &str) -> bool {
         let end = tail.find(|c: char| !(c.is_ascii_digit() || c == ',' || c == '.')).unwrap_or(tail.len());
         let token = tail[..end].trim_end_matches([',', '.']).replace(',', "");
         rest = &tail[end.max(1)..];
-        let (int_part, frac) = token.split_once('.').unwrap_or((&token, ""));
-        let int_norm = int_part.trim_start_matches('0');
-        let int_norm = if int_norm.is_empty() { "0" } else { int_norm };
-        if !allowed.contains(int_norm) {
-            return false;
-        }
-        if !frac.is_empty() && !allowed.contains(frac) && !allowed.contains(frac.trim_start_matches('0')) {
-            return false;
+        // Every dot-separated group must come from the input. Leading zeros are
+        // padding: "4.05" needs 4 and 5, and "4.00" only 4 (as "4:00" does).
+        for group in token.split('.').filter(|g| !g.is_empty()) {
+            let norm = group.trim_start_matches('0');
+            if !allowed.contains(if norm.is_empty() { "0" } else { norm }) {
+                return false;
+            }
         }
     }
     true
@@ -682,6 +679,26 @@ mod tests {
         assert!(numbers_supported("Buy 2, then 5.", "buy two then five"));
         // Wrong decimals are caught.
         assert!(!numbers_supported("$4.99", "four dollars ninety five"));
+    }
+
+    #[test]
+    fn dotted_numbers_are_checked_one_group_at_a_time() {
+        // Versions, addresses and dotted dates the transcript already contains.
+        assert!(numbers_supported("Update to version 2.3.1.", "update to version 2.3.1"));
+        assert!(numbers_supported("Ping 192.168.1.1 first.", "ping 192.168.1.1 first"));
+        assert!(numbers_supported("Version 2.3.1", "version two point three point one"));
+        assert_eq!(ordered_numbers("version 2.3.1"), vec![2, 3, 1]);
+        // A changed group is still caught.
+        assert!(!numbers_supported("Version 2.3.4", "version two point three point one"));
+        // Zero cents are padding, like the minutes in "4:00".
+        assert!(numbers_supported("It costs $4.00.", "it costs four dollars"));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn a_copy_of_the_input_always_passes_the_number_guard(text in "\\PC{0,80}") {
+            proptest::prop_assert!(numbers_supported(&text, &text), "{}", text);
+        }
     }
 
     #[test]

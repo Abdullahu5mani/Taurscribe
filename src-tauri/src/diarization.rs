@@ -168,6 +168,9 @@ pub fn detect_channel_speech_segments(
     let max_silence_gap_frames = 12; // Merge pauses shorter than 480ms
 
     let mut segments = Vec::new();
+    if frame_size == 0 {
+        return segments;
+    }
     let num_frames = samples.len() / frame_size;
     if num_frames == 0 {
         return segments;
@@ -425,14 +428,17 @@ pub fn extract_3s_audio_snippet(
         )
     };
 
-    let start_sample = ((window_start_ms as f64 / 1000.0) * sample_rate as f64) as usize;
-    let end_sample = ((window_end_ms as f64 / 1000.0) * sample_rate as f64) as usize;
+    let to_sample = |ms: u64| ((ms as f64 / 1000.0) * sample_rate as f64) as usize;
+    let start_sample = to_sample(window_start_ms);
+    let end_sample = to_sample(window_end_ms);
+    // A turn shorter than the clip is followed by silence, not by whoever spoke next.
+    let turn_end_sample = to_sample(target_end_ms).min(samples.len());
 
     let total_samples = sample_rate as usize * 3; // exactly 3s @ 48kHz = 144,000 samples
     let mut snippet_samples = Vec::with_capacity(total_samples);
 
     for idx in start_sample..end_sample {
-        if idx < samples.len() {
+        if idx < turn_end_sample {
             snippet_samples.push(samples[idx]);
         } else {
             snippet_samples.push(0.0_f32);
@@ -1680,6 +1686,12 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_sample_rate_does_not_divide_by_zero() {
+        assert!(detect_channel_speech_segments(&[0.1; 1000], 0, 1, 0.05).is_empty());
+        assert!(detect_channel_speech_segments(&[0.1; 1000], 24, 1, 0.05).is_empty());
+    }
+
+    #[test]
     fn test_cluster_remote_turns() {
         let mut turns = vec![
             AudioTurnSegment {
@@ -1733,6 +1745,21 @@ mod tests {
         assert_eq!(reader.duration(), 48000 * 3); // exactly 3 seconds
 
         let _ = std::fs::remove_file(&out_path);
+    }
+
+    #[test]
+    fn a_short_turn_snippet_does_not_play_the_next_speaker() {
+        let sample_rate = 16_000;
+        // This speaker says "yes" for 0.8 s; someone else talks right after.
+        let mut audio = vec![0.5_f32; 16_000 * 5];
+        audio[16_000 * 8 / 10..].fill(-0.5);
+        let out_path = std::env::temp_dir().join(format!("test_snippet_isolated_{}.wav", std::process::id()));
+        extract_3s_audio_snippet(&audio, sample_rate, 0, 800, &out_path).unwrap();
+        let written: Vec<i16> = hound::WavReader::open(&out_path).unwrap().into_samples().map(Result::unwrap).collect();
+        let _ = std::fs::remove_file(&out_path);
+        assert_eq!(written.len(), 16_000 * 3);
+        assert!(written[..16_000 * 8 / 10].iter().all(|&s| s > 0), "the turn itself is kept");
+        assert!(written.iter().all(|&s| s >= 0), "the next speaker leaked into this speaker's clip");
     }
 
     #[test]

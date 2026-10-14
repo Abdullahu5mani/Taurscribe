@@ -106,6 +106,27 @@ test("Show more asks for the next page", async () => {
     expect(byTest(handle.current, "voicebank-show-more")).toBeUndefined();
 });
 
+test("answering speakers on a full page keeps the rest reachable", async () => {
+    const { handle, settle } = await panel("find");
+    const rows = () => nodes(handle.current).filter((n) => String(n.props?.["data-testid"]).startsWith("voicebank-suggestion-"));
+    await byTest(handle.current, "voicebank-add-1-speaker_remote_2").props.onClick();
+    await settle();
+    expect(rows()).toHaveLength(SUGGESTION_PAGE - 1);
+    expect(byTest(handle.current, "voicebank-show-more")).toBeDefined();
+    for (let meeting = 2; meeting <= SUGGESTION_PAGE; meeting++) {
+        await byTest(handle.current, `voicebank-reject-${meeting}-speaker_remote_2`).props.onClick();
+        await settle();
+    }
+    // Three more speakers still sound like Dana: not "nobody does".
+    expect(byTest(handle.current, "voicebank-no-suggestions")).toBeUndefined();
+    // The server no longer offers answered speakers.
+    suggestions = suggestions.slice(SUGGESTION_PAGE);
+    byTest(handle.current, "voicebank-show-more").props.onClick();
+    await settle();
+    expect(rows()).toHaveLength(3);
+    expect(byTest(handle.current, "voicebank-show-more")).toBeUndefined();
+});
+
 test("nothing similar and errors are explained", async () => {
     suggestions = [];
     let view = await panel("find");

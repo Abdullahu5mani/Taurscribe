@@ -55,6 +55,8 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
     const [suggestions, setSuggestions] = useState<VoiceSampleSuggestion[]>([]);
     const [samples, setSamples] = useState<Voiceprint[]>([]);
     const [limit, setLimit] = useState(SUGGESTION_PAGE);
+    /** The last fetch filled its page, so the server may have more. Answers shrink the list without refetching. */
+    const [hasMore, setHasMore] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     /** Key of the row whose Add / Not them / Remove is in flight. */
@@ -72,7 +74,7 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
         try {
             if (mode === "find") {
                 const found = await invoke<VoiceSampleSuggestion[]>("find_voice_samples", { personId, limit: nextLimit });
-                if (id === request.current) setSuggestions(found);
+                if (id === request.current) { setSuggestions(found); setHasMore(found.length >= nextLimit); }
             } else {
                 const list = await invoke<Voiceprint[]>("list_voiceprints", { personId });
                 if (id === request.current) setSamples(list);
@@ -202,7 +204,7 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
                 <p className="voicebank-empty">{mode === "find" ? "Listening through past meetings…" : "Loading…"}</p>
             )}
 
-            {mode === "find" && !loading && !error && suggestions.length === 0 && (
+            {mode === "find" && !loading && !error && suggestions.length === 0 && !hasMore && (
                 <p className="voicebank-empty" data-testid="voicebank-no-suggestions">No other speakers in your meetings sound like {personName}.</p>
             )}
 
@@ -255,7 +257,7 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
                     </div>
                 );
             })}
-            {mode === "find" && suggestions.length >= limit && (
+            {mode === "find" && hasMore && (
                 <button type="button" className="vault-action-btn voicebank-more" onClick={showMore} disabled={loading} data-testid="voicebank-show-more">
                     Show more
                 </button>
