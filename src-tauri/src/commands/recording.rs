@@ -299,6 +299,10 @@ pub async fn start_recording(
                 let lower = message.to_lowercase();
                 let code = if lower.contains("microphone permission denied") {
                     "mic_permission_denied"
+                } else if lower.contains("system audio permission") || lower.contains("system audio recording permission") {
+                    "system_audio_permission_denied"
+                } else if lower.contains("audio capture is unsupported") {
+                    "meeting_capture_unsupported"
                 } else if lower.contains("no input device found")
                     || lower.contains("no microphone found")
                 {
@@ -1026,7 +1030,7 @@ fn start_meeting_capture(
         .meeting_detector
         .get_status()
         .active_meetings
-        .first()
+        .iter().find(|m| m.should_record || m.confidence >= 70)
         .map(|m| m.pid)
         .filter(|pid| *pid > 0 && *pid != 99999);
     let target = meeting_pid.map(DualChannelTarget::Process).unwrap_or(DualChannelTarget::System);

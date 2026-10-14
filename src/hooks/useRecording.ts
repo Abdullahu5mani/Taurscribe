@@ -123,6 +123,7 @@ export function useRecording({
     const overlayTerminalRef = useRef(false);
     const overlayCommandChainRef = useRef<Promise<void>>(Promise.resolve());
     const liveTranscriptRef = useRef("");
+    const callAudioNoticeRef = useRef(false);
     const pausedAtRef = useRef<number | null>(null);
     const totalPausedMsRef = useRef(0);
 
@@ -199,6 +200,7 @@ export function useRecording({
     };
 
     const showNotice = (notice: SessionNotice | null) => {
+        callAudioNoticeRef.current = notice?.code === "meeting_audio_unverified" || notice?.code === "meeting_audio_recovering";
         setSessionNotice?.(notice);
     };
 
@@ -283,6 +285,30 @@ export function useRecording({
         return () => {
             unlistenPromise.then((unlisten) => unlisten());
         };
+    }, []);
+
+    useEffect(() => {
+        const subscription = listen<{ status: string; message: string }>("meeting-audio-status", ({ payload }) => {
+            if (!isRecordingRef.current || !meetingSessionRef.current) return;
+            if (payload.status === "restored") {
+                if (callAudioNoticeRef.current) showNotice(null);
+                return;
+            }
+            const retryable = payload.status === "silent";
+            showNotice({
+                level: payload.status === "failed" ? "error" : "warning",
+                code: retryable ? "meeting_audio_unverified" : "meeting_audio_recovering",
+                title: retryable ? "Check call audio" : payload.status === "fallback" ? "Recording all system audio" : "Meeting audio interrupted",
+                message: payload.message, sticky: true,
+                actions: retryable ? [
+                    { id: "retry-call-audio", label: "Retry call audio", onClick: () => {
+                        void invoke("retry_meeting_audio_capture").catch(e => showNotice({ level: "error", code: "meeting_audio_retry_failed", title: "Call audio retry failed", message: String(e), sticky: true }));
+                    } },
+                    { id: "system-audio-settings", label: "Open Audio Recording Settings", onClick: () => { void invoke("open_system_audio_settings").catch(() => {}); } },
+                ] : undefined,
+            });
+        });
+        return () => { void subscription.then(unlisten => unlisten()); };
     }, []);
 
     const startRecordingOnce = async (generation: number, fromHotkey = false, audioSource?: string) => {

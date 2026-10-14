@@ -65,9 +65,15 @@ pub struct CaptureLoss {
     pub gap_frames: AtomicU64,
     pub preview_frames: AtomicU64,
     pub preview_failed: AtomicBool,
+    pub meeting_warnings: std::sync::Mutex<Vec<String>>,
 }
 
 impl CaptureLoss {
+    pub fn warn_meeting(&self, warning: String) {
+        if let Ok(mut warnings) = self.meeting_warnings.lock() {
+            if !warnings.contains(&warning) { warnings.push(warning); }
+        }
+    }
     /// Returns true only for the first failed write-queue send, so the callback
     /// can notify the UI once without blocking or flooding its event queue.
     pub fn send_file(&self, tx: &Sender<Vec<f32>>, samples: Vec<f32>, channels: usize) -> bool {
@@ -83,8 +89,11 @@ impl CaptureLoss {
     pub fn warnings(&self) -> Vec<String> {
         let file = self.file_frames.load(Ordering::Relaxed);
         let input = self.input_frames.load(Ordering::Relaxed);
-        if file == 0 && input == 0 { return Vec::new(); }
-        vec![format!("Recording is incomplete: {file} frames could not be written and {input} input frames were lost.")]
+        let mut warnings = self.meeting_warnings.lock().map(|w| w.clone()).unwrap_or_default();
+        if file > 0 || input > 0 {
+            warnings.push(format!("Recording is incomplete: {file} frames could not be written and {input} input frames were lost."));
+        }
+        warnings
     }
 }
 
