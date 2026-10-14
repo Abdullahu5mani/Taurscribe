@@ -124,7 +124,7 @@ export function useRecording({
     const overlayTerminalRef = useRef(false);
     const overlayCommandChainRef = useRef<Promise<void>>(Promise.resolve());
     const liveTranscriptRef = useRef("");
-    const callAudioNoticeRef = useRef(false);
+    const callAudioNoticeRef = useRef<string | null>(null);
     const pausedAtRef = useRef<number | null>(null);
     const totalPausedMsRef = useRef(0);
 
@@ -201,7 +201,7 @@ export function useRecording({
     };
 
     const showNotice = (notice: SessionNotice | null) => {
-        callAudioNoticeRef.current = notice?.code === "meeting_audio_unverified" || notice?.code === "meeting_audio_recovering";
+        callAudioNoticeRef.current = notice && ["meeting_audio_unverified", "meeting_audio_recovering", "meeting_audio_fallback"].includes(notice.code) ? notice.code : null;
         setSessionNotice?.(notice);
     };
 
@@ -255,6 +255,7 @@ export function useRecording({
                 setSessionPhase?.("recording");
                 void emitOverlayState("recording").catch(() => {});
             } else if (!is_recording) {
+                if (callAudioNoticeRef.current) showNotice(null);
                 recordingGenerationRef.current += 1;
                 if (isRecordingRef.current) {
                     setIsRecording(false);
@@ -287,7 +288,7 @@ export function useRecording({
         const subscription = listen<{ status: string; message: string }>("meeting-audio-status", ({ payload }) => {
             if (disposed || !isRecordingRef.current || !meetingSessionRef.current) return;
             if (payload.status === "restored") {
-                if (callAudioNoticeRef.current) showNotice(null);
+                if (callAudioNoticeRef.current && callAudioNoticeRef.current !== "meeting_audio_fallback") showNotice(null);
                 return;
             }
             const retryable = payload.status === "silent";

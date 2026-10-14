@@ -772,6 +772,7 @@ fn spawn_named_mic_capture(
             let config: cpal::StreamConfig = supported.into();
             let (channels, rate) = (config.channels as u32, config.sample_rate.0);
             let mut to_48k = MonoTo48k::new();
+            let callback_stops = stops.clone();
             let stream = crate::audio::build_input_stream_f32(
                 &device,
                 &config,
@@ -779,11 +780,7 @@ fn spawn_named_mic_capture(
                 move |data: &[f32]| {
                     let out = to_48k.push(data, channels, rate as f64);
                     if !out.is_empty() {
-                        // Never block the audio callback; a full queue drops the chunk.
-                        let frames = out.len();
-                        if tx.try_send(out).is_err() {
-                            loss.input_frames.fetch_add(frames as u64, Ordering::Relaxed);
-                        }
+                        send_named_mic_frames(&tx, out, &callback_stops, &loss);
                     }
                 },
                 |e| eprintln!("[ERROR] Meeting microphone stream error: {}", e),
@@ -814,6 +811,20 @@ fn spawn_named_mic_capture(
         }
         Err(_) => Err("microphone thread exited".into()),
     }
+}
+
+fn send_named_mic_frames(
+    tx: &Sender<Vec<f32>>, frames: Vec<f32>, stops: &[Arc<AtomicBool>; 2], loss: &crate::audio::CaptureLoss,
+) {
+    // Full queues always lose requested audio. A callback after intentional
+    // Stop can meet a closed receiver; that is outside the capture window.
+    let lost = match tx.try_send(frames) {
+        Err(crossbeam_channel::TrySendError::Full(frames)) => frames.len(),
+        Err(crossbeam_channel::TrySendError::Disconnected(frames))
+            if !stops.iter().any(|s| s.load(Ordering::Relaxed)) => frames.len(),
+        _ => 0,
+    };
+    loss.input_frames.fetch_add(lost as u64, Ordering::Relaxed);
 }
 
 /// One track's audio as mono 48 kHz, through a single resampler for the whole
@@ -922,6 +933,23 @@ mod tests {
     use super::{app_bundle_path, untapped_meeting_audio_pids};
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn late_mic_callback_after_stop_is_not_loss_but_full_queues_still_are() {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let stops = [std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))];
+        let loss = crate::audio::CaptureLoss::default();
+        super::send_named_mic_frames(&tx, vec![0.1; 1024], &stops, &loss);
+        super::send_named_mic_frames(&tx, vec![0.2; 1024], &stops, &loss);
+        assert_eq!(rx.recv().unwrap(), vec![0.1; 1024]);
+        assert_eq!(loss.input_frames.load(std::sync::atomic::Ordering::Relaxed), 1024);
+        drop(rx);
+        super::send_named_mic_frames(&tx, vec![0.3; 1024], &stops, &loss);
+        assert_eq!(loss.input_frames.load(std::sync::atomic::Ordering::Relaxed), 2048);
+        stops[0].store(true, std::sync::atomic::Ordering::Relaxed);
+        super::send_named_mic_frames(&tx, vec![0.4; 1024], &stops, &loss);
+        assert_eq!(loss.input_frames.load(std::sync::atomic::Ordering::Relaxed), 2048);
+    }
 
     #[test]
     fn zero_packets_warn_once_and_quiet_speech_clears_the_warning() {

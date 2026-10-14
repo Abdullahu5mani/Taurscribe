@@ -705,6 +705,22 @@ test("both completion events preserve expanded history and Load more", async () 
         expect(more()).toBeDefined();
     }
 });
+
+test("progress and a newer preview during hydration keep the running job visible", async () => {
+    let snapshot!: (status: any) => void;
+    invokeOverride = cmd => cmd === "get_meeting_import_status" ? new Promise(resolve => { snapshot = resolve; }) : undefined;
+    const view = render(); await view.settle();
+    listeners.get("meeting-processing-progress")!({ payload: { stage: "Newest stage" } });
+    const preview = { title: "Restored job", paragraphs: [{ start_ms: 0, end_ms: 10000, text: "Newest draft" }], completed_ms: 10000, total_ms: 30000 };
+    listeners.get("meeting-processing-preview")!({ payload: preview });
+    snapshot({ title: "Restored job", platform: "Imported recording", job_id: "running", running: true, startedAt: Date.now(), stage: "Stale stage", preview: null });
+    await view.settle();
+    expect(textOf(byTest(view.handle.current, "meetings-processing-status"))).toContain("Newest stage");
+    expect(byTest(view.handle.current, "meeting-processing-stop")).toBeDefined();
+    nodes(view.handle.current).find(n => n.type === "button" && textOf(n).includes("Read transcript")).props.onClick(); await view.settle();
+    expect(textOf(byTest(view.handle.current, "meeting-import-preview"))).toContain("Newest draft");
+});
+
 for (const event of ["meeting-processing-started", "meeting-processing-finished"]) {
     test(`${event} during hydration supersedes the stale snapshot`, async () => {
         let snapshot!: (status: any) => void;

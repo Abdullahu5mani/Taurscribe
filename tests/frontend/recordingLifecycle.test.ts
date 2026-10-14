@@ -156,6 +156,15 @@ test("silent caller warning has a retry action and clears when sound returns", a
     expect(h.notices).toHaveLength(count);
 });
 
+test("system-audio fallback stays visible during capture and clears on external Stop", async () => {
+    const h = fixture(); await h.handle.current.handleStartRecording(false, "dual_channel"); await h.settle();
+    fire("meeting-audio-status", { status: "fallback", message: "Recording all system audio" });
+    fire("meeting-audio-status", { status: "restored", message: "Sound received" });
+    expect(h.notices.at(-1).code).toBe("meeting_audio_fallback");
+    fire("recording-state", { is_recording: false, is_dual_channel: false });
+    expect(h.notices.at(-1)).toBe(null);
+});
+
 test("late meeting levels cannot restore meeting UI after backend Stop", async () => {
     const h = fixture();
     fire("recording-state", { is_recording: true, is_dual_channel: true });
