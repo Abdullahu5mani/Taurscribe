@@ -6,6 +6,7 @@ import type { ModelInfo, GraniteModelInfo, Qwen3ModelInfo } from "./useModels";
 import type { ASREngine } from "./useEngineSwitch";
 import { applyDictionary, applySnippets } from "./usePersonalization";
 import { isEngineModelLoaded } from "../utils/engineLoader";
+import { ensureMeetingPermissions, permissionNotice } from "../utils/meetingPermissions";
 import type { DictEntry, SnippetEntry } from "./usePersonalization";
 import type { CommandResult, RecordingOutcome, SessionNotice } from "../types/session";
 
@@ -204,13 +205,7 @@ export function useRecording({
         setSessionNotice?.(notice);
     };
 
-    const commandErrorToNotice = (error: { code?: string; message?: string }, fallbackTitle: string): SessionNotice => ({
-        level: "error",
-        code: error.code ?? "unknown",
-        title: fallbackTitle,
-        message: error.message ?? fallbackTitle,
-        sticky: true,
-    });
+    const commandErrorToNotice = permissionNotice;
 
     const [isDualChannelRecording, setIsDualChannelRecording] = useState(false);
     // An in-person meeting: one microphone, saved to Meetings like a call.
@@ -326,6 +321,19 @@ export function useRecording({
         const isDual = effectiveAudioSource === "dual_channel";
         const isInPerson = effectiveAudioSource === "in_person";
         const isMeeting = isDual || isInPerson;
+        if (isDual) {
+            try {
+                setHeaderStatus("Checking meeting recording permissions…", 15000);
+                await ensureMeetingPermissions(isCurrent);
+                if (!isCurrent()) return;
+            } catch (e) {
+                if (!isCurrent()) return;
+                setSessionPhase?.("error");
+                showNotice(permissionNotice(e as { code?: string; message?: string }, "Meeting recording could not start"));
+                setHeaderStatus("Meeting recording needs permission", 6000);
+                return;
+            }
+        }
         setIsDualChannelRecording(isDual);
         setIsInPersonRecording(isInPerson);
         meetingSessionRef.current = isMeeting;

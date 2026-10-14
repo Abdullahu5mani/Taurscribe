@@ -259,6 +259,12 @@ function handle(cmd: string, args: Record<string, unknown> = {}): unknown {
         }
 
         // Meetings
+        case "update_meeting_title": {
+            const meeting = meetings.find(m => m.id === args.meetingId);
+            if (!meeting) throw new Error("Meeting no longer exists");
+            meeting.title = String(args.title).trim();
+            return null;
+        }
         case "get_meeting_import_status": return demoImportStatus;
         case "plugin:dialog|open":
             return ["/demo/Meeting part 2.m4a", "/demo/Meeting part 1.wav"];

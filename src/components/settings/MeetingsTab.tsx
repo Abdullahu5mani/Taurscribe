@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Store } from '@tauri-apps/plugin-store';
+import { MeetingAudioPermissions } from './MeetingAudioPermissions';
 import { MEETING_KEYS, DEFAULT_AUTORECORD_DELAY, DEFAULT_MATCH_THRESHOLD, DEFAULT_CONTINUE_MINUTES } from './types';
 
 const AUTORECORD_DELAYS = [0, 3, 5, 10];
@@ -123,6 +124,7 @@ export function MeetingsTab({ speakerModelDownloaded, diarizationModelDownloaded
 
     return (
         <div className="meetings-tab">
+            <MeetingAudioPermissions />
 
             {/* ── Detection ───────────────────────────────────────── */}
             <div className="setting-card-header">

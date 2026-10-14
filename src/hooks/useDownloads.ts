@@ -23,7 +23,11 @@ export function useDownloads(
     const [downloadProgress, setDownloadProgress] = useState<Record<string, DownloadProgress>>({});
     const activeDownloadsRef = useRef<Set<string>>(new Set());
     const stalledRef = useRef<Set<string>>(new Set());
-    const lastActivityRef = useRef<Record<string, { bytes: number; time: number }>>({});
+    const lastActivityRef = useRef<Record<string, { bytes: number; time: number; phase: string }>>({});
+    const attemptsRef = useRef(new Map<string, number>());
+    const completionsRef = useRef(new Map<string, Promise<void>>());
+    const onModelDownloadedRef = useRef(onModelDownloaded);
+    onModelDownloadedRef.current = onModelDownloaded;
     const onDownloadFailedRef = useRef(onDownloadFailed);
     onDownloadFailedRef.current = onDownloadFailed;
 
@@ -79,6 +83,22 @@ export function useDownloads(
         clearProgress(modelId);
     }, [clearProgress]);
 
+    const completeDownload = useCallback((modelId: string) => {
+        const previous = completionsRef.current.get(modelId);
+        if (previous) return previous;
+        stalledRef.current.delete(modelId);
+        setDownloadProgress(prev => ({ ...prev, [modelId]: { ...prev[modelId], bytes: 100, total: 100, status: "finalizing" } }));
+        const completion = Promise.resolve().then(() => onModelDownloadedRef.current(modelId))
+            .catch(err => console.warn("onModelDownloaded failed:", err))
+            .finally(() => {
+                activeDownloadsRef.current.delete(modelId);
+                clearProgress(modelId);
+                toast.success(`Downloaded: ${modelId}`);
+            });
+        completionsRef.current.set(modelId, completion);
+        return completion;
+    }, [clearProgress]);
+
     // Stall detector: fires every STALL_CHECK_INTERVAL_MS, checks each active
     // download for progress. If bytes haven't advanced in STALL_THRESHOLD_MS,
     // auto-cancel and surface an error so the UI never hangs.
@@ -86,15 +106,21 @@ export function useDownloads(
         const timer = setInterval(() => {
             const now = Date.now();
             for (const modelId of activeDownloadsRef.current) {
+                if (completionsRef.current.has(modelId)) continue;
                 const activity = lastActivityRef.current[modelId];
                 if (!activity) continue;
+                // Disk work may take arbitrarily long between chunks. The native
+                // worker checks cancellation and reports progress itself.
+                if (!["starting", "downloading"].includes(activity.phase)) continue;
                 if (now - activity.time > STALL_THRESHOLD_MS) {
                     if (stalledRef.current.has(modelId)) continue;
                     stalledRef.current.add(modelId);
+                    const attempt = attemptsRef.current.get(modelId);
                     console.warn(`[STALL] No progress for ${modelId} in ${STALL_THRESHOLD_MS}ms — cancelling`);
                     invoke<boolean>("cancel_download", { modelId })
-                        .then((accepted) => { if (!accepted) stalledRef.current.delete(modelId); })
+                        .then((accepted) => { if (!accepted && attemptsRef.current.get(modelId) === attempt) stalledRef.current.delete(modelId); })
                         .catch(() => {
+                            if (attemptsRef.current.get(modelId) !== attempt) return;
                             stalledRef.current.delete(modelId);
                             if (activeDownloadsRef.current.has(modelId)) {
                                 markError(modelId, "Download failed — connection stalled. Check your internet and try again.");
@@ -108,35 +134,31 @@ export function useDownloads(
 
     useEffect(() => {
         let unlisten: (() => void) | undefined;
+        let disposed = false;
 
         const setupListener = async () => {
-            unlisten = await listen("download-progress", (event) => {
+            const unsubscribe = await listen("download-progress", (event) => {
+                if (disposed) return;
                 const payload = event.payload as DownloadProgressPayload;
 
                 // Track last-seen activity for stall detection.
-                if (payload.status === "downloading" || payload.status === "extracting" || payload.status === "verifying") {
+                if (["downloading", "copying", "extracting", "verifying"].includes(payload.status)) {
+                    if (completionsRef.current.has(payload.model_id)) return;
+                    activeDownloadsRef.current.add(payload.model_id);
                     const prev = lastActivityRef.current[payload.model_id];
-                    if (!prev || prev.bytes !== payload.downloaded_bytes) {
+                    if (!prev || prev.bytes !== payload.downloaded_bytes || prev.phase !== payload.status) {
                         lastActivityRef.current[payload.model_id] = {
                             bytes: payload.downloaded_bytes,
                             time: Date.now(),
+                            phase: payload.status,
                         };
                     }
                 }
 
                 if (payload.status === "done") {
-                    stalledRef.current.delete(payload.model_id);
-                    updateProgressState(payload, "finalizing");
-                    Promise.resolve(onModelDownloaded(payload.model_id))
-                        .catch((err) => {
-                            console.warn("onModelDownloaded failed:", err);
-                        })
-                        .finally(() => {
-                            activeDownloadsRef.current.delete(payload.model_id);
-                            clearProgress(payload.model_id);
-                            toast.success(`Downloaded: ${payload.model_id}`);
-                        });
+                    void completeDownload(payload.model_id);
                 } else if (payload.status === "error") {
+                    if (!activeDownloadsRef.current.has(payload.model_id) || completionsRef.current.has(payload.model_id)) return;
                     const stalled = stalledRef.current.delete(payload.model_id);
                     markError(
                         payload.model_id,
@@ -162,21 +184,28 @@ export function useDownloads(
                     updateProgressState(payload);
                 }
             });
+            if (disposed) unsubscribe();
+            else unlisten = unsubscribe;
         };
 
-        setupListener();
+        void setupListener().catch(err => console.warn("Download progress listener failed:", err));
 
         return () => {
+            disposed = true;
             if (unlisten) unlisten();
         };
-    }, [onModelDownloaded, clearProgress, markError, updateProgressState]);
+    }, [completeDownload, clearProgress, markError, updateProgressState]);
 
     const handleDownload = async (id: string, name: string) => {
         if (activeDownloadsRef.current.has(id)) {
             return;
         }
         activeDownloadsRef.current.add(id);
-        lastActivityRef.current[id] = { bytes: 0, time: Date.now() };
+        const attempt = (attemptsRef.current.get(id) ?? 0) + 1;
+        attemptsRef.current.set(id, attempt);
+        completionsRef.current.delete(id);
+        stalledRef.current.delete(id);
+        lastActivityRef.current[id] = { bytes: 0, time: Date.now(), phase: "starting" };
         toast.info(`Starting download: ${name}`);
         setDownloadProgress((prev) => ({
             ...prev,
@@ -184,7 +213,9 @@ export function useDownloads(
         }));
         try {
             await invoke("download_model", { modelId: id });
+            if (attemptsRef.current.get(id) === attempt) await completeDownload(id);
         } catch (e) {
+            if (attemptsRef.current.get(id) !== attempt) return;
             const raw = `${e ?? "Unknown error"}`;
             if (raw.toLowerCase().includes("cancel")) {
                 if (activeDownloadsRef.current.has(id)) {
@@ -214,9 +245,10 @@ export function useDownloads(
     };
 
     const handleCancelDownload = async (id: string) => {
+        const attempt = attemptsRef.current.get(id);
         try {
             const accepted = await invoke<boolean>("cancel_download", { modelId: id });
-            if (accepted) {
+            if (accepted && attemptsRef.current.get(id) === attempt && activeDownloadsRef.current.has(id)) {
                 setDownloadProgress(prev => prev[id]
                     ? { ...prev, [id]: { ...prev[id], status: "cancelling" } }
                     : prev);

@@ -10,6 +10,7 @@ import { renderHook } from "./hookHarness";
 // granted later → restart).
 let platform = "windows";
 let perms: { mic: string; acc: boolean; input: boolean };
+let systemAudio = "granted";
 const calls: string[] = [];
 const realCore = { ...(await import("@tauri-apps/api/core")) };
 mock.module("@tauri-apps/api/core", () => ({
@@ -22,6 +23,8 @@ mock.module("@tauri-apps/api/core", () => ({
             case "is_apple_silicon": return platform === "macos";
             case "get_gpu_report": return null;
             case "check_microphone_permission": return perms.mic;
+            case "check_meeting_permissions": return { microphone: perms.mic, system_audio: systemAudio };
+            case "request_system_audio_permission": systemAudio = "granted"; return systemAudio;
             case "check_accessibility_permission": return perms.acc;
             case "check_input_monitoring_permission": return perms.input;
             case "request_microphone_permission": perms.mic = "granted"; return null;
@@ -62,6 +65,7 @@ let props: any;
 beforeEach(() => {
     platform = "windows";
     perms = { mic: "granted", acc: true, input: true };
+    systemAudio = "granted";
     calls.length = 0;
     results = [];
     downloads = [];
@@ -150,6 +154,14 @@ test("the last step downloads the recommended model, can cancel, and launches on
     byTest(ready.handle.current, "wizard-ready-launch-btn").props.onClick();
     expect(results).toEqual([]);
 
+    for (const status of ["copying", "cancelling"]) {
+        props = { ...props, downloadProgress: { [modelId]: { status, bytes: 50, total: 200 } } };
+        view.rerender(); ready = await renderStep(currentStep(view.handle.current));
+        expect(byTest(ready.handle.current, "wizard-ready-download-model-btn")).toBeUndefined();
+        expect(textOf(ready.handle.current)).toContain(status === "copying" ? "Copying…" : "Cancelling…");
+        expect(byTest(ready.handle.current, "wizard-ready-launch-btn").props.disabled).toBe(true);
+    }
+
     props = { ...props, downloadProgress: {}, settingsModels: [{ id: modelId, downloaded: true }] };
     view.rerender();
     ready = await renderStep(currentStep(view.handle.current));
@@ -178,6 +190,27 @@ test("permissions: everything already granted skips the step going forward", asy
     const { step } = await permissionsStep();
     await renderStep({ ...step, props: { ...step.props, onNext: () => advanced++ } });
     expect(advanced).toBe(1);
+});
+
+test("microphone access alone cannot skip system audio setup", async () => {
+    systemAudio = "denied";
+    let advanced = 0;
+    const { step } = await permissionsStep();
+    const view = await renderStep({ ...step, props: { ...step.props, onNext: () => advanced++ } });
+    expect(advanced).toBe(0);
+    expect(byTest(view.handle.current, "wizard-perm-audio-grant-btn").props["aria-label"]).toBe("Open System Audio Recording Settings");
+    await byTest(view.handle.current, "wizard-perm-audio-grant-btn").props.onClick();
+    expect(calls).toContain("open_system_audio_settings");
+});
+
+test("system audio Grant Access requests permission without marking an unknown grant ready", async () => {
+    systemAudio = "undetermined";
+    const { step } = await permissionsStep();
+    const view = await renderStep(step);
+    await byTest(view.handle.current, "wizard-perm-audio-grant-btn").props.onClick();
+    await view.settle();
+    expect(calls).toContain("request_system_audio_permission");
+    expect(byTest(view.handle.current, "wizard-perm-audio-ok")).toBeDefined();
 });
 
 test("permissions: denied mic points to Settings, restricted says so, missing ones can be skipped", async () => {

@@ -508,7 +508,7 @@ function App() {
     const unlistenDetectedPromise = listen<MeetingInfo>("meeting-detected", (event) => {
       const m = event.payload;
       if (m.should_record || m.confidence >= 70) {
-        setActiveMeeting(m);
+        setActiveMeeting(curr => curr?.should_record && !m.should_record ? curr : m);
       }
     });
 

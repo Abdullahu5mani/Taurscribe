@@ -580,7 +580,7 @@ pub async fn check_microphone_permission() -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn check_microphone_permission_blocking() -> String {
+pub(crate) fn check_microphone_permission_blocking() -> String {
     // AVAuthorizationStatus: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
     // [AVCaptureDevice authorizationStatusForMediaType:] is a pure read — never shows a dialog.
     use std::ffi::CStr;
@@ -642,7 +642,7 @@ fn check_microphone_permission_blocking() -> String {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn check_microphone_permission_blocking() -> String {
+pub(crate) fn check_microphone_permission_blocking() -> String {
     "granted".to_string()
 }
 
@@ -1235,7 +1235,7 @@ fn macos_input_monitoring_trusted(prompt: bool) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn open_macos_privacy_settings(anchor: &str) {
+pub(crate) fn open_macos_privacy_settings(anchor: &str) {
     let _ = std::process::Command::new("open")
         .arg(format!(
             "x-apple.systempreferences:com.apple.preference.security?{}",

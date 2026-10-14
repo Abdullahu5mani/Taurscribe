@@ -1124,6 +1124,9 @@ fn start_recording_blocking(
 ) -> Result<String, String> {
     let mode = capture_mode(&state, audio_source.as_deref());
     let is_dual_channel = mode.is_dual_channel();
+    if is_dual_channel {
+        super::permissions::require_meeting_permissions()?;
+    }
     // RNNoise is tuned for a voice close to the mic; in a room it strips the
     // quieter voices of people further away.
     let denoise_enabled = denoise.unwrap_or(true) && mode != CaptureMode::InPerson;

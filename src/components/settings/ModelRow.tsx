@@ -140,6 +140,7 @@ export function ModelRow({ model, downloadProgress, onDownload, onDelete, onCanc
                         <div className="model-progress-header model-progress-header--download">
                             <span>
                                 {progress.status === 'starting' ? 'Starting download...' :
+                                    progress.status === 'copying' ? 'Copying model...' :
                                     progress.status === 'cancelling' ? 'Cancelling download...' :
                                     progress.status === 'finalizing' ? 'Finalizing...' :
                                 (progress.total_files || 0) > 1 ?

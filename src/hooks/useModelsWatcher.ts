@@ -68,6 +68,7 @@ export function useModelsWatcher({
                             [
                                 "starting",
                                 "downloading",
+                                "copying",
                                 "extracting",
                                 "verifying",
                                 "finalizing",

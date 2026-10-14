@@ -10,6 +10,7 @@ import {
   hardwareVerdict,
 } from '../modelRecommendations';
 import type { DownloadableModel, DownloadProgress } from './settings/types';
+import type { MeetingPermissions } from '../utils/meetingPermissions';
 import './SetupWizard.css';
 
 /** What finishing the wizard hands the app. `modelId`: the recommended model,
@@ -933,6 +934,10 @@ function StepPermissions({
       setMicStatus(mic);
     } catch { setMicStatus('undetermined'); }
     try {
+      const permissions = await invoke<MeetingPermissions>('check_meeting_permissions');
+      setAudioStatus(permissions.system_audio);
+    } catch { setAudioStatus('error'); }
+    try {
       const acc = await invoke<boolean>('check_accessibility_permission');
       setAccGranted(acc);
       if (initialAccRef.current === false && acc === true) {
@@ -1229,7 +1234,7 @@ function StepReady({
   const alreadyDownloaded = modelEntry?.downloaded === true;
 
   const progress = downloadProgress[modelId];
-  const activeStatuses = ['starting', 'downloading', 'extracting', 'verifying', 'finalizing'];
+  const activeStatuses = ['starting', 'downloading', 'copying', 'extracting', 'verifying', 'finalizing', 'cancelling'];
   const isDownloading = !!progress && activeStatuses.includes(progress.status);
 
   const totalFiles = Math.max(1, progress?.total_files ?? 1);
@@ -1248,9 +1253,11 @@ function StepReady({
 
   const progressLabel =
     progress?.status === 'verifying' ? 'Verifying…' :
+    progress?.status === 'copying' ? 'Copying…' :
     progress?.status === 'extracting' ? 'Extracting…' :
     progress?.status === 'finalizing' ? 'Finalizing…' :
     progress?.status === 'starting' ? 'Starting…' :
+    progress?.status === 'cancelling' ? 'Cancelling…' :
     `${progressPct}%`;
 
   const canLaunch = alreadyDownloaded;

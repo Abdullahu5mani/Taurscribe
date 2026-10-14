@@ -143,20 +143,41 @@ fn publish_staged_files(files: &[&super::model_registry::ModelFile], staging: &s
     result
 }
 
-fn verify_archive_hash(path: &std::path::Path, expected: &str, cancel: &AtomicBool) -> Result<(), String> {
+fn verify_archive_hash(path: &std::path::Path, expected: &str, cancel: &AtomicBool, mut progress: impl FnMut(u64)) -> Result<(), String> {
     if expected.is_empty() { return Ok(()); }
     use sha2::{Digest, Sha256};
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let mut hash = Sha256::new();
     let mut bytes = [0u8; 65536];
+    let mut processed = 0;
     loop {
         if cancel.load(Ordering::Relaxed) { return Err("Download cancelled by user".into()); }
         let count = file.read(&mut bytes).map_err(|e| e.to_string())?;
         if count == 0 { break; }
         hash.update(&bytes[..count]);
+        processed += count as u64;
+        progress(processed);
     }
     if format!("{:x}", hash.finalize()) != expected { return Err("Download failed — archive hash mismatch".into()); }
     Ok(())
+}
+
+fn copy_cancellable(mut input: impl Read, mut output: impl Write, cancel: &AtomicBool, mut progress: impl FnMut(u64)) -> Result<u64, String> {
+    let mut buffer = [0u8; 65536];
+    let mut copied = 0;
+    loop {
+        if cancel.load(Ordering::Relaxed) { return Err("Download cancelled by user".into()); }
+        let count = input.read(&mut buffer).map_err(|e| e.to_string())?;
+        if cancel.load(Ordering::Relaxed) { return Err("Download cancelled by user".into()); }
+        if count == 0 { return Ok(copied); }
+        output.write_all(&buffer[..count]).map_err(|e| e.to_string())?;
+        copied += count as u64;
+        progress(copied);
+    }
+}
+
+fn progress_due(bytes: u64, last_bytes: u64, elapsed: Duration) -> bool {
+    bytes != last_bytes && (bytes.saturating_sub(last_bytes) >= 512 * 1024 || elapsed >= Duration::from_millis(250))
 }
 
 /// Delete files from this attempt's staging directory on cancel/hash mismatch.
@@ -311,7 +332,10 @@ fn model_source(config: &ModelConfig) -> Result<ModelSource<'_>, String> {
 fn copy_local_model_file(
     source: &std::path::Path,
     destination: &std::path::Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(u64),
 ) -> Result<u64, String> {
+    if cancel.load(Ordering::Relaxed) { return Err("Download cancelled by user".into()); }
     if source.is_dir() {
         if destination.exists() {
             std::fs::remove_dir_all(destination)
@@ -324,7 +348,8 @@ fn copy_local_model_file(
             .map_err(|e| format!("Failed to read local model directory: {}", e))?
         {
             let entry = entry.map_err(|e| format!("Failed to read local model entry: {}", e))?;
-            copied += copy_local_model_file(&entry.path(), &destination.join(entry.file_name()))?;
+            let offset = copied;
+            copied += copy_local_model_file(&entry.path(), &destination.join(entry.file_name()), cancel, &mut |bytes| progress(offset + bytes))?;
         }
         return Ok(copied);
     }
@@ -333,7 +358,9 @@ fn copy_local_model_file(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create local model parent directory: {}", e))?;
     }
-    std::fs::copy(source, destination).map_err(|e| {
+    let input = File::open(source).map_err(|e| e.to_string())?;
+    let output = File::create(destination).map_err(|e| e.to_string())?;
+    copy_cancellable(input, output, cancel, progress).map_err(|e| {
         format!(
             "Failed to copy local model file {}: {}",
             source.display(),
@@ -784,7 +811,19 @@ async fn download_model_inner(
                     &format!("Local model file not found: {}", source_path.display()),
                 ));
             }
-            let copied = copy_local_model_file(&source_path, &download_path)
+            let total = std::fs::metadata(&source_path).ok().filter(|m| m.is_file()).map_or(0, |m| m.len());
+            let emit_copy = |bytes| { let _ = app.emit("download-progress", DownloadProgressPayload {
+                model_id: model_id.into(), total_bytes: total, downloaded_bytes: bytes, status: "copying".into(),
+                current_file: (i + 1) as u32, total_files: files_count as u32,
+            }); };
+            emit_copy(0);
+            let mut last_copy = 0;
+            let mut last_copy_at = std::time::Instant::now();
+            let copied = copy_local_model_file(&source_path, &download_path, cancel_flag, &mut |bytes| {
+                if progress_due(bytes, last_copy, last_copy_at.elapsed()) {
+                    emit_copy(bytes); last_copy = bytes; last_copy_at = std::time::Instant::now();
+                }
+            })
                 .map_err(|e| emit_error(app, model_id, i, files_count, &e))?;
             let _ = app.emit(
                 "download-progress",
@@ -792,7 +831,7 @@ async fn download_model_inner(
                     model_id: model_id.to_string(),
                     total_bytes: copied,
                     downloaded_bytes: copied,
-                    status: "downloading".to_string(),
+                    status: "copying".to_string(),
                     current_file: (i + 1) as u32,
                     total_files: files_count as u32,
                 },
@@ -852,7 +891,7 @@ async fn download_model_inner(
             let mut downloaded: u64 = 0;
             let mut stream = res.bytes_stream();
             let mut last_emit: u64 = 0;
-            let emit_threshold = 1024 * 1024; // 1 MB
+            let mut last_emit_at = std::time::Instant::now();
 
             while let Some(item) = stream.next().await {
                 // Check for user cancellation on every chunk immediately
@@ -894,8 +933,9 @@ async fn download_model_inner(
                 }
                 downloaded += chunk.len() as u64;
 
-                if downloaded - last_emit > emit_threshold || downloaded == total_size {
+                if progress_due(downloaded, last_emit, last_emit_at.elapsed()) || downloaded == total_size {
                     last_emit = downloaded;
+                    last_emit_at = std::time::Instant::now();
                     let _ = app.emit(
                         "download-progress",
                         DownloadProgressPayload {
@@ -913,11 +953,24 @@ async fn download_model_inner(
         }
 
         if is_zip {
+            let archive_bytes = std::fs::metadata(&download_path).map_err(|e| e.to_string())?.len();
+            let emit_hash = |bytes| { let _ = app.emit("download-progress", DownloadProgressPayload {
+                model_id: model_id.into(), total_bytes: archive_bytes, downloaded_bytes: bytes, status: "verifying".into(),
+                current_file: (i + 1) as u32, total_files: files_count as u32,
+            }); };
+            emit_hash(0);
             let expected = if !file_spec.sha1.is_empty() { file_spec.sha1.to_string() }
                 else if is_hf_repo { fetch_hf_lfs_sha256(&client, config.repo, config.branch, file_spec.remote_path).await.unwrap_or_default() }
                 else { String::new() };
-            verify_archive_hash(&download_path, &expected, cancel_flag)
+            let mut last_hash = 0;
+            let mut last_hash_at = std::time::Instant::now();
+            verify_archive_hash(&download_path, &expected, cancel_flag, |bytes| {
+                if progress_due(bytes, last_hash, last_hash_at.elapsed()) {
+                    emit_hash(bytes); last_hash = bytes; last_hash_at = std::time::Instant::now();
+                }
+            })
                 .map_err(|e| emit_error(app, model_id, i, files_count, &e))?;
+            emit_hash(archive_bytes);
         }
 
         if is_zip {
@@ -945,7 +998,13 @@ async fn download_model_inner(
                 .map_err(|e| zip_fail(format!("Failed to open zip for extraction: {}", e)))?;
             let mut archive = ZipArchive::new(zip_file)
                 .map_err(|e| zip_fail(format!("Failed to read zip archive: {}", e)))?;
-            let total_entries = archive.len() as u64;
+            let mut total_extracted = 0u64;
+            for entry_idx in 0..archive.len() {
+                total_extracted = total_extracted.saturating_add(archive.by_index(entry_idx).map_err(|e| zip_fail(e.to_string()))?.size());
+            }
+            let mut extracted = 0u64;
+            let mut last_extracted = 0u64;
+            let mut last_extract_at = std::time::Instant::now();
 
             for entry_idx in 0..archive.len() {
                 let mut entry = archive
@@ -966,16 +1025,26 @@ async fn download_model_inner(
                     }
                     let mut out_file = File::create(&outpath)
                         .map_err(|e| zip_fail(format!("Failed to create extracted file: {}", e)))?;
-                    std::io::copy(&mut entry, &mut out_file)
+                    let offset = extracted;
+                    extracted += copy_cancellable(&mut entry, &mut out_file, cancel_flag, |bytes| {
+                        let bytes = offset + bytes;
+                        if progress_due(bytes, last_extracted, last_extract_at.elapsed()) {
+                            let _ = app.emit("download-progress", DownloadProgressPayload {
+                                model_id: model_id.into(), total_bytes: total_extracted, downloaded_bytes: bytes, status: "extracting".into(),
+                                current_file: (i + 1) as u32, total_files: files_count as u32,
+                            });
+                            last_extracted = bytes; last_extract_at = std::time::Instant::now();
+                        }
+                    })
                         .map_err(|e| zip_fail(format!("Failed to write extracted file: {}", e)))?;
                 }
-                // Progress: bytes = entries done, total = total entries
+                // Includes progress within large entries, not just completed files.
                 let _ = app.emit(
                     "download-progress",
                     DownloadProgressPayload {
                         model_id: model_id.to_string(),
-                        total_bytes: total_entries,
-                        downloaded_bytes: (entry_idx + 1) as u64,
+                        total_bytes: total_extracted,
+                        downloaded_bytes: extracted,
                         status: "extracting".to_string(),
                         current_file: (i + 1) as u32,
                         total_files: files_count as u32,
@@ -1369,6 +1438,48 @@ mod tests {
     use crate::commands::model_registry::ModelFile;
 
     #[test]
+    fn copying_a_large_entry_reports_intermediate_bytes_and_stops_on_cancel() {
+        let input=vec![42u8;65536*5];let cancel=AtomicBool::new(false);let mut output=Vec::new();let mut progress=Vec::new();
+        let copied=copy_cancellable(std::io::Cursor::new(&input),&mut output,&cancel,|bytes|progress.push(bytes)).unwrap();
+        assert_eq!(copied,input.len() as u64);assert_eq!(output,input);
+        assert!(progress.len()>1 && progress[0]<copied);
+        let mut partial=Vec::new();
+        assert!(copy_cancellable(std::io::Cursor::new(&input),&mut partial,&cancel,|_|cancel.store(true,Ordering::Relaxed)).unwrap_err().contains("cancelled"));
+        assert_eq!(partial.len(),65536);
+    }
+
+    #[test]
+    fn a_real_zip_entry_is_cancellable_before_it_finishes_extracting() {
+        let mut zip=zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("weights.bin",zip::write::FileOptions::default()).unwrap();
+        zip.write_all(&vec![17u8;65536*5]).unwrap();
+        let archive=zip.finish().unwrap();let mut zip=ZipArchive::new(archive).unwrap();
+        let mut entry=zip.by_index(0).unwrap();let cancel=AtomicBool::new(false);let mut extracted=Vec::new();
+        let result=copy_cancellable(&mut entry,&mut extracted,&cancel,|_|cancel.store(true,Ordering::Relaxed));
+        assert!(result.unwrap_err().contains("cancelled"));assert_eq!(extracted.len(),65536);
+    }
+
+    #[test]
+    fn slow_network_chunks_emit_activity_before_the_old_megabyte_threshold() {
+        assert!(progress_due(10_000,0,Duration::from_secs(1)));
+        assert!(!progress_due(0,0,Duration::from_secs(40)));
+        assert!(!progress_due(10_000,0,Duration::from_millis(10)));
+        assert!(progress_due(1_000_000,0,Duration::from_millis(10)));
+    }
+
+    #[test]
+    fn archive_hashing_reports_incremental_progress_and_can_be_cancelled() {
+        use sha2::{Digest,Sha256};
+        let path=std::env::temp_dir().join(format!("archive-hash-{}",rand::random::<u64>()));
+        let bytes=vec![3u8;65536*3];std::fs::write(&path,&bytes).unwrap();
+        let expected=format!("{:x}",Sha256::digest(&bytes));let cancel=AtomicBool::new(false);let mut progress=Vec::new();
+        verify_archive_hash(&path,&expected,&cancel,|bytes|progress.push(bytes)).unwrap();
+        assert_eq!(*progress.last().unwrap(),bytes.len() as u64);assert!(progress.len()>1);
+        assert!(verify_archive_hash(&path,&expected,&cancel,|_|cancel.store(true,Ordering::Relaxed)).unwrap_err().contains("cancelled"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn encoder_owner_check_respects_installed_quantized_weights() {
         let dir = std::env::temp_dir().join(format!("taurscribe-encoder-owners-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1522,9 +1633,9 @@ mod download_integrity_tests {
         let root=root();let archive=root.join("encoder.zip");
         let bytes=b"approved archive bytes";let expected=format!("{:x}",Sha256::digest(bytes));
         std::fs::write(&archive,bytes).unwrap();
-        verify_archive_hash(&archive,&expected,&AtomicBool::new(false)).unwrap();
+        verify_archive_hash(&archive,&expected,&AtomicBool::new(false), |_| {}).unwrap();
         std::fs::write(&archive,b"truncated or corrupted archive").unwrap();
-        assert!(verify_archive_hash(&archive,&expected,&AtomicBool::new(false)).unwrap_err().contains("hash mismatch"));
+        assert!(verify_archive_hash(&archive,&expected,&AtomicBool::new(false), |_| {}).unwrap_err().contains("hash mismatch"));
         std::fs::create_dir(root.join("encoder.mlmodelc")).unwrap();
         let file=ModelFile{filename:"encoder.mlmodelc",remote_path:"encoder.mlmodelc.zip",sha1:"expected-archive-hash"};
         assert!(verify_installed_model_files(&[&file],&root).is_err());
