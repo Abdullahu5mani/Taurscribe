@@ -13,6 +13,7 @@ mock.module("@tauri-apps/api/core", () => ({ ...realCore, invoke: async (cmd: st
     switch (cmd) {
         case "get_granite_status": return { loaded: true, model_id: "granite-test" };
         case "get_audio_source_mode": return "mic";
+        case "check_meeting_permissions": return { microphone: "granted", system_audio: "granted" };
         case "start_recording": case "pause_recording": case "resume_recording": case "type_text": case "cancel_recording":
             return { ok: true, data: "ok" };
         case "stop_recording": return stopped();
@@ -94,6 +95,65 @@ test("a manually started meeting shows both channels before any level event", as
     const h = fixture({ mute: true }); await h.handle.current.handleStartRecording(false, "dual_channel"); await h.settle();
     expect(h.handle.current.isDualChannelRecording).toBe(true);
     expect(calls).not.toContain("mute_system_audio");
+});
+
+test("denied system audio never loads a model or starts a mic-only meeting", async () => {
+    responses.set("check_meeting_permissions", () => ({ microphone: "granted", system_audio: "denied" }));
+    const h = fixture(); await h.handle.current.handleStartRecording(false, "dual_channel"); await h.settle();
+    expect(calls).not.toContain("start_recording");
+    expect(calls).not.toContain("get_granite_status");
+    expect(h.handle.current.isRecording).toBe(false);
+    const notice = h.notices.at(-1);
+    expect(notice.code).toBe("system_audio_permission_denied");
+    notice.actions[0].onClick(); await h.settle();
+    expect(calls).toContain("open_system_audio_settings");
+});
+
+test("an undecided audio grant is requested and verified before opening tracks", async () => {
+    let granted = false;
+    responses.set("check_meeting_permissions", () => ({ microphone: "granted", system_audio: granted ? "granted" : "undetermined" }));
+    responses.set("request_system_audio_permission", () => { granted = true; return "granted"; });
+    const h = fixture(); await h.handle.current.handleStartRecording(false, "dual_channel"); await h.settle();
+    expect(calls.indexOf("request_system_audio_permission")).toBeLessThan(calls.indexOf("start_recording"));
+    expect(h.handle.current.isDualChannelRecording).toBe(true);
+});
+
+test("an unreadable permission status fails closed while dictation remains independent", async () => {
+    responses.set("check_meeting_permissions", () => null);
+    const h = fixture(); await h.handle.current.handleStartRecording(false, "dual_channel");
+    expect(calls).not.toContain("start_recording");
+    expect(h.notices.at(-1).code).toBe("meeting_permission_check_failed");
+    calls.length = 0;
+    await h.handle.current.handleStartRecording(false, "mic");
+    expect(calls).toContain("start_recording");
+    expect(calls).not.toContain("check_meeting_permissions");
+});
+
+test("a permission reply after an external Stop cannot open a new capture", async () => {
+    const pending = deferred<any>();
+    responses.set("check_meeting_permissions", () => pending.promise);
+    const h = fixture(); const start = h.handle.current.handleStartRecording(false, "dual_channel");
+    await h.settle();
+    fire("recording-state", { is_recording: false, is_dual_channel: false });
+    pending.resolve({ microphone: "granted", system_audio: "granted" });
+    await start; await h.settle();
+    expect(calls).not.toContain("start_recording");
+});
+
+test("silent caller warning has a retry action and clears when sound returns", async () => {
+    const h = fixture(); await h.handle.current.handleStartRecording(false, "dual_channel"); await h.settle();
+    fire("meeting-audio-status", { status: "silent", message: "If someone is speaking, check call audio" });
+    const notice = h.notices.at(-1);
+    expect(notice.code).toBe("meeting_audio_unverified");
+    expect(notice.sticky).toBe(true);
+    notice.actions[0].onClick(); await h.settle();
+    expect(calls).toContain("retry_meeting_audio_capture");
+    fire("meeting-audio-status", { status: "restored", message: "Call audio received" });
+    expect(h.notices.at(-1)).toBe(null);
+    fire("recording-state", { is_recording: false, is_dual_channel: false });
+    const count = h.notices.length;
+    fire("meeting-audio-status", { status: "silent", message: "Late warning" });
+    expect(h.notices).toHaveLength(count);
 });
 
 test("late meeting levels cannot restore meeting UI after backend Stop", async () => {

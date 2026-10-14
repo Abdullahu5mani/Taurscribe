@@ -13,6 +13,7 @@ mock.module("@tauri-apps/api/core", () => ({ ...realCore, invoke: async (cmd: st
     switch (cmd) {
         case "get_granite_status": return { loaded: true, model_id: "granite-test" };
         case "get_audio_source_mode": return "mic";
+        case "check_meeting_permissions": return { microphone: "granted", system_audio: "granted" };
         case "start_recording": case "pause_recording": case "resume_recording": case "type_text": case "cancel_recording":
             return { ok: true, data: "ok" };
         case "stop_recording": return stopped();

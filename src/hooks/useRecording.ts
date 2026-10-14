@@ -283,8 +283,9 @@ export function useRecording({
     }, []);
 
     useEffect(() => {
+        let disposed = false;
         const subscription = listen<{ status: string; message: string }>("meeting-audio-status", ({ payload }) => {
-            if (!isRecordingRef.current || !meetingSessionRef.current) return;
+            if (disposed || !isRecordingRef.current || !meetingSessionRef.current) return;
             if (payload.status === "restored") {
                 if (callAudioNoticeRef.current) showNotice(null);
                 return;
@@ -292,7 +293,7 @@ export function useRecording({
             const retryable = payload.status === "silent";
             showNotice({
                 level: payload.status === "failed" ? "error" : "warning",
-                code: retryable ? "meeting_audio_unverified" : "meeting_audio_recovering",
+                code: retryable ? "meeting_audio_unverified" : payload.status === "fallback" ? "meeting_audio_fallback" : "meeting_audio_recovering",
                 title: retryable ? "Check call audio" : payload.status === "fallback" ? "Recording all system audio" : "Meeting audio interrupted",
                 message: payload.message, sticky: true,
                 actions: retryable ? [
@@ -303,7 +304,7 @@ export function useRecording({
                 ] : undefined,
             });
         });
-        return () => { void subscription.then(unlisten => unlisten()); };
+        return () => { disposed = true; void subscription.then(unlisten => unlisten()); };
     }, []);
 
     const startRecordingOnce = async (generation: number, fromHotkey = false, audioSource?: string) => {

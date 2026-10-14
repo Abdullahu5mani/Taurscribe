@@ -229,6 +229,16 @@ mod tests {
         assert!(loss.warnings().is_empty());
     }
 
+    #[test]
+    fn meeting_capture_failures_survive_teardown_without_duplicate_warnings() {
+        let loss = CaptureLoss::default();
+        loss.warn_meeting("Call audio interrupted".into());
+        loss.warn_meeting("Call audio interrupted".into());
+        assert_eq!(loss.warnings(), vec!["Call audio interrupted"]);
+        loss.input_frames.store(960, Ordering::Relaxed);
+        assert_eq!(loss.warnings().len(), 2);
+    }
+
         #[test]
     fn disconnected_writer_is_audio_loss_but_recoverable_preview_loss_is_not() {
         let loss = CaptureLoss::default();

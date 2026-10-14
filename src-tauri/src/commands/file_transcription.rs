@@ -108,6 +108,7 @@ fn register_cancel_flag(path: &str, job_id: Option<String>) -> Result<Arc<Atomic
     Ok(flag)
 }
 
+#[cfg(test)]
 fn unregister_cancel_flag(path: &str) {
     cancel_flags().lock().unwrap().remove(path);
 }
@@ -135,9 +136,13 @@ const FILE_SLOT_WAIT: std::time::Duration = std::time::Duration::from_secs(30 * 
 /// never blocks the recording, load or import it is waiting for.
 async fn wait_for_file_slot(
     state: &AudioState,
+    cancel: &AtomicBool,
 ) -> Result<(crate::state::ModelOperationGuard, crate::state::RecordingTransitionGuard), String> {
     let deadline = std::time::Instant::now() + FILE_SLOT_WAIT;
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Transcription cancelled".into());
+        }
         let attempt = state.begin_model_operation().and_then(|operation| {
             if state.engine_loading.load(Ordering::Acquire) {
                 return Err("ASR model is still loading; wait until the engine is ready before transcribing a file".to_string());
@@ -146,11 +151,27 @@ async fn wait_for_file_slot(
             Ok((operation, transition))
         });
         match attempt {
-            Ok(slot) => return Ok(slot),
+            Ok(slot) => {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Transcription cancelled".into());
+                }
+                return Ok(slot);
+            }
             Err(error) if std::time::Instant::now() >= deadline => return Err(error),
             Err(_) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
         }
     }
+}
+
+async fn reserve_file_job(
+    state: &AudioState,
+    path: &str,
+    job_id: Option<String>,
+) -> Result<(Arc<AtomicBool>, FileJobRegistration, crate::state::ModelOperationGuard, crate::state::RecordingTransitionGuard), String> {
+    let cancel = register_cancel_flag(path, job_id)?;
+    let registration = FileJobRegistration { path: path.into(), flag: cancel.clone() };
+    let (operation, transition) = wait_for_file_slot(state, &cancel).await?;
+    Ok((cancel, registration, operation, transition))
 }
 
 /// Transcribe an audio file using the currently active ASR engine.
@@ -177,9 +198,8 @@ pub async fn transcribe_file(
     // instead of failing: the Files queue advances the moment one job ends, so
     // failing here would fail every remaining queued file at once. Per-chunk
     // priority then protects the live recording on the shared engine.
-    let (model_operation, transition) = wait_for_file_slot(&state).await?;
+    let (cancel, registration, model_operation, transition) = reserve_file_job(&state, &path, job_id).await?;
     let model_operation = Arc::new(model_operation);
-    let cancel = register_cancel_flag(&path, job_id)?;
     drop(transition);
     let whisper = state.whisper.clone();
     let granite = state.granite.clone();
@@ -194,7 +214,6 @@ pub async fn transcribe_file(
         .as_deref()
         .is_some_and(|expected| expected != actual_engine)
     {
-        unregister_cancel_flag(&path);
         return Err("The active engine changed after this file was queued. Re-run it with the desired model.".into());
     }
     let path_for_task = path.clone();
@@ -202,7 +221,6 @@ pub async fn transcribe_file(
     let state_for_task = (*state).clone();
 
     // A detached blocking job still owns its model gate and registration.
-    let registration = FileJobRegistration(path.clone());
     let worker_operation = model_operation.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
         let _registration = registration;
@@ -737,11 +755,17 @@ mod vm_feature_tests {
     }
 }
 
-struct FileJobRegistration(String);
+struct FileJobRegistration {
+    path: String,
+    flag: Arc<AtomicBool>,
+}
 
 impl Drop for FileJobRegistration {
     fn drop(&mut self) {
-        unregister_cancel_flag(&self.0);
+        let mut jobs = cancel_flags().lock().unwrap();
+        if jobs.get(&self.path).is_some_and(|job| Arc::ptr_eq(&job.flag, &self.flag)) {
+            jobs.remove(&self.path);
+        }
     }
 }
 
@@ -955,6 +979,56 @@ fn transcribe_file_window(
 mod tests {
     use super::*;
 
+    fn idle_state() -> AudioState {
+        AudioState::new(crate::whisper::WhisperManager::new(), crate::gguf_asr::GgufAsrManager::granite(),
+            crate::vad::VADManager::new().unwrap(), crate::gguf_asr::GgufAsrManager::qwen3())
+    }
+
+    #[tokio::test]
+    async fn cancel_waiting_file_exits_before_the_busy_model_is_released() {
+        let state = idle_state();
+        let busy = state.begin_exclusive_model_operation().unwrap();
+        let path = format!("/tmp/waiting-file-{}", rand::random::<u64>());
+        let worker = { let state=state.clone(); let path=path.clone();
+            tokio::spawn(async move { reserve_file_job(&state, &path, Some("waiting".into())).await }) };
+        tokio::task::yield_now().await;
+        assert!(cancel_flags().lock().unwrap().contains_key(&path));
+        assert!(reserve_file_job(&state, &path, Some("duplicate".into())).await.is_err());
+        cancel_file_transcription(path.clone(), Some("waiting".into())).await.unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), worker).await.unwrap().unwrap();
+        assert!(matches!(result, Err(ref error) if error == "Transcription cancelled"));
+        assert!(!cancel_flags().lock().unwrap().contains_key(&path));
+        drop(busy);
+        let (_, registration, operation, transition) = reserve_file_job(&state, &path, Some("retry".into())).await.unwrap();
+        drop((registration, operation, transition));
+        assert!(!cancel_flags().lock().unwrap().contains_key(&path));
+    }
+
+    #[tokio::test]
+    async fn abandoned_waiting_request_releases_its_registration() {
+        let state=idle_state(); let _busy=state.begin_exclusive_model_operation().unwrap();
+        let path=format!("/tmp/abandoned-file-{}",rand::random::<u64>());
+        let worker={let state=state.clone();let path=path.clone();tokio::spawn(async move{reserve_file_job(&state,&path,None).await})};
+        tokio::task::yield_now().await;
+        assert!(cancel_flags().lock().unwrap().contains_key(&path));
+        worker.abort(); assert!(matches!(worker.await, Err(error) if error.is_cancelled()));
+        assert!(!cancel_flags().lock().unwrap().contains_key(&path));
+    }
+
+    #[test]
+    fn obsolete_registration_cannot_remove_a_successor() {
+        let path=format!("/tmp/registration-owner-{}",rand::random::<u64>());
+        let first=register_cancel_flag(&path,None).unwrap();
+        let old=FileJobRegistration{path:path.clone(),flag:first};
+        unregister_cancel_flag(&path);
+        let flag=register_cancel_flag(&path,Some("new".into())).unwrap();
+        let current=FileJobRegistration{path:path.clone(),flag:flag.clone()};
+        drop(old);
+        assert!(Arc::ptr_eq(&cancel_flags().lock().unwrap()[&path].flag,&flag));
+        drop(current);
+        assert!(!cancel_flags().lock().unwrap().contains_key(&path));
+    }
+
     #[test]
     fn speech_speed_accumulates_chunks_and_resets_for_each_job() {
         let mut timing = FileTiming::default();
@@ -971,8 +1045,8 @@ mod tests {
     #[test]
     fn detached_file_worker_releases_its_registration() {
         let path = format!("/tmp/file-registration-{}", rand::random::<u64>());
-        register_cancel_flag(&path, None).unwrap();
-        let registration = FileJobRegistration(path.clone());
+        let flag = register_cancel_flag(&path, None).unwrap();
+        let registration = FileJobRegistration { path: path.clone(), flag };
         let (release, wait) = std::sync::mpsc::channel();
         let (done, finished) = std::sync::mpsc::channel();
         let worker = tauri::async_runtime::spawn_blocking(move || {

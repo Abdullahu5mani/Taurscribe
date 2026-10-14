@@ -293,6 +293,11 @@ pub async fn start_recording(
         .map(|result| match result {
             Ok(message) => {
                 emit_recording_state(&app_for_event, &state_for_event);
+                if crate::audio_dual_channel::capture_diagnostics().is_some_and(|d| d.active && d.fell_back_to_system) {
+                    let _ = app_for_event.emit("meeting-audio-status", serde_json::json!({
+                        "status": "fallback", "message": "Using all system audio because meeting-only capture failed. Other apps' sounds may also be recorded."
+                    }));
+                }
                 CommandResult::ok(message)
             }
             Err(message) => {
@@ -1026,11 +1031,7 @@ fn start_meeting_capture(
     // music, anything else playing) stays out of the callers channel. Without a
     // detected meeting (or for the simulator's synthetic pid) fall back to the
     // whole system mix.
-    let meeting_pid = state
-        .meeting_detector
-        .get_status()
-        .active_meetings
-        .iter().find(|m| m.should_record || m.confidence >= 70)
+    let meeting_pid = state.recording_meeting.lock().unwrap().as_ref()
         .map(|m| m.pid)
         .filter(|pid| *pid > 0 && *pid != 99999);
     let target = meeting_pid.map(DualChannelTarget::Process).unwrap_or(DualChannelTarget::System);
@@ -1051,7 +1052,7 @@ fn start_meeting_capture(
         Ok(handle) => Ok(handle),
         Err(e) if target != DualChannelTarget::System => {
             eprintln!("[WARN] Meeting-process capture failed ({}); falling back to system audio", e);
-            crate::audio_dual_channel::start_dual_channel_capture(
+            let handle = crate::audio_dual_channel::start_dual_channel_capture(
                 DualChannelTarget::System,
                 48000,
                 file_tx,
@@ -1060,7 +1061,9 @@ fn start_meeting_capture(
                 dual_stop,
                 meeting_mic,
                 capture_loss,
-            )
+            )?;
+            crate::audio_dual_channel::mark_system_fallback();
+            Ok(handle)
         }
         Err(e) => Err(e),
     }
