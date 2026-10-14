@@ -145,6 +145,9 @@ impl StreamingResampler {
 }
 
 pub(crate) fn resample_mono_ratio(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, String> {
+    if from_rate == 0 || to_rate == 0 {
+        return Err("File has invalid sample rate".into());
+    }
     if from_rate == to_rate {
         return Ok(samples.to_vec());
     }
@@ -385,7 +388,10 @@ fn denoise_16k_with_rnnoise(samples: &[f32]) -> Vec<f32> {
         return samples.to_vec();
     };
     let mut den = Denoiser::new();
-    let den48 = den.process(&up);
+    let mut den48 = den.process(&up);
+    // process keeps a short frame for the next call. This is the only call,
+    // so that tail would otherwise come back as silence.
+    den48.extend(den.flush());
     if den48.is_empty() {
         return samples.to_vec();
     }
@@ -553,6 +559,13 @@ mod tests {
             assert_eq!(out.len(), expected, "{len} samples at {rate} Hz");
         }
         assert!(resample_mono_to_16k(&[], 48_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_zero_sample_rate_is_an_error() {
+        assert!(resample_mono_ratio(&[0.1, 0.2], 0, 16_000).is_err());
+        assert!(resample_mono_ratio(&[0.1, 0.2], 16_000, 0).is_err());
+        assert!(resample_mono_to_16k(&[0.1, 0.2], 0).is_err());
     }
 
     #[test]

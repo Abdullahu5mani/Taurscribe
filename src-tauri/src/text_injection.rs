@@ -2,12 +2,14 @@
 //!
 //! On Linux under Wayland (GNOME, KDE Plasma, Sway, Hyprland), client isolation prevents
 //! synthetic keystrokes via XTest/Enigo from reaching foreign application surfaces.
-//! This module implements a prioritized 5-tier injection strategy:
+//! This module implements a prioritized 4-tier paste strategy:
 //! 1. Direct Kernel `/dev/uinput` Virtual Keyboard (instantaneous, compositor-agnostic)
 //! 2. `ydotool` / `ydotoold` CLI automation daemon
 //! 3. `wtype` for wlroots-based compositors
-//! 4. FreeDesktop RemoteDesktop Portal (`org.freedesktop.portal.RemoteDesktop`)
-//! 5. `enigo` synthetic Ctrl+V fallback (for X11 and legacy sessions)
+//! 4. `enigo` synthetic Ctrl+V fallback (for X11 and legacy sessions)
+//!
+//! [`TextInjectionBackend::RemoteDesktopPortal`] is reported by
+//! [`select_text_injection_backend`] only; pasting never goes through the portal.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextInjectionBackend {
@@ -138,13 +140,10 @@ fn perform_paste_keystroke() -> Result<TextInjectionBackend, String> {
             return Ok(TextInjectionBackend::Wtype);
         }
 
-        // Tier 4: RemoteDesktop portal
-        if let Ok(()) = try_portal_ctrl_v() {
-            println!("[INSERT] Wayland text injection via RemoteDesktop portal succeeded");
-            return Ok(TextInjectionBackend::RemoteDesktopPortal);
-        }
+        // No RemoteDesktop portal tier: sending a key through it needs a started
+        // session (SelectDevices + Start, which asks the user), not one-shot calls.
 
-        // Tier 5: fallback to enigo
+        // Tier 4: fallback to enigo
         eprintln!("[INSERT] Wayland injection tiers exhausted, attempting Enigo fallback");
         simulate_enigo_ctrl_v()?;
         Ok(TextInjectionBackend::Enigo)
@@ -377,48 +376,4 @@ fn try_wtype_ctrl_v() -> Result<(), String> {
     } else {
         Err(format!("wtype exited with code: {:?}", status.code()))
     }
-}
-
-#[cfg(target_os = "linux")]
-fn try_portal_ctrl_v() -> Result<(), String> {
-    let output = std::process::Command::new("busctl")
-        .args([
-            "--user",
-            "call",
-            "org.freedesktop.portal.Desktop",
-            "/org/freedesktop/portal/desktop",
-            "org.freedesktop.portal.RemoteDesktop",
-            "CreateSession",
-            "a{sv}",
-            "0",
-        ])
-        .output();
-
-    if let Ok(out) = output {
-        if out.status.success() {
-            return Ok(());
-        }
-    }
-
-    let output2 = std::process::Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--dest",
-            "org.freedesktop.portal.Desktop",
-            "--object-path",
-            "/org/freedesktop/portal/desktop",
-            "--method",
-            "org.freedesktop.portal.RemoteDesktop.CreateSession",
-            "{}",
-        ])
-        .output();
-
-    if let Ok(out) = output2 {
-        if out.status.success() {
-            return Ok(());
-        }
-    }
-
-    Err("RemoteDesktop portal invocation failed".into())
 }

@@ -65,6 +65,20 @@ impl Denoiser {
 
         output
     }
+
+    /// Denoise the leftover short of a frame. Zero-padding the frame is how
+    /// RNNoise finishes a stream; only the real samples are returned.
+    pub fn flush(&mut self) -> Vec<f32> {
+        if self.remainder.is_empty() {
+            return Vec::new();
+        }
+        let kept = self.remainder.len();
+        self.remainder.resize(FRAME_SIZE, 0.0);
+        let mut out_frame = [0.0f32; FRAME_SIZE];
+        process_normalized_frame(&mut self.state, &mut out_frame, &self.remainder);
+        self.remainder.clear();
+        out_frame[..kept].to_vec()
+    }
 }
 
 
@@ -98,5 +112,13 @@ mod tests {
         let energy:f64=actual.iter().map(|sample|(*sample as f64).powi(2)).sum();
         let original:f64=speech.iter().map(|sample|(*sample as f64).powi(2)).sum();
         assert!(energy>original*0.05,"speech must not collapse to near silence");
+    }
+
+    #[test]
+    fn the_last_partial_frame_is_not_discarded() {
+        let mut denoiser = Denoiser::new();
+        assert_eq!(denoiser.process(&[0.2; 500]).len(), 480);
+        assert_eq!(denoiser.flush().len(), 20);
+        assert!(denoiser.flush().is_empty());
     }
 }
