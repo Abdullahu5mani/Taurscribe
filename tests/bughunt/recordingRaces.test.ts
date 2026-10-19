@@ -93,6 +93,30 @@ test("a failed old Start cannot clear a newer externally started session", async
     expect(h.handle.current.isDualChannelRecording).toBe(true);
 });
 
+test("a Start whose own recording event arrives before its reply finishes starting", async () => {
+    // The backend emits recording-state before start_recording replies.
+    const pending = deferred<any>(); responses.set("start_recording", () => pending.promise);
+    const h = fixture(); await h.settle();
+    const start = h.handle.current.handleStartRecording(); await h.settle();
+    fire("recording-state", { is_recording: true, is_dual_channel: false });
+    pending.resolve({ ok: true, data: "started" });
+    await start; await h.settle();
+    expect(h.handle.current.isRecording).toBe(true);
+    expect(h.headers).toContain("Recording started");
+});
+
+test("a Stop between a Start's event and its reply still wins", async () => {
+    const pending = deferred<any>(); responses.set("start_recording", () => pending.promise);
+    const h = fixture(); await h.settle();
+    const start = h.handle.current.handleStartRecording(); await h.settle();
+    fire("recording-state", { is_recording: true, is_dual_channel: false });
+    fire("recording-state", { is_recording: false, is_dual_channel: false });
+    pending.resolve({ ok: true, data: "started" });
+    await start; await h.settle();
+    expect(h.handle.current.isRecording).toBe(false);
+    expect(h.headers).not.toContain("Recording started");
+});
+
 test("backend mode reconciliation wins over the delayed UI Start mode", async () => {
     const pending = deferred<any>(); responses.set("start_recording", () => pending.promise);
     const h = fixture(); await h.settle();

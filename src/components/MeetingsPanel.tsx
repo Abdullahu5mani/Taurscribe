@@ -317,8 +317,10 @@ export function MeetingsPanel({
   };
   const [processingElapsed, setProcessingElapsed] = useState(0);
   const [editingTitle, setEditingTitle] = useState("");
+  const titleDraft = useRef<string | null>(null);
   const titleWrites = useRef(serialTasks());
   const titleRequests = useRef(new Map<number, { revision: number; title: string }>());
+  const savedTitles = useRef(new Map<number, { revision: number; title: string }>());
   const titleRevision = useRef(0);
   const [renamingSpeakerId, setRenamingSpeakerId] = useState<string | null>(null);
   // Speaker ids like "speaker_remote_1" repeat across meetings: close any open
@@ -340,6 +342,7 @@ export function MeetingsPanel({
       detailRequestRef.current += 1;
       selectedMeetingIdRef.current = id;
       setSelectedMeeting(null);
+      titleDraft.current = null;
       setEditingTitle("");
       setLoadingDetail(false);
       setConfirmDeleteMeetingId(null);
@@ -431,6 +434,7 @@ export function MeetingsPanel({
   const loadMeetingDetail = async (id: number) => {
     if (selectedMeetingIdRef.current !== id) return;
     const request = ++detailRequestRef.current;
+    const savedBeforeRead = savedTitles.current.get(id);
     setLoadingDetail(true);
     stopFullAudio();
     stopSnippetAudio();
@@ -439,6 +443,9 @@ export function MeetingsPanel({
         meetingId: id,
       });
       if (request !== detailRequestRef.current || selectedMeetingIdRef.current !== id) return;
+      // A read may have captured the old row while a title write was pending.
+      const savedDuringRead = savedTitles.current.get(id);
+      if (savedDuringRead && savedDuringRead !== savedBeforeRead) detail.title = savedDuringRead.title;
       const audioPath = detail.audio_path ?? null;
       if (selectedAudioPathRef.current !== audioPath) {
         setAudioCurrentTime(0);
@@ -447,7 +454,7 @@ export function MeetingsPanel({
       selectedAudioPathRef.current = audioPath;
       setSelectedMeeting(detail);
       setAudioFailed(false);
-      setEditingTitle(detail.title);
+      setEditingTitle(titleDraft.current ?? titleRequests.current.get(id)?.title ?? detail.title);
     } catch (err) {
       if (request === detailRequestRef.current) console.error("Failed to load meeting detail:", err);
     } finally {
@@ -734,14 +741,24 @@ export function MeetingsPanel({
     const meetingId = selectedMeeting.id;
     const newTitle = editingTitle.trim();
     const previous = titleRequests.current.get(meetingId);
-    if (previous?.title === newTitle || (!previous && newTitle === selectedMeeting.title)) return;
+    if (previous?.title === newTitle) return;
+    if (!previous && newTitle === selectedMeeting.title) {
+      titleDraft.current = null;
+      setEditingTitle(newTitle);
+      return;
+    }
     const revision = ++titleRevision.current;
     titleRequests.current.set(meetingId, { revision, title: newTitle });
     try {
       await titleWrites.current(() => invoke("update_meeting_title", { meetingId, title: newTitle }));
+      savedTitles.current.set(meetingId, { revision, title: newTitle });
       if (titleRequests.current.get(meetingId)?.revision !== revision) return;
       titleRequests.current.delete(meetingId);
       if (selectedMeetingIdRef.current === meetingId) {
+        if (titleDraft.current?.trim() === newTitle) {
+          titleDraft.current = null;
+          setEditingTitle(newTitle);
+        }
         setSelectedMeeting((prev) => (prev?.id === meetingId ? { ...prev, title: newTitle } : prev));
         setToolbarError("");
       }
@@ -1354,7 +1371,7 @@ export function MeetingsPanel({
                   type="text"
                   className="detail-title-input"
                   value={editingTitle}
-                  onChange={(e) => setEditingTitle(e.target.value)}
+                  onChange={(e) => { titleDraft.current = e.target.value; setEditingTitle(e.target.value); }}
                   onBlur={handleSaveTitle}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") handleSaveTitle();

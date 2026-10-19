@@ -4,7 +4,7 @@ use crate::meeting_summary::{extract_summary_heuristics, ActionItem};
 use crate::state::AudioState;
 use chrono::Utc;
 use dirs::data_local_dir;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -1189,10 +1189,46 @@ fn rename_vault_speaker_internal(conn: &Connection, speaker_id: &str, name: &str
 }
 
 fn rename_vault_speaker_in(conn: &Connection, speaker_id: &str, name: &str) -> Result<(), String> {
-    let changed = conn.execute("UPDATE speaker_vault SET name = ?1, last_seen=?3 WHERE id = ?2", params![name, speaker_id, Utc::now().to_rfc3339()])
+    // Two people with one name can't be told apart, and naming a caller links
+    // them to the person with that name: refuse instead of making a twin.
+    let taken: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM speaker_vault WHERE lower(name) = lower(?1) AND id != ?2)",
+            params![name, speaker_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if taken {
+        return Err(format!("Someone else in the Speaker Vault is already called \"{name}\". Choose a different name."));
+    }
+    // A rename is not an appearance: last_seen stays when they were last heard.
+    let changed = conn.execute("UPDATE speaker_vault SET name = ?1 WHERE id = ?2", params![name, speaker_id])
         .map_err(|e| e.to_string())?;
     if changed == 0 { return Err("Speaker not found in vault".into()); }
     conn.execute("UPDATE meeting_turns SET speaker_name = ?1 WHERE speaker_id = ?2", params![name, speaker_id])
+        .map_err(|e| e.to_string())?;
+    // Undo snapshots also own display names. Update them in this transaction
+    // so undo cannot resurrect a globally renamed person's old name. Preserve
+    // meeting-only aliases unless the user explicitly renames the vault person.
+    let snapshots = {
+        let mut stmt = conn.prepare("SELECT id, turns_json FROM meeting_speaker_merges WHERE from_speaker_id = ?1")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([speaker_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?
+    };
+    for (id, json) in snapshots {
+        let mut turns: Vec<MergedTurn> = serde_json::from_str(&json).map_err(|e| format!("Merge record is damaged: {e}"))?;
+        for turn in &mut turns {
+            if turn.speaker_id == speaker_id { turn.speaker_name = name.to_string(); }
+        }
+        let json = serde_json::to_string(&turns).map_err(|e| e.to_string())?;
+        conn.execute("UPDATE meeting_speaker_merges SET turns_json = ?1 WHERE id = ?2", params![json, id])
+            .map_err(|e| e.to_string())?;
+    }
+    conn.execute("UPDATE meeting_speaker_merges SET from_speaker_name = ?1 WHERE from_speaker_id = ?2", params![name, speaker_id])
+        .map_err(|e| e.to_string())?;
+    conn.execute("UPDATE meeting_speaker_merges SET into_speaker_name = ?1 WHERE into_speaker_id = ?2", params![name, speaker_id])
         .map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1320,7 +1356,7 @@ pub(crate) fn rename_speaker_internal(
     // A per-meeting caller: link to an existing person with that name, or enroll.
     let existing: Option<String> = conn
         .query_row(
-            "SELECT id FROM speaker_vault WHERE lower(name) = lower(?1) LIMIT 1",
+            "SELECT id FROM speaker_vault WHERE lower(name) = lower(?1) ORDER BY last_seen DESC, id LIMIT 1",
             params![new_name],
             |row| row.get(0),
         )
@@ -1436,9 +1472,10 @@ pub(crate) fn merge_speakers_internal(
     if from == into {
         return Err("Pick two different speakers to merge".into());
     }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let target: (String, i64, Option<String>, Option<String>, i64) = if into == "background" {
         ("Background".into(), 1, None, None, 0)
-    } else { conn
+    } else { tx
         .query_row(
             "SELECT speaker_name, channel, snippet_path, candidate_snippets, COALESCE(current_snippet_idx, 0) FROM meeting_turns \
              WHERE meeting_id = ?1 AND speaker_id = ?2 ORDER BY (snippet_path IS NULL), start_ms LIMIT 1",
@@ -1447,7 +1484,7 @@ pub(crate) fn merge_speakers_internal(
         )
         .map_err(|_| "That speaker is no longer in this meeting".to_string())? };
     let moved: Vec<MergedTurn> = {
-        let mut stmt = conn
+        let mut stmt = tx
             .prepare(
                 "SELECT id, speaker_id, speaker_name, channel, snippet_path, candidate_snippets, COALESCE(current_snippet_idx, 0) \
                  FROM meeting_turns WHERE meeting_id = ?1 AND speaker_id = ?2 ORDER BY start_ms",
@@ -1475,7 +1512,6 @@ pub(crate) fn merge_speakers_internal(
     let turns_json = serde_json::to_string(&moved).map_err(|e| e.to_string())?;
     let created_at = Utc::now().to_rfc3339();
 
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     tx.execute(
         "INSERT INTO meeting_speaker_merges (meeting_id, from_speaker_id, from_speaker_name, into_speaker_id, into_speaker_name, turns_json, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1513,13 +1549,14 @@ pub async fn undo_meeting_speaker_merge(meeting_id: i64, merge_id: i64) -> Resul
 
 /// Puts the turns of the newest merge back as they were.
 pub(crate) fn undo_merge_internal(conn: &Connection, meeting_id: i64, merge_id: i64) -> Result<(), String> {
-    let newest: Option<(i64, String)> = conn
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let newest: Option<(i64, String)> = tx
         .query_row(
             "SELECT id, turns_json FROM meeting_speaker_merges WHERE meeting_id = ?1 ORDER BY id DESC LIMIT 1",
             params![meeting_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .ok();
+        .optional().map_err(|e| e.to_string())?;
     let Some((newest_id, turns_json)) = newest else {
         return Err("Nothing to undo in this meeting".into());
     };
@@ -1527,7 +1564,6 @@ pub(crate) fn undo_merge_internal(conn: &Connection, meeting_id: i64, merge_id: 
         return Err("Undo the later merges first".into());
     }
     let turns: Vec<MergedTurn> = serde_json::from_str(&turns_json).map_err(|e| format!("Merge record is damaged: {}", e))?;
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     for t in &turns {
         tx.execute(
             "UPDATE meeting_turns SET speaker_id = ?1, speaker_name = ?2, channel = ?3, snippet_path = ?4, candidate_snippets = ?5, current_snippet_idx = ?6 \
@@ -2269,6 +2305,84 @@ mod tests {
         undo_merge_internal(&conn, m, first.id).unwrap();
         assert_eq!(speakers_of(&conn, m), before);
         assert!(undo_merge_internal(&conn, m, first.id).is_err());
+    }
+
+    #[test]
+    fn merge_undo_preserves_a_vault_rename_made_after_the_merge() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        conn.execute("INSERT INTO speaker_vault (id,name,created_at,last_seen) VALUES ('person_alice','Alice','2026-10-19','2026-10-19')", []).unwrap();
+        let m = meeting_with(&conn, &[
+            turn("person_alice", "Alice", 1, 0),
+            turn("speaker_remote_2", "Speaker 2", 1, 2500),
+        ]);
+        let merge = merge_speakers_internal(&conn, m, "person_alice", "speaker_remote_2").unwrap();
+        // Alice no longer has a visible turn here, but the undo snapshot still references her.
+        rename_vault_speaker_internal(&conn, "person_alice", "Alicia").unwrap();
+        assert_eq!(speaker_merges(&conn, m).unwrap()[0].from_speaker_name, "Alicia");
+        undo_merge_internal(&conn, m, merge.id).unwrap();
+        assert_eq!(speakers_of(&conn, m)[0].1, "Alicia");
+    }
+
+    #[test]
+    fn undo_merge_failure_rolls_back_restored_turns_and_keeps_the_undo_record() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let m = meeting_with(&conn, &[turn("a", "A", 1, 0), turn("b", "B", 1, 2500)]);
+        let merge = merge_speakers_internal(&conn, m, "a", "b").unwrap();
+        let before = speakers_of(&conn, m);
+        conn.execute_batch("CREATE TRIGGER reject_undo BEFORE DELETE ON meeting_speaker_merges BEGIN SELECT RAISE(ABORT, 'blocked'); END;").unwrap();
+        assert!(undo_merge_internal(&conn, m, merge.id).is_err());
+        assert_eq!(speakers_of(&conn, m), before);
+        assert_eq!(speaker_merges(&conn, m).unwrap().len(), 1);
+        assert_eq!(speaker_count_of(&conn, m), 1);
+    }
+
+    #[test]
+    fn merge_undo_keeps_a_meeting_only_alias_until_an_explicit_global_rename() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        conn.execute("INSERT INTO speaker_vault (id,name,created_at,last_seen) VALUES ('person_alice','Alice','2026-10-19','2026-10-19')", []).unwrap();
+        let m = meeting_with(&conn, &[turn("person_alice", "Alice", 1, 0), turn("b", "B", 1, 2500)]);
+        rename_speaker_internal(&conn, m, "person_alice", "Presenter", false).unwrap();
+        let merge = merge_speakers_internal(&conn, m, "person_alice", "b").unwrap();
+        assert_eq!(speaker_merges(&conn, m).unwrap()[0].from_speaker_name, "Presenter");
+        undo_merge_internal(&conn, m, merge.id).unwrap();
+        assert_eq!(speakers_of(&conn, m)[0].1, "Presenter");
+        let merge = merge_speakers_internal(&conn, m, "person_alice", "b").unwrap();
+        rename_vault_speaker_internal(&conn, "person_alice", "Alicia").unwrap();
+        undo_merge_internal(&conn, m, merge.id).unwrap();
+        assert_eq!(speakers_of(&conn, m)[0].1, "Alicia");
+    }
+
+    #[test]
+    fn a_vault_rename_cannot_create_a_namesake_and_does_not_count_as_seen() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        conn.execute("INSERT INTO speaker_vault (id,name,created_at,last_seen) VALUES ('person_alice','Alice','2026-10-01','2026-10-01'),('person_bob','Bob','2026-10-01','2026-10-02')", []).unwrap();
+        assert!(rename_vault_speaker_internal(&conn, "person_bob", "alice").is_err());
+        let name: String = conn.query_row("SELECT name FROM speaker_vault WHERE id='person_bob'", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "Bob");
+        // A different spelling of one's own name is fine, and is not an appearance.
+        rename_vault_speaker_internal(&conn, "person_alice", "ALICE").unwrap();
+        let (name, seen): (String, String) = conn.query_row("SELECT name, last_seen FROM speaker_vault WHERE id='person_alice'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((name.as_str(), seen.as_str()), ("ALICE", "2026-10-01"));
+    }
+
+    #[test]
+    fn failed_undo_snapshot_rename_rolls_back_the_vault_and_visible_names() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        conn.execute("INSERT INTO speaker_vault (id,name,created_at,last_seen) VALUES ('person_alice','Alice','2026-10-19','2026-10-19')", []).unwrap();
+        let m = meeting_with(&conn, &[turn("person_alice", "Alice", 1, 0), turn("b", "B", 1, 2500)]);
+        let other = meeting_with(&conn, &[turn("person_alice", "Alice", 1, 0)]);
+        let merge = merge_speakers_internal(&conn, m, "person_alice", "b").unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_snapshot BEFORE UPDATE ON meeting_speaker_merges BEGIN SELECT RAISE(ABORT, 'blocked'); END;").unwrap();
+        assert!(rename_vault_speaker_internal(&conn, "person_alice", "Alicia").is_err());
+        assert_eq!(vault_rows(&conn)[0].1, "Alice");
+        assert_eq!(speakers_of(&conn, other)[0].1, "Alice");
+        undo_merge_internal(&conn, m, merge.id).unwrap();
+        assert_eq!(speakers_of(&conn, m)[0].1, "Alice");
     }
 
     #[test]

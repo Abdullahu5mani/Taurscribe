@@ -487,6 +487,8 @@ test("export file names drop characters no file system accepts", () => {
     expect(speakerInitials("Speaker 1")).toBe("S1");
     expect(speakerInitials("Speaker1")).toBe("S1");
     expect(speakerInitials("Ada Lovelace")).toBe("AL");
+    expect(speakerInitials("😀 Smith")).toBe("😀S");
+    expect(speakerInitials("𝒜da")).toBe("𝒜D");
 });
 
 test("merging is offered on turns and persisted undo reloads the selected meeting", async () => {
@@ -797,4 +799,36 @@ test("a saved title from another meeting cannot replace the current title or sho
     select(view.handle.current, 2); await view.settle(); reject(new Error("old view failed")); await pending; await view.settle();
     expect(byTest(view.handle.current, "meetings-detail-title-input").props.value).toBe("Meeting 2");
     expect(byTest(view.handle.current, "meetings-toolbar-error")).toBeUndefined();
+});
+
+test("a background detail refresh preserves a title draft and still refreshes the transcript", async () => {
+    const view = render(); await view.settle();
+    const input = () => byTest(view.handle.current, "meetings-detail-title-input");
+    input().props.onChange({ target: { value: "Draft I am still typing" } }); await view.settle();
+    detail = makeDetail(1, "Updated transcript");
+    finished(); await view.settle();
+    expect(input().props.value).toBe("Draft I am still typing");
+    expect(textOf(view.handle.current)).toContain("Updated transcript");
+    select(view.handle.current, 2); await view.settle();
+    expect(input().props.value).toBe("Meeting 2");
+    view.unmount();
+});
+
+test("a detail response started before a title save cannot restore the old saved title", async () => {
+    const view = render(); await view.settle();
+    let finishRead!: (value: any) => void, finishSave!: () => void;
+    const input = () => byTest(view.handle.current, "meetings-detail-title-input");
+    input().props.onChange({ target: { value: "Saved while refreshing" } }); await view.settle();
+    invokeOverride = cmd => cmd === "update_meeting_title" ? new Promise<void>(resolve => { finishSave = resolve; }) : undefined;
+    const saving = input().props.onBlur(); await view.settle();
+    pendingDetail = new Promise(resolve => { finishRead = resolve; });
+    finished(); await view.settle();
+    finishSave(); await saving; await view.settle();
+    finishRead(makeDetail(1, "Refreshed transcript")); await view.settle();
+    expect(input().props.value).toBe("Saved while refreshing");
+    expect(textOf(view.handle.current)).toContain("Refreshed transcript");
+    // The stale response must not also change the saved-title comparison.
+    await input().props.onBlur(); await view.settle();
+    expect(calls.filter(c => c.cmd === "update_meeting_title")).toHaveLength(1);
+    view.unmount();
 });

@@ -477,7 +477,7 @@ mod platform_impl {
                     } else {
                         cache.push(info.clone());
                     }
-                    let active_top = cache.first().cloned();
+                    let active_top = top_meeting(&cache);
                     sync_detector_tray(&app_handle_clone, active_top.as_ref());
                     let _ = app_handle_clone.emit("meeting-detected", &info);
                 }
@@ -487,7 +487,7 @@ mod platform_impl {
                         if let Some(pos) = cache.iter().position(|m| m.pid == info.pid) {
                             let removed = cache.remove(pos);
                             println!("[MEETING ENDED] Transitioned to lobby/pre-join: {} - '{}'", removed.app_name, removed.title);
-                            let active_top = cache.first().cloned();
+                            let active_top = top_meeting(&cache);
                             sync_detector_tray(&app_handle_clone, active_top.as_ref());
                             let _ = app_handle_clone.emit("meeting-ended", &removed);
                         }
@@ -496,12 +496,12 @@ mod platform_impl {
 
                     if let Some(existing) = cache.iter_mut().find(|m| m.pid == info.pid) {
                         *existing = info.clone();
-                        let active_top = cache.first().cloned();
+                        let active_top = top_meeting(&cache);
                         sync_detector_tray(&app_handle_clone, active_top.as_ref());
                         let _ = app_handle_clone.emit("meeting-changed", &info);
                     } else if meeting.should_record || meeting.confidence >= 70 {
                         cache.push(info.clone());
-                        let active_top = cache.first().cloned();
+                        let active_top = top_meeting(&cache);
                         sync_detector_tray(&app_handle_clone, active_top.as_ref());
                         let _ = app_handle_clone.emit("meeting-detected", &info);
                     }
@@ -513,7 +513,7 @@ mod platform_impl {
                         info.app_name, info.title, info.pid
                     );
                     cache.retain(|m| m.pid != info.pid);
-                    let active_top = cache.first().cloned();
+                    let active_top = top_meeting(&cache);
                     sync_detector_tray(&app_handle_clone, active_top.as_ref());
                     let _ = app_handle_clone.emit("meeting-ended", &info);
                 }
@@ -612,10 +612,21 @@ mod platform_impl {
 /// before it is reported as ended.
 const REAPER_MISSES_BEFORE_END: u32 = 2;
 
+/// The meeting the tray shows: the one `prioritize_meetings` puts first. The
+/// cache itself stays in detection order, so its first entry can be an unknown
+/// app holding the mic while a real call is also running.
+fn top_meeting(meetings: &[MeetingInfo]) -> Option<MeetingInfo> {
+    meetings.iter().min_by_key(|m| meeting_priority(m)).cloned()
+}
+
+fn meeting_priority(m: &MeetingInfo) -> (bool, std::cmp::Reverse<i32>) {
+    (!m.should_record, std::cmp::Reverse(m.confidence))
+}
+
 fn prioritize_meetings(meetings: &mut [MeetingInfo]) {
     // A known call takes precedence over an unknown app that merely holds a
     // microphone and plays audio.
-    meetings.sort_by_key(|m| (!m.should_record, std::cmp::Reverse(m.confidence)));
+    meetings.sort_by_key(meeting_priority);
 }
 
 pub struct MeetingDetectorManager {
@@ -773,7 +784,7 @@ impl MeetingDetectorManager {
 
                 if changed {
                     let cache = active_cache_reaper.lock().unwrap();
-                    let active_top = cache.first().cloned();
+                    let active_top = top_meeting(&cache);
                     sync_detector_tray(&app_handle_reaper, active_top.as_ref());
                 }
             }
@@ -826,6 +837,16 @@ impl MeetingDetectorManager {
 mod tests {
     #[test]
     fn a_known_meeting_precedes_an_unrelated_audio_bridge() {
+        // The tray's pick agrees with the sorted order, whatever the cache order.
+        {
+            let bridge = super::MeetingInfo {
+                pid: 1, app_name: "Unknown Voice App".into(), title: "".into(), url: "".into(),
+                platform: "other".into(), confidence: 90, should_record: false,
+                is_using_mic: true, is_playing_audio: true,
+            };
+            let call = super::MeetingInfo { pid: 2, platform: "meet".into(), should_record: true, confidence: 80, ..bridge.clone() };
+            assert_eq!(super::top_meeting(&[bridge, call]).map(|m| m.pid), Some(2));
+        }
         let bridge = super::MeetingInfo {
             pid: 1, app_name: "Unknown Voice App".into(), title: "".into(), url: "".into(),
             platform: "other".into(), confidence: 90, should_record: false,

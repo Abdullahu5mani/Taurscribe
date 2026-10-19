@@ -40,13 +40,15 @@ pub fn extract_summary_heuristics(turns: &[DiarizedTurn], default_title: &str) -
     }
 
     let mut full_text = String::new();
-    let mut speaker_names = std::collections::HashSet::new();
+    // In order of first appearance: a HashSet's order changes from run to run,
+    // which made "Discussion with A & B" flip each time notes were regenerated.
+    let mut speaker_names: Vec<&str> = Vec::new();
 
     for t in turns {
         full_text.push_str(&t.text);
         full_text.push(' ');
-        if !t.speaker_name.is_empty() {
-            speaker_names.insert(t.speaker_name.as_str());
+        if !t.speaker_name.is_empty() && !speaker_names.contains(&t.speaker_name.as_str()) {
+            speaker_names.push(t.speaker_name.as_str());
         }
     }
 
@@ -86,8 +88,7 @@ pub fn extract_summary_heuristics(turns: &[DiarizedTurn], default_title: &str) -
     } else if category == "Client Sync" {
         "Client Project Sync".to_string()
     } else if speaker_names.len() >= 2 {
-        let names: Vec<&str> = speaker_names.into_iter().collect();
-        format!("Discussion with {}", names.join(" & "))
+        format!("Discussion with {}", speaker_names.join(" & "))
     } else {
         "Recorded Discussion".to_string()
     };
@@ -122,7 +123,12 @@ pub fn extract_summary_heuristics(turns: &[DiarizedTurn], default_title: &str) -
             let sent_lower = sent_trim.to_ascii_lowercase();
 
             for (trigger, target_type) in &action_triggers {
-                if let Some(pos) = sent_lower.find(trigger) {
+                // At a word start only: "i will" is not in "Hawaii will", nor
+                // "please" in "displease".
+                let at_word_start = sent_lower.match_indices(trigger).map(|(pos, _)| pos).find(|&pos| {
+                    !sent_lower[..pos].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '\'')
+                });
+                if let Some(pos) = at_word_start {
                     let task_text = sent_trim[pos..].trim();
                     let assignee = match *target_type {
                         0 => turn.speaker_name.clone(), // Speaker committed to it
@@ -262,6 +268,22 @@ mod tests {
         // inside "é" and panic, taking the whole meeting save with it.
         let out = extract_summary_heuristics(&[turn("Alice", "\u{212A}é let's go over the slides")], "Call");
         assert_eq!(out.action_items[0].task, "Let's go over the slides");
+    }
+
+    #[test]
+    fn action_triggers_only_match_at_the_start_of_a_word() {
+        let out = extract_summary_heuristics(&[turn("Alice", "We flew to Hawaii will be fun, nothing to displease anyone.")], "Call");
+        assert!(out.action_items.is_empty(), "{:?}", out.action_items);
+        let out = extract_summary_heuristics(&[turn("Alice", "Ok, I will send the deck tomorrow.")], "Call");
+        assert_eq!(out.action_items[0].task, "I will send the deck tomorrow");
+    }
+
+    #[test]
+    fn the_discussion_title_lists_people_in_the_order_they_spoke() {
+        let turns = [turn("Zoe", "Hello everyone, thanks for joining."), turn("Adam", "Glad to be here today, really.")];
+        for _ in 0..5 {
+            assert_eq!(extract_summary_heuristics(&turns, "Call").title, "Discussion with Zoe & Adam");
+        }
     }
 
     #[test]

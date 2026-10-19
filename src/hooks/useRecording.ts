@@ -113,6 +113,11 @@ export function useRecording({
     const isPausedRef = useRef(false);
     // Pause/resume commands may settle after Stop or after a new session begins.
     const recordingGenerationRef = useRef(0);
+    // The generation of a UI start whose start_recording call is in flight, and
+    // the generation the backend's "recording started" event moved it to if
+    // that event arrived first (the backend emits it before replying).
+    const startInFlightGenerationRef = useRef<number | null>(null);
+    const startEventGenerationRef = useRef<number | null>(null);
     const recordingEventVersionRef = useRef(0);
     const recordingSessionRef = useRef(0);
     // Only one Pause/Resume request per generation may be in flight.
@@ -238,7 +243,11 @@ export function useRecording({
             const { is_recording, is_dual_channel, is_in_person = false } = event.payload;
             recordingEventVersionRef.current += 1;
             if (is_recording && !isRecordingRef.current) {
+                const startInFlight = startInFlightGenerationRef.current === recordingGenerationRef.current;
                 recordingGenerationRef.current += 1;
+                // Possibly this start's own event: the start adopts it if its
+                // call then succeeds (an external start would have failed it).
+                startEventGenerationRef.current = startInFlight ? recordingGenerationRef.current : null;
                 recordingSessionRef.current += 1;
                 if (isProcessingTranscriptRef.current) {
                     hotkeySessionRef.current = false;
@@ -309,6 +318,8 @@ export function useRecording({
     }, []);
 
     const startRecordingOnce = async (generation: number, fromHotkey = false, audioSource?: string) => {
+        // `generation` can move forward below: a start adopts the generation of
+        // its own "recording started" event.
         const isCurrent = () => generation === recordingGenerationRef.current;
         hotkeySessionRef.current = fromHotkey; // tracks hotkey session independent of overlay toggle
         let effectiveAudioSource = audioSource;

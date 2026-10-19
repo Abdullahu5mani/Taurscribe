@@ -41,7 +41,11 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
         setAutoRecordCountdown(null);
     };
 
-    const meetingKey = meeting ? `${meeting.pid}:${meeting.title}` : "";
+    // Identifies the call by its process, not its window title: titles change
+    // mid-call (browser tab badges like "(1) Meet – …", Zoom renaming its window),
+    // and a title change must not undo a dismissal or restart the auto-record
+    // countdown. A new call clears the dismissal when `meeting` goes null.
+    const meetingKey = meeting ? `${meeting.pid}:${meeting.platform}` : "";
     const isDismissed = Boolean(meetingKey && dismissedMeetingKey === meetingKey);
 
     useEffect(() => {
@@ -83,7 +87,8 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
             cancel();
             if (cancelAutoRecordRef.current === cancel) cancelAutoRecordRef.current = null;
         };
-    }, [meetingKey, isDismissed]);
+        // should_record: the same process can go from an offered call to a known one.
+    }, [meetingKey, isDismissed, meeting?.should_record]);
 
     // The meetings view shows its own header pill; the auto-record countdown
     // above keeps running either way.
