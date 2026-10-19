@@ -73,8 +73,10 @@ fn load_recording_for_final_pass(path: &str) -> Result<Vec<f32>, String> {
 }
 
 fn normalize_merge_word(word: &str) -> String {
-    word.chars()
-        .filter(|c| c.is_alphanumeric())
+    // Only the punctuation Whisper glues to a chunk edge; keep '+' and '#' so
+    // "C++" and "C#" are not the same word.
+    word.trim_matches(|c: char| matches!(c, ',' | '.' | '!' | '?' | ';' | ':' | '"' | '\'' | '(' | ')'))
+        .chars()
         .flat_map(|c| c.to_lowercase())
         .collect()
 }
@@ -2881,6 +2883,13 @@ mod tests {
         append_transcript_with_word_overlap(&mut transcript, "second sentence");
 
         assert_eq!(transcript, "first sentence second sentence");
+    }
+
+    #[test]
+    fn append_transcript_with_word_overlap_keeps_c_plus_plus_and_c_sharp_apart() {
+        let mut transcript = "we use C++".to_string();
+        append_transcript_with_word_overlap(&mut transcript, "C# for interop");
+        assert_eq!(transcript, "we use C++ C# for interop");
     }
 
     /// A 16 kHz mono WAV of `ms` milliseconds in the temp dir.

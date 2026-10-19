@@ -2,10 +2,81 @@ use crate::types::{HotkeyBinding, RecordingMode};
 use rdev::{listen, Event, EventType, Key};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex, RwLock,
+    Arc, RwLock,
 };
 
 const MAX_HOTKEY_KEYS: usize = 2;
+
+/// What a key event asks the frontend to do.
+#[derive(Debug, PartialEq)]
+enum HotkeyAction {
+    Start,
+    Stop,
+    Toggle,
+}
+
+/// Which combo keys are down, and what the combo already did.
+#[derive(Default)]
+struct ComboState {
+    held: Vec<&'static str>,
+    /// Prevents keyboard auto-repeat from firing the action multiple times per physical press.
+    triggered: bool,
+    recording_active: bool,
+}
+
+impl ComboState {
+    fn on_event(&mut self, event: &EventType, config: &HotkeyBinding, suppressed: bool) -> Option<HotkeyAction> {
+        if config.keys.len() != MAX_HOTKEY_KEYS {
+            return None;
+        }
+        match event {
+            // Settings suppresses the hotkey while it is open. Releases still
+            // count: the hotkey opens Settings when no model is installed, so its
+            // keys come up while suppressed, and a key left "held" would let the
+            // other key alone fire the combo later.
+            EventType::KeyPress(_) if suppressed => None,
+            EventType::KeyPress(key) => {
+                let code = key_to_code(key)?;
+                if config.keys.iter().any(|k| k == code) && !self.held.contains(&code) {
+                    self.held.push(code);
+                }
+                let all_held = config.keys.iter().all(|k| self.held.iter().any(|h| k == h));
+                if !all_held || self.triggered {
+                    return None;
+                }
+                self.triggered = true;
+                match config.mode {
+                    RecordingMode::Hold if !self.recording_active => {
+                        self.recording_active = true;
+                        Some(HotkeyAction::Start)
+                    }
+                    RecordingMode::Hold => None,
+                    // React resolves this against the actual recording lifecycle.
+                    // A speculative native flag diverges after a failed start or
+                    // when recording is stopped from the UI.
+                    RecordingMode::Toggle => Some(HotkeyAction::Toggle),
+                }
+            }
+            EventType::KeyRelease(key) => {
+                let code = key_to_code(key)?;
+                self.held.retain(|k| *k != code);
+                if !config.keys.iter().any(|k| k == code) {
+                    return None;
+                }
+                // Reset so the next physical key press can trigger the combo again.
+                self.triggered = false;
+                // Hold mode: releasing any combo key stops recording.
+                // Toggle mode: key releases have no effect on recording state.
+                if config.mode == RecordingMode::Hold && self.recording_active {
+                    self.recording_active = false;
+                    return Some(HotkeyAction::Stop);
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+}
 
 /// Map an rdev Key to a stable string code matching browser KeyboardEvent.code names.
 fn key_to_code(key: &Key) -> Option<&'static str> {
@@ -72,85 +143,29 @@ pub fn start_hotkey_listener(
         }
     }
 
-    let recording_active = Arc::new(AtomicBool::new(false));
-    // &'static str: key_to_code() returns static strings — no String allocation per keypress
-    let held_keys: Arc<Mutex<Vec<&'static str>>> =
-        Arc::new(Mutex::new(Vec::with_capacity(MAX_HOTKEY_KEYS)));
-    // Prevents keyboard auto-repeat from firing the action multiple times per physical press.
-    let combo_triggered = Arc::new(AtomicBool::new(false));
-
-    let recording_active_c = recording_active.clone();
-    let held_keys_c = held_keys.clone();
-    let combo_triggered_c = combo_triggered.clone();
+    let mut combo = ComboState::default();
     let app_c = app_handle.clone();
     let config_c = hotkey_config.clone();
-
     let suppressed_c = hotkey_suppressed.clone();
 
     let callback = move |event: Event| {
-        if suppressed_c.load(Ordering::SeqCst) {
-            return;
-        }
-
-        let config = config_c.read().unwrap().clone();
-
-        if config.keys.len() != MAX_HOTKEY_KEYS {
-            return;
-        }
-
-        match event.event_type {
-            EventType::KeyPress(key) => {
-                if let Some(code) = key_to_code(&key) {
-                    let mut held = held_keys_c.lock().unwrap();
-                    if config.keys.iter().any(|k| k == code) && !held.contains(&code) {
-                        held.push(code);
-                    }
-                    let all_held = config.keys.iter().all(|k| held.iter().any(|h| k == h));
-                    if all_held
-                        && !config.keys.is_empty()
-                        && !combo_triggered_c.load(Ordering::SeqCst)
-                    {
-                        combo_triggered_c.store(true, Ordering::SeqCst);
-                        drop(held);
-                        match config.mode {
-                            RecordingMode::Hold => {
-                                if !recording_active_c.load(Ordering::SeqCst) {
-                                    recording_active_c.store(true, Ordering::SeqCst);
-                                    println!("[HOTKEY] Hold — starting recording");
-                                    let _ = app_c.emit("hotkey-start-recording", ());
-                                }
-                            }
-                            RecordingMode::Toggle => {
-                                // React resolves this against the actual recording lifecycle.
-                                // A speculative native flag diverges after a failed start or
-                                // when recording is stopped from the UI.
-                                let _ = app_c.emit("hotkey-toggle-recording", ());
-                            }
-                        }
-                    }
-                }
+        let action = {
+            let config = config_c.read().unwrap();
+            combo.on_event(&event.event_type, &config, suppressed_c.load(Ordering::SeqCst))
+        };
+        match action {
+            Some(HotkeyAction::Start) => {
+                println!("[HOTKEY] Hold — starting recording");
+                let _ = app_c.emit("hotkey-start-recording", ());
             }
-
-            EventType::KeyRelease(key) => {
-                if let Some(code) = key_to_code(&key) {
-                    held_keys_c.lock().unwrap().retain(|k| *k != code);
-                    if config.keys.iter().any(|k| k == code) {
-                        // Reset so the next physical key press can trigger the combo again.
-                        combo_triggered_c.store(false, Ordering::SeqCst);
-                        // Hold mode: releasing any combo key stops recording.
-                        // Toggle mode: key releases have no effect on recording state.
-                        if config.mode == RecordingMode::Hold
-                            && recording_active_c.load(Ordering::SeqCst)
-                        {
-                            recording_active_c.store(false, Ordering::SeqCst);
-                            println!("[HOTKEY] Hold — stopping recording");
-                            let _ = app_c.emit("hotkey-stop-recording", ());
-                        }
-                    }
-                }
+            Some(HotkeyAction::Stop) => {
+                println!("[HOTKEY] Hold — stopping recording");
+                let _ = app_c.emit("hotkey-stop-recording", ());
             }
-
-            _ => {}
+            Some(HotkeyAction::Toggle) => {
+                let _ = app_c.emit("hotkey-toggle-recording", ());
+            }
+            None => {}
         }
     };
 
@@ -193,4 +208,55 @@ fn macos_input_monitoring_trusted() -> bool {
     }
 
     unsafe { CGPreflightListenEventAccess() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binding(mode: RecordingMode) -> HotkeyBinding {
+        HotkeyBinding { keys: vec!["ControlLeft".into(), "AltLeft".into()], mode }
+    }
+    fn press(s: &mut ComboState, c: &HotkeyBinding, key: Key, suppressed: bool) -> Option<HotkeyAction> {
+        s.on_event(&EventType::KeyPress(key), c, suppressed)
+    }
+    fn release(s: &mut ComboState, c: &HotkeyBinding, key: Key, suppressed: bool) -> Option<HotkeyAction> {
+        s.on_event(&EventType::KeyRelease(key), c, suppressed)
+    }
+
+    #[test]
+    fn combo_fires_once_per_press_and_hold_stops_on_release() {
+        let c = binding(RecordingMode::Hold);
+        let mut s = ComboState::default();
+        assert_eq!(press(&mut s, &c, Key::ControlLeft, false), None);
+        assert_eq!(press(&mut s, &c, Key::Alt, false), Some(HotkeyAction::Start));
+        // Auto-repeat.
+        assert_eq!(press(&mut s, &c, Key::Alt, false), None);
+        assert_eq!(release(&mut s, &c, Key::Alt, false), Some(HotkeyAction::Stop));
+        assert_eq!(release(&mut s, &c, Key::ControlLeft, false), None);
+        // Settings is open: the hotkey does nothing.
+        assert_eq!(press(&mut s, &c, Key::ControlLeft, true), None);
+        assert_eq!(press(&mut s, &c, Key::Alt, true), None);
+    }
+
+    #[test]
+    fn keys_released_while_settings_is_open_are_not_left_held() {
+        for mode in [RecordingMode::Toggle, RecordingMode::Hold] {
+            let c = binding(mode);
+            let mut s = ComboState::default();
+            press(&mut s, &c, Key::ControlLeft, false);
+            assert!(press(&mut s, &c, Key::Alt, false).is_some());
+            // With no model installed the hotkey opens Settings, which suppresses
+            // the hotkey before the keys come up.
+            release(&mut s, &c, Key::ControlLeft, true);
+            release(&mut s, &c, Key::Alt, true);
+            // Settings closed. Ctrl on its own (Ctrl+C, Ctrl+V) must not record.
+            for _ in 0..3 {
+                assert_eq!(press(&mut s, &c, Key::ControlLeft, false), None, "{mode:?}");
+                release(&mut s, &c, Key::ControlLeft, false);
+            }
+            press(&mut s, &c, Key::ControlLeft, false);
+            assert!(press(&mut s, &c, Key::Alt, false).is_some(), "{mode:?}: the combo still works");
+        }
+    }
 }
