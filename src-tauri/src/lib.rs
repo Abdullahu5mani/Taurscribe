@@ -61,7 +61,7 @@ use whisper::WhisperManager;
 /// A boolean from settings.json (written by the frontend's store), if set.
 fn saved_setting(key: &str) -> Option<bool> {
     let text = std::fs::read_to_string(mcp_server::settings_path()?).ok()?;
-    serde_json::from_str::<serde_json::Value>(&text).ok()?.get(key)?.as_bool()
+    mcp_server::parse_settings(&text)?.get(key)?.as_bool()
 }
 
 /// The window opens at its configured 780×730. Where the screen has less room
@@ -128,8 +128,8 @@ fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
             *llm = None;
         }
     }
-    // Safety unmute in case the app exits mid-recording
-    let _ = system_audio::force_unmute();
+    // Restore system audio if the app exits mid-recording (no-op otherwise)
+    let _ = system_audio::unmute();
     println!("[EXIT] Cleanup complete");
 }
 
@@ -186,12 +186,10 @@ pub fn run() {
             // that was interrupted by a crash or force-quit.
             commands::downloader::scan_and_clean_stale_downloads();
 
-            // Safety: if the app crashed mid-recording while system audio was
-            // muted, restore it now so the user doesn't start with no sound.
-            if let Err(e) = system_audio::force_unmute() {
-                eprintln!("[WARN] Safety unmute on startup failed: {}", e);
-            } else {
-                println!("[INFO] Safety unmute on startup completed");
+            // If the app crashed mid-recording while it had system audio muted,
+            // restore it now. Audio the user muted themselves is left alone.
+            if let Err(e) = system_audio::unmute() {
+                eprintln!("[WARN] Restoring system audio on startup failed: {}", e);
             }
 
             // Older meetings kept their raw WAV; convert them to small playback

@@ -3,13 +3,13 @@
 // useRef, useEffect, useCallback, useMemo. Effects run after each render in
 // declaration order, as in React; state set during effects or async work
 // triggers another render on the next `settle()`.
-import { afterEach, mock } from "bun:test";
+import { mock } from "bun:test";
 
 type EffectSlot = { kind: "effect"; deps?: unknown[]; cleanup?: () => void; setup: () => void | (() => void) };
 type Runtime = { slots: any[]; cursor: number; pending: (() => void)[]; dirty: boolean; mounted: boolean };
 let active: Runtime | undefined;
-const mounted = new Set<() => void>();
-afterEach(() => { for (const unmount of mounted) unmount(); });
+// Unmounted after every test by harnessCleanup.ts (a preload in bunfig.toml).
+const mounted: Set<() => void> = ((globalThis as any).__hookHarnessMounted ??= new Set());
 const runtime = () => {
     if (!active) throw new Error("Hook called outside renderHook");
     return active;

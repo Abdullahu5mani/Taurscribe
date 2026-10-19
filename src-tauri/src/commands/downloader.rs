@@ -16,6 +16,7 @@ use zip::ZipArchive;
 struct DownloadCancelState {
     flag: Arc<AtomicBool>,
     finishing: bool,
+    request_id: Option<String>,
 }
 
 static CANCEL_FLAGS: OnceLock<Mutex<HashMap<String, DownloadCancelState>>> = OnceLock::new();
@@ -52,7 +53,7 @@ impl Drop for ModelsMoveGuard {
     }
 }
 
-fn register_cancel_flag(model_id: &str) -> Result<Arc<AtomicBool>, String> {
+fn register_cancel_flag(model_id: &str, request_id: Option<&str>) -> Result<Arc<AtomicBool>, String> {
     let flag = Arc::new(AtomicBool::new(false));
     let mut flags = cancel_flags().lock().unwrap();
     if MODELS_MOVING.load(Ordering::SeqCst) {
@@ -64,6 +65,7 @@ fn register_cancel_flag(model_id: &str) -> Result<Arc<AtomicBool>, String> {
     flags.insert(model_id.to_string(), DownloadCancelState {
         flag: Arc::clone(&flag),
         finishing: false,
+        request_id: request_id.map(str::to_owned),
     });
     Ok(flag)
 }
@@ -261,9 +263,9 @@ pub fn scan_and_clean_stale_downloads() {
 
 /// Signal an in-progress download to stop. The worker owns file cleanup.
 #[tauri::command]
-pub async fn cancel_download(model_id: String) -> Result<bool, String> {
+pub async fn cancel_download(model_id: String, request_id: Option<String>) -> Result<bool, String> {
     if let Some(active) = cancel_flags().lock().unwrap().get(&model_id) {
-        if !active.finishing {
+        if !active.finishing && (request_id.is_none() || request_id == active.request_id) {
             active.flag.store(true, Ordering::Relaxed);
             return Ok(true);
         }
@@ -522,6 +524,8 @@ fn verify_installed_model_files(
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DownloadProgressPayload {
+    pub request_id: Option<String>,
+    pub error: Option<String>,
     pub model_id: String,
     pub total_bytes: u64,
     pub downloaded_bytes: u64,
@@ -530,28 +534,14 @@ pub struct DownloadProgressPayload {
     pub total_files: u32,
 }
 
-/// Delete partial model files and emit `error` to the download manager UI.
-fn emit_download_error_and_cleanup(
-    app: &AppHandle,
-    model_id: &str,
+/// Clean up this attempt; the owning command emits one terminal event after
+/// it has released the native registration and all staging files.
+fn download_error_and_cleanup(
     config: &ModelConfig,
     base_dir: &std::path::Path,
-    current_file: u32,
-    files_count: u32,
     message: &str,
 ) -> String {
     delete_model_files(config, base_dir);
-    let _ = app.emit(
-        "download-progress",
-        DownloadProgressPayload {
-            model_id: model_id.to_string(),
-            total_bytes: 0,
-            downloaded_bytes: 0,
-            status: "error".to_string(),
-            current_file,
-            total_files: files_count,
-        },
-    );
     eprintln!("[DOWNLOAD] {}", message);
     message.to_string()
 }
@@ -685,16 +675,19 @@ pub async fn get_download_status(
 }
 
 #[tauri::command]
-pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, String> {
+pub async fn download_model(app: AppHandle, model_id: String, request_id: Option<String>) -> Result<String, String> {
     get_model_config(&model_id).ok_or_else(|| format!("Unknown model ID: {model_id}"))?;
-    let cancel_flag = register_cancel_flag(&model_id)?;
+    let cancel_flag = register_cancel_flag(&model_id, request_id.as_deref())?;
     write_download_lock(&model_id);
-    let result = download_model_inner(&app, &model_id, &cancel_flag).await;
+    let result = download_model_inner(&app, &model_id, &cancel_flag, request_id.as_deref()).await;
     let cancelled = begin_finish_cancel_flag(&model_id, &cancel_flag);
     remove_download_lock(&model_id);
     let status = if cancelled { "cancelled" } else if result.is_ok() { "done" } else { "error" };
-    if cancelled || result.is_ok() {
-        let _ = app.emit("download-progress", DownloadProgressPayload {
+    unregister_cancel_flag(&model_id, &cancel_flag);
+    // Release native ownership before the UI refreshes status or retries.
+    let _ = app.emit("download-progress", DownloadProgressPayload {
+            request_id: request_id.clone(),
+            error: result.as_ref().err().cloned(),
             model_id: model_id.clone(),
             total_bytes: if cancelled { 0 } else { 100 },
             downloaded_bytes: if cancelled { 0 } else { 100 },
@@ -702,8 +695,6 @@ pub async fn download_model(app: AppHandle, model_id: String) -> Result<String, 
             current_file: 0,
             total_files: 0,
         });
-    }
-    unregister_cancel_flag(&model_id, &cancel_flag);
     if cancelled { Err("Download cancelled by user".to_string()) } else { result }
 }
 
@@ -746,6 +737,7 @@ async fn download_model_inner(
     app: &AppHandle,
     model_id: &str,
     cancel_flag: &Arc<AtomicBool>,
+    request_id: Option<&str>,
 ) -> Result<String, String> {
     let config =
         get_model_config(model_id).ok_or_else(|| format!("Unknown model ID: {}", model_id))?;
@@ -780,18 +772,7 @@ async fn download_model_inner(
             base_dir.join(file_spec.filename)
         };
 
-        let emit_error =
-            |app: &AppHandle, model_id: &str, i: usize, files_count: usize, msg: &str| {
-                emit_download_error_and_cleanup(
-                    app,
-                    model_id,
-                    &config,
-                    &base_dir,
-                    (i + 1) as u32,
-                    files_count as u32,
-                    msg,
-                )
-            };
+        let fail = |message: &str| download_error_and_cleanup(&config, &base_dir, message);
 
         if let ModelSource::Local(local_dir) = &source {
             let source_path = local_dir.join(file_spec.remote_path);
@@ -803,16 +784,13 @@ async fn download_model_inner(
                 source_path.display()
             );
             if !source_path.exists() {
-                return Err(emit_error(
-                    app,
-                    model_id,
-                    i,
-                    files_count,
-                    &format!("Local model file not found: {}", source_path.display()),
+                return Err(fail(&format!("Local model file not found: {}", source_path.display()),
                 ));
             }
             let total = std::fs::metadata(&source_path).ok().filter(|m| m.is_file()).map_or(0, |m| m.len());
             let emit_copy = |bytes| { let _ = app.emit("download-progress", DownloadProgressPayload {
+                request_id: request_id.map(str::to_owned),
+                error: None,
                 model_id: model_id.into(), total_bytes: total, downloaded_bytes: bytes, status: "copying".into(),
                 current_file: (i + 1) as u32, total_files: files_count as u32,
             }); };
@@ -824,10 +802,12 @@ async fn download_model_inner(
                     emit_copy(bytes); last_copy = bytes; last_copy_at = std::time::Instant::now();
                 }
             })
-                .map_err(|e| emit_error(app, model_id, i, files_count, &e))?;
+                .map_err(|e| fail(&e))?;
             let _ = app.emit(
                 "download-progress",
                 DownloadProgressPayload {
+                    request_id: request_id.map(str::to_owned),
+                    error: None,
                     model_id: model_id.to_string(),
                     total_bytes: copied,
                     downloaded_bytes: copied,
@@ -871,22 +851,17 @@ async fn download_model_inner(
                 } else {
                     "Failed to connect to download server."
                 };
-                emit_error(app, model_id, i, files_count, reason)
+                fail(reason)
             })?;
 
             if !res.status().is_success() {
-                return Err(emit_error(
-                    app,
-                    model_id,
-                    i,
-                    files_count,
-                    &format!("Download server returned HTTP {}", res.status()),
+                return Err(fail(&format!("Download server returned HTTP {}", res.status()),
                 ));
             }
 
             let total_size = res.content_length().unwrap_or(0);
-            // Through emit_error so earlier files are cleaned up and the UI hears about it.
-            let mut file = create_download_file(&download_path, |msg| emit_error(app, model_id, i, files_count, msg))?;
+            // Clean up earlier files as well if creating this file fails.
+            let mut file = create_download_file(&download_path, |msg| fail(msg))?;
 
             let mut downloaded: u64 = 0;
             let mut stream = res.bytes_stream();
@@ -917,18 +892,13 @@ async fn download_model_inner(
                         } else {
                             "Download interrupted — a network error occurred."
                         };
-                        return Err(emit_error(app, model_id, i, files_count, reason));
+                        return Err(fail(reason));
                     }
                 };
                 if let Err(e) = file.write_all(&chunk) {
                     drop(file);
                     let _ = std::fs::remove_file(&download_path);
-                    return Err(emit_error(
-                        app,
-                        model_id,
-                        i,
-                        files_count,
-                        &format!("Download failed — could not write file ({})", e),
+                    return Err(fail(&format!("Download failed — could not write file ({})", e),
                     ));
                 }
                 downloaded += chunk.len() as u64;
@@ -939,6 +909,8 @@ async fn download_model_inner(
                     let _ = app.emit(
                         "download-progress",
                         DownloadProgressPayload {
+                            request_id: request_id.map(str::to_owned),
+                            error: None,
                             model_id: model_id.to_string(),
                             total_bytes: total_size,
                             downloaded_bytes: downloaded,
@@ -955,6 +927,8 @@ async fn download_model_inner(
         if is_zip {
             let archive_bytes = std::fs::metadata(&download_path).map_err(|e| e.to_string())?.len();
             let emit_hash = |bytes| { let _ = app.emit("download-progress", DownloadProgressPayload {
+                request_id: request_id.map(str::to_owned),
+                error: None,
                 model_id: model_id.into(), total_bytes: archive_bytes, downloaded_bytes: bytes, status: "verifying".into(),
                 current_file: (i + 1) as u32, total_files: files_count as u32,
             }); };
@@ -969,7 +943,7 @@ async fn download_model_inner(
                     emit_hash(bytes); last_hash = bytes; last_hash_at = std::time::Instant::now();
                 }
             })
-                .map_err(|e| emit_error(app, model_id, i, files_count, &e))?;
+                .map_err(|e| fail(&e))?;
             emit_hash(archive_bytes);
         }
 
@@ -978,6 +952,8 @@ async fn download_model_inner(
             let _ = app.emit(
                 "download-progress",
                 DownloadProgressPayload {
+                    request_id: request_id.map(str::to_owned),
+                    error: None,
                     model_id: model_id.to_string(),
                     total_bytes: 0,
                     downloaded_bytes: 0,
@@ -991,7 +967,7 @@ async fn download_model_inner(
 
             let zip_fail = |detail: String| -> String {
                 let _ = std::fs::remove_file(&download_path);
-                emit_error(app, model_id, i, files_count, &detail)
+                fail(&detail)
             };
 
             let zip_file = File::open(&download_path)
@@ -1030,6 +1006,8 @@ async fn download_model_inner(
                         let bytes = offset + bytes;
                         if progress_due(bytes, last_extracted, last_extract_at.elapsed()) {
                             let _ = app.emit("download-progress", DownloadProgressPayload {
+                                request_id: request_id.map(str::to_owned),
+                                error: None,
                                 model_id: model_id.into(), total_bytes: total_extracted, downloaded_bytes: bytes, status: "extracting".into(),
                                 current_file: (i + 1) as u32, total_files: files_count as u32,
                             });
@@ -1042,6 +1020,8 @@ async fn download_model_inner(
                 let _ = app.emit(
                     "download-progress",
                     DownloadProgressPayload {
+                        request_id: request_id.map(str::to_owned),
+                        error: None,
                         model_id: model_id.to_string(),
                         total_bytes: total_extracted,
                         downloaded_bytes: extracted,
@@ -1128,6 +1108,8 @@ async fn download_model_inner(
         let _ = app.emit(
             "download-progress",
             DownloadProgressPayload {
+                request_id: request_id.map(str::to_owned),
+                error: None,
                 model_id: model_id.to_string(),
                 total_bytes: total_verify_bytes,
                 downloaded_bytes: verified_bytes,
@@ -1145,13 +1127,7 @@ async fn download_model_inner(
         }
 
         let mut file = File::open(&file_path).map_err(|e| {
-            emit_download_error_and_cleanup(
-                app,
-                model_id,
-                &config,
-                &base_dir,
-                (i + 1) as u32,
-                files_count as u32,
+            download_error_and_cleanup(&config, &base_dir,
                 &format!(
                     "Download failed — could not read file for verification ({})",
                     e
@@ -1165,13 +1141,7 @@ async fn download_model_inner(
 
         loop {
             let count = file.read(&mut buffer).map_err(|e| {
-                emit_download_error_and_cleanup(
-                    app,
-                    model_id,
-                    &config,
-                    &base_dir,
-                    (i + 1) as u32,
-                    files_count as u32,
+                download_error_and_cleanup(&config, &base_dir,
                     &format!("Download failed — verification read error ({})", e),
                 )
             })?;
@@ -1191,6 +1161,8 @@ async fn download_model_inner(
                 let _ = app.emit(
                     "download-progress",
                     DownloadProgressPayload {
+                        request_id: request_id.map(str::to_owned),
+                        error: None,
                         model_id: model_id.to_string(),
                         total_bytes: total_verify_bytes,
                         downloaded_bytes: verified_bytes,
@@ -1206,6 +1178,8 @@ async fn download_model_inner(
         let _ = app.emit(
             "download-progress",
             DownloadProgressPayload {
+                request_id: request_id.map(str::to_owned),
+                error: None,
                 model_id: model_id.to_string(),
                 total_bytes: total_verify_bytes,
                 downloaded_bytes: verified_bytes,
@@ -1227,13 +1201,7 @@ async fn download_model_inner(
                 "Download failed — file may be corrupted ({}). Try again.",
                 file_spec.filename
             );
-            return Err(emit_download_error_and_cleanup(
-                app,
-                model_id,
-                &config,
-                &base_dir,
-                (i + 1) as u32,
-                files_count as u32,
+            return Err(download_error_and_cleanup(&config, &base_dir,
                 &msg,
             ));
         }
@@ -1375,6 +1343,8 @@ pub async fn delete_model(
         let _ = app.emit(
             "download-progress",
             DownloadProgressPayload {
+                request_id: None,
+                error: None,
                 model_id: model_id.clone(),
                 total_bytes: total_size,
                 downloaded_bytes: deleted_bytes,
@@ -1420,6 +1390,8 @@ pub async fn delete_model(
     let _ = app.emit(
         "download-progress",
         DownloadProgressPayload {
+            request_id: None,
+            error: None,
             model_id: model_id.clone(),
             total_bytes: total_size,
             downloaded_bytes: total_size,
@@ -1495,20 +1467,33 @@ mod tests {
     #[tokio::test]
     async fn download_cancellation_is_scoped_to_an_active_worker() {
         let id = format!("cancel-test-{}", rand::random::<u64>());
-        assert!(!cancel_download(id.clone()).await.unwrap());
-        let first = register_cancel_flag(&id).unwrap();
-        assert!(register_cancel_flag(&id).is_err());
-        assert!(cancel_download(id.clone()).await.unwrap());
+        assert!(!cancel_download(id.clone(), None).await.unwrap());
+        let first = register_cancel_flag(&id, None).unwrap();
+        assert!(register_cancel_flag(&id, None).is_err());
+        assert!(cancel_download(id.clone(), None).await.unwrap());
         assert!(begin_finish_cancel_flag(&id, &first));
         assert!(cancel_flags().lock().unwrap().get(&id).unwrap().finishing);
-        assert!(!cancel_download(id.clone()).await.unwrap());
+        assert!(!cancel_download(id.clone(), None).await.unwrap());
         unregister_cancel_flag(&id, &first);
-        assert!(!cancel_download(id.clone()).await.unwrap());
+        assert!(!cancel_download(id.clone(), None).await.unwrap());
 
-        let second = register_cancel_flag(&id).unwrap();
+        let second = register_cancel_flag(&id, None).unwrap();
         assert!(!second.load(Ordering::Relaxed));
         assert!(!begin_finish_cancel_flag(&id, &second));
         unregister_cancel_flag(&id, &second);
+    }
+
+    #[tokio::test]
+    async fn stale_download_cancellation_cannot_cancel_a_retry() {
+        let id = format!("request-cancel-test-{}", rand::random::<u64>());
+        let first = register_cancel_flag(&id, Some("first")).unwrap();
+        unregister_cancel_flag(&id, &first);
+        let retry = register_cancel_flag(&id, Some("retry")).unwrap();
+        assert!(!cancel_download(id.clone(), Some("first".into())).await.unwrap());
+        assert!(!retry.load(Ordering::Relaxed));
+        assert!(cancel_download(id.clone(), Some("retry".into())).await.unwrap());
+        assert!(retry.load(Ordering::Relaxed));
+        unregister_cancel_flag(&id, &retry);
     }
 
     #[test]

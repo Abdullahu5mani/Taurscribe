@@ -1117,7 +1117,7 @@ pub async fn factory_reset_app_data(
         .recording_paused
         .store(false, std::sync::atomic::Ordering::Relaxed);
 
-    let _ = crate::system_audio::force_unmute();
+    let _ = crate::system_audio::unmute();
     state
         .model_loaded
         .store(false, std::sync::atomic::Ordering::Relaxed);

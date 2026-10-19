@@ -6,6 +6,8 @@ import { DownloadProgress } from "../components/settings/types";
 
 interface DownloadProgressPayload {
     model_id: string;
+    request_id?: string | null;
+    error?: string | null;
     total_bytes: number;
     downloaded_bytes: number;
     status: string;
@@ -16,6 +18,9 @@ interface DownloadProgressPayload {
 const STALL_CHECK_INTERVAL_MS = 5_000;
 const STALL_THRESHOLD_MS = 35_000;
 
+const downloadErrorMessage = (raw: string) => raw.includes("internet") || raw.includes("onnect") || raw.includes("stall") || raw.includes("lost")
+    ? raw : `Download failed — ${raw}`;
+
 export function useDownloads(
     onModelDownloaded: (id: string) => void,
     onDownloadFailed?: (id: string) => void | Promise<void>,
@@ -24,7 +29,8 @@ export function useDownloads(
     const activeDownloadsRef = useRef<Set<string>>(new Set());
     const stalledRef = useRef<Set<string>>(new Set());
     const lastActivityRef = useRef<Record<string, { bytes: number; time: number; phase: string }>>({});
-    const attemptsRef = useRef(new Map<string, number>());
+    const attemptsRef = useRef(new Map<string, string>());
+    const settledRef = useRef(new Set<string>());
     const completionsRef = useRef(new Map<string, Promise<void>>());
     const onModelDownloadedRef = useRef(onModelDownloaded);
     onModelDownloadedRef.current = onModelDownloaded;
@@ -74,10 +80,11 @@ export function useDownloads(
     }, []);
 
     const markError = useCallback((modelId: string, message: string) => {
+        settledRef.current.add(modelId);
         activeDownloadsRef.current.delete(modelId);
         delete lastActivityRef.current[modelId];
         toast.error(message);
-        void Promise.resolve(onDownloadFailedRef.current?.(modelId)).catch((err) => {
+        void Promise.resolve().then(() => onDownloadFailedRef.current?.(modelId)).catch((err) => {
             console.warn("onDownloadFailed failed:", err);
         });
         clearProgress(modelId);
@@ -86,11 +93,14 @@ export function useDownloads(
     const completeDownload = useCallback((modelId: string) => {
         const previous = completionsRef.current.get(modelId);
         if (previous) return previous;
+        settledRef.current.add(modelId);
+        const attempt = attemptsRef.current.get(modelId);
         stalledRef.current.delete(modelId);
         setDownloadProgress(prev => ({ ...prev, [modelId]: { ...prev[modelId], bytes: 100, total: 100, status: "finalizing" } }));
         const completion = Promise.resolve().then(() => onModelDownloadedRef.current(modelId))
             .catch(err => console.warn("onModelDownloaded failed:", err))
             .finally(() => {
+                if (attemptsRef.current.get(modelId) !== attempt) return;
                 activeDownloadsRef.current.delete(modelId);
                 clearProgress(modelId);
                 toast.success(`Downloaded: ${modelId}`);
@@ -117,7 +127,7 @@ export function useDownloads(
                     stalledRef.current.add(modelId);
                     const attempt = attemptsRef.current.get(modelId);
                     console.warn(`[STALL] No progress for ${modelId} in ${STALL_THRESHOLD_MS}ms — cancelling`);
-                    invoke<boolean>("cancel_download", { modelId })
+                    invoke<boolean>("cancel_download", { modelId, requestId: attempt })
                         .then((accepted) => { if (!accepted && attemptsRef.current.get(modelId) === attempt) stalledRef.current.delete(modelId); })
                         .catch(() => {
                             if (attemptsRef.current.get(modelId) !== attempt) return;
@@ -140,6 +150,14 @@ export function useDownloads(
             const unsubscribe = await listen("download-progress", (event) => {
                 if (disposed) return;
                 const payload = event.payload as DownloadProgressPayload;
+                // Native events and command replies can arrive in either order.
+                // A previous attempt must never finish or cancel a retry.
+                if (!["deleting", "delete-done"].includes(payload.status)) {
+                    if (settledRef.current.has(payload.model_id)) return;
+                    const attempt = attemptsRef.current.get(payload.model_id);
+                    if (attempt && payload.request_id !== attempt) return;
+                    if (!attempt && payload.request_id) attemptsRef.current.set(payload.model_id, payload.request_id);
+                }
 
                 // Track last-seen activity for stall detection.
                 if (["downloading", "copying", "extracting", "verifying"].includes(payload.status)) {
@@ -164,10 +182,11 @@ export function useDownloads(
                         payload.model_id,
                         stalled
                             ? "Download failed — connection stalled. Check your internet and try again."
-                            : "Download failed — check your internet connection and try again.",
+                            : payload.error ? downloadErrorMessage(payload.error) : "Download failed — check your internet connection and try again.",
                     );
                 } else if (payload.status === "cancelled") {
-                    if (!activeDownloadsRef.current.has(payload.model_id)) return;
+                    if (!activeDownloadsRef.current.has(payload.model_id) || completionsRef.current.has(payload.model_id)) return;
+                    settledRef.current.add(payload.model_id);
                     const stalled = stalledRef.current.delete(payload.model_id);
                     if (stalled) {
                         markError(payload.model_id, "Download failed — connection stalled. Check your internet and try again.");
@@ -177,7 +196,7 @@ export function useDownloads(
                     delete lastActivityRef.current[payload.model_id];
                     toast.info(`Download cancelled: ${payload.model_id}`);
                     clearProgress(payload.model_id);
-                    void Promise.resolve(onDownloadFailedRef.current?.(payload.model_id)).catch(() => {});
+                    void Promise.resolve().then(() => onDownloadFailedRef.current?.(payload.model_id)).catch(() => {});
                 } else if (payload.status === "delete-done") {
                     clearProgress(payload.model_id);
                 } else {
@@ -201,8 +220,9 @@ export function useDownloads(
             return;
         }
         activeDownloadsRef.current.add(id);
-        const attempt = (attemptsRef.current.get(id) ?? 0) + 1;
+        const attempt = crypto.randomUUID();
         attemptsRef.current.set(id, attempt);
+        settledRef.current.delete(id);
         completionsRef.current.delete(id);
         stalledRef.current.delete(id);
         lastActivityRef.current[id] = { bytes: 0, time: Date.now(), phase: "starting" };
@@ -212,10 +232,11 @@ export function useDownloads(
             [id]: { bytes: 0, total: 100, status: "starting" },
         }));
         try {
-            await invoke("download_model", { modelId: id });
+            await invoke("download_model", { modelId: id, requestId: attempt });
             if (attemptsRef.current.get(id) === attempt) await completeDownload(id);
         } catch (e) {
-            if (attemptsRef.current.get(id) !== attempt) return;
+            if (attemptsRef.current.get(id) !== attempt || completionsRef.current.has(id)) return;
+            settledRef.current.add(id);
             const raw = `${e ?? "Unknown error"}`;
             if (raw.toLowerCase().includes("cancel")) {
                 if (activeDownloadsRef.current.has(id)) {
@@ -225,7 +246,7 @@ export function useDownloads(
                         activeDownloadsRef.current.delete(id);
                         clearProgress(id);
                         toast.info(`Download cancelled: ${id}`);
-                        void Promise.resolve(onDownloadFailedRef.current?.(id)).catch(() => {});
+                        void Promise.resolve().then(() => onDownloadFailedRef.current?.(id)).catch(() => {});
                     }
                 }
                 return;
@@ -233,11 +254,8 @@ export function useDownloads(
             if (!activeDownloadsRef.current.has(id)) return;
             activeDownloadsRef.current.delete(id);
             delete lastActivityRef.current[id];
-            const message = raw.includes("internet") || raw.includes("onnect") || raw.includes("stall") || raw.includes("lost")
-                ? raw
-                : `Download failed — ${raw}`;
-            toast.error(message);
-            void Promise.resolve(onDownloadFailedRef.current?.(id)).catch((err) => {
+            toast.error(downloadErrorMessage(raw));
+            void Promise.resolve().then(() => onDownloadFailedRef.current?.(id)).catch((err) => {
                 console.warn("onDownloadFailed failed:", err);
             });
             clearProgress(id);
@@ -247,7 +265,7 @@ export function useDownloads(
     const handleCancelDownload = async (id: string) => {
         const attempt = attemptsRef.current.get(id);
         try {
-            const accepted = await invoke<boolean>("cancel_download", { modelId: id });
+            const accepted = await invoke<boolean>("cancel_download", { modelId: id, requestId: attempt });
             if (accepted && attemptsRef.current.get(id) === attempt && activeDownloadsRef.current.has(id)) {
                 setDownloadProgress(prev => prev[id]
                     ? { ...prev, [id]: { ...prev[id], status: "cancelling" } }

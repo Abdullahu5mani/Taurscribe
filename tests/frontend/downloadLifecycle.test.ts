@@ -4,6 +4,7 @@ import { renderHook } from "./hookHarness";
 const listeners = new Set<(event: any) => void>();
 const registrations: (() => void)[] = [];
 const calls: { command: string; args: any }[] = [];
+const errors: string[] = [];
 let delayRegistration = false;
 let commandResult: Promise<unknown>;
 let cancelResult: Promise<boolean>;
@@ -21,15 +22,77 @@ mock.module("@tauri-apps/api/core", () => ({ ...realCore, invoke: async (command
     throw new Error(command);
 } }));
 // Avoid loading Sonner's CSS injector into other tests' partial document fixtures.
-mock.module("sonner", () => ({ Toaster: () => null, toast: { info: () => {}, success: () => {}, error: () => {} } }));
+mock.module("sonner", () => ({ Toaster: () => null, toast: { info: () => {}, success: () => {}, error: (message: string) => errors.push(message) } }));
 const { useDownloads } = await import("../../src/hooks/useDownloads");
-const emit = (status: string, bytes = 0) => {
-    for (const cb of listeners) cb({ payload: { model_id: "whisper-base", status, total_bytes: 100, downloaded_bytes: bytes } });
+const emit = (status: string, bytes = 0, requestId = calls.filter(c => c.command === "download_model").at(-1)?.args.requestId, error?: string) => {
+    for (const cb of listeners) cb({ payload: { model_id: "whisper-base", request_id: requestId, error, status, total_bytes: 100, downloaded_bytes: bytes } });
 };
 beforeEach(() => {
     listeners.clear(); registrations.length = 0; calls.length = 0; delayRegistration = false;
+    errors.length = 0;
     commandResult = new Promise(() => {}); cancelResult = Promise.resolve(true);
 });
+
+test("a terminal error event retains the native failure reason and reports it once", async () => {
+    let reject!: (error: Error) => void;
+    commandResult = new Promise((_, fail) => { reject = fail; });
+    const view = renderHook(() => useDownloads(() => {})); await view.settle();
+    const pending = view.handle.current.handleDownload("whisper-base", "Base");
+    emit("error", 0, undefined, "No space left on device"); await view.settle();
+    reject(new Error("No space left on device")); await pending; await view.settle();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("No space left on device");
+    expect(view.handle.current.downloadProgress["whisper-base"]).toBeUndefined();
+    view.unmount();
+});
+
+test("a throwing failure callback cannot prevent progress cleanup or retry", async () => {
+    commandResult = Promise.reject(new Error("connection lost"));
+    const view = renderHook(() => useDownloads(() => {}, () => { throw new Error("refresh failed"); }));
+    const pending = view.handle.current.handleDownload("whisper-base", "Base");
+    await pending; await view.settle();
+    expect(view.handle.current.downloadProgress["whisper-base"]).toBeUndefined();
+    commandResult = new Promise(() => {});
+    void view.handle.current.handleDownload("whisper-base", "Base"); await view.settle();
+    expect(calls.filter(c => c.command === "download_model")).toHaveLength(2);
+    await view.handle.current.handleCancelDownload("whisper-base");
+    expect(calls.find(c => c.command === "cancel_download")?.args.requestId).toBe(calls.filter(c => c.command === "download_model").at(-1)?.args.requestId);
+    view.unmount();
+});
+
+test("progress delivered after the failure reply cannot resurrect a failed download", async () => {
+    let reject!: (error: Error) => void;
+    commandResult = new Promise((_, fail) => { reject = fail; });
+    const view = renderHook(() => useDownloads(() => {})); await view.settle();
+    const pending = view.handle.current.handleDownload("whisper-base", "Base");
+    reject(new Error("connection lost")); await pending; await view.settle();
+    emit("downloading", 5); await view.settle();
+    expect(view.handle.current.downloadProgress["whisper-base"]).toBeUndefined();
+    commandResult = new Promise(() => {});
+    void view.handle.current.handleDownload("whisper-base", "Base"); await view.settle();
+    expect(calls.filter(c => c.command === "download_model")).toHaveLength(2);
+    view.unmount();
+});
+
+for (const status of ["error", "cancelled", "done", "downloading"]) {
+    test(`a delayed ${status} event from a failed download cannot alter its retry`, async () => {
+        let reject!: (error: Error) => void;
+        commandResult = new Promise((_, fail) => { reject = fail; });
+        let completed = 0, failed = 0;
+        const view = renderHook(() => useDownloads(() => { completed++; }, () => { failed++; }));
+        await view.settle();
+        const first = view.handle.current.handleDownload("whisper-base", "Base");
+        const firstId = calls.find(c => c.command === "download_model")!.args.requestId ?? "old-attempt";
+        reject(new Error("connection lost")); await first; await view.settle();
+        commandResult = new Promise(() => {});
+        void view.handle.current.handleDownload("whisper-base", "Base"); await view.settle();
+        emit("downloading", 12); await view.settle();
+        emit(status, 99, firstId); await view.settle();
+        expect(view.handle.current.downloadProgress["whisper-base"]).toMatchObject({ status: "downloading", bytes: 12 });
+        expect(completed).toBe(0); expect(failed).toBe(1);
+        view.unmount();
+    });
+}
 
 test("StrictMode replay disposes late listeners and completes a download once", async () => {
     delayRegistration = true;

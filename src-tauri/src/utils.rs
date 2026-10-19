@@ -25,6 +25,22 @@ mod utf8_truncation_tests {
         assert_eq!(truncate_utf8_with_ellipsis("é🙂abcd", 9), "é🙂...");
         assert_eq!(truncate_utf8_with_ellipsis("é🙂abcd", 10), "é🙂abcd");
     }
+
+    proptest::proptest! {
+        #[test]
+        fn truncated_text_stays_valid_utf8_and_within_the_budget(
+            text in "\\PC{0,80}",
+            max in 0usize..64,
+        ) {
+            let out = truncate_utf8_with_ellipsis(&text, max);
+            assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+            if text.len() <= max {
+                assert_eq!(out, text);
+            } else {
+                assert!(out.len() <= max, "len {} > max {max} for {out:?}", out.len());
+            }
+        }
+    }
 }
 
 /// Post-process raw ASR output: fix punctuation artifacts and remove Whisper hallucinations.
@@ -51,9 +67,11 @@ pub fn clean_transcript(text: &str) -> String {
         cleaned = cleaned.replace("  ", " ");
     }
 
-    // Capitalize first letter
+    // Capitalize first letter, unless the first word has its own casing ("iPhone", "macOS")
+    let first_word = cleaned.split_whitespace().next().unwrap_or("");
+    let own_casing = first_word.chars().skip(1).any(char::is_uppercase);
     if let Some(first) = cleaned.chars().next() {
-        if first.is_lowercase() {
+        if first.is_lowercase() && !own_casing {
             let mut c = cleaned.chars();
             cleaned = match c.next() {
                 None => String::new(),
@@ -375,5 +393,27 @@ mod repetition_tests {
             "Thanks for watching."
         );
         assert_eq!(remove_repetitions("Hello. Bye. Bye. Bye. Bye. Bye. See you."), "Hello. Bye. See you.");
+    }
+}
+
+#[cfg(test)]
+mod clean_transcript_tests {
+    use super::clean_transcript;
+
+    #[test]
+    fn first_letter_is_capitalised_unless_the_word_has_its_own_casing() {
+        assert_eq!(clean_transcript("hello there ."), "Hello there.");
+        assert_eq!(clean_transcript("élan , mostly"), "Élan, mostly");
+        for text in ["iPhone sales are up.", "macOS needs an update", "eBay sent the refund", "mRNA vaccines work"] {
+            assert_eq!(clean_transcript(text), text);
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn cleaning_any_utf8_does_not_panic(text in "\\PC{0,200}") {
+            let out = clean_transcript(&text);
+            assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+        }
     }
 }
