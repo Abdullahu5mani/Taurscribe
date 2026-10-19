@@ -385,7 +385,7 @@ test("Record in person opens the in-person section, which replaces the button", 
 });
 
 // ── Toolbar: delete needs confirming, copy / export report failures ──────────
-const { exportFileName } = await import("../../src/components/MeetingsPanel");
+const { exportFileName, speakerInitials } = await import("../../src/components/MeetingsPanel");
 let clipboardFails = false;
 const copied: string[] = [];
 Object.defineProperty(globalThis.navigator, "clipboard", {
@@ -484,6 +484,9 @@ test("export file names drop characters no file system accepts", () => {
     expect(exportFileName("In-person meeting on Oct 7, 2026", "markdown")).toBe("In-person_meeting_on_Oct_7,_2026_transcript.md");
     expect(exportFileName("Budget: Q3/Q4 <draft>?", "text")).toBe("Budget_Q3_Q4_draft_transcript.txt");
     expect(exportFileName("  ", "json")).toBe("meeting_transcript.json");
+    expect(speakerInitials("Speaker 1")).toBe("S1");
+    expect(speakerInitials("Speaker1")).toBe("S1");
+    expect(speakerInitials("Ada Lovelace")).toBe("AL");
 });
 
 test("merging is offered on turns and persisted undo reloads the selected meeting", async () => {
@@ -567,6 +570,17 @@ test("repeated transcript turns produce one speaker management card per person",
     expect(textOf(transcript)).toContain("One");
     expect(textOf(transcript)).toContain("Two");
     expect(nodes(transcript).some(node => node.props?.["data-testid"]?.startsWith("meetings-rename-speaker-btn"))).toBe(false);
+    view.unmount();
+});
+
+test("speaker colours cycle without giving two people in a row the same one", async () => {
+    detail.turns = ["a", "b", "c", "d", "e", "f", "g"].map((id, i) => (
+        { speaker_id: id, speaker_name: id.toUpperCase(), channel: 1, start_ms: i * 1000, end_ms: i * 1000 + 900, text: id }
+    ));
+    const view = render();
+    await view.settle();
+    const tones = nodes(view.handle.current).filter(node => node.props?.className === "meeting-speaker-card").map(node => node.props["data-tone"]);
+    expect(tones).toEqual([1, 2, 3, 4, 5, 1, 2]);
     view.unmount();
 });
 

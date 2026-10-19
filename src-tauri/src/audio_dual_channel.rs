@@ -316,6 +316,11 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
                     None => break,
                 }
             }
+            let tail = to_48k.finish();
+            mic_frames += tail.len();
+            if !tail.is_empty() {
+                let _ = mic_tx.send(tail);
+            }
         }
         println!("[CAPTURE] mic delivered {:.2}s of 48k samples over {:.2}s wall", mic_frames as f64 / 48_000.0, mic_started.elapsed().as_secs_f64());
     }) };
@@ -344,6 +349,11 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
                 }
                 None => break,
             }
+        }
+        let tail = to_48k.finish();
+        sys_frames += tail.len();
+        if !tail.is_empty() {
+            let _ = sys_tx.send(tail);
         }
         println!("[CAPTURE] callers delivered {:.2}s of 48k samples over {:.2}s wall", sys_frames as f64 / 48_000.0, sys_started.elapsed().as_secs_f64());
     });
@@ -761,7 +771,7 @@ fn spawn_named_mic_capture(
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let handle = std::thread::spawn(move || {
         use cpal::traits::StreamTrait;
-        let opened = (|| -> Result<cpal::Stream, String> {
+        let opened = (|| -> Result<_, String> {
             let device = cpal::default_host()
                 .input_devices()
                 .map_err(|e| e.to_string())?
@@ -771,16 +781,19 @@ fn spawn_named_mic_capture(
             let format = supported.sample_format();
             let config: cpal::StreamConfig = supported.into();
             let (channels, rate) = (config.channels as u32, config.sample_rate.0);
-            let mut to_48k = MonoTo48k::new();
+            let to_48k = std::sync::Arc::new(std::sync::Mutex::new(MonoTo48k::new()));
+            let callback_resampler = to_48k.clone();
+            let callback_tx = tx.clone();
             let callback_stops = stops.clone();
+            let callback_loss = loss.clone();
             let stream = crate::audio::build_input_stream_f32(
                 &device,
                 &config,
                 format,
                 move |data: &[f32]| {
-                    let out = to_48k.push(data, channels, rate as f64);
+                    let out = callback_resampler.lock().unwrap_or_else(|e| e.into_inner()).push(data, channels, rate as f64);
                     if !out.is_empty() {
-                        send_named_mic_frames(&tx, out, &callback_stops, &loss);
+                        send_named_mic_frames(&callback_tx, out, &callback_stops, &callback_loss);
                     }
                 },
                 |e| eprintln!("[ERROR] Meeting microphone stream error: {}", e),
@@ -788,15 +801,19 @@ fn spawn_named_mic_capture(
             .map_err(|e| e.to_string())?;
             stream.play().map_err(|e| e.to_string())?;
             println!("[INFO] Dual-channel mic track: '{}' via cpal ({} ch, {} Hz, {:?})", name, channels, rate, format);
-            Ok(stream)
+            Ok((stream, to_48k, tx, stops, loss))
         })();
         match opened {
-            Ok(stream) => {
+            Ok((stream, to_48k, tx, stops, loss)) => {
                 let _ = ready_tx.send(Ok(()));
                 while !stops.iter().any(|s| s.load(Ordering::Relaxed)) {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
                 drop(stream);
+                let tail = to_48k.lock().unwrap_or_else(|e| e.into_inner()).finish();
+                if !tail.is_empty() {
+                    send_named_mic_frames(&tx, tail, &stops, &loss);
+                }
             }
             Err(e) => {
                 let _ = ready_tx.send(Err(e));
@@ -872,6 +889,15 @@ impl MonoTo48k {
             Err(e) => eprintln!("[ERROR] Meeting audio resample failed: {}", e),
         }
         out
+    }
+
+    /// The last incomplete block. Dropping the resampler instead loses up to
+    /// 1024 source frames, and the mic and callers can lose different amounts.
+    fn finish(&mut self) -> Vec<f32> {
+        match self.resampler.take() {
+            Some(mut resampler) => resampler.finish().unwrap_or_default(),
+            None => Vec::new(),
+        }
     }
 }
 
@@ -1071,5 +1097,13 @@ mod tests {
         assert!(t.push(&vec![0.5f32; 700], 1, 44100.0).is_empty(), "less than one block is buffered");
         let after_switch = t.push(&vec![0.5f32; 480], 1, 48000.0);
         assert_eq!(after_switch.len(), 762 + 480, "700 frames at 44.1 kHz = 762 at 48 kHz, then 480 as-is");
+    }
+
+    #[test]
+    fn stopping_returns_audio_the_resampler_was_still_holding() {
+        let mut t = super::MonoTo48k::new();
+        assert!(t.push(&vec![0.5f32; 700], 1, 44100.0).is_empty());
+        assert_eq!(t.finish().len(), 762);
+        assert!(t.finish().is_empty());
     }
 }

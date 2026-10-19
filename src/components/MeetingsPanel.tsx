@@ -109,10 +109,12 @@ export function exportFileName(title: string, format: "markdown" | "text" | "jso
 /** Speaker colours cycle through six tones; "You" is always tone 0. */
 const SPEAKER_TONE_COUNT = 6;
 
-function speakerInitials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
+export function speakerInitials(name: string): string {
+  const trimmed = name.trim();
+  const words = trimmed.split(/\s+/).filter(Boolean);
   if (words.length === 0) return "?";
-  if (/^speaker\s*\d+$/i.test(name.trim())) return `S${words[1]}`;
+  const numbered = trimmed.match(/^speaker\s*(\d+)$/i);
+  if (numbered) return `S${numbered[1]}`;
   return (words.length === 1 ? words[0].slice(0, 2) : words[0][0] + words[words.length - 1][0]).toUpperCase();
 }
 
@@ -215,11 +217,12 @@ export function MeetingsPanel({
   // Colour and talk time per speaker, in order of first appearance.
   const speakerStats = useMemo(() => {
     const stats = new Map<string, { tone: number; talkMs: number; share: number }>();
-    let next = 1, total = 0;
+    let next = 0, total = 0;
     for (const turn of selectedMeeting?.turns ?? []) {
       let entry = stats.get(turn.speaker_id);
       if (!entry) {
-        entry = { tone: turn.channel === 0 ? 0 : next++ % SPEAKER_TONE_COUNT || 1, talkMs: 0, share: 0 };
+        // Tone 0 is the local mic's; everyone else cycles through 1..5.
+        entry = { tone: turn.channel === 0 ? 0 : 1 + (next++ % (SPEAKER_TONE_COUNT - 1)), talkMs: 0, share: 0 };
         stats.set(turn.speaker_id, entry);
       }
       const ms = Math.max(0, turn.end_ms - turn.start_ms);

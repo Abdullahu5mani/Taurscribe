@@ -732,110 +732,119 @@ pub async fn list_meetings(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<MeetingSummaryRecord>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_connection()?;
-        let limit_val = limit.unwrap_or(50) as i64;
-        let offset_val = offset.unwrap_or(0) as i64;
+    tauri::async_runtime::spawn_blocking(move || list_meetings_in(&open_connection()?, search, category, platform, limit, offset))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
 
-        let mut query = "SELECT id, session_id, title, platform, app_name, url, created_at, duration_ms, category, speaker_count, transcript_raw, action_items, audio_path FROM meetings WHERE 1=1".to_string();
-        let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+fn list_meetings_in(
+    conn: &Connection,
+    search: Option<String>,
+    category: Option<String>,
+    platform: Option<String>,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<Vec<MeetingSummaryRecord>, String> {
+    let limit_val = limit.unwrap_or(50) as i64;
+    let offset_val = offset.unwrap_or(0) as i64;
 
-        if let Some(ref cat) = category {
-            if !cat.trim().is_empty() && cat.to_lowercase() != "all" {
-                query.push_str(" AND category = ?");
-                param_values.push(Box::new(cat.clone()));
-            }
+    let mut query = "SELECT id, session_id, title, platform, app_name, url, created_at, duration_ms, category, speaker_count, transcript_raw, action_items, audio_path FROM meetings WHERE 1=1".to_string();
+    let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    if let Some(ref cat) = category {
+        if !cat.trim().is_empty() && cat.to_lowercase() != "all" {
+            query.push_str(" AND category = ?");
+            param_values.push(Box::new(cat.clone()));
         }
+    }
 
-        if let Some(ref plat) = platform {
-            if !plat.trim().is_empty() && plat.to_lowercase() != "all" {
-                query.push_str(" AND LOWER(platform) = LOWER(?)");
-                param_values.push(Box::new(plat.trim().to_string()));
-            }
+    if let Some(ref plat) = platform {
+        if !plat.trim().is_empty() && plat.to_lowercase() != "all" {
+            query.push_str(" AND LOWER(platform) = LOWER(?)");
+            param_values.push(Box::new(plat.trim().to_string()));
         }
+    }
 
-        if let Some(ref s) = search {
-            if !s.trim().is_empty() {
-                query.push_str(" AND (title LIKE ? OR transcript_raw LIKE ? OR EXISTS (SELECT 1 FROM meeting_tags WHERE meeting_tags.meeting_id = meetings.id AND tag LIKE ?))");
-                let pattern = format!("%{}%", s.trim());
-                param_values.push(Box::new(pattern.clone()));
-                param_values.push(Box::new(pattern.clone()));
-                param_values.push(Box::new(pattern));
-            }
+    if let Some(ref s) = search {
+        if !s.trim().is_empty() {
+            query.push_str(" AND (title LIKE ? ESCAPE '\\' OR transcript_raw LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM meeting_tags WHERE meeting_tags.meeting_id = meetings.id AND tag LIKE ? ESCAPE '\\'))");
+            // "100%" or "file_name" are text to find, not LIKE wildcards.
+            let pattern = format!("%{}%", s.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+            param_values.push(Box::new(pattern.clone()));
+            param_values.push(Box::new(pattern.clone()));
+            param_values.push(Box::new(pattern));
         }
+    }
 
-        query.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
-        param_values.push(Box::new(limit_val));
-        param_values.push(Box::new(offset_val));
+    query.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
+    param_values.push(Box::new(limit_val));
+    param_values.push(Box::new(offset_val));
 
-        let mut stmt = conn
-            .prepare(&query)
-            .map_err(|e| format!("Failed to prepare query: {}", e))?;
+    let mut stmt = conn
+        .prepare(&query)
+        .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
-        let params_refs: Vec<&dyn rusqlite::ToSql> =
-            param_values.iter().map(|b| b.as_ref()).collect();
+    let params_refs: Vec<&dyn rusqlite::ToSql> =
+        param_values.iter().map(|b| b.as_ref()).collect();
 
-        let rows = stmt
-            .query_map(params_refs.as_slice(), |row| {
-                let id: i64 = row.get(0)?;
-                let session_id: String = row.get(1)?;
-                let title: String = row.get(2)?;
-                let platform: String = row.get(3)?;
-                let app_name: String = row.get(4)?;
-                let url: String = row.get(5)?;
-                let created_at: String = row.get(6)?;
-                let duration_ms: i64 = row.get(7)?;
-                let cat: String = row.get(8)?;
-                let speaker_count: i64 = row.get(9)?;
-                let raw_text: String = row.get(10)?;
-                let actions_raw: Option<String> = row.get(11)?;
-                let audio_path: Option<String> = row.get(12)?;
+    let rows = stmt
+        .query_map(params_refs.as_slice(), |row| {
+            let id: i64 = row.get(0)?;
+            let session_id: String = row.get(1)?;
+            let title: String = row.get(2)?;
+            let platform: String = row.get(3)?;
+            let app_name: String = row.get(4)?;
+            let url: String = row.get(5)?;
+            let created_at: String = row.get(6)?;
+            let duration_ms: i64 = row.get(7)?;
+            let cat: String = row.get(8)?;
+            let speaker_count: i64 = row.get(9)?;
+            let raw_text: String = row.get(10)?;
+            let actions_raw: Option<String> = row.get(11)?;
+            let audio_path: Option<String> = row.get(12)?;
 
-                let action_count = actions_raw
-                    .and_then(|a| serde_json::from_str::<Vec<ActionItem>>(&a).ok())
-                    .map(|v| v.len())
-                    .unwrap_or(0);
+            let action_count = actions_raw
+                .and_then(|a| serde_json::from_str::<Vec<ActionItem>>(&a).ok())
+                .map(|v| v.len())
+                .unwrap_or(0);
 
-                // Cut on a character boundary (byte slicing panicked on accents/emoji).
-                let preview = if raw_text.chars().count() > 140 {
-                    format!("{}...", raw_text.chars().take(137).collect::<String>())
-                } else {
-                    raw_text
-                };
+            // Cut on a character boundary (byte slicing panicked on accents/emoji).
+            let preview = if raw_text.chars().count() > 140 {
+                format!("{}...", raw_text.chars().take(137).collect::<String>())
+            } else {
+                raw_text
+            };
 
-                let has_audio = file_exists(&audio_path);
-                let audio_missing = audio_path.is_some() && !has_audio;
+            let has_audio = file_exists(&audio_path);
+            let audio_missing = audio_path.is_some() && !has_audio;
 
-                Ok(MeetingSummaryRecord {
-                    id,
-                    session_id,
-                    title,
-                    platform,
-                    app_name,
-                    url,
-                    created_at,
-                    duration_ms,
-                    category: cat,
-                    speaker_count,
-                    snippet_preview: preview,
-                    action_item_count: action_count,
-                    has_audio,
-                    audio_missing,
-                })
+            Ok(MeetingSummaryRecord {
+                id,
+                session_id,
+                title,
+                platform,
+                app_name,
+                url,
+                created_at,
+                duration_ms,
+                category: cat,
+                speaker_count,
+                snippet_preview: preview,
+                action_item_count: action_count,
+                has_audio,
+                audio_missing,
             })
-            .map_err(|e| format!("Query failed: {}", e))?;
+        })
+        .map_err(|e| format!("Query failed: {}", e))?;
 
-        let mut records = Vec::new();
-        for r in rows {
-            if let Ok(rec) = r {
-                records.push(rec);
-            }
+    let mut records = Vec::new();
+    for r in rows {
+        if let Ok(rec) = r {
+            records.push(rec);
         }
+    }
 
-        Ok(records)
-    })
-    .await
-    .map_err(|e| format!("Task failed: {}", e))?
+    Ok(records)
 }
 
 #[tauri::command]
@@ -2794,6 +2803,31 @@ mod history_persistence_tests {
         undo_merge_internal(&conn,id,merged.id).unwrap();
         assert_eq!(conn.query_row("SELECT speaker_id FROM meeting_turns WHERE meeting_id=?1",[id],|row|row.get::<_,String>(0)).unwrap(),"guest");
         drop(conn);std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod meeting_list_tests {
+    use super::*;
+    fn fixture(titles: &[&str]) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        for (id, title) in titles.iter().enumerate() {
+            conn.execute("INSERT INTO meetings (id,session_id,title,platform,app_name,url,created_at,duration_ms,transcript_raw,category,speaker_count) VALUES (?1,'s'||?1,?2,'zoom','','','2026-10-01T10:00:00+00:00',1000,'','General',1)", params![id as i64 + 1, title]).unwrap();
+        }
+        conn
+    }
+    fn found(conn: &Connection, search: &str) -> Vec<String> {
+        list_meetings_in(conn, Some(search.into()), None, None, None, None).unwrap().into_iter().map(|m| m.title).collect()
+    }
+    #[test]
+    fn search_text_is_matched_literally() {
+        let conn = fixture(&["Hit 100% of target", "1000 signups", "file_list review", "Budget sync"]);
+        assert_eq!(found(&conn, "100%"), ["Hit 100% of target"]);
+        assert_eq!(found(&conn, "_"), ["file_list review"]);
+        assert_eq!(found(&conn, "budget"), ["Budget sync"]);
+        save_tags_in(&conn, 4, vec!["Q4_plan".into()]).unwrap();
+        assert_eq!(found(&conn, "q4_"), ["Budget sync"]);
     }
 }
 

@@ -52,35 +52,21 @@ pub fn extract_summary_heuristics(turns: &[DiarizedTurn], default_title: &str) -
 
     let lower = full_text.to_lowercase();
 
-    // 1. Categorization
-    let category = if lower.contains("bug")
-        || lower.contains("architecture")
-        || lower.contains("database")
-        || lower.contains("backend")
-        || lower.contains("frontend")
-        || lower.contains("deploy")
-        || lower.contains("rust")
-        || lower.contains("api")
-    {
+    // 1. Categorization, by whole words and their plural/verb forms: "trust"
+    // is not "rust", "rapid capital" is not "api", "democracy" is not "demo".
+    let words: std::collections::HashSet<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let mentions = |keywords: &[&str]| {
+        words.iter().any(|w| {
+            keywords.iter().any(|k| w.strip_prefix(k).is_some_and(|rest| ["", "s", "es", "ed", "ing", "ment", "ments"].contains(&rest)))
+        })
+    };
+    let category = if mentions(&["bug", "debug", "debugging", "architecture", "database", "backend", "frontend", "deploy", "rust", "api"]) {
         "Engineering".to_string()
-    } else if lower.contains("standup")
-        || lower.contains("yesterday")
-        || lower.contains("blocker")
-    {
+    } else if mentions(&["standup", "yesterday", "blocker"]) {
         "Standup".to_string()
-    } else if lower.contains("roadmap")
-        || lower.contains("sprint")
-        || lower.contains("q3")
-        || lower.contains("q4")
-        || lower.contains("planning")
-        || lower.contains("milestone")
-    {
+    } else if mentions(&["roadmap", "sprint", "q3", "q4", "planning", "milestone"]) {
         "Planning".to_string()
-    } else if lower.contains("client")
-        || lower.contains("contract")
-        || lower.contains("demo")
-        || lower.contains("customer")
-    {
+    } else if mentions(&["client", "contract", "demo", "customer"]) {
         "Client Sync".to_string()
     } else if speaker_names.len() == 2 {
         "1-on-1".to_string()
@@ -131,7 +117,9 @@ pub fn extract_summary_heuristics(turns: &[DiarizedTurn], default_title: &str) -
             if sent_trim.len() < 10 {
                 continue;
             }
-            let sent_lower = sent_trim.to_lowercase();
+            // The triggers are ASCII. Full lowercasing changes the byte length of
+            // some letters ("İ", the Kelvin sign), and `pos` must index `sent_trim`.
+            let sent_lower = sent_trim.to_ascii_lowercase();
 
             for (trigger, target_type) in &action_triggers {
                 if let Some(pos) = sent_lower.find(trigger) {
@@ -247,6 +235,43 @@ mod tests {
         assert_eq!(out.action_items[0].assignee, "Team");
         assert_eq!(out.action_items[1].assignee, "Alice");
         assert!(out.action_items[1].task.contains("implement the SQLite"));
+    }
+
+    fn turn(speaker: &str, text: &str) -> DiarizedTurn {
+        DiarizedTurn {
+            speaker_id: format!("speaker_{speaker}"),
+            speaker_name: speaker.to_string(),
+            start_ms: 0,
+            end_ms: 2000,
+            channel: 1,
+            text: text.to_string(),
+            snippet_path: None,
+            candidate_snippets: Vec::new(),
+            current_snippet_idx: 0,
+        }
+    }
+
+    #[test]
+    fn action_items_start_at_the_trigger_after_non_ascii_letters() {
+        // Lowercasing "İ" adds a byte, so a position found in the lowercased
+        // sentence is past the trigger in the original.
+        let out = extract_summary_heuristics(&[turn("Alice", "İrem, can you share the report today.")], "Call");
+        assert_eq!(out.action_items.len(), 1);
+        assert_eq!(out.action_items[0].task, "Can you share the report today");
+        // Lowercasing the Kelvin sign removes two bytes: the slice used to start
+        // inside "é" and panic, taking the whole meeting save with it.
+        let out = extract_summary_heuristics(&[turn("Alice", "\u{212A}é let's go over the slides")], "Call");
+        assert_eq!(out.action_items[0].task, "Let's go over the slides");
+    }
+
+    #[test]
+    fn categories_match_whole_words_not_parts_of_words() {
+        let client = extract_summary_heuristics(&[turn("Alice", "We trust the client with the contract renewal.")], "Call");
+        assert_eq!(client.category, "Client Sync");
+        let planning = extract_summary_heuristics(&[turn("Alice", "Rapid capital planning for the next milestone.")], "Call");
+        assert_eq!(planning.category, "Planning");
+        let engineering = extract_summary_heuristics(&[turn("Alice", "The API returns a bug, so we debug the backend.")], "Call");
+        assert_eq!(engineering.category, "Engineering");
     }
 
     #[test]

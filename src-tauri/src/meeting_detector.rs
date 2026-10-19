@@ -130,12 +130,13 @@ pub fn classify_meeting_url(url: &str) -> Option<&'static str> {
         return (path.starts_with("/wc/") || path.starts_with("/j/") || path.starts_with("/s/")).then_some("zoom");
     }
     // Webex: personal rooms (/meet/...), the web meeting client (/wbxmjs/, /webappng/),
-    // and web.webex.com meetings.
+    // and web.webex.com meetings (/meeting/..., not the /meetings list).
     if host == "webex.com" || host.ends_with(".webex.com") {
+        let first_segment = path.trim_start_matches('/').split(['/', '?', '#']).next().unwrap_or("");
         let in_call = path.starts_with("/meet/")
             || path.contains("/wbxmjs/")
             || path.contains("/webappng/")
-            || (host == "web.webex.com" && path.starts_with("/meeting"));
+            || (host == "web.webex.com" && first_segment == "meeting");
         return in_call.then_some("webex");
     }
     None
@@ -187,6 +188,23 @@ fn is_audio_utility(app_name: &str, bundle_id: &str) -> bool {
     let bundle = bundle_id.to_lowercase();
     NAMES.iter().any(|n| name == *n || name.starts_with(&format!("{n} ")))
         || BUNDLES.iter().any(|b| bundle.starts_with(b))
+}
+
+/// Remote-desktop sessions. They hold a microphone and play the other
+/// computer's audio for the whole connection, which is the same signal the
+/// "other apps" heuristic uses for a call. Matched on the app's display name,
+/// Windows executable stem, or bundle id, case-insensitively.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn is_remote_desktop(app_name: &str, bundle_id: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "jump desktop", "jump desktop connect", "jumpconnect",
+    ];
+    const BUNDLES: &[&str] = &[
+        "com.p5sys.jump.",
+    ];
+    let name = app_name.to_lowercase();
+    let bundle = bundle_id.to_lowercase();
+    NAMES.contains(&name.as_str()) || BUNDLES.iter().any(|b| bundle.starts_with(b))
 }
 
 /// The name to show for a call in an app outside the catalogue, or `None` when
@@ -364,7 +382,7 @@ mod platform_impl {
                 continue;
             }
             let Some(name) = super::other_call_app_name(&p.name, &app, &exe) else { continue };
-            if super::is_audio_utility(&name, &p.bundle_id) {
+            if super::is_audio_utility(&name, &p.bundle_id) || super::is_remote_desktop(&name, &p.bundle_id) {
                 continue;
             }
             let entry = apps.entry(app).or_insert((p.pid, name, false, false));
@@ -595,8 +613,8 @@ mod platform_impl {
 const REAPER_MISSES_BEFORE_END: u32 = 2;
 
 fn prioritize_meetings(meetings: &mut [MeetingInfo]) {
-    // A known call takes precedence over apps that merely hold a microphone
-    // and play audio (for example a remote desktop audio bridge).
+    // A known call takes precedence over an unknown app that merely holds a
+    // microphone and plays audio.
     meetings.sort_by_key(|m| (!m.should_record, std::cmp::Reverse(m.confidence)));
 }
 
@@ -809,7 +827,7 @@ mod tests {
     #[test]
     fn a_known_meeting_precedes_an_unrelated_audio_bridge() {
         let bridge = super::MeetingInfo {
-            pid: 1, app_name: "Jump Desktop Connect".into(), title: "".into(), url: "".into(),
+            pid: 1, app_name: "Unknown Voice App".into(), title: "".into(), url: "".into(),
             platform: "other".into(), confidence: 90, should_record: false,
             is_using_mic: true, is_playing_audio: true,
         };
@@ -856,6 +874,18 @@ mod tests {
         assert!(!is_audio_utility("FaceTime", "com.apple.FaceTime"));
         // A name that merely starts with a utility's letters is not that utility.
         assert!(!is_audio_utility("Finetuned Calls", ""));
+    }
+
+    #[test]
+    fn remote_desktop_sessions_are_not_calls() {
+        assert!(is_remote_desktop("Jump Desktop Connect", "com.p5sys.jump.connect"));
+        assert!(is_remote_desktop("Jump Desktop", "com.p5sys.jump.mac.client"));
+        assert!(is_remote_desktop("JumpConnect", ""));
+        assert!(is_remote_desktop("renamed", "com.p5sys.jump.connect"));
+        assert!(!is_remote_desktop("Signal", "org.whispersystems.signal-desktop"));
+        assert!(!is_remote_desktop("WhatsApp", ""));
+        assert!(!is_remote_desktop("FaceTime", "com.apple.FaceTime"));
+        assert!(!is_remote_desktop("Jump Desktop Notes", ""));
     }
 
     #[cfg(windows)]
@@ -937,11 +967,33 @@ mod tests {
     }
 
     #[test]
+    fn the_webex_meetings_list_is_not_a_call() {
+        assert_eq!(classify_meeting_url("https://web.webex.com/meetings"), None);
+        assert_eq!(classify_meeting_url("https://web.webex.com/meetings/upcoming"), None);
+        assert_eq!(classify_meeting_url("https://web.webex.com/meeting/abc?launchApp=true"), Some("webex"));
+    }
+
+    #[test]
     fn prejoin_titles_match_whole_title_for_bare_app_names() {
         assert!(is_prejoin_window_title("Google Meet"));
         assert!(is_prejoin_window_title("  meet".trim()));
         assert!(!is_prejoin_window_title("Meet with Sam"));
         assert!(!is_prejoin_window_title(""));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn classify_meeting_url_does_not_panic(url in "\\PC{0,300}") {
+            let _ = classify_meeting_url(&url);
+        }
+
+        #[test]
+        fn the_webex_meetings_list_is_never_a_call(
+            rest in "[A-Za-z0-9/_?#.-]{0,40}",
+        ) {
+            let url = format!("https://web.webex.com/meetings{rest}");
+            proptest::prop_assert!(classify_meeting_url(&url).is_none(), "{}", url);
+        }
     }
 
     #[test]
