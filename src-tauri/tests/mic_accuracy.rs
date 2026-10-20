@@ -70,7 +70,7 @@ fn mic_sim_whisper<F>(
     sample_rate: u32,
     vad: &Arc<Mutex<VADManager>>,
     mut transcribe: F,
-) -> String
+) -> Result<String, String>
 where
     F: FnMut(&[f32]) -> Result<String, String>,
 {
@@ -98,24 +98,20 @@ where
             true
         } else {
             // Mirror recording.rs: scan full chunk, use peak prob.
-            let prob = vad
-                .lock()
-                .ok()
-                .map(|mut v| v.max_speech_prob(&pcm16, usize::MAX))
-                .unwrap_or(0.0);
+            let prob = vad.lock().map_err(|e| format!("VAD lock: {e}"))?
+                .max_speech_prob(&pcm16, usize::MAX);
             prob > VAD_THRESHOLD
         };
 
         if should_transcribe {
-            if let Ok(t) = transcribe(&pcm16) {
-                if !t.trim().is_empty() {
-                    parts.push(t.trim().to_string());
-                }
+            let t = transcribe(&pcm16)?;
+            if !t.trim().is_empty() {
+                parts.push(t.trim().to_string());
             }
         }
     }
 
-    parts.join(" ")
+    Ok(parts.join(" "))
 }
 
 #[derive(Clone, Copy)]
@@ -148,7 +144,7 @@ fn mic_sim_granite(
     sample_rate: u32,
     p: &mut GgufAsrManager,
     config: GraniteMicConfig,
-) -> String {
+) -> Result<String, String> {
     let chunk_size = ((sample_rate as f32) * config.feed_secs).round() as usize;
     let mut parts: Vec<String> = Vec::new();
 
@@ -161,14 +157,13 @@ fn mic_sim_granite(
         if pcm16.len() < config.min_samples_16k {
             pcm16.resize(config.min_samples_16k, 0.0);
         }
-        if let Ok(t) = p.transcribe_chunk(&pcm16, 16000, None) {
-            if !t.trim().is_empty() {
-                parts.push(t.trim().to_string());
-            }
+        let t = p.transcribe_chunk(&pcm16, 16000, None)?;
+        if !t.trim().is_empty() {
+            parts.push(t.trim().to_string());
         }
     }
 
-    parts.join(" ")
+    Ok(parts.join(" "))
 }
 
 // ── Stats helpers ─────────────────────────────────────────────────────────────
@@ -206,6 +201,7 @@ fn mic_accuracy() {
         .expect("Set TAURSCRIBE_EVAL_MANIFEST to a .jsonl manifest path");
     let rows = load_manifest(&manifest_path);
     assert!(!rows.is_empty(), "manifest is empty");
+    assert!(rows.iter().all(|row| !row.ref_text.trim().is_empty()), "reference text is empty");
 
     let audio_root: Option<std::path::PathBuf> = std::env::var("TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT")
         .ok()
@@ -234,8 +230,7 @@ fn mic_accuracy() {
                         let (samples, rate) = match load_native_mono(&flac) {
                             Ok(v) => v,
                             Err(e) => {
-                                eprintln!("[whisper] {} audio error: {e}", row.utt_id);
-                                continue;
+                                panic!("[whisper] {} audio error: {e}", row.utt_id);
                             }
                         };
                         // Reset LSTM state — simulates start of a fresh recording
@@ -246,7 +241,8 @@ fn mic_accuracy() {
                         let vad_ref = Arc::clone(&vad);
                         let hyp = mic_sim_whisper(&samples, rate, &vad_ref, |pcm| {
                             w.transcribe_chunk(pcm, 16000)
-                        });
+                        }).unwrap_or_else(|e| panic!("[whisper] {} transcribe error: {e}", row.utt_id));
+                        assert!(!hyp.trim().is_empty(), "[whisper] {} produced no transcript", row.utt_id);
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
                         eprintln!(
@@ -256,12 +252,12 @@ fn mic_accuracy() {
                         wers.push(w_val);
                     }
                 }
-                Err(e) => eprintln!("[SKIP] Whisper init: {e}"),
+                Err(e) => panic!("Installed Whisper model failed to initialize: {e}"),
             }
             w.unload();
         }
         Ok(_) => eprintln!("[SKIP] Whisper: no models installed"),
-        Err(e) => eprintln!("[SKIP] Whisper list_models: {e}"),
+        Err(e) => panic!("Whisper list_models: {e}"),
     }
 
     // ── Granite ──────────────────────────────────────────────────────────────
@@ -281,11 +277,12 @@ fn mic_accuracy() {
                         let (samples, rate) = match load_native_mono(&flac) {
                             Ok(v) => v,
                             Err(e) => {
-                                eprintln!("[granite] {} audio error: {e}", row.utt_id);
-                                continue;
+                                panic!("[granite] {} audio error: {e}", row.utt_id);
                             }
                         };
-                        let hyp = mic_sim_granite(&samples, rate, &mut p, config);
+                        let hyp = mic_sim_granite(&samples, rate, &mut p, config)
+                            .unwrap_or_else(|e| panic!("[granite] {} transcribe error: {e}", row.utt_id));
+                        assert!(!hyp.trim().is_empty(), "[granite] {} produced no transcript", row.utt_id);
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
                         eprintln!(
@@ -295,12 +292,12 @@ fn mic_accuracy() {
                         wers.push(w_val);
                     }
                 }
-                Err(e) => eprintln!("[SKIP] Granite init: {e}"),
+                Err(e) => panic!("Installed Granite model failed to initialize: {e}"),
             }
             p.unload();
         }
         Ok(_) => eprintln!("[SKIP] Granite: no models installed"),
-        Err(e) => eprintln!("[SKIP] Granite list_models: {e}"),
+        Err(e) => panic!("Granite list_models: {e}"),
     }
 
     // ── Summary ───────────────────────────────────────────────────────────────
@@ -309,6 +306,8 @@ fn mic_accuracy() {
         panic!("No engines produced results. Install at least one model or set TAURSCRIBE_ASR_SMOKE_SKIP=1 for an intentional skip.");
     }
     for (engine, wers) in &results {
+        assert_eq!(wers.len(), rows.len(), "{engine}: every fixture must be evaluated");
+        assert!(wers.iter().all(|wer| wer.is_finite()), "{engine}: invalid WER");
         let mean = wers.iter().sum::<f64>() / wers.len() as f64;
         let med = median(wers.clone());
         eprintln!(

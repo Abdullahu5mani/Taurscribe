@@ -128,13 +128,15 @@ fn jfk_audio_through_qwen3() {
     let pcm = jfk_pcm16_preprocessed_for_asr().unwrap_or_else(|e| panic!("{e}"));
     let mut manager = GgufAsrManager::qwen3();
     let models = manager.list_available_models().expect("list installed Qwen3 models");
-    let id = &models.first().expect("install a Qwen3-ASR model before explicitly running this test").id;
-    manager.initialize(Some(id), false).expect("initialize Qwen3");
-    eprintln!("Qwen3 model: {id}; backend: {}", manager.get_status().backend);
-    let result = manager.transcribe_chunk(&pcm, 16000, None);
-    manager.unload();
-    assert!(!manager.get_status().loaded);
-    check_transcript("Qwen3", &result.expect("transcribe Qwen3 fixture")).unwrap();
+    assert!(!models.is_empty(), "install a Qwen3-ASR model before explicitly running this test");
+    for model in models {
+        manager.initialize(Some(&model.id), false).expect("initialize Qwen3");
+        eprintln!("Qwen3 model: {}; backend: {}", model.id, manager.get_status().backend);
+        let result = manager.transcribe_chunk(&pcm, 16000, None);
+        manager.unload();
+        assert!(!manager.get_status().loaded);
+        check_transcript(&model.id, &result.expect("transcribe Qwen3 fixture")).unwrap();
+    }
 }
 
 #[test]

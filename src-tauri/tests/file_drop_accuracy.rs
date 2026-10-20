@@ -1,7 +1,8 @@
 //! Accuracy test: file drag-and-drop transcription path.
 //!
-//! Runs each audio file in a JSONL manifest through the **exact same pipeline**
-//! as `commands/file_transcription.rs: transcribe_file_blocking`:
+//! Exercises file preprocessing and installed engines over a JSONL manifest.
+//! This diagnostic calls engine managers directly; the native UI harness covers
+//! `commands/file_transcription.rs` scheduling, progress and persistence.
 //!
 //!   decode → mono mix → resample 16kHz → trim edges
 //!     → assemble_speech_audio (energy VAD) → preprocess_assembled_speech_16k
@@ -46,7 +47,7 @@ fn load_manifest(path: &str) -> Vec<ManifestRow> {
         .collect()
 }
 
-// ── Audio pipeline (mirrors transcribe_file_blocking exactly) ─────────────────
+// ── File preprocessing ────────────────────────────────────────────────────────
 
 fn prepare_file_audio(path: &Path) -> Result<Vec<f32>, String> {
     let (mut mono, sample_rate) = audio_decode::decode_audio_mono_f32(path)?;
@@ -88,26 +89,16 @@ const STREAM_CHUNK_SAMPLES: usize = 16000 * 15; // 15 seconds
 fn transcribe_whisper(w: &mut WhisperManager, pcm: &[f32]) -> Result<String, String> {
     let parts: Vec<String> = pcm
         .chunks(WHISPER_CHUNK_SAMPLES)
-        .filter_map(|chunk| {
-            w.transcribe_audio_data(chunk, None)
-                .ok()
-                .filter(|t| !t.trim().is_empty())
-                .map(|t| t.trim().to_string())
-        })
-        .collect();
+        .map(|chunk| w.transcribe_audio_data(chunk, None))
+        .collect::<Result<_, _>>()?;
     Ok(clean_transcript(&parts.join(" ")))
 }
 
 fn transcribe_granite(p: &mut GgufAsrManager, pcm: &[f32]) -> Result<String, String> {
     let parts: Vec<String> = pcm
         .chunks(STREAM_CHUNK_SAMPLES)
-        .filter_map(|chunk| {
-            p.transcribe_chunk(chunk, 16000, None)
-                .ok()
-                .filter(|t| !t.trim().is_empty())
-                .map(|t| t.trim().to_string())
-        })
-        .collect();
+        .map(|chunk| p.transcribe_chunk(chunk, 16000, None))
+        .collect::<Result<_, _>>()?;
     Ok(clean_transcript(&parts.join(" ")))
 }
 
@@ -146,6 +137,7 @@ fn file_drop_accuracy() {
         .expect("Set TAURSCRIBE_EVAL_MANIFEST to a .jsonl manifest path");
     let rows = load_manifest(&manifest_path);
     assert!(!rows.is_empty(), "manifest is empty");
+    assert!(rows.iter().all(|row| !row.ref_text.trim().is_empty()), "reference text is empty");
 
     let audio_root: Option<std::path::PathBuf> = std::env::var("TAURSCRIBE_LIBRISPEECH_AUDIO_ROOT")
         .ok()
@@ -169,17 +161,16 @@ fn file_drop_accuracy() {
                         let pcm = match prepare_file_audio(&flac) {
                             Ok(p) => p,
                             Err(e) => {
-                                eprintln!("[whisper] {} audio error: {e}", row.utt_id);
-                                continue;
+                                panic!("[whisper] {} audio error: {e}", row.utt_id);
                             }
                         };
                         let hyp = match transcribe_whisper(&mut w, &pcm) {
                             Ok(t) => t,
                             Err(e) => {
-                                eprintln!("[whisper] {} transcribe error: {e}", row.utt_id);
-                                continue;
+                                panic!("[whisper] {} transcribe error: {e}", row.utt_id);
                             }
                         };
+                        assert!(!hyp.trim().is_empty(), "[whisper] {} produced no transcript", row.utt_id);
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
                         eprintln!(
@@ -189,12 +180,12 @@ fn file_drop_accuracy() {
                         wers.push(w_val);
                     }
                 }
-                Err(e) => eprintln!("[SKIP] Whisper init: {e}"),
+                Err(e) => panic!("Installed Whisper model failed to initialize: {e}"),
             }
             w.unload();
         }
         Ok(_) => eprintln!("[SKIP] Whisper: no models installed"),
-        Err(e) => eprintln!("[SKIP] Whisper list_models: {e}"),
+        Err(e) => panic!("Whisper list_models: {e}"),
     }
 
     // ── Granite ──────────────────────────────────────────────────────────────
@@ -213,17 +204,16 @@ fn file_drop_accuracy() {
                         let pcm = match prepare_file_audio(&flac) {
                             Ok(p) => p,
                             Err(e) => {
-                                eprintln!("[granite] {} audio error: {e}", row.utt_id);
-                                continue;
+                                panic!("[granite] {} audio error: {e}", row.utt_id);
                             }
                         };
                         let hyp = match transcribe_granite(&mut p, &pcm) {
                             Ok(t) => t,
                             Err(e) => {
-                                eprintln!("[granite] {} transcribe error: {e}", row.utt_id);
-                                continue;
+                                panic!("[granite] {} transcribe error: {e}", row.utt_id);
                             }
                         };
+                        assert!(!hyp.trim().is_empty(), "[granite] {} produced no transcript", row.utt_id);
                         let w_val = wer(&row.ref_text, &hyp);
                         let snippet: String = hyp.chars().take(80).collect();
                         eprintln!(
@@ -233,12 +223,12 @@ fn file_drop_accuracy() {
                         wers.push(w_val);
                     }
                 }
-                Err(e) => eprintln!("[SKIP] Granite init: {e}"),
+                Err(e) => panic!("Installed Granite model failed to initialize: {e}"),
             }
             p.unload();
         }
         Ok(_) => eprintln!("[SKIP] Granite: no models installed"),
-        Err(e) => eprintln!("[SKIP] Granite list_models: {e}"),
+        Err(e) => panic!("Granite list_models: {e}"),
     }
 
     // ── Summary ───────────────────────────────────────────────────────────────
@@ -247,6 +237,8 @@ fn file_drop_accuracy() {
         panic!("No engines produced results. Install at least one model or set TAURSCRIBE_ASR_SMOKE_SKIP=1 for an intentional skip.");
     }
     for (engine, wers) in &results {
+        assert_eq!(wers.len(), rows.len(), "{engine}: every fixture must be evaluated");
+        assert!(wers.iter().all(|wer| wer.is_finite()), "{engine}: invalid WER");
         let mean = wers.iter().sum::<f64>() / wers.len() as f64;
         let med = median(wers.clone());
         eprintln!(

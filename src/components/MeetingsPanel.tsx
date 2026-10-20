@@ -115,7 +115,11 @@ export function speakerInitials(name: string): string {
   if (words.length === 0) return "?";
   const numbered = trimmed.match(/^speaker\s*(\d+)$/i);
   if (numbered) return `S${numbered[1]}`;
-  return (words.length === 1 ? words[0].slice(0, 2) : words[0][0] + words[words.length - 1][0]).toUpperCase();
+  // By code point, not UTF-16 unit: indexing split emoji and other characters
+  // outside the BMP in half and showed a broken glyph.
+  const chars = (word: string) => Array.from(word);
+  const first = chars(words[0]);
+  return (words.length === 1 ? first.slice(0, 2).join("") : first[0] + chars(words[words.length - 1])[0]).toUpperCase();
 }
 
 /** "Today", "Yesterday", "This week", or the month, for the library's date headers. */

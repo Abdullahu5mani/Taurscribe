@@ -434,12 +434,27 @@ export function useRecording({
                     .catch(e => console.warn("mute_system_audio failed:", e));
             }
             if (!isCurrent()) return;
-            const result = await invoke<CommandResult<string>>("start_recording", {
-                denoise: enableDenoiseRef.current,
-                modelId: targetModel, useGpu: asrBackend === "gpu",
-                engine: currentEngine, backgroundLoad,
-                audioSource: isDual ? "dual_channel" : isInPerson ? "in_person" : "mic",
-            });
+            startInFlightGenerationRef.current = generation;
+            startEventGenerationRef.current = null;
+            let result: CommandResult<string>;
+            try {
+                result = await invoke<CommandResult<string>>("start_recording", {
+                    denoise: enableDenoiseRef.current,
+                    modelId: targetModel, useGpu: asrBackend === "gpu",
+                    engine: currentEngine, backgroundLoad,
+                    audioSource: isDual ? "dual_channel" : isInPerson ? "in_person" : "mic",
+                });
+            } finally {
+                if (startInFlightGenerationRef.current === generation) startInFlightGenerationRef.current = null;
+            }
+            // The backend announces the recording before replying. When that
+            // event won the race and nothing else happened since, it was this
+            // start's own: carry on (clear a pending overlay hide, show the
+            // loading status, ...) instead of treating the start as superseded.
+            if (!isCurrent() && result.ok && startEventGenerationRef.current === recordingGenerationRef.current) {
+                generation = recordingGenerationRef.current;
+            }
+            startEventGenerationRef.current = null;
             if (!isCurrent()) return;
             if (!result.ok) throw result.error ?? new Error("Failed to start recording");
             if (fileHasPriority) playStart?.();
