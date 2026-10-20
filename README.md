@@ -125,8 +125,12 @@ bun run build:windows    # Windows installer
 Tests:
 
 ```bash
-cd src-tauri && cargo test
+bun run test:native
 ```
+
+Use `bun scripts/cargo-native.ts <cargo arguments>` for other native commands.
+This wrapper gives Whisper and transcribe.cpp one compatible ggml build.
+Direct Cargo commands omit that setup and can link incompatible inference code.
 
 The slower tests that load real models (a JFK clip through every engine, memory leak checks, LibriSpeech accuracy) are marked `#[ignore]`. [TESTING.md](TESTING.md) explains how to run them.
 

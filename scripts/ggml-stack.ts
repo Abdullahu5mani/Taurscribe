@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * One ggml for whisper.cpp and transcribe.cpp (Windows and Linux builds).
+ * One ggml for whisper.cpp and transcribe.cpp.
  *
  * whisper-rs and transcribe-cpp each compile their own static ggml, of
  * different versions (whisper.cpp 1.8.2 ships ggml 0.9.4, transcribe.cpp
@@ -26,8 +26,9 @@
  * scripts/build-windows.ts calls ggmlStackEnv() itself. The prefix is cached
  * under target/ggml-stack/<key> and rebuilt only when its inputs change.
  *
- * macOS builds are left as they are: their link has not shown the problem, and
- * whisper-rs there also links ggml's BLAS backend, which transcribe.cpp turns off.
+ * macOS has the same conflict: Qwen3's unpadded attention mask aborts in
+ * whisper.cpp's older ggml. Enable the matching ggml BLAS backend there too,
+ * because whisper-rs links it unconditionally on macOS.
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -76,7 +77,7 @@ function transcribeSource(target: string | null): { dir: string; rev: string } {
 }
 
 /** CMake options for the features, as transcribe-cpp-sys's build.rs sets them. */
-function cmakeDefines(features: string[]): string[] {
+function cmakeDefines(features: string[], target: string): string[] {
   const d = [
     "-DCMAKE_BUILD_TYPE=Release",
     "-DTRANSCRIBE_INSTALL=ON",
@@ -89,6 +90,15 @@ function cmakeDefines(features: string[]): string[] {
   if (features.includes("gpu-nvidia") || features.includes("windows-nvidia")) d.push("-DTRANSCRIBE_CUDA=ON");
   if (features.includes("gpu-vulkan")) d.push("-DTRANSCRIBE_VULKAN=ON");
   if (features.includes("gpu-amd")) d.push("-DTRANSCRIBE_HIP=ON");
+  if (target.endsWith("apple-darwin")) {
+    d.push(
+      "-DTRANSCRIBE_METAL=ON",
+      "-DGGML_METAL_EMBED_LIBRARY=ON",
+      "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0",
+      `-DCMAKE_OSX_ARCHITECTURES=${target.startsWith("aarch64") ? "arm64" : "x86_64"}`,
+      `-DCMAKE_PROJECT_ggml_INCLUDE=${join(root, "scripts", "ggml-macos.cmake")}`,
+    );
+  }
   // Same escape hatch transcribe-cpp-sys honours (CI passes -DGGML_NATIVE=OFF).
   for (const extra of [process.env.TRANSCRIBE_CMAKE_ARGS, process.env.CMAKE_ARGS]) {
     if (extra) d.push(...extra.split(/\s+/).filter(Boolean));
@@ -97,6 +107,23 @@ function cmakeDefines(features: string[]): string[] {
 }
 
 export type GgmlStackEnv = Record<string, string>;
+
+/** Cargo splits string rustflags on whitespace; encoded flags preserve checkout
+ * paths containing spaces. Preserve the normal Cargo precedence and the target's
+ * configured flags when adding the native archive search path. */
+export function nativeSearchFlags(
+  libDir: string, configured: string[], targetFlags?: string,
+  rustflags?: string, encoded?: string,
+): string {
+  const flags = encoded !== undefined ? encoded.split("\x1f").filter(Boolean)
+    : rustflags !== undefined ? rustflags.split(/\s+/).filter(Boolean)
+    : [...configured, ...(targetFlags?.split(/\s+/).filter(Boolean) ?? [])];
+  const libFlag = `native=${libDir}`;
+  if (!flags.some((flag, i) => flag === libFlag && flags[i - 1] === "-L")) {
+    flags.push("-L", libFlag);
+  }
+  return flags.join("\x1f");
+}
 
 /** The triple cargo builds for: --target, else the host's. */
 function buildTriple(target: string | null): string {
@@ -109,12 +136,14 @@ function buildTriple(target: string | null): string {
 
 /** Builds (or reuses) the shared prefix and returns the environment to build with. */
 export function ggmlStackEnv(featureList: string | null, target: string | null): GgmlStackEnv {
-  if (process.platform === "darwin") throw new Error("ggml-stack is for Windows and Linux builds");
+  const triple = buildTriple(target);
   const features = (featureList ?? "").split(",").map((f) => f.trim()).filter(Boolean).sort();
   const { dir: source, rev } = transcribeSource(target);
-  const defines = cmakeDefines(features);
+  const defines = cmakeDefines(features, triple);
   const key = createHash("sha256")
-    .update(JSON.stringify({ rev, defines, target, cuda: process.env.CMAKE_CUDA_ARCHITECTURES ?? "", gen: process.env.CMAKE_GENERATOR ?? "" }))
+    .update(JSON.stringify({ rev, defines, target: triple, compat: GGML_COMPAT_SHIM,
+      macos: triple.endsWith("apple-darwin") ? readFileSync(join(root, "scripts", "ggml-macos.cmake"), "utf8") : "",
+      cuda: process.env.CMAKE_CUDA_ARCHITECTURES ?? "", gen: process.env.CMAKE_GENERATOR ?? "" }))
     .digest("hex")
     .slice(0, 16);
   const targetDir = process.env.CARGO_TARGET_DIR || join(srcTauri, "target");
@@ -142,16 +171,26 @@ export function ggmlStackEnv(featureList: string | null, target: string | null):
   // CMake takes ';'-separated lists on every platform; keep what is already
   // there (CI puts SPIRV-Headers on it for transcribe.cpp's Vulkan build).
   const existing = process.env.CMAKE_PREFIX_PATH;
-  const flagsVar = `CARGO_TARGET_${buildTriple(target).toUpperCase().replace(/-/g, "_")}_RUSTFLAGS`;
+  const flagsVar = `CARGO_TARGET_${triple.toUpperCase().replace(/-/g, "_")}_RUSTFLAGS`;
   const libFlag = `-L native=${join(prefix, "lib")}`;
   const flags = process.env[flagsVar];
-  return {
+  const env: GgmlStackEnv = {
     TRANSCRIBE_DIR: prefix,
     WHISPER_USE_SYSTEM_GGML: "ON",
     // Keep what is already there; running twice must not drop other entries.
     CMAKE_PREFIX_PATH: !existing ? prefix : existing.split(";").includes(prefix) ? existing : `${prefix};${existing}`,
     [flagsVar]: flags && !flags.includes(libFlag) ? `${flags} ${libFlag}` : flags ?? libFlag,
   };
+  if (triple.endsWith("apple-darwin")) {
+    const config = Bun.TOML.parse(readFileSync(join(srcTauri, ".cargo", "config.toml"), "utf8")) as {
+      target?: Record<string, { rustflags?: string[] }>;
+    };
+    delete env[flagsVar];
+    env.CARGO_ENCODED_RUSTFLAGS = nativeSearchFlags(join(prefix, "lib"),
+      config.target?.[triple]?.rustflags ?? [], flags,
+      process.env.RUSTFLAGS, process.env.CARGO_ENCODED_RUSTFLAGS);
+  }
+  return env;
 }
 
 if (import.meta.main) {

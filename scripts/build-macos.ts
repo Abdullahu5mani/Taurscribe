@@ -19,6 +19,7 @@ import { platform } from "os";
 import { spawnSync } from "child_process";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { ggmlStackEnv } from "./ggml-stack";
 
 if (platform() !== "darwin") {
   console.error("build-macos: This script is for macOS only.");
@@ -43,13 +44,14 @@ if (targetTriple) {
 
 const buildEnv = {
   ...process.env,
+  ...ggmlStackEnv(null, targetTriple || null),
   CI: "true",
   ...(targetTriple ? { TAURI_BUILD_TARGET: targetTriple } : {}),
 };
 
 function run(cmd: string, args: string[], opts?: { cwd?: string; env?: NodeJS.ProcessEnv }) {
   const cwd = opts?.cwd ?? root;
-  const r = spawnSync(cmd, args, { stdio: "inherit", cwd, env: opts?.env });
+  const r = spawnSync(cmd, args, { stdio: "inherit", cwd, env: opts?.env ?? buildEnv });
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
 

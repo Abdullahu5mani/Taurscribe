@@ -448,12 +448,10 @@ jobs:
         if: matrix.os_name != 'Windows'
         run: |
           if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then unset CCACHE_DISABLE; fi
-          # Linux: one ggml for whisper.cpp and transcribe.cpp (scripts/ggml-stack.ts).
+          # One ggml for whisper.cpp and transcribe.cpp, including macOS.
           # --github-env keeps it for the bundle step's cargo run too.
-          if [ "${{ contains(matrix.platform, 'ubuntu') }}" = "true" ]; then
-            ggml_stack_env=$(bun scripts/ggml-stack.ts --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} --github-env) || exit $?
-            while IFS='=' read -r key value; do export "$key=$value"; done <<< "$ggml_stack_env"
-          fi
+          ggml_stack_env=$(bun scripts/ggml-stack.ts --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} --github-env) || exit $?
+          while IFS='=' read -r key value; do export "$key=$value"; done <<< "$ggml_stack_env"
           cd src-tauri
           cargo build --release --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }}
         env:
