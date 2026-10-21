@@ -181,6 +181,20 @@ fn emit_call_audio_status(app: &AppHandle, status: &str, message: &str) {
     let _ = app.emit("meeting-audio-status", serde_json::json!({ "status": status, "message": message }));
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn announce_mic_fallback(app: &AppHandle, fell_back: bool) {
+    if !fell_back {
+        return;
+    }
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let name = cpal::default_host()
+        .default_input_device()
+        .and_then(|device| device.name().ok())
+        .unwrap_or_else(|| "the default microphone".to_string());
+    eprintln!("[WARN] Meeting microphone fell back to {name}");
+    let _ = app.emit("audio-fallback", name);
+}
+
 /// Snapshot of the current (or last) dual-channel capture's diagnostics.
 pub fn capture_diagnostics() -> Option<CaptureDiagnostics> {
     DIAGNOSTICS.lock().ok().and_then(|d| d.clone())
@@ -206,6 +220,8 @@ struct CaptureRig {
     sys_thread: Option<std::thread::JoinHandle<()>>,
     /// Stops a microphone opened through cpal (a mic other than the default).
     mic_stop: Arc<AtomicBool>,
+    /// The microphone chosen in Settings could not be opened, so the default is in use.
+    mic_fell_back: bool,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -259,13 +275,19 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
     // meeting-record can only open the system default microphone, so a mic
     // chosen in Settings is captured through cpal instead.
     let mic_stop = Arc::new(AtomicBool::new(false));
-    let custom_mic = mic_device.and_then(|name| {
-        spawn_named_mic_capture(name, mic_tx.clone(), [stop_signal.clone(), mic_stop.clone()], loss.clone())
-            .unwrap_or_else(|e| {
-                eprintln!("[WARN] Selected microphone '{}' unavailable for the meeting ({}); using the default", name, e);
+    let mut mic_fell_back = false;
+    let custom_mic = if let Some(name) = mic_device {
+        match spawn_named_mic_capture(name, mic_tx.clone(), [stop_signal.clone(), mic_stop.clone()], loss.clone()) {
+            Ok(handle) => handle,
+            Err(e) => {
+                eprintln!("[WARN] Selected microphone '{name}' unavailable for the meeting ({e}); using the default");
+                mic_fell_back = true;
                 None
-            })
-    });
+            }
+        }
+    } else {
+        None
+    };
 
     let session = capture::start(
         capture_target,
@@ -358,7 +380,7 @@ fn start_rig(target: DualChannelTarget, stop_signal: &Arc<AtomicBool>, mic_devic
         println!("[CAPTURE] callers delivered {:.2}s of 48k samples over {:.2}s wall", sys_frames as f64 / 48_000.0, sys_started.elapsed().as_secs_f64());
     });
 
-    Ok(CaptureRig { session, mic_rx, sys_rx, mic_thread: Some(mic_thread), sys_thread: Some(sys_thread), mic_stop })
+    Ok(CaptureRig { session, mic_rx, sys_rx, mic_thread: Some(mic_thread), sys_thread: Some(sys_thread), mic_stop, mic_fell_back })
 }
 
 /// (pid, owning app bundle path) of every process currently producing output.
@@ -401,6 +423,7 @@ pub fn start_dual_channel_capture(
     }).unwrap_or_default();
     SYSTEM_AUDIO_RETRY.store(false, Ordering::Release);
     let rig = start_rig(target, &stop_signal, mic_device.as_deref(), loss.clone())?;
+    announce_mic_fallback(&app_handle, rig.mic_fell_back);
     *DIAGNOSTICS.lock().unwrap() = Some(CaptureDiagnostics {
         active: true,
         target: format!("{:?}", target),
@@ -506,9 +529,10 @@ pub fn start_dual_channel_capture(
                     && meeting_app.as_deref().is_some_and(|app| current_audio_processes(&mut sys).iter().any(|(_, path)| path.as_path() == app))
             } else { false };
 
-            if stalled || (check_health && rig.session.failure().is_some())
-                || rig.mic_thread.as_ref().is_some_and(|t| t.is_finished())
-                || rig.sys_thread.as_ref().is_some_and(|t| t.is_finished())
+            if !stop_combiner.load(Ordering::Relaxed)
+                && (stalled || (check_health && rig.session.failure().is_some())
+                    || rig.mic_thread.as_ref().is_some_and(|t| t.is_finished())
+                    || rig.sys_thread.as_ref().is_some_and(|t| t.is_finished()))
             {
                 loss.warn_meeting("Meeting audio capture was interrupted; some audio may be missing.".into());
                 if health_retries >= 2 {
@@ -723,7 +747,12 @@ fn restart_rig(
         start_rig(DualChannelTarget::System, stop_signal, mic_device, loss.clone())
     });
     match fresh {
-        Ok(new_rig) => { *rig = new_rig; tail },
+        Ok(new_rig) => {
+            let fell_back = new_rig.mic_fell_back;
+            *rig = new_rig;
+            announce_mic_fallback(app, fell_back);
+            tail
+        }
         Err(e) => {
             loss.warn_meeting(format!("Meeting audio stopped and could not restart: {e}"));
             stop_signal.store(true, Ordering::Relaxed);
@@ -786,6 +815,8 @@ fn spawn_named_mic_capture(
             let callback_tx = tx.clone();
             let callback_stops = stops.clone();
             let callback_loss = loss.clone();
+            let failed = Arc::new(AtomicBool::new(false));
+            let error_flag = failed.clone();
             let stream = crate::audio::build_input_stream_f32(
                 &device,
                 &config,
@@ -796,17 +827,22 @@ fn spawn_named_mic_capture(
                         send_named_mic_frames(&callback_tx, out, &callback_stops, &callback_loss);
                     }
                 },
-                |e| eprintln!("[ERROR] Meeting microphone stream error: {}", e),
+                move |e| {
+                    eprintln!("[ERROR] Meeting microphone stream error: {e}");
+                    error_flag.store(true, Ordering::Relaxed);
+                },
             )
             .map_err(|e| e.to_string())?;
             stream.play().map_err(|e| e.to_string())?;
             println!("[INFO] Dual-channel mic track: '{}' via cpal ({} ch, {} Hz, {:?})", name, channels, rate, format);
-            Ok((stream, to_48k, tx, stops, loss))
+            Ok((stream, to_48k, tx, stops, loss, failed))
         })();
         match opened {
-            Ok((stream, to_48k, tx, stops, loss)) => {
+            Ok((stream, to_48k, tx, stops, loss, failed)) => {
                 let _ = ready_tx.send(Ok(()));
-                while !stops.iter().any(|s| s.load(Ordering::Relaxed)) {
+                // A stream error has to end this thread. The capture loop treats a
+                // finished microphone thread as a dropped device and reopens it.
+                while !failed.load(Ordering::Relaxed) && !stops.iter().any(|s| s.load(Ordering::Relaxed)) {
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
                 drop(stream);
