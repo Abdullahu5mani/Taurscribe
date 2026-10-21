@@ -156,6 +156,37 @@ test("silent caller warning has a retry action and clears when sound returns", a
     expect(h.notices).toHaveLength(count);
 });
 
+test("a capture that cannot recover is not described as still reconnecting", async () => {
+    const h = fixture(); await h.handle.current.handleStartRecording(false, "dual_channel"); await h.settle();
+    fire("meeting-audio-status", { status: "failed", message: "Meeting audio capture could not recover. The captured recording will be saved." });
+    expect(h.notices.at(-1)).toMatchObject({ code: "meeting_audio_failed", title: "Meeting audio stopped", level: "error" });
+    fire("meeting-audio-status", { status: "restored", message: "Call audio is coming through." });
+    expect(h.notices.at(-1).code).toBe("meeting_audio_failed");
+});
+
+test("a finished meeting stop does not disarm or unmute a newer recording", async () => {
+    const h = fixture({ mute: true });
+    await h.handle.current.handleStartRecording(false, "dual_channel");
+    const pending = deferred<any>();
+    responses.set("stop_recording", () => pending.promise);
+    const stop = h.handle.current.handleStopRecording();
+    await h.settle();
+    fire("recording-state", { is_recording: false, is_dual_channel: false });
+    // A new call starts while the old meeting is still finishing.
+    fire("recording-state", { is_recording: true, is_dual_channel: true });
+    const unmutesBefore = calls.filter(c => c === "unmute_system_audio").length;
+    pending.resolve({ ok: true, data: {
+        kind: "meeting", transcript: "kept", warnings: [], recording_path: null,
+        meeting_id: 4, duration_ms: 5000, too_short: false, history: { status: "skipped" },
+    } });
+    await stop; await h.settle();
+    expect(h.handle.current.isRecording).toBe(true);
+    expect(h.handle.current.isDualChannelRecording).toBe(true);
+    expect(calls.filter(c => c === "unmute_system_audio").length).toBe(unmutesBefore);
+    fire("meeting-audio-status", { status: "silent", message: "If someone is speaking, check call audio" });
+    expect(h.notices.at(-1)?.code).toBe("meeting_audio_unverified");
+});
+
 test("system-audio fallback stays visible during capture and clears on external Stop", async () => {
     const h = fixture(); await h.handle.current.handleStartRecording(false, "dual_channel"); await h.settle();
     fire("meeting-audio-status", { status: "fallback", message: "Recording all system audio" });

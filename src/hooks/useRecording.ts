@@ -206,7 +206,7 @@ export function useRecording({
     };
 
     const showNotice = (notice: SessionNotice | null) => {
-        callAudioNoticeRef.current = notice && ["meeting_audio_unverified", "meeting_audio_recovering", "meeting_audio_fallback"].includes(notice.code) ? notice.code : null;
+        callAudioNoticeRef.current = notice && ["meeting_audio_unverified", "meeting_audio_recovering", "meeting_audio_fallback", "meeting_audio_failed"].includes(notice.code) ? notice.code : null;
         setSessionNotice?.(notice);
     };
 
@@ -297,14 +297,18 @@ export function useRecording({
         const subscription = listen<{ status: string; message: string }>("meeting-audio-status", ({ payload }) => {
             if (disposed || !isRecordingRef.current || !meetingSessionRef.current) return;
             if (payload.status === "restored") {
-                if (callAudioNoticeRef.current && callAudioNoticeRef.current !== "meeting_audio_fallback") showNotice(null);
+                const kept = callAudioNoticeRef.current === "meeting_audio_fallback"
+                    || callAudioNoticeRef.current === "meeting_audio_failed";
+                if (callAudioNoticeRef.current && !kept) showNotice(null);
                 return;
             }
             const retryable = payload.status === "silent";
+            const failed = payload.status === "failed";
+            const fallback = payload.status === "fallback";
             showNotice({
-                level: payload.status === "failed" ? "error" : "warning",
-                code: retryable ? "meeting_audio_unverified" : payload.status === "fallback" ? "meeting_audio_fallback" : "meeting_audio_recovering",
-                title: retryable ? "Check call audio" : payload.status === "fallback" ? "Recording all system audio" : "Meeting audio interrupted",
+                level: failed ? "error" : "warning",
+                code: retryable ? "meeting_audio_unverified" : fallback ? "meeting_audio_fallback" : failed ? "meeting_audio_failed" : "meeting_audio_recovering",
+                title: retryable ? "Check call audio" : fallback ? "Recording all system audio" : failed ? "Meeting audio stopped" : "Meeting audio interrupted",
                 message: payload.message, sticky: true,
                 actions: retryable ? [
                     { id: "retry-call-audio", label: "Retry call audio", onClick: () => {

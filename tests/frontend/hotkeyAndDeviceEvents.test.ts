@@ -154,6 +154,15 @@ test("after a disconnect stops the recording, the next start works (retry)", asy
     expect(events).toEqual(["stop", "start"]);
 });
 
+test("a lost meeting capture stops the recording and says it is being saved", async () => {
+    refs.isRecordingRef.current = true;
+    await mount();
+    await fire("audio-disconnected", { code: "meeting_capture_lost", message: "Meeting audio capture could not recover" });
+    await wait(0);
+    expect(events).toEqual(["stop"]);
+    expect(statuses[0]).toBe("Meeting recording stopped: Meeting audio capture could not recover. Saving what was recorded.");
+});
+
 test("a missing chosen mic falls back to another device with a notice", async () => {
     await mount();
     await fire("audio-fallback", "MacBook Air Microphone");

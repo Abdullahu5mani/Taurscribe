@@ -219,11 +219,14 @@ export function useHotkeyListeners({
                 const payload = typeof event.payload === "string"
                     ? { code: "audio_device_disconnected", message: event.payload }
                     : event.payload;
+                const meetingLoss = payload?.code === "meeting_capture_lost";
                 setHeaderStatusRef.current?.(
-                    payload?.message
-                        ? `Microphone disconnected: ${payload.message}`
-                        : "Microphone disconnected! Recording stopped.",
-                    6000
+                    meetingLoss
+                        ? `Meeting recording stopped: ${payload?.message ?? "call audio could not be captured"}. Saving what was recorded.`
+                        : payload?.message
+                            ? `Microphone disconnected: ${payload.message}`
+                            : "Microphone disconnected! Recording stopped.",
+                    meetingLoss ? 10000 : 6000
                 );
                 if (isRecordingRef.current && !stopInProgressRef.current) {
                     stopInProgressRef.current = true;
