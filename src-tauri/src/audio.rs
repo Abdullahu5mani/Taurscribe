@@ -91,7 +91,14 @@ impl CaptureLoss {
         let input = self.input_frames.load(Ordering::Relaxed);
         let mut warnings = self.meeting_warnings.lock().map(|w| w.clone()).unwrap_or_default();
         if file > 0 || input > 0 {
-            warnings.push(format!("Recording is incomplete: {file} frames could not be written and {input} input frames were lost."));
+            let mut parts = Vec::new();
+            if file > 0 {
+                parts.push(format!("{file} frames could not be written"));
+            }
+            if input > 0 {
+                parts.push(format!("{input} input frames were lost"));
+            }
+            warnings.push(format!("Recording is incomplete: {}.", parts.join(" and ")));
         }
         warnings
     }
@@ -237,6 +244,21 @@ mod tests {
         assert_eq!(loss.warnings(), vec!["Call audio interrupted"]);
         loss.input_frames.store(960, Ordering::Relaxed);
         assert_eq!(loss.warnings().len(), 2);
+    }
+
+    #[test]
+    fn loss_text_mentions_only_the_audio_that_was_actually_lost() {
+        let input_only = CaptureLoss::default();
+        input_only.input_frames.store(960, Ordering::Relaxed);
+        let input_text = input_only.warnings().join(" ");
+        assert!(input_text.contains("960"));
+        assert!(!input_text.contains("0 frames could not be written"), "{input_text}");
+
+        let file_only = CaptureLoss::default();
+        file_only.file_frames.store(480, Ordering::Relaxed);
+        let file_text = file_only.warnings().join(" ");
+        assert!(file_text.contains("480"));
+        assert!(!file_text.contains("0 input frames"), "{file_text}");
     }
 
         #[test]
