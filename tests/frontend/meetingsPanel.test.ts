@@ -229,6 +229,19 @@ test("processing errors preserve the saved transcript", async () => {
     expect(textOf(handle.current)).toContain("Original transcript");
 });
 
+test("a meeting saved with missing audio is not described as unsaved", async () => {
+    const { handle, settle } = render();
+    await settle();
+    listeners.get("meeting-processing-finished")!({ payload: {
+        meeting_id: 7,
+        error: "Meeting saved with incomplete audio: 960 frames could not be written.",
+    } });
+    await settle();
+    const text = textOf(handle.current);
+    expect(text).toContain("960 frames could not be written");
+    expect(text).not.toContain("Meeting processing failed");
+});
+
 test("late callbacks from an old audio player cannot affect its replacement", async () => {
     const { handle, settle } = render();
     await settle();

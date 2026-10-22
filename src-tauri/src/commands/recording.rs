@@ -665,7 +665,18 @@ fn spawn_writer_thread(
         let spec = writer.spec();
         let capacity = crate::audio::wav_sample_capacity(&spec);
         let mut written = 0u64;
+        let mut checkpointed = 0u64;
         let mut full = false;
+        let mut checkpoint = |writer: &mut hound::WavWriter<std::io::BufWriter<std::fs::File>>, written: u64| -> Result<(), String> {
+            if !crate::recording_recovery::should_checkpoint(spec.channels, spec.sample_rate, written.saturating_sub(checkpointed)) {
+                return Ok(());
+            }
+            // A quit before Stop would otherwise leave the audio on disk with a
+            // header that says the file is empty.
+            writer.flush().map_err(|e| format!("Could not checkpoint recording {}: {e}", path.display()))?;
+            checkpointed = written;
+            Ok(())
+        };
         let result = (|| -> Result<(), String> {
             loop {
                 match file_rx.recv_timeout(std::time::Duration::from_millis(50)) {
@@ -681,6 +692,7 @@ fn spawn_writer_thread(
                         if full {
                             break;
                         }
+                        checkpoint(&mut writer, written)?;
                         // macOS fix: CoreAudio may keep the audio callback alive
                         // briefly after Stream::drop() when called from a non-main
                         // thread, so the channel stays open and we never hit the
@@ -709,6 +721,7 @@ fn spawn_writer_thread(
                     written += 1;
                 }
             }
+            checkpoint(&mut writer, written)?;
             writer
                 .finalize()
                 .map_err(|e| format!("Could not finalize recording {}: {e}", path.display()))
@@ -1076,6 +1089,7 @@ fn start_meeting_capture(
 fn prepare_session(
     state: &AudioState,
     is_meeting: bool,
+    in_person: bool,
     channels: u16,
     sample_rate: u32,
 ) -> Result<(std::path::PathBuf, hound::WavWriter<std::io::BufWriter<std::fs::File>>), String> {
@@ -1115,7 +1129,36 @@ fn prepare_session(
     let writer = hound::WavWriter::new(std::io::BufWriter::new(file), spec)
         .map_err(|e| format!("Could not initialize recording {}: {e}", path.display()))?;
     *state.last_recording_path.lock().unwrap() = Some(path.to_string_lossy().into_owned());
+    if is_meeting {
+        let kind = if in_person { "in_person" } else { "call" };
+        if let Err(error) = crate::recording_recovery::mark_recording_kind(&path, kind) {
+            let _ = std::fs::remove_file(&path);
+            *state.last_recording_path.lock().unwrap() = None;
+            return Err(error);
+        }
+    }
     Ok((path, writer))
+}
+
+/// Joins the workers from a capture that never started and deletes the file.
+/// Dropping the join handles instead would leave the writer running after the
+/// file was removed, so it could recreate an empty recording.
+fn release_failed_start(
+    path: &std::path::Path,
+    level_stop: &AtomicBool,
+    file_tx: crossbeam_channel::Sender<Vec<f32>>,
+    whisper_tx: crossbeam_channel::Sender<Vec<f32>>,
+    writer_thread: std::thread::JoinHandle<Result<(), String>>,
+    transcriber_thread: std::thread::JoinHandle<()>,
+    level_thread: std::thread::JoinHandle<()>,
+) {
+    level_stop.store(true, Ordering::Relaxed);
+    drop(file_tx);
+    drop(whisper_tx);
+    let _ = writer_thread.join();
+    let _ = transcriber_thread.join();
+    let _ = level_thread.join();
+    crate::recording_recovery::discard_recording_files(path);
 }
 
 /// The blocking core of start_recording, run inside spawn_blocking: pick the
@@ -1156,7 +1199,7 @@ fn start_recording_blocking(
     };
 
     // 2. Session WAV and per-session state.
-    let (path, writer) = prepare_session(&state, mode.is_meeting(), channels, sample_rate)?;
+    let (path, writer) = prepare_session(&state, mode.is_meeting(), mode == CaptureMode::InPerson, channels, sample_rate)?;
 
     // 3. Channels. Bounded so a slow writer or transcriber cannot grow memory
     // without limit; the capture side uses try_send and never blocks.
@@ -1228,7 +1271,8 @@ fn start_recording_blocking(
     let (stream, dual) = match capture {
         Ok(c) => c,
         Err(e) => {
-            level_stop.store(true, Ordering::Relaxed);
+            release_failed_start(&path, &level_stop, file_tx, whisper_tx, writer_thread, transcriber_thread, level_thread);
+            *state.last_recording_path.lock().unwrap() = None;
             return Err(e);
         }
     };
@@ -1390,7 +1434,7 @@ pub async fn cancel_recording(state: State<'_, AudioState>, app: AppHandle) -> R
         crate::meeting_continuation::release_recording_claim();
         session_transcript.lock().unwrap().clear();
         if let Some(path) = last_recording_path {
-            let _ = std::fs::remove_file(path);
+            crate::recording_recovery::discard_recording_files(std::path::Path::new(&path));
         }
         teardown_result?;
         Ok::<CommandResult<()>, String>(CommandResult::ok(()))
@@ -2292,6 +2336,7 @@ fn process_and_save_meeting_if_applicable(
     };
     match saved {
         Ok(id) => {
+            crate::recording_recovery::clear_recording_open(src_path);
             crate::commands::meetings::save_transcription_model(&conn, id, transcription_model)?;
             // Keep the full stereo recording for a while so recording this call
             // again continues this meeting (before the WAV is swapped for playback).
@@ -3061,13 +3106,48 @@ mod final_pass_cancellation_tests {
 
 #[cfg(test)]
 mod recording_model_tests {
-    use super::recording_model_needs_load;
+    use super::*;
 
     #[test]
     fn a_different_model_of_the_same_engine_is_replaced_not_an_error() {
         assert!(recording_model_needs_load("whisper-large-v3-turbo", Some("whisper-small-en")));
         assert!(recording_model_needs_load("whisper-large-v3-turbo", None));
         assert!(!recording_model_needs_load("whisper-large-v3-turbo", Some("whisper-large-v3-turbo")));
+    }
+
+    #[test]
+    fn a_failed_meeting_start_removes_the_partial_file_and_waits_for_the_writer() {
+        let dir = std::env::temp_dir().join(format!("taurscribe-failed-start-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("meeting_failed.wav");
+        std::fs::write(&path, b"partial").unwrap();
+        crate::recording_recovery::mark_recording_open(&path).unwrap();
+        let (file_tx, file_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+        let (whisper_tx, whisper_rx) = crossbeam_channel::unbounded::<Vec<f32>>();
+        let started = Arc::new(AtomicBool::new(false));
+        let flag = started.clone();
+        let writer = std::thread::spawn(move || {
+            flag.store(true, Ordering::Relaxed);
+            while file_rx.recv().is_ok() {}
+            Ok(())
+        });
+        let transcriber = std::thread::spawn(move || while whisper_rx.recv().is_ok() {});
+        let level_stop = Arc::new(AtomicBool::new(false));
+        let stop = level_stop.clone();
+        let level = std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        while !started.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        release_failed_start(&path, &level_stop, file_tx, whisper_tx, writer, transcriber, level);
+        assert!(!path.exists());
+        assert!(!crate::recording_recovery::open_marker(&path).exists());
+        assert!(level_stop.load(Ordering::Relaxed));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

@@ -507,6 +507,7 @@ export function MeetingsPanel({
         if (disposed) return;
         receivedLifecycleEvent = true; setProcessing(null); setStoppingProcessing(false);
         const stopped=!!event.payload?.cancelled || !!event.payload?.error?.includes("Meeting processing stopped");
+        const savedWithGap = !!event.payload?.meeting_id && !!event.payload?.error?.startsWith("Meeting saved");
         setProcessingStopped(stopped);
         if (stopped) {setProcessingError(null);} else if (event.payload?.error) {
           setProcessingError(event.payload.error);
@@ -514,11 +515,12 @@ export function MeetingsPanel({
           setProcessingError("Nothing was saved: no speech was transcribed from the recording.");
         }
         loadMeetings();
-        if (!event.payload?.error && event.payload?.meeting_id && previewOpenRef.current) {
-          selectMeeting(event.payload.meeting_id);
+        const savedId = event.payload?.meeting_id;
+        if (savedId && (!event.payload?.error || savedWithGap) && previewOpenRef.current) {
+          selectMeeting(savedId);
         }
-        if (!event.payload?.error && event.payload?.meeting_id && event.payload.meeting_id === selectedMeetingIdRef.current) {
-          void loadMeetingDetail(event.payload.meeting_id);
+        if (savedId && (!event.payload?.error || savedWithGap) && savedId === selectedMeetingIdRef.current) {
+          void loadMeetingDetail(savedId);
         }
       }),
     ];
@@ -1097,7 +1099,7 @@ export function MeetingsPanel({
             <div id="meetings-processing-error" data-testid="meetings-processing-error" className="meeting-processing-card meeting-processing-card--error" role="alert">
               <span className="meeting-processing-dot meeting-processing-dot--error" aria-hidden="true" />
               <div className="meeting-processing-body">
-                <span className="meeting-processing-label">Meeting processing failed</span>
+                <span className="meeting-processing-label">{processingError.startsWith("Meeting saved") ? "Meeting saved" : "Meeting processing failed"}</span>
                 <span className="meeting-processing-detail">{processingError}</span>
                 {!!importPreview?.paragraphs.length && <button className="detail-tool-btn" type="button" onClick={openImportPreview}>Read partial transcript</button>}
               </div>
@@ -1295,7 +1297,7 @@ export function MeetingsPanel({
                 <button className="detail-tool-btn" type="button" onClick={() => { previewOpenRef.current = false; setShowImportPreview(false); }}>Back to meetings</button>
                 <h3>{importPreview.title}</h3>
                 <div className="meeting-transcription-model">Transcribed with <strong>{MODELS.find(model => model.id === importPreview.model_id)?.name || importPreview.model_id || "Selected speech model"}</strong></div>
-                <p role="status">{processingStopped ? "Partial draft · stopped · not saved" : processingError ? "Partial draft · processing failed · not saved" : "Draft transcript · speaker labels pending"}</p>
+                <p role="status">{processingStopped ? "Partial draft · stopped · not saved" : processingError?.startsWith("Meeting saved") ? "Saved · some recorded audio is missing" : processingError ? "Partial draft · processing failed · not saved" : "Draft transcript · speaker labels pending"}</p>
                 <p>{Math.round(importPreview.completed_ms / 1000)} / {Math.round(importPreview.total_ms / 1000)} seconds transcribed</p>
               </div>
               <div className="meeting-detail-scroll" data-testid="meeting-import-preview">
