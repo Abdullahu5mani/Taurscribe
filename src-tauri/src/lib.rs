@@ -27,6 +27,7 @@ pub mod librispeech_wer;
 pub mod llm;
 pub mod memory;
 pub mod meeting_audio;
+pub mod recording_recovery;
 pub mod meeting_detector;
 pub mod meeting_summary;
 pub mod cli;
@@ -195,6 +196,11 @@ pub fn run() {
             // Older meetings kept their raw WAV; convert them to small playback
             // copies in the background (can take a while for long recordings).
             std::thread::spawn(|| {
+                match recording_recovery::recover_from_app_dirs() {
+                    Ok(n) if n > 0 => println!("[INFO] Recovered {n} meeting recording(s) interrupted by a quit"),
+                    Err(e) => eprintln!("[WARN] Could not recover interrupted meeting recordings: {e}"),
+                    _ => {}
+                }
                 if let Ok(conn) = commands::meetings::open_connection() {
                     let n = commands::meetings::compress_legacy_meeting_audio(&conn);
                     if n > 0 {
