@@ -513,6 +513,8 @@ export function MeetingsPanel({
           setProcessingError(event.payload.error);
         } else if (!event.payload?.meeting_id) {
           setProcessingError("Nothing was saved: no speech was transcribed from the recording.");
+        } else {
+          setProcessingError(null);
         }
         loadMeetings();
         const savedId = event.payload?.meeting_id;
