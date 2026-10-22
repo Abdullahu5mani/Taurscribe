@@ -36,8 +36,9 @@ describe("applyDictionary", () => {
     expect(applyDictionary("nodeXjs", [dict("node.js", "Node.js")])).toBe("nodeXjs");
   });
 
-  test("skips blank entries and applies entries in order", () => {
-    expect(applyDictionary("a b", [dict("  ", "x"), dict("a", ""), dict("a", "b"), dict("b", "c")])).toBe("c c");
+  test("skips blank entries and replaces each spoken word once", () => {
+    // "a" becomes "b"; that "b" is not rewritten again by the b→c entry.
+    expect(applyDictionary("a b", [dict("  ", "x"), dict("a", ""), dict("a", "b"), dict("b", "c")])).toBe("b c");
     expect(applyDictionary("same", [])).toBe("same");
   });
 });
@@ -64,4 +65,22 @@ describe("applySnippets", () => {
 test("genId returns unique ids", () => {
   const ids = new Set(Array.from({ length: 100 }, () => genId()));
   expect(ids.size).toBe(100);
+});
+
+test("a replacement is never rewritten by a later entry", () => {
+    // Each spoken word is replaced once, from the original text.
+    expect(applyDictionary("call jon and john", [
+        { id: "1", soundsLike: "jon", correct: "John" },
+        { id: "2", soundsLike: "john", correct: "Jonathan" },
+    ] as any)).toBe("call John and Jonathan");
+    // An expansion that contains another trigger is not expanded again.
+    expect(applySnippets("sig", [
+        { id: "1", trigger: "sig", expansion: "Best, addr" },
+        { id: "2", trigger: "addr", expansion: "1 Main St" },
+    ] as any)).toBe("Best, addr");
+    // Where terms overlap, the longer one wins regardless of entry order.
+    expect(applyDictionary("visit new york soon", [
+        { id: "1", soundsLike: "new", correct: "New" },
+        { id: "2", soundsLike: "new york", correct: "New York City" },
+    ] as any)).toBe("visit New York City soon");
 });

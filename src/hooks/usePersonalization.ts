@@ -44,15 +44,42 @@ function wholeWordRegex(term: string): RegExp {
  * Runs early in the pipeline to fix proper nouns before grammar correction.
  */
 export function applyDictionary(text: string, dict: DictEntry[]): string {
-    if (!dict.length) return text;
-    let result = text;
-    for (const entry of dict) {
-        const term = entry.soundsLike.trim();
-        if (!term || !entry.correct.trim()) continue;
-        // A replacer function inserts the text as-is ("$&" or "$$" in a string would be expanded).
-        result = result.replace(wholeWordRegex(term), () => entry.correct);
+    return replaceWholeWords(text, dict.map(entry => [entry.soundsLike, entry.correct]));
+}
+
+/**
+ * Replaces every whole-word, case-insensitive occurrence of each term in ONE
+ * pass over the original text. Applying entries one after another let a
+ * replacement be rewritten again: "jon"→"John" followed by "john"→"Jonathan"
+ * turned "jon" into "Jonathan", and a snippet whose expansion contained another
+ * trigger was expanded twice. Longer terms win where terms overlap; for a
+ * repeated term the first entry wins.
+ */
+function replaceWholeWords(text: string, pairs: [string, string][]): string {
+    const replacements = new Map<string, string>();
+    const terms: string[] = [];
+    for (const [rawTerm, replacement] of pairs) {
+        const term = rawTerm.trim();
+        if (!term || !replacement.trim()) continue;
+        const key = term.toLowerCase();
+        if (replacements.has(key)) continue;
+        replacements.set(key, replacement);
+        terms.push(term);
     }
-    return result;
+    if (!terms.length) return text;
+    terms.sort((a, b) => b.length - a.length);
+    const pattern = new RegExp(
+        `(?<![\\p{L}\\p{N}_])(?:${terms.map(escapeRegex).join("|")})(?![\\p{L}\\p{N}_])`,
+        "giu",
+    );
+    // A replacer function inserts the text as-is ("$&" or "$$" in a string would be expanded).
+    return text.replace(pattern, match => {
+        const direct = replacements.get(match.toLowerCase());
+        if (direct !== undefined) return direct;
+        // Case folding that changes length (e.g. "ß"): find the term that matches.
+        const term = terms.find(t => wholeWordRegex(t).test(match));
+        return term !== undefined ? replacements.get(term.toLowerCase()) ?? match : match;
+    });
 }
 
 /**
@@ -60,14 +87,7 @@ export function applyDictionary(text: string, dict: DictEntry[]): string {
  * Runs last in the pipeline so the LLM doesn't mangle expanded text.
  */
 export function applySnippets(text: string, snippets: SnippetEntry[]): string {
-    if (!snippets.length) return text;
-    let result = text;
-    for (const snippet of snippets) {
-        const trigger = snippet.trigger.trim();
-        if (!trigger || !snippet.expansion.trim()) continue;
-        result = result.replace(wholeWordRegex(trigger), () => snippet.expansion);
-    }
-    return result;
+    return replaceWholeWords(text, snippets.map(snippet => [snippet.trigger, snippet.expansion]));
 }
 
 // ── Vocabulary Presets ────────────────────────────────────────────────────────

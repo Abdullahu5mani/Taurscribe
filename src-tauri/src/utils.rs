@@ -17,6 +17,7 @@ pub fn truncate_utf8_with_ellipsis(text: &str, max_bytes: usize) -> String {
 
 #[cfg(test)]
 mod utf8_truncation_tests {
+
     use super::truncate_utf8_with_ellipsis;
 
     #[test]
@@ -53,14 +54,13 @@ pub fn clean_transcript(text: &str) -> String {
     // Strip known subtitle-style sound/caption tags ([music], (laughter), …) from Whisper / Qwen3
     cleaned = strip_whitelisted_sound_captions(&cleaned);
 
-    // Fix floating punctuation
-    cleaned = cleaned.replace(" ,", ",");
-    cleaned = cleaned.replace(" .", ".");
-    cleaned = cleaned.replace(" ?", "?");
-    cleaned = cleaned.replace(" !", "!");
-
-    // Fix percent signs
-    cleaned = cleaned.replace(" %", "%");
+    // Fix floating punctuation ("hello , world" / "50 %"): only a mark that
+    // stands on its own (then a space, the end, or a closing quote/bracket).
+    // One that starts a word (".NET", ".gitignore") keeps
+    // its space; a plain " ." replace turned "use .NET" into "use.NET".
+    static FLOATING: OnceLock<Regex> = OnceLock::new();
+    let floating = FLOATING.get_or_init(|| Regex::new(r#" +([,.?!%]+)(\s|$|["')\]\u{201D}\u{2019}])"#).unwrap());
+    cleaned = floating.replace_all(&cleaned, "${1}${2}").into_owned();
 
     // Fix double spaces
     while cleaned.contains("  ") {
@@ -398,6 +398,17 @@ mod repetition_tests {
 
 #[cfg(test)]
 mod clean_transcript_tests {
+    #[test]
+    fn cleanup_keeps_the_space_before_a_word_that_starts_with_punctuation() {
+        assert_eq!(super::clean_transcript("I use .NET daily"), "I use .NET daily");
+        assert_eq!(super::clean_transcript("rename it to .gitignore please"), "Rename it to .gitignore please");
+        assert_eq!(super::clean_transcript("about ,5 or ?x"), "About ,5 or ?x");
+        // Floating punctuation is still attached to the word before it.
+        assert_eq!(super::clean_transcript("hello , world . done ! 50 %"), "Hello, world. done! 50%");
+        assert_eq!(super::clean_transcript("is it ?"), "Is it?");
+        assert_eq!(super::clean_transcript("she said \"stop !\" (then left .)"), "She said \"stop!\" (then left.)");
+    }
+
     use super::clean_transcript;
 
     #[test]
