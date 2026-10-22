@@ -93,29 +93,50 @@ fn append_transcript_with_word_overlap(base: &mut String, next: &str) {
 
     let base_words: Vec<&str> = base.split_whitespace().collect();
     let next_words: Vec<&str> = next.split_whitespace().collect();
-    let max_overlap = base_words.len().min(next_words.len()).min(12);
-    let mut overlap = 0usize;
+    let (base_cut, next_skip, overlap) = seam_overlap(&base_words, &next_words);
 
-    for n in (1..=max_overlap).rev() {
-        let base_tail = &base_words[base_words.len() - n..];
-        let next_head = &next_words[..n];
-        if base_tail
-            .iter()
-            .zip(next_head.iter())
-            .all(|(a, b)| normalize_merge_word(a) == normalize_merge_word(b))
-        {
-            overlap = n;
-            break;
-        }
+    if base_cut > 0 {
+        // The previous window ended inside a word the next one heard whole.
+        *base = base_words[..base_words.len() - base_cut].join(" ");
     }
-
-    let remainder = next_words[overlap..].join(" ");
+    let remainder = next_words[next_skip + overlap..].join(" ");
     if !remainder.is_empty() {
-        if !base.ends_with(char::is_whitespace) {
+        if !base.is_empty() && !base.ends_with(char::is_whitespace) {
             base.push(' ');
         }
         base.push_str(&remainder);
     }
+}
+
+/// Where two windows' transcripts overlap: (words to drop from the end of
+/// `base`, words to skip at the start of `next`, overlapping words). Windows
+/// overlap by a couple of seconds, and the word a window starts or ends inside
+/// comes out as a fragment ("orrow" for "tomorrow"), so an exact tail/head match
+/// fails and the overlap was written twice. A fragment at either edge may be
+/// skipped; then at least two words must match, so a single repeated word
+/// ("no" … "no") is not mistaken for overlap.
+fn seam_overlap(base: &[&str], next: &[&str]) -> (usize, usize, usize) {
+    let matches = |base_end: usize, next_start: usize, n: usize| {
+        base[base_end - n..base_end]
+            .iter()
+            .zip(&next[next_start..next_start + n])
+            .all(|(a, b)| normalize_merge_word(a) == normalize_merge_word(b))
+    };
+    let mut best = (0, 0, 0);
+    for base_cut in 0..=1usize.min(base.len()) {
+        for next_skip in 0..=2usize.min(next.len()) {
+            let base_end = base.len() - base_cut;
+            let max = base_end.min(next.len() - next_skip).min(12);
+            let min = if base_cut + next_skip > 0 { 2 } else { 1 };
+            if let Some(n) = (min..=max).rev().find(|&n| matches(base_end, next_skip, n)) {
+                // Longest overlap wins; on a tie, the fewest skipped words.
+                if n > best.2 {
+                    best = (base_cut, next_skip, n);
+                }
+            }
+        }
+    }
+    best
 }
 
 /// Transcribes a whole saved recording (Granite's final pass), in overlapping
@@ -2919,6 +2940,23 @@ mod tests {
             transcript,
             "this is a final chunk boundary with punctuation handled"
         );
+    }
+
+    #[test]
+    fn window_seams_do_not_repeat_words_when_an_edge_word_is_cut() {
+        // The next window starts inside "tomorrow": its first word is a fragment.
+        let mut t = "we should meet tomorrow at noon".to_string();
+        append_transcript_with_word_overlap(&mut t, "orrow at noon and then lunch");
+        assert_eq!(t, "we should meet tomorrow at noon and then lunch");
+        // The previous window ended inside "tomorrow"; the next one, starting
+        // two seconds earlier, heard it whole.
+        let mut t = "we should meet tomorr".to_string();
+        append_transcript_with_word_overlap(&mut t, "should meet tomorrow at noon and then lunch");
+        assert_eq!(t, "we should meet tomorrow at noon and then lunch");
+        // A lone repeated word across the seam is not taken as overlap after a skip.
+        let mut t = "she said no".to_string();
+        append_transcript_with_word_overlap(&mut t, "well no way");
+        assert_eq!(t, "she said no well no way");
     }
 
     #[test]
