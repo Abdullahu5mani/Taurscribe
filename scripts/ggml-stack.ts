@@ -15,10 +15,11 @@
  *   TRANSCRIBE_DIR           transcribe-cpp-sys links that prefix instead of building
  *   WHISPER_USE_SYSTEM_GGML  whisper-rs builds whisper.cpp against the prefix's ggml
  *   CMAKE_PREFIX_PATH        where whisper.cpp's find_package(ggml) finds it
- *   CARGO_TARGET_<TRIPLE>_RUSTFLAGS  "-L native=<prefix>/lib": whisper-rs-sys bundles
+ *   CARGO_ENCODED_RUSTFLAGS  adds "-L native=<prefix>/lib": whisper-rs-sys bundles
  *                            the static ggml into its rlib when it compiles, so it
- *                            must find the libraries itself (Cargo merges this with
- *                            .cargo/config.toml's rustflags)
+ *                            must find the libraries itself. Encoded flags win over
+ *                            RUSTFLAGS and .cargo/config.toml, so they carry whichever
+ *                            of those Cargo would have used (CI sets RUSTFLAGS).
  * so one ggml serves both. (llama.cpp keeps its own ggml inside its DLLs.)
  *
  *   bun scripts/ggml-stack.ts --features gpu-nvidia,gpu-vulkan [--target <triple>]
@@ -174,25 +175,20 @@ export function ggmlStackEnv(featureList: string | null, target: string | null):
   // there (CI puts SPIRV-Headers on it for transcribe.cpp's Vulkan build).
   const existing = process.env.CMAKE_PREFIX_PATH;
   const flagsVar = `CARGO_TARGET_${triple.toUpperCase().replace(/-/g, "_")}_RUSTFLAGS`;
-  const libFlag = `-L native=${join(prefix, "lib")}`;
-  const flags = process.env[flagsVar];
-  const env: GgmlStackEnv = {
+  // A target-specific variable alone is ignored whenever RUSTFLAGS is set, as it
+  // is on CI for Linux and Windows; whisper-rs-sys then can't find ggml.
+  const config = Bun.TOML.parse(readFileSync(join(srcTauri, ".cargo", "config.toml"), "utf8")) as {
+    target?: Record<string, { rustflags?: string[] }>;
+  };
+  return {
     TRANSCRIBE_DIR: prefix,
     WHISPER_USE_SYSTEM_GGML: "ON",
     // Keep what is already there; running twice must not drop other entries.
     CMAKE_PREFIX_PATH: !existing ? prefix : existing.split(";").includes(prefix) ? existing : `${prefix};${existing}`,
-    [flagsVar]: flags && !flags.includes(libFlag) ? `${flags} ${libFlag}` : flags ?? libFlag,
+    CARGO_ENCODED_RUSTFLAGS: nativeSearchFlags(join(prefix, "lib"),
+      config.target?.[triple]?.rustflags ?? [], process.env[flagsVar],
+      process.env.RUSTFLAGS, process.env.CARGO_ENCODED_RUSTFLAGS),
   };
-  if (triple.endsWith("apple-darwin")) {
-    const config = Bun.TOML.parse(readFileSync(join(srcTauri, ".cargo", "config.toml"), "utf8")) as {
-      target?: Record<string, { rustflags?: string[] }>;
-    };
-    delete env[flagsVar];
-    env.CARGO_ENCODED_RUSTFLAGS = nativeSearchFlags(join(prefix, "lib"),
-      config.target?.[triple]?.rustflags ?? [], flags,
-      process.env.RUSTFLAGS, process.env.CARGO_ENCODED_RUSTFLAGS);
-  }
-  return env;
 }
 
 if (import.meta.main) {
