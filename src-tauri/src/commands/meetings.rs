@@ -303,7 +303,10 @@ pub fn compress_legacy_meeting_audio(conn: &Connection) -> usize {
 /// Keep the WAV until the new path has been committed to SQLite. A failed
 /// conversion or DB update leaves the original meeting playable and retryable.
 pub fn convert_meeting_audio(conn: &Connection, id: i64, wav: &std::path::Path) -> Result<(), String> {
-    let webm = crate::meeting_audio::compress_for_playback(wav)?;
+    // Startup migration can overlap a recording's completion. Each attempt
+    // owns its output so losing the DB race can only delete its own file.
+    let destination = wav.with_extension(format!("{:032x}.webm", rand::random::<u128>()));
+    let webm = crate::meeting_audio::compress_for_playback_to(wav, &destination)?;
     let updated = conn.execute(
         "UPDATE meetings SET audio_path = ?1 WHERE id = ?2 AND audio_path = ?3",
         params![webm.to_string_lossy(), id, wav.to_string_lossy()],
@@ -1989,7 +1992,33 @@ mod tests {
         assert_eq!(saved, wav.to_string_lossy());
         assert!(wav.exists());
         assert!(!wav.with_extension("webm").exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "failed conversion leaked output");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stale_audio_conversion_preserves_committed_playback() {
+        let _serial = crate::meeting_audio::COMPRESS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("taurscribe_stale_conversion_{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("meeting.wav");
+        let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+        let mut writer = hound::WavWriter::create(&wav, spec).unwrap();
+        for _ in 0..4_800 { writer.write_sample(0.1f32).unwrap(); }
+        writer.finalize().unwrap();
+        let webm = crate::meeting_audio::compress_for_playback(&wav).unwrap();
+        let original = std::fs::read(&webm).unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_meetings_schema(&conn).unwrap();
+        let id = insert_completed_meeting(&conn, "Saved", "meet", "Chrome", "", 100, Some(&webm.to_string_lossy()), "hi", &[]).unwrap();
+
+        // A background worker still holds the old WAV path after another
+        // worker committed its playback copy. The stale CAS must not delete it.
+        assert!(convert_meeting_audio(&conn, id, &wav).is_err());
+        assert_eq!(std::fs::read(&webm).expect("committed playback was deleted"), original);
+        assert!(wav.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "stale output leaked");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

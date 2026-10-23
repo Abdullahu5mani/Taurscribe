@@ -45,6 +45,12 @@ pub fn last_processing_diagnostics() -> Option<ProcessingDiagnostics> {
 /// Writes `<wav stem>.webm` next to the WAV and returns its path. The WAV is
 /// left in place; the caller removes it once the new file is recorded.
 pub fn compress_for_playback(wav: &Path) -> Result<PathBuf, String> {
+    compress_for_playback_to(wav, &wav.with_extension("webm"))
+}
+
+/// An explicit destination lets database conversions own their output until
+/// their compare-and-swap commits, without overwriting another worker's file.
+pub(crate) fn compress_for_playback_to(wav: &Path, out: &Path) -> Result<PathBuf, String> {
     let (spec, gains, channel_rms, channel_correlation, frames) = measure_wav(wav)?;
 
     let mut diag = ProcessingDiagnostics {
@@ -56,9 +62,8 @@ pub fn compress_for_playback(wav: &Path) -> Result<PathBuf, String> {
         ..Default::default()
     };
 
-    let out = wav.with_extension("webm");
     let bytes = encode_wav_stream(wav, &gains, frames, spec.sample_rate)?;
-    let temp = wav.with_extension("webm.tmp");
+    let temp = out.with_extension("webm.tmp");
     if let Err(error) = std::fs::write(&temp, &bytes)
         .and_then(|()| std::fs::rename(&temp, &out))
     {
@@ -71,7 +76,7 @@ pub fn compress_for_playback(wav: &Path) -> Result<PathBuf, String> {
     if let Ok(mut last) = LAST.lock() {
         *last = Some(diag);
     }
-    Ok(out)
+    Ok(out.to_path_buf())
 }
 
 /// Swaps a processed meeting's raw WAV for its playback copy; returns the path to
