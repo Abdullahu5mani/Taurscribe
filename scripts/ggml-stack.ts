@@ -53,7 +53,9 @@ const GGML_COMPAT_SHIM = `
 
 function run(cmd: string, args: string[], cwd?: string) {
   console.error(`[ggml-stack] ${cmd} ${args.join(" ")}`);
-  const r = spawnSync(cmd, args, { cwd, stdio: ["ignore", "inherit", "inherit"], shell: process.platform === "win32" });
+  // The tool's stdout goes to our stderr: our stdout carries only the KEY=VALUE
+  // lines that CI exports, and CMake prints "-- Installing: …" lines.
+  const r = spawnSync(cmd, args, { cwd, stdio: ["ignore", 2, "inherit"], shell: process.platform === "win32" });
   if (r.status !== 0) throw new Error(`${cmd} failed (exit ${r.status})`);
 }
 
