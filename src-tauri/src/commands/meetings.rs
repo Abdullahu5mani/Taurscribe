@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 // ── Database Access & Tables ────────────────────────────────────────────────
 
@@ -1874,9 +1874,12 @@ pub async fn get_audio_source_mode(state: State<'_, AudioState>) -> Result<Strin
 #[tauri::command]
 pub async fn set_auto_record_meetings(
     enabled: bool,
+    app: AppHandle,
     state: State<'_, AudioState>,
 ) -> Result<(), String> {
-    state.auto_record_meetings.store(enabled, Ordering::SeqCst);
+    if state.auto_record_meetings.swap(enabled, Ordering::SeqCst) != enabled {
+        let _ = app.emit("auto-record-meetings-changed", enabled);
+    }
     println!("[INFO] Auto-record meetings set to: {}", enabled);
     Ok(())
 }

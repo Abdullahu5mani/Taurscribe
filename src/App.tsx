@@ -1264,7 +1264,6 @@ function App() {
 
             {/* Meeting Banner V8 */}
             <MeetingBanner
-              key={activeMeeting ? `${activeMeeting.pid}:${activeMeeting.url}:${activeMeeting.title}` : "none"}
               meeting={activeMeeting}
               isRecording={isRecording}
               onStartDualRecording={() => handleStartRecording(false, "dual_channel")}

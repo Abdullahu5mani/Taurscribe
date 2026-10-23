@@ -32,6 +32,7 @@ describe("scheduleAutoRecord", () => {
     await Promise.resolve();
     expect(calls.countdown).toEqual([3]);
     jest.advanceTimersByTime(3000);
+    await Promise.resolve();
     expect(calls.countdown).toEqual([3, 2, 1, null]);
     expect(calls.start).toBe(1);
   });
@@ -108,5 +109,30 @@ describe("scheduleAutoRecord", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(calls.start).toBe(0);
+  });
+
+  test("cancellation also covers the final settings recheck", async () => {
+    const finalCheck = deferred<[boolean, number | undefined]>();
+    let reads = 0, starts = 0;
+    const cancel = scheduleAutoRecord({
+      loadSettings: () => ++reads === 1 ? Promise.resolve([true, 1]) : finalCheck.promise,
+      defaultDelay: 1, isRecording: () => false, start: () => starts++, onCountdown: () => {},
+    });
+    await Promise.resolve();
+    jest.advanceTimersByTime(1000);
+    expect(reads).toBe(2);
+    cancel(); finalCheck.resolve([true, 1]); await Promise.resolve();
+    expect(starts).toBe(0);
+  });
+
+  test("a failed final settings check does not start recording", async () => {
+    let reads = 0, starts = 0;
+    scheduleAutoRecord({
+      loadSettings: () => ++reads === 1 ? Promise.resolve([true, 1]) : Promise.reject(new Error("backend unavailable")),
+      defaultDelay: 1, isRecording: () => false, start: () => starts++, onCountdown: () => {},
+    });
+    await Promise.resolve(); jest.advanceTimersByTime(1000);
+    await Promise.resolve(); await Promise.resolve();
+    expect(reads).toBe(2); expect(starts).toBe(0);
   });
 });

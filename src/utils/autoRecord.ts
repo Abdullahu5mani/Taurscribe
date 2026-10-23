@@ -43,7 +43,11 @@ export function scheduleAutoRecord(opts: AutoRecordOptions): () => void {
                 if (timeLeft <= 0) {
                     stopTimer();
                     opts.onCountdown(null);
-                    if (!opts.isRecording()) opts.start();
+                    // The preference can change after the countdown starts.
+                    // Recheck the backend even if its change event was missed.
+                    opts.loadSettings().then(([enabled]) => {
+                        if (!cancelled && enabled && !opts.isRecording()) opts.start();
+                    }).catch(() => {});
                 } else {
                     opts.onCountdown(timeLeft);
                 }

@@ -46,8 +46,9 @@ async function scenario(action, delay, expectedStarts) {
       if (name === 'react') return react;
       if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
       if (name === '@tauri-apps/api/core') return { invoke: () => enabled };
+      if (name === '@tauri-apps/api/event') return { listen: async () => () => {} };
       if (name === '@tauri-apps/plugin-store') {
-        return { Store: { load: async () => ({ get: async key => key === 'delay' ? delay : true }) } };
+        return { Store: { load: async () => ({ get: async key => key === 'delay' ? delay : true, onChange: async () => () => {} }) } };
       }
       if (name === './settings/types') {
         return { MEETING_KEYS: { showBanner: 'banner', autoRecordDelay: 'delay' }, DEFAULT_AUTORECORD_DELAY: 5 };
@@ -67,7 +68,7 @@ async function scenario(action, delay, expectedStarts) {
     clearInterval(id) { timers.delete(id); },
   };
   vm.runInNewContext(compiled, context);
-  const meeting = { pid: 123, title: 'Test call', platform: 'Zoom' };
+  const meeting = { pid: 123, title: 'Test call', platform: 'Zoom', should_record: true };
   function render(currentMeeting) {
     si = ri = ei = 0;
     const tree = context.exports.MeetingBanner({
@@ -94,7 +95,10 @@ async function scenario(action, delay, expectedStarts) {
   if (action === 'manual-start') find(tree, 'meeting-banner-record-btn').props.onClick();
   resolveEnabled(true);
   await new Promise(resolve => setImmediate(resolve));
+  if (action !== 'unmounted') render(action === 'ended' ? null : meeting);
+  await new Promise(resolve => setImmediate(resolve));
   for (let i = 0; i < delay + 1; i++) [...timers.values()].forEach(fn => fn());
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(starts, expectedStarts, `${action}, delay=${delay}`);
   effects.forEach(effect => effect.cleanup?.());
 }

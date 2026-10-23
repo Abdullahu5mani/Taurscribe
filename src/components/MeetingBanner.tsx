@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
 import { MEETING_KEYS, DEFAULT_AUTORECORD_DELAY } from "./settings/types";
 import { scheduleAutoRecord } from "../utils/autoRecord";
@@ -28,7 +29,10 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
     const [dismissedMeetingKey, setDismissedMeetingKey] = useState<string | null>(null);
     const [autoRecordCountdown, setAutoRecordCountdown] = useState<number | null>(null);
     const [bannerEnabled, setBannerEnabled] = useState(true);
+    const [autoRecordRevision, setAutoRecordRevision] = useState(0);
+    const [autoRecordReady, setAutoRecordReady] = useState(false);
     const cancelAutoRecordRef = useRef<(() => void) | null>(null);
+    const consumedMeetingKeyRef = useRef<string | null>(null);
 
     const isRecordingRef = useRef(isRecording);
     isRecordingRef.current = isRecording;
@@ -51,19 +55,56 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
     useEffect(() => {
         if (!meeting) {
             setDismissedMeetingKey(null);
-            return;
+            consumedMeetingKeyRef.current = null;
         }
-        // Settings → Meetings → "Show meeting banner"; re-read per meeting.
-        Store.load("settings.json")
-            .then((s) => s.get<boolean>(MEETING_KEYS.showBanner))
-            .then((v) => setBannerEnabled(v !== false))
-            .catch(() => {});
     }, [meetingKey]);
+
+    useEffect(() => {
+        let disposed = false;
+        const subscription = listen<boolean>("auto-record-meetings-changed", () => {
+            if (disposed) return;
+            // Cancel synchronously, including an outstanding settings read.
+            cancelAutoRecord();
+            setAutoRecordRevision((v) => v + 1);
+        }).catch(() => () => {});
+        // Subscribe before reading the setting so startup hydration cannot
+        // enable auto-record between the first read and listener registration.
+        void subscription.then(() => { if (!disposed) setAutoRecordReady(true); });
+        return () => {
+            disposed = true;
+            void subscription.then((unlisten) => unlisten()).catch(() => {});
+        };
+    }, []);
+
+    useEffect(() => {
+        let disposed = false;
+        let bannerRevision = 0;
+        let unlisten: (() => void) | undefined;
+        void (async () => {
+            const store = await Store.load("settings.json");
+            if (disposed) return;
+            unlisten = await store.onChange((key, value) => {
+                if (disposed) return;
+                if (key === MEETING_KEYS.showBanner) {
+                    bannerRevision++;
+                    setBannerEnabled(value !== false);
+                } else if (key === MEETING_KEYS.autoRecordDelay) {
+                    cancelAutoRecord();
+                    setAutoRecordRevision((v) => v + 1);
+                }
+            });
+            if (disposed) { unlisten(); return; }
+            const revision = bannerRevision;
+            const value = await store.get<boolean>(MEETING_KEYS.showBanner);
+            if (!disposed && revision === bannerRevision) setBannerEnabled(value !== false);
+        })().catch(() => {});
+        return () => { disposed = true; unlisten?.(); };
+    }, []);
 
     useEffect(() => {
         // A call in an app the detector doesn't know (should_record false) is
         // only offered: a DAW or a voice tool can look like one.
-        if (!meeting || isDismissed || !meeting.should_record) {
+        if (!autoRecordReady || !meeting || isDismissed || !meeting.should_record || consumedMeetingKeyRef.current === meetingKey) {
             cancelAutoRecord();
             return;
         }
@@ -78,7 +119,10 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
                 ]).then(([autoRecord, delay]) => [autoRecord, delay ?? undefined] as [boolean, number | undefined]),
             defaultDelay: DEFAULT_AUTORECORD_DELAY,
             isRecording: () => isRecordingRef.current,
-            start: () => onStartDualRecordingRef.current(),
+            start: () => {
+                consumedMeetingKeyRef.current = meetingKey;
+                onStartDualRecordingRef.current();
+            },
             onCountdown: setAutoRecordCountdown,
         });
         cancelAutoRecordRef.current = cancel;
@@ -88,12 +132,21 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
             if (cancelAutoRecordRef.current === cancel) cancelAutoRecordRef.current = null;
         };
         // should_record: the same process can go from an offered call to a known one.
-    }, [meetingKey, isDismissed, meeting?.should_record]);
+    }, [meetingKey, isDismissed, meeting?.should_record, autoRecordRevision, autoRecordReady]);
+
+    // A manual/hotkey recording consumes this countdown, even if it stops
+    // before the original timer would have expired. Stopping doesn't re-arm it.
+    useEffect(() => {
+        if (isRecording) {
+            consumedMeetingKeyRef.current = meetingKey;
+            cancelAutoRecord();
+        }
+    }, [isRecording, meetingKey]);
 
     // The meetings view shows its own header pill; the auto-record countdown
     // above keeps running either way.
     // Auto-record still counts down when the banner is hidden.
-    if (!meeting || isRecording || suppressBanner || (!bannerEnabled && autoRecordCountdown === null)) {
+    if (!meeting || isDismissed || isRecording || suppressBanner || (!bannerEnabled && autoRecordCountdown === null)) {
         return null;
     }
 
@@ -159,6 +212,7 @@ export function MeetingBanner({ meeting, isRecording, onStartDualRecording, supp
                     id="meeting-banner-record-btn"
                     className="meeting-banner-btn-record"
                     onClick={() => {
+                        consumedMeetingKeyRef.current = meetingKey;
                         cancelAutoRecord();
                         onStartDualRecording();
                     }}
