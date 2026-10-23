@@ -553,6 +553,7 @@ mod tests {
 mod mp3_integrity_tests {
     use super::*;
     #[test]
+    #[ignore = "requires tests/fixtures/audit-full.mp3, which is kept out of the repo"]
     fn strict_mp3_decode_rejects_a_truncated_file_with_a_complete_header() {
         let original=Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audit-full.mp3");
         let (frames,rate)=decode_audio_mono_stream_strict(&original,|_,_,_,_|Ok(())).unwrap();

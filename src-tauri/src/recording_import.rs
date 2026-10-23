@@ -544,6 +544,7 @@ mod offered_format_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    #[ignore = "requires tests/fixtures/audit-full.mp3, which is kept out of the repo"]
     fn corrupt_mp3_import_removes_partial_join_and_keeps_the_original() {
         let source=Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audit-full.mp3");
         let root=std::env::temp_dir().join(format!("taurscribe-corrupt-import-{:016x}",rand::random::<u64>()));std::fs::create_dir_all(&root).unwrap();
