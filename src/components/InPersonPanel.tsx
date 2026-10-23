@@ -146,7 +146,7 @@ export function InPersonPanel({
                 <div className="inperson-note inperson-note--warn" data-testid="inperson-separator-missing">
                     <IconWarning size={14} />
                     <span>Telling speakers apart needs the Meeting speakers download. Without it, voices are grouped roughly.</span>
-                    <button type="button" className="inperson-link" onClick={onOpenModelSettings}>Download</button>
+                    <button id="inperson-separator-download-btn" data-testid="inperson-separator-download-btn" type="button" className="inperson-link" onClick={onOpenModelSettings}>Download</button>
                 </div>
             )}
 
@@ -160,20 +160,20 @@ export function InPersonPanel({
                     <div className="inperson-actions">
                         {recording ? (
                             <>
-                                <button type="button" className="inperson-btn" data-testid="inperson-pause-btn" onClick={isPaused ? onResume : onPause}>
+                                <button id="inperson-pause-btn" data-testid="inperson-pause-btn" type="button" className="inperson-btn" onClick={isPaused ? onResume : onPause}>
                                     {isPaused ? <IconPlay size={13} /> : <IconPause size={13} />}
                                     <span>{isPaused ? "Resume" : "Pause"}</span>
                                 </button>
-                                <button type="button" className="inperson-btn inperson-btn--stop" data-testid="inperson-stop-btn" onClick={stop}>
+                                <button id="inperson-stop-btn" data-testid="inperson-stop-btn" type="button" className="inperson-btn inperson-btn--stop" onClick={stop}>
                                     <IconStop size={13} />
                                     <span>Stop</span>
                                 </button>
                             </>
                         ) : (
-                            <button
+                            <button id="inperson-record-btn" data-testid="inperson-record-btn"
                                 type="button"
                                 className="inperson-btn inperson-btn--record"
-                                data-testid="inperson-record-btn"
+
                                 onClick={() => void start()}
                                 disabled={busyElsewhere || isProcessing}
                                 title={busyElsewhere ? "Stop the current recording first" : undefined}
@@ -183,7 +183,7 @@ export function InPersonPanel({
                             </button>
                         )}
                         {!recording && (
-                            <button type="button" className="inperson-icon-btn" data-testid="inperson-close-btn" onClick={onClose} aria-label="Close">
+                            <button id="inperson-close-btn" data-testid="inperson-close-btn" type="button" className="inperson-icon-btn" onClick={onClose} aria-label="Close">
                                 <IconX size={14} />
                             </button>
                         )}
@@ -220,7 +220,7 @@ export function InPersonPanel({
                     <span>
                         {voice.enrolled ? "Your voice is set up: you're labelled “You” in the transcript." : "Your voice isn't set up: everyone is labelled Speaker 1, 2, …"}
                     </span>
-                    <button type="button" className="inperson-link" onClick={() => setSetupOpen(true)} disabled={isRecording}>
+                    <button id="inperson-voice-setup-open-btn" data-testid="inperson-voice-setup-open-btn" type="button" className="inperson-link" onClick={() => setSetupOpen(true)} disabled={isRecording}>
                         {voice.enrolled ? "Redo" : "Set up"}
                     </button>
                 </div>
@@ -279,7 +279,7 @@ function VoiceSetup({ voice, onSaved, onDone, onOpenModelSettings }: {
                 <div className="inperson-note inperson-note--warn">
                     <IconWarning size={14} />
                     <span>This needs the speaker recognition model.</span>
-                    <button type="button" className="inperson-link" onClick={onOpenModelSettings}>Download it</button>
+                    <button id="inperson-speaker-model-download-btn" data-testid="inperson-speaker-model-download-btn" type="button" className="inperson-link" onClick={onOpenModelSettings}>Download it</button>
                 </div>
             ) : (
                 <blockquote className={`inperson-passage${phase === "recording" ? " inperson-passage--live" : ""}`}>{VOICE_PASSAGE}</blockquote>
@@ -301,21 +301,21 @@ function VoiceSetup({ voice, onSaved, onDone, onOpenModelSettings }: {
             )}
             <div className="inperson-setup-actions">
                 {phase === "done" ? (
-                    <button type="button" className="inperson-btn inperson-btn--record" data-testid="inperson-voice-continue" onClick={() => onDone(true)}>
+                    <button id="inperson-voice-continue" data-testid="inperson-voice-continue" type="button" className="inperson-btn inperson-btn--record" onClick={() => onDone(true)}>
                         <IconRecord size={13} /><span>Start recording</span>
                     </button>
                 ) : (
                     <>
-                        <button
+                        <button id="inperson-voice-record" data-testid="inperson-voice-record"
                             type="button"
                             className="inperson-btn inperson-btn--record"
-                            data-testid="inperson-voice-record"
+
                             onClick={() => void record()}
                             disabled={phase === "recording" || modelMissing}
                         >
                             <IconMic size={13} /><span>{phase === "recording" ? "Listening…" : phase === "error" ? "Try again" : "Start reading"}</span>
                         </button>
-                        <button type="button" className="inperson-btn" data-testid="inperson-voice-skip" onClick={() => onDone(false)} disabled={phase === "recording"}>
+                        <button id="inperson-voice-skip" data-testid="inperson-voice-skip" type="button" className="inperson-btn" onClick={() => onDone(false)} disabled={phase === "recording"}>
                             Skip
                         </button>
                     </>

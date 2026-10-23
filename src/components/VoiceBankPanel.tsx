@@ -170,12 +170,12 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
     };
 
     return (
-        <div className="voicebank-panel" data-testid={`voicebank-panel-${personId}`} role="region" aria-label={mode === "find" ? `More voice samples for ${personName}` : `Voice samples of ${personName}`}>
+        <div id={`voicebank-panel-${personId}`} data-testid={`voicebank-panel-${personId}`} className="voicebank-panel" role="region" aria-label={mode === "find" ? `More voice samples for ${personName}` : `Voice samples of ${personName}`}>
             <div className="voicebank-head">
                 <span className="voicebank-title">
                     {mode === "find" ? `Is this ${personName}?` : `${personName}'s voice samples`}
                 </span>
-                <button type="button" className="vault-action-btn" data-testid="voicebank-close-btn" onClick={() => { player.stop(); onClose(); }} aria-label="Close">
+                <button id="voicebank-close-btn" data-testid="voicebank-close-btn" type="button" className="vault-action-btn" onClick={() => { player.stop(); onClose(); }} aria-label="Close">
                     <IconX size={12} />
                 </button>
             </div>
@@ -188,18 +188,18 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
 
             {mode === "samples" && <div className="voicebank-new-sample">
                 <p className="voicebank-hint">Generate a new clip from this person's saved meeting speech, or choose a 5–60 second recording. Listen and confirm it contains only {personName} before adding it to their bank.</p>
-                <button type="button" className="vault-action-btn" data-testid="voicebank-generate-sample" disabled={busy !== null || candidates.length >= 3} onClick={() => prepareSample(true)}>{candidates.length ? "Generate another sample" : "Generate sample"}</button>
-                <button type="button" className="vault-action-btn" data-testid="voicebank-choose-sample" disabled={busy !== null || candidates.length >= 3} onClick={() => prepareSample(false)}>Choose recording</button>
-                {candidates.map((candidate, index) => <div key={candidate} className="voicebank-candidate" role="group" aria-label={`Preview sample ${index + 1}`}>
+                <button id="voicebank-generate-sample" data-testid="voicebank-generate-sample" type="button" className="vault-action-btn" disabled={busy !== null || candidates.length >= 3} onClick={() => prepareSample(true)}>{candidates.length ? "Generate another sample" : "Generate sample"}</button>
+                <button id="voicebank-choose-sample" data-testid="voicebank-choose-sample" type="button" className="vault-action-btn" disabled={busy !== null || candidates.length >= 3} onClick={() => prepareSample(false)}>Choose recording</button>
+                {candidates.map((candidate, index) => <div id={`voicebank-candidate-${index}`} data-testid={`voicebank-candidate-${index}`} key={candidate} className="voicebank-candidate" role="group" aria-label={`Preview sample ${index + 1}`}>
                     <strong>Sample {index + 1} · not added yet</strong>
                     <div className="voicebank-candidate-actions">
-                    <button type="button" className="vault-action-btn" data-testid="voicebank-preview-sample" onClick={() => player.toggle(`candidate:${candidate}`, candidate)}>{player.playing === `candidate:${candidate}` ? "Stop preview" : "Listen"}</button>
-                    <button type="button" className="vault-action-btn" data-testid="voicebank-confirm-sample" disabled={busy !== null} onClick={() => addSample(candidate)}>This is {personName} — add sample</button>
-                    <button type="button" className="vault-action-btn" disabled={busy !== null} onClick={() => { player.stop(); discardPreview(candidate); setCandidates(previous => previous.filter(path => path !== candidate)); }}>Discard</button>
+                    <button id={`voicebank-preview-sample-${index}`} data-testid="voicebank-preview-sample" type="button" className="vault-action-btn" onClick={() => player.toggle(`candidate:${candidate}`, candidate)}>{player.playing === `candidate:${candidate}` ? "Stop preview" : "Listen"}</button>
+                    <button id={`voicebank-confirm-sample-${index}`} data-testid="voicebank-confirm-sample" type="button" className="vault-action-btn" disabled={busy !== null} onClick={() => addSample(candidate)}>This is {personName} — add sample</button>
+                    <button id={`voicebank-discard-sample-${index}`} data-testid={`voicebank-discard-sample-${index}`} type="button" className="vault-action-btn" disabled={busy !== null} onClick={() => { player.stop(); discardPreview(candidate); setCandidates(previous => previous.filter(path => path !== candidate)); }}>Discard</button>
                     </div>
                 </div>)}
             </div>}
-            {error && <p className="voicebank-error" role="alert" data-testid="voicebank-error">{error}</p>}
+            {error && <p id="voicebank-error" data-testid="voicebank-error" className="voicebank-error" role="alert">{error}</p>}
             {loading && (mode === "find" ? suggestions.length === 0 : samples.length === 0) && (
                 <p className="voicebank-empty">{mode === "find" ? "Listening through past meetings…" : "Loading…"}</p>
             )}
@@ -213,13 +213,13 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
                 const pct = Math.round(s.similarity * 100);
                 return (
                     <div key={key} className="voicebank-row" data-testid={`voicebank-suggestion-${s.meeting_id}-${s.speaker_id}`}>
-                        <button
+                        <button id={`voicebank-play-${s.meeting_id}-${s.speaker_id}`} data-testid={`voicebank-play-${s.meeting_id}-${s.speaker_id}`}
                             type="button"
                             className={`vault-action-btn ${player.playing === key ? "active" : ""}`}
                             onClick={() => player.toggle(key, s.clip_path)}
                             disabled={!s.clip_path}
                             aria-label={player.playing === key ? "Stop" : `Play ${s.speaker_name} from ${s.meeting_title}`}
-                            data-testid={`voicebank-play-${s.meeting_id}-${s.speaker_id}`}
+
                         >
                             {player.playing === key ? <IconStop size={12} /> : <IconPlay size={12} />}
                         </button>
@@ -235,21 +235,21 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
                             </div>
                         </div>
                         <div className="voicebank-actions">
-                            <button
+                            <button id={`voicebank-add-${s.meeting_id}-${s.speaker_id}`} data-testid={`voicebank-add-${s.meeting_id}-${s.speaker_id}`}
                                 type="button"
                                 className="vault-action-btn voicebank-add"
                                 onClick={() => answer(s, true)}
                                 disabled={busy !== null}
-                                data-testid={`voicebank-add-${s.meeting_id}-${s.speaker_id}`}
+
                             >
                                 <IconCheck size={12} /><span>Add</span>
                             </button>
-                            <button
+                            <button id={`voicebank-reject-${s.meeting_id}-${s.speaker_id}`} data-testid={`voicebank-reject-${s.meeting_id}-${s.speaker_id}`}
                                 type="button"
                                 className="vault-action-btn"
                                 onClick={() => answer(s, false)}
                                 disabled={busy !== null}
-                                data-testid={`voicebank-reject-${s.meeting_id}-${s.speaker_id}`}
+
                             >
                                 <IconX size={12} /><span>Not them</span>
                             </button>
@@ -258,14 +258,14 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
                 );
             })}
             {mode === "find" && hasMore && (
-                <button type="button" className="vault-action-btn voicebank-more" onClick={showMore} disabled={loading} data-testid="voicebank-show-more">
+                <button id="voicebank-show-more" data-testid="voicebank-show-more" type="button" className="vault-action-btn voicebank-more" onClick={showMore} disabled={loading}>
                     Show more
                 </button>
             )}
 
             {mode === "samples" && samples.map((v, i) => (
                 <div key={v.id} className="voicebank-row" data-testid={`voicebank-sample-${v.id}`}>
-                    <button
+                    <button id={`voicebank-play-sample-${v.id}`} data-testid={`voicebank-play-sample-${v.id}`}
                         type="button"
                         className={`vault-action-btn ${player.playing === `v${v.id}` ? "active" : ""}`}
                         onClick={() => player.toggle(`v${v.id}`, v.clip_path)}
@@ -281,13 +281,13 @@ export function VoiceBankPanel({ personId, personName, mode, onChanged, onClose 
                         </div>
                     </div>
                     <div className="voicebank-actions">
-                        <button
+                        <button id={`voicebank-remove-${v.id}`} data-testid={`voicebank-remove-${v.id}`}
                             type="button"
                             className={`vault-action-btn danger ${confirmRemove === v.id ? "active" : ""}`}
                             onClick={() => remove(v)}
                             disabled={busy !== null || samples.length <= 1}
                             title={samples.length <= 1 ? "Their only sample: delete the person instead" : "Remove this sample"}
-                            data-testid={`voicebank-remove-${v.id}`}
+
                         >
                             <IconTrash size={12} />{confirmRemove === v.id && <span>Remove?</span>}
                         </button>

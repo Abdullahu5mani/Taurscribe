@@ -78,7 +78,7 @@ export function CliSection() {
                 )}
                 {status.note && <p className="setting-card-desc" style={{ marginTop: '8px' }}>{status.note}</p>}
                 {message && (
-                    <p
+                    <p id="cli-install-message" data-testid="cli-install-message"
                         className="setting-card-desc"
                         role={message.error ? 'alert' : 'status'}
                         style={{ marginTop: '8px', color: message.error ? 'var(--error)' : undefined }}

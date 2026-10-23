@@ -214,23 +214,23 @@ export function MeetingRecordingImport({ compact = false, isVisible = true, bloc
     },
   };
   return <>
-    <div ref={zone} className={`meeting-import ${compact ? "meeting-import--compact" : ""} ${importing ? "meeting-import--busy" : ""} ${dragging && !modalOpen ? "meeting-import--dragging" : ""}`} data-testid="meeting-import-drop-zone" role="region" aria-label="Import meeting recordings" {...dropHandlers}>
+    <div id="meeting-import-drop-zone" data-testid="meeting-import-drop-zone" ref={zone} className={`meeting-import ${compact ? "meeting-import--compact" : ""} ${importing ? "meeting-import--busy" : ""} ${dragging && !modalOpen ? "meeting-import--dragging" : ""}`} role="region" aria-label="Import meeting recordings" {...dropHandlers}>
       <div className="meeting-import-launcher-icon"><IconFileText size={20} /></div>
       <div className="meeting-import-launcher-copy"><strong>{importing ? `Importing meetings · ${batchProgress.completed}/${batchProgress.total}` : sources.length ? `${sources.length} recording${sources.length === 1 ? "" : "s"} ready to import` : "Add a meeting recording"}</strong>
         {importing && <p>You can keep using the app.</p>}
       </div>
-      <button type="button" className="meeting-vault-btn" onClick={openModal} disabled={disabled} data-testid="meeting-import-open">{importing ? "Importing…" : sources.length ? "Review import" : compact ? "Import" : "Import recordings"}</button>
+      <button id="meeting-import-open" data-testid="meeting-import-open" type="button" className="meeting-vault-btn" onClick={openModal} disabled={disabled}>{importing ? "Importing…" : sources.length ? "Review import" : compact ? "Import" : "Import recordings"}</button>
     </div>
-    {stoppedNotice && !modalOpen && <p className="meeting-import-notice" role="status">{stoppedNotice}</p>}
-    {error && !modalOpen && <p className="meeting-import-error" role="alert">{error} — choose Review import to retry.</p>}
+    {stoppedNotice && !modalOpen && <p id="meeting-import-stopped-notice" data-testid="meeting-import-stopped-notice" className="meeting-import-notice" role="status">{stoppedNotice}</p>}
+    {error && !modalOpen && <p id="meeting-import-error" data-testid="meeting-import-error" className="meeting-import-error" role="alert">{error} — choose Review import to retry.</p>}
     <ModalLayer>{modalOpen && <div className="meeting-import-overlay" data-testid="meeting-import-overlay" onClick={event => { if (event.target === event.currentTarget) closeModal(); }}>
-      <div ref={modal} className={`meeting-import-modal ${dragging ? "meeting-import--dragging" : ""}`} role="dialog" aria-modal="true" aria-labelledby="meeting-import-dialog-title" aria-describedby="meeting-import-dialog-description" tabIndex={-1} data-testid="meeting-import-modal" aria-busy={importing || inspecting} {...dropHandlers}>
+      <div id="meeting-import-modal" data-testid="meeting-import-modal" ref={modal} className={`meeting-import-modal ${dragging ? "meeting-import--dragging" : ""}`} role="dialog" aria-modal="true" aria-labelledby="meeting-import-dialog-title" aria-describedby="meeting-import-dialog-description" tabIndex={-1} aria-busy={importing || inspecting} {...dropHandlers}>
         <header className="meeting-import-modal-header">
           <div className="meeting-import-modal-heading"><span className="meeting-import-launcher-icon"><IconFileText size={22} /></span><div>
             
             <h2 id="meeting-import-dialog-title">Import recordings</h2>
           </div></div>
-          <button type="button" className="meeting-import-close" onClick={closeModal} disabled={importing} aria-label="Close recording importer" data-testid="meeting-import-close"><IconX size={18} /></button>
+          <button id="meeting-import-close" data-testid="meeting-import-close" type="button" className="meeting-import-close" onClick={closeModal} disabled={importing} aria-label="Close recording importer"><IconX size={18} /></button>
         </header>
         <div className="meeting-import-modal-body">
           <p id="meeting-import-dialog-description" className="meeting-import-description">Each file becomes a separate meeting unless you choose to combine it.</p>
@@ -238,42 +238,42 @@ export function MeetingRecordingImport({ compact = false, isVisible = true, bloc
             <div><strong>{dragging ? "Drop to add recordings" : sources.length ? "Add more recordings" : "Drop your audio files here"}</strong>
               <p className="meeting-import-formats">WAV, MP3, M4A, AAC, FLAC, OGG · MP4/MOV audio</p>
             </div>
-            <button type="button" className="meeting-vault-btn" onClick={browse} disabled={disabled || inspecting} data-testid="meeting-import-browse">{sources.length ? "Add files" : "Choose recordings"}</button>
+            <button id="meeting-import-browse" data-testid="meeting-import-browse" type="button" className="meeting-vault-btn" onClick={browse} disabled={disabled || inspecting}>{sources.length ? "Add files" : "Choose recordings"}</button>
           </div>
-          {inspecting && <p className="meeting-import-reading" role="status">Reading recording metadata…</p>}
+          {inspecting && <p id="meeting-import-reading" data-testid="meeting-import-reading" className="meeting-import-reading" role="status">Reading recording metadata…</p>}
           {sources.length > 0 && <>
-            <label className="meeting-import-mode"><input type="checkbox" checked={combineAll} disabled={disabled} onChange={event => setCombineAll(event.target.checked)} data-testid="meeting-import-combine" />Combine all files into one meeting</label>
-            {!combineAll && nearbyGroups.map(group => {
+            <label className="meeting-import-mode"><input id="meeting-import-combine" data-testid="meeting-import-combine" aria-label="Combine all files into one meeting" type="checkbox" checked={combineAll} disabled={disabled} onChange={event => setCombineAll(event.target.checked)} />Combine all files into one meeting</label>
+            {!combineAll && nearbyGroups.map((group, groupIndex) => {
               const key = recordingGroupKey(group);
-              return <label className="meeting-import-merge-suggestion" key={key}><input type="checkbox" checked={approvedGroups.has(key)} disabled={disabled} onChange={event => setApprovedGroups(previous => { const next = new Set(previous); if (event.target.checked) next.add(key); else next.delete(key); return next; })} />
+              return <label className="meeting-import-merge-suggestion" key={key}><input id={`meeting-import-merge-${groupIndex}`} data-testid={`meeting-import-merge-${groupIndex}`} aria-label={`Combine these ${group.length} recordings`} type="checkbox" checked={approvedGroups.has(key)} disabled={disabled} onChange={event => setApprovedGroups(previous => { const next = new Set(previous); if (event.target.checked) next.add(key); else next.delete(key); return next; })} />
                 <span>These {group.length} recordings are within 5 minutes of each other. Combine? <strong>{group[0].name} → {group[group.length - 1].name}</strong></span></label>;
             })}
-            {(combineAll || sources.length === 1) && <label className="meeting-import-title">Meeting title<input value={title} onChange={event => setTitle(event.target.value)} disabled={disabled} data-testid="meeting-import-title" /></label>}
-            {warnings.map((warning, index) => <p className="meeting-import-warning" role="status" key={index}>{warning}</p>)}
+            {(combineAll || sources.length === 1) && <label className="meeting-import-title">Meeting title<input id="meeting-import-title" data-testid="meeting-import-title" aria-label="Meeting title" value={title} onChange={event => setTitle(event.target.value)} disabled={disabled} /></label>}
+            {warnings.map((warning, index) => <p id={`meeting-import-warning-${index}`} data-testid={`meeting-import-warning-${index}`} className="meeting-import-warning" role="status" key={index}>{warning}</p>)}
             <div className="meeting-import-order"><span>Selected files · {sources.length} recording{sources.length === 1 ? "" : "s"}</span>
-              <button type="button" onClick={() => { manualOrder.current = false; setSources(chronologicalRecordings); }} disabled={disabled || inspecting} data-testid="meeting-import-sort">Sort by recording time</button>
+              <button id="meeting-import-sort" data-testid="meeting-import-sort" type="button" onClick={() => { manualOrder.current = false; setSources(chronologicalRecordings); }} disabled={disabled || inspecting}>Sort by recording time</button>
             </div>
             <ol className="meeting-import-files">{sources.map((source, index) => <li key={source.path}>
               <div className="meeting-import-file-info"><strong>{source.name}</strong><span title={source.timestamp_source || "No recording timestamp"}>{Math.round(source.duration_ms / 1000)} seconds{source.recorded_start ? ` · ${recordingDate(source.recorded_start)}` : ""}</span>
               </div>
               <div className="meeting-import-file-actions">
-                <button type="button" aria-label={`Move ${source.name} earlier`} disabled={disabled || inspecting || index === 0} onClick={() => { manualOrder.current = true; setSources(previous => moveRecording(previous, index, -1)); }}>↑</button>
-                <button type="button" aria-label={`Move ${source.name} later`} disabled={disabled || inspecting || index === sources.length - 1} onClick={() => { manualOrder.current = true; setSources(previous => moveRecording(previous, index, 1)); }}>↓</button>
-                <button type="button" aria-label={`Remove ${source.name}`} disabled={disabled || inspecting} onClick={() => setSources(previous => previous.filter(s => s.path !== source.path))}>×</button>
+                <button id={`meeting-import-move-earlier-${index}`} data-testid={`meeting-import-move-earlier-${index}`} type="button" aria-label={`Move ${source.name} earlier`} disabled={disabled || inspecting || index === 0} onClick={() => { manualOrder.current = true; setSources(previous => moveRecording(previous, index, -1)); }}>↑</button>
+                <button id={`meeting-import-move-later-${index}`} data-testid={`meeting-import-move-later-${index}`} type="button" aria-label={`Move ${source.name} later`} disabled={disabled || inspecting || index === sources.length - 1} onClick={() => { manualOrder.current = true; setSources(previous => moveRecording(previous, index, 1)); }}>↓</button>
+                <button id={`meeting-import-remove-${index}`} data-testid={`meeting-import-remove-${index}`} type="button" aria-label={`Remove ${source.name}`} disabled={disabled || inspecting} onClick={() => setSources(previous => previous.filter(s => s.path !== source.path))}>×</button>
               </div>
             </li>)}</ol>
             {undated && sources.length > 1 && <p className="meeting-import-notice">Undated files keep their selected order. Use the arrows to rearrange.</p>}
             <details className="meeting-import-options"><summary>Speaker options</summary>
-            <label className="meeting-import-title">About how many people? (optional)<input type="number" min="1" max="32" step="1" aria-label="About how many people?" value={expectedSpeakers} disabled={disabled} onChange={e => setExpectedSpeakers(e.target.value)} /></label>
+            <label className="meeting-import-title">About how many people? (optional)<input id="meeting-import-speaker-count-input" data-testid="meeting-import-speaker-count-input" type="number" min="1" max="32" step="1" aria-label="About how many people?" value={expectedSpeakers} disabled={disabled} onChange={e => setExpectedSpeakers(e.target.value)} /></label>
             {!hasDiarizationModel && <p className="meeting-import-notice">Install Meeting speakers in Settings → Models for better speaker recognition.</p>}
             </details>
           </>}
           {blocked && !importing && <p className="meeting-import-notice">Finish the current audio or model operation before importing.</p>}
-          {error && <p className="meeting-import-error" role="alert">{error}</p>}
+          {error && <p id="meeting-import-modal-error" data-testid="meeting-import-modal-error" className="meeting-import-error" role="alert">{error}</p>}
         </div>
         <footer className="meeting-import-modal-footer">
-          <button type="button" className="meeting-vault-btn" onClick={closeModal} disabled={importing}>Close</button>
-          <button type="button" className="meeting-import-submit" onClick={importMeeting} disabled={disabled || inspecting || !sources.length || ((combineAll || sources.length === 1) && !title.trim())} data-testid="meeting-import-submit">{importing ? "Importing and processing…" : warnings.length ? "Import together anyway" : `Import ${plannedCount} meeting${plannedCount === 1 ? "" : "s"}`}</button>
+          <button id="meeting-import-footer-close-btn" data-testid="meeting-import-footer-close-btn" type="button" className="meeting-vault-btn" onClick={closeModal} disabled={importing}>Close</button>
+          <button id="meeting-import-submit" data-testid="meeting-import-submit" type="button" className="meeting-import-submit" onClick={importMeeting} disabled={disabled || inspecting || !sources.length || ((combineAll || sources.length === 1) && !title.trim())}>{importing ? "Importing and processing…" : warnings.length ? "Import together anyway" : `Import ${plannedCount} meeting${plannedCount === 1 ? "" : "s"}`}</button>
         </footer>
       </div>
     </div>}</ModalLayer>

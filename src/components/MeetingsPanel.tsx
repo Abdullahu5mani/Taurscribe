@@ -1054,10 +1054,10 @@ export function MeetingsPanel({
             )}
           </div>
           <div className="meeting-library-filters">
-            <select aria-label="Filter meetings by platform" value={selectedPlatform} onChange={e => setSelectedPlatform(e.target.value)}>
+            <select id="meetings-platform-filter" data-testid="meetings-platform-filter" aria-label="Filter meetings by platform" value={selectedPlatform} onChange={e => setSelectedPlatform(e.target.value)}>
               {availablePlatforms.map(platform => <option key={platform} value={platform}>{platform === "All" ? "All sources" : getPlatformMeta(platform).label}</option>)}
             </select>
-            <select aria-label="Meeting list order" value={groupByPlatform ? "platform" : "recent"} onChange={e => setGroupByPlatform(e.target.value === "platform")}>
+            <select id="meetings-list-order" data-testid="meetings-list-order" aria-label="Meeting list order" value={groupByPlatform ? "platform" : "recent"} onChange={e => setGroupByPlatform(e.target.value === "platform")}>
               <option value="recent">Recent first</option><option value="platform">By source</option>
             </select>
           </div>
@@ -1081,20 +1081,20 @@ export function MeetingsPanel({
                 <h3 className="meeting-card-title">{processing.title}</h3>
                 <span className="meeting-processing-detail">{processing.stage || "Preparing meeting processing"}</span>
                 {!!importPreview && importPreview.total_ms > 0 && (
-                  <div className="meeting-processing-progress" role="progressbar" aria-label="Transcription progress"
+                  <div id="meetings-processing-progress" data-testid="meetings-processing-progress" className="meeting-processing-progress" role="progressbar" aria-label="Transcription progress"
                     aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(importPreview.completed_ms / importPreview.total_ms * 100))}>
                     <span style={{ width: `${Math.min(100, importPreview.completed_ms / importPreview.total_ms * 100)}%` }} />
                   </div>
                 )}
-                {!!importPreview?.paragraphs.length && <button className="detail-tool-btn" type="button" onClick={openImportPreview}>Read transcript · speaker labels pending</button>}
-                <button className="detail-tool-btn" type="button" data-testid="meeting-processing-stop" disabled={stoppingProcessing || processing.stage?.startsWith("Saving")} onClick={() => void stopProcessing()}>{stoppingProcessing ? "Stopping…" : "Stop processing"}</button>
+                {!!importPreview?.paragraphs.length && <button id="meetings-processing-read-transcript-btn" data-testid="meetings-processing-read-transcript-btn" className="detail-tool-btn" type="button" onClick={openImportPreview}>Read transcript · speaker labels pending</button>}
+                <button id="meeting-processing-stop" data-testid="meeting-processing-stop" className="detail-tool-btn" type="button" disabled={stoppingProcessing || processing.stage?.startsWith("Saving")} onClick={() => void stopProcessing()}>{stoppingProcessing ? "Stopping…" : "Stop processing"}</button>
               </div>
             </div>
           )}
-          {!processing && processingStopped && <div className="meeting-processing-card" role="status" data-testid="meeting-processing-stopped">
+          {!processing && processingStopped && <div id="meeting-processing-stopped" data-testid="meeting-processing-stopped" className="meeting-processing-card" role="status">
             <div className="meeting-processing-body"><span>Meeting processing stopped</span><span className="meeting-processing-detail">Saved meetings and original recordings are unchanged.</span>
-              {!!importPreview?.paragraphs.length && <button className="detail-tool-btn" type="button" onClick={openImportPreview}>Read partial transcript</button>}
-              <button className="detail-tool-btn" type="button" onClick={() => setProcessingStopped(false)}>Dismiss</button>
+              {!!importPreview?.paragraphs.length && <button id="meetings-stopped-read-transcript-btn" data-testid="meetings-stopped-read-transcript-btn" className="detail-tool-btn" type="button" onClick={openImportPreview}>Read partial transcript</button>}
+              <button id="meetings-stopped-dismiss-btn" data-testid="meetings-stopped-dismiss-btn" className="detail-tool-btn" type="button" onClick={() => setProcessingStopped(false)}>Dismiss</button>
             </div>
           </div>}
           {!processing && processingError && (
@@ -1103,7 +1103,7 @@ export function MeetingsPanel({
               <div className="meeting-processing-body">
                 <span className="meeting-processing-label">{processingError.startsWith("Meeting saved") ? "Meeting saved" : "Meeting processing failed"}</span>
                 <span className="meeting-processing-detail">{processingError}</span>
-                {!!importPreview?.paragraphs.length && <button className="detail-tool-btn" type="button" onClick={openImportPreview}>Read partial transcript</button>}
+                {!!importPreview?.paragraphs.length && <button id="meetings-error-read-transcript-btn" data-testid="meetings-error-read-transcript-btn" className="detail-tool-btn" type="button" onClick={openImportPreview}>Read partial transcript</button>}
               </div>
               <button
                 id="meetings-dismiss-processing-error-btn"
@@ -1174,7 +1174,7 @@ export function MeetingsPanel({
                         })}`;
 
                         return (
-                          <div
+                          <div id={`meetings-card-${m.id}`} data-testid={`meetings-card-${m.id}`}
                             key={m.id}
                             className={`meeting-list-card ${isSelected ? "selected" : ""}`}
                             role="button" tabIndex={0} aria-label={`Open meeting ${m.title}`}
@@ -1238,7 +1238,7 @@ export function MeetingsPanel({
 
               return [
                 showBucket ? <div key={`bucket-${bucket}-${m.id}`} className="meeting-date-header">{bucket}</div> : null,
-                <div
+                <div id={`meetings-card-${m.id}`} data-testid={`meetings-card-${m.id}`}
                   key={m.id}
                   className={`meeting-list-card ${isSelected ? "selected" : ""}`}
                   role="button" tabIndex={0} aria-label={`Open meeting ${m.title}`}
@@ -1281,7 +1281,7 @@ export function MeetingsPanel({
               ];
             })
           )}
-          {meetings.length >= historyPages * 100 && <button type="button" className="meeting-load-more" disabled={loadingList} onClick={() => setHistoryPages(pages => pages + 1)}>{loadingList ? "Loading…" : "Load more meetings"}</button>}
+          {meetings.length >= historyPages * 100 && <button id="meetings-load-more-btn" data-testid="meetings-load-more-btn" type="button" className="meeting-load-more" disabled={loadingList} onClick={() => setHistoryPages(pages => pages + 1)}>{loadingList ? "Loading…" : "Load more meetings"}</button>}
         </div>
 
         <MeetingHistoryControls count={platformCounts.reduce((sum, platform) => sum + platform.count, 0)} onSelect={selectMeeting} />
@@ -1296,10 +1296,10 @@ export function MeetingsPanel({
           {showImportPreview && importPreview ? (
             <>
               <div className="detail-header meeting-draft-header">
-                <button className="detail-tool-btn" type="button" onClick={() => { previewOpenRef.current = false; setShowImportPreview(false); }}>Back to meetings</button>
+                <button id="meetings-draft-back-btn" data-testid="meetings-draft-back-btn" className="detail-tool-btn" type="button" onClick={() => { previewOpenRef.current = false; setShowImportPreview(false); }}>Back to meetings</button>
                 <h3>{importPreview.title}</h3>
                 <div className="meeting-transcription-model">Transcribed with <strong>{MODELS.find(model => model.id === importPreview.model_id)?.name || importPreview.model_id || "Selected speech model"}</strong></div>
-                <p role="status">{processingStopped ? "Partial draft · stopped · not saved" : processingError?.startsWith("Meeting saved") ? "Saved · some recorded audio is missing" : processingError ? "Partial draft · processing failed · not saved" : "Draft transcript · speaker labels pending"}</p>
+                <p id="meetings-draft-status" data-testid="meetings-draft-status" role="status">{processingStopped ? "Partial draft · stopped · not saved" : processingError?.startsWith("Meeting saved") ? "Saved · some recorded audio is missing" : processingError ? "Partial draft · processing failed · not saved" : "Draft transcript · speaker labels pending"}</p>
                 <p>{Math.round(importPreview.completed_ms / 1000)} / {Math.round(importPreview.total_ms / 1000)} seconds transcribed</p>
               </div>
               <div className="meeting-detail-scroll" data-testid="meeting-import-preview">
@@ -1425,7 +1425,7 @@ export function MeetingsPanel({
                   </div>
                 </div>
                 {meetingSpeakers.filter(person => person.speaker_id !== "background").length > 1 && speakerStats.size > 0 && (
-                  <button type="button" className="meeting-talkshare" data-testid="meeting-talkshare" onClick={() => setDetailView("speakers")}
+                  <button id="meeting-talkshare" data-testid="meeting-talkshare" type="button" className="meeting-talkshare" onClick={() => setDetailView("speakers")}
                     aria-label="Talk time by speaker. Open speakers.">
                     <span className="meeting-talkshare-bar" aria-hidden="true">
                       {meetingSpeakers.filter(person => person.speaker_id !== "background").map(person => {
@@ -1504,7 +1504,7 @@ export function MeetingsPanel({
                 </div>
               )}
 
-              <div className="meeting-detail-tabs" role="tablist" aria-label="Meeting view" onKeyDown={e => {
+              <div id="meetings-detail-tablist" data-testid="meetings-detail-tablist" className="meeting-detail-tabs" role="tablist" aria-label="Meeting view" onKeyDown={e => {
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
                 e.preventDefault();
                 const views = ["transcript", "speakers", "tools"] as const;
@@ -1518,7 +1518,7 @@ export function MeetingsPanel({
                 {detailView === "transcript" && blocks.length > 0 && (
                   <label className="meeting-transcript-search">
                     <IconSearch size={13} />
-                    <input type="search" aria-label="Search this transcript" data-testid="meetings-transcript-search" placeholder="Search transcript"
+                    <input id="meetings-transcript-search" data-testid="meetings-transcript-search" type="search" aria-label="Search this transcript" placeholder="Search transcript"
                       value={transcriptQuery} onChange={e => setTranscriptQuery(e.target.value)}
                       onKeyDown={e => { if (e.key === "Escape") setTranscriptQuery(""); }} />
                     {transcriptQuery.trim() && <span aria-live="polite">{visibleBlocks.length} of {blocks.length}</span>}
@@ -1527,10 +1527,10 @@ export function MeetingsPanel({
               </div>
               <div className="meeting-detail-scroll" ref={transcriptScroll}>
               {/* Diarized Conversation Turns */}
-              <section className="detail-turns-section" role="tabpanel" id="meetings-panel-transcript" aria-labelledby="meetings-tab-transcript" hidden={detailView !== "transcript"}>
+              <section id="meetings-panel-transcript" data-testid="meetings-panel-transcript" className="detail-turns-section" role="tabpanel" aria-labelledby="meetings-tab-transcript" hidden={detailView !== "transcript"}>
                 <div className="turns-conversation-flow">
                   {transcriptQuery.trim() && visibleBlocks.length === 0 && (
-                    <p className="meeting-transcript-nomatch" role="status">No passage mentions “{transcriptQuery.trim()}”.</p>
+                    <p id="meetings-transcript-nomatch" data-testid="meetings-transcript-nomatch" className="meeting-transcript-nomatch" role="status">No passage mentions “{transcriptQuery.trim()}”.</p>
                   )}
                   {visibleBlocks.map(({ block: t, index: idx }) => {
                     const isYou = t.channel === 0;
@@ -1552,27 +1552,27 @@ export function MeetingsPanel({
                               {isYou ? "YOU" : speakerInitials(t.speaker_name)}
                             </div>
 
-                            <button type="button" className="turn-speaker-link" onClick={() => setDetailView("speakers")} aria-label={`Manage speaker ${t.speaker_name}`}>{t.speaker_name}</button>
-                            <button type="button" className="turn-time-stamp" aria-label={`Play from ${formatSeconds(t.start_ms / 1000)}`} disabled={!selectedMeeting.audio_path || !!selectedMeeting.audio_missing || audioFailed} onClick={() => handleToggleFullAudio(t.start_ms / 1000, true)}>{formatSeconds(Math.round(t.start_ms / 1000))}</button>
+                            <button id={`meetings-turn-speaker-${idx}`} data-testid={`meetings-turn-speaker-${idx}`} type="button" className="turn-speaker-link" onClick={() => setDetailView("speakers")} aria-label={`Manage speaker ${t.speaker_name}`}>{t.speaker_name}</button>
+                            <button id={`meetings-turn-play-${idx}`} data-testid={`meetings-turn-play-${idx}`} type="button" className="turn-time-stamp" aria-label={`Play from ${formatSeconds(t.start_ms / 1000)}`} disabled={!selectedMeeting.audio_path || !!selectedMeeting.audio_missing || audioFailed} onClick={() => handleToggleFullAudio(t.start_ms / 1000, true)}>{formatSeconds(Math.round(t.start_ms / 1000))}</button>
                           </div>
 
 
                         </div>
 
-                        <button type="button" className="turn-clip-btn turn-assign-btn" aria-label={`Assign speaker for passage at ${formatSeconds(t.start_ms / 1000)}`} disabled={speakerBusy} onClick={() => { setAssignBlock(idx); setAssignPerson(""); setAssignName(""); setAssignAll(false); }}>Assign speaker</button>
+                        <button id={`meetings-turn-assign-${idx}`} data-testid={`meetings-turn-assign-${idx}`} type="button" className="turn-clip-btn turn-assign-btn" aria-label={`Assign speaker for passage at ${formatSeconds(t.start_ms / 1000)}`} disabled={speakerBusy} onClick={() => { setAssignBlock(idx); setAssignPerson(""); setAssignName(""); setAssignAll(false); }}>Assign speaker</button>
                         {assignBlock === idx && <form className="turn-assignment" aria-label="Assign passage speaker" onSubmit={e => { e.preventDefault(); void assignPassage(); }}>
-                          <label>Person<select value={assignPerson} onChange={e => setAssignPerson(e.target.value)} disabled={speakerBusy}>
+                          <label>Person<select id={`meetings-assign-person-${idx}`} data-testid={`meetings-assign-person-${idx}`} aria-label="Person" value={assignPerson} onChange={e => setAssignPerson(e.target.value)} disabled={speakerBusy}>
                             <option value="">New person…</option>
                             {meetingSpeakers.filter(person => person.speaker_id !== "background").map(person => <option key={person.speaker_id} value={person.speaker_id}>{person.speaker_name}</option>)}
                           </select></label>
-                          {!assignPerson && <label>Name<input autoFocus value={assignName} maxLength={200} onChange={e => setAssignName(e.target.value)} placeholder="Person’s name" disabled={speakerBusy} /></label>}
-                          <label><input type="checkbox" checked={assignAll} onChange={e => setAssignAll(e.target.checked)} disabled={speakerBusy} />Apply to every passage currently labeled {t.speaker_name}</label>
+                          {!assignPerson && <label>Name<input id={`meetings-assign-name-${idx}`} data-testid={`meetings-assign-name-${idx}`} aria-label="Name" autoFocus value={assignName} maxLength={200} onChange={e => setAssignName(e.target.value)} placeholder="Person’s name" disabled={speakerBusy} /></label>}
+                          <label><input id={`meetings-assign-all-${idx}`} data-testid={`meetings-assign-all-${idx}`} aria-label={`Apply to every passage labeled ${t.speaker_name}`} type="checkbox" checked={assignAll} onChange={e => setAssignAll(e.target.checked)} disabled={speakerBusy} />Apply to every passage currently labeled {t.speaker_name}</label>
                           <p>Otherwise, only this passage changes. Voice samples can be added in Speaker Vault.</p>
                           {!!selectedMeeting.merges?.length && <p>Saving a correction clears earlier merge undo history.</p>}
-                          <button className="turn-clip-btn" type="submit" disabled={speakerBusy || (!assignPerson && !assignName.trim())}>{speakerBusy ? "Saving…" : "Save speaker"}</button>
-                          <button className="turn-clip-btn" type="button" disabled={speakerBusy} onClick={() => setAssignBlock(null)}>Cancel</button>
+                          <button id={`meetings-assign-save-${idx}`} data-testid={`meetings-assign-save-${idx}`} className="turn-clip-btn" type="submit" disabled={speakerBusy || (!assignPerson && !assignName.trim())}>{speakerBusy ? "Saving…" : "Save speaker"}</button>
+                          <button id={`meetings-assign-cancel-${idx}`} data-testid={`meetings-assign-cancel-${idx}`} className="turn-clip-btn" type="button" disabled={speakerBusy} onClick={() => setAssignBlock(null)}>Cancel</button>
                         </form>}
-                        <p className="turn-text" role={selectedMeeting.audio_path && !audioFailed ? "button" : undefined}
+                        <p id={`meetings-turn-text-${idx}`} data-testid={`meetings-turn-text-${idx}`} className="turn-text" role={selectedMeeting.audio_path && !audioFailed ? "button" : undefined}
                           tabIndex={selectedMeeting.audio_path && !audioFailed ? 0 : undefined}
                           aria-label={`Jump to ${formatSeconds(t.start_ms / 1000)}: ${t.text}`}
                           onClick={() => { if (selectedMeeting.audio_path && !audioFailed) handleToggleFullAudio(t.start_ms / 1000, true); }}
@@ -1590,7 +1590,7 @@ export function MeetingsPanel({
                   })}
                 </div>
               </section>
-              <section className="meeting-speakers-panel" role="tabpanel" id="meetings-panel-speakers" aria-labelledby="meetings-tab-speakers" hidden={detailView !== "speakers"}>
+              <section id="meetings-panel-speakers" data-testid="meetings-panel-speakers" className="meeting-speakers-panel" role="tabpanel" aria-labelledby="meetings-tab-speakers" hidden={detailView !== "speakers"}>
                 <div className="meeting-panel-intro"><p>Play a sample, rename a speaker, or merge voices that belong to the same person.</p></div>
               {/* "Speaker 2 sounds like Dana — is it?" */}
               <SpeakerSuggestions
@@ -1599,7 +1599,7 @@ export function MeetingsPanel({
               />
 
                 {selectedMeeting.merges?.[0] && (
-                  <button type="button" className="turn-clip-btn" data-testid="meetings-undo-merge-btn" disabled={speakerBusy}
+                  <button id="meetings-undo-merge-btn" data-testid="meetings-undo-merge-btn" type="button" className="turn-clip-btn" disabled={speakerBusy}
                     onClick={() => changeSpeakers("undo_meeting_speaker_merge", { mergeId: selectedMeeting.merges![0].id })}>
                     Undo merge: {selectedMeeting.merges[0].from_speaker_name} → {selectedMeeting.merges[0].into_speaker_name}
                   </button>
@@ -1659,10 +1659,10 @@ export function MeetingsPanel({
                             )}
 
 
-                            {!isYou && t.speaker_id !== "background" && <button type="button" className="turn-clip-btn" aria-label={`Compare voice samples for ${t.speaker_name}`}
+                            {!isYou && t.speaker_id !== "background" && <button id={`meetings-compare-samples-${t.speaker_id}`} data-testid={`meetings-compare-samples-${t.speaker_id}`} type="button" className="turn-clip-btn" aria-label={`Compare voice samples for ${t.speaker_name}`}
                               onClick={() => { stopSnippetAudio(); stopFullAudio(); setPreviewSpeaker({ id: t.speaker_id, name: t.speaker_name, path: t.snippet_path }); }}>Compare samples</button>}
 
-                            <select aria-label={`Merge ${t.speaker_name} into`} className="turn-merge-select"
+                            <select id={`meetings-merge-select-${t.speaker_id}`} data-testid={`meetings-merge-select-${t.speaker_id}`} aria-label={`Merge ${t.speaker_name} into`} className="turn-merge-select"
                               value="" disabled={speakerBusy}
                               onChange={e => { if (e.target.value) void changeSpeakers("merge_meeting_speakers", { fromSpeakerId: t.speaker_id, intoSpeakerId: e.target.value }); }}>
                               <option value="">Merge into…</option>
@@ -1697,7 +1697,7 @@ export function MeetingsPanel({
                   })}
                 </div>
               </section>
-              <section className="meeting-tools-panel" role="tabpanel" id="meetings-panel-tools" aria-labelledby="meetings-tab-tools" hidden={detailView !== "tools"}>
+              <section id="meetings-panel-tools" data-testid="meetings-panel-tools" className="meeting-tools-panel" role="tabpanel" aria-labelledby="meetings-tab-tools" hidden={detailView !== "tools"}>
 
                 <div className="meeting-maintenance-card meeting-danger-zone"><h3>Delete meeting</h3><p>Permanently remove this meeting and its recording.</p><div className="meeting-speaker-card-actions">                    {confirmDeleteMeetingId === selectedMeeting.id ? (
                       <>
@@ -1739,25 +1739,25 @@ export function MeetingsPanel({
                   <h3>Reprocess recording</h3>
                   <p>Use the original recording to rebuild the transcript and speaker labels.</p>
                 <div className="meeting-speaker-tools">
-                  <label>About how many people? <input type="number" min="1" max="32" step="1" value={speakerHint} aria-label="Speaker count hint" disabled={speakerBusy}
+                  <label>About how many people? <input id="meetings-speaker-hint-input" data-testid="meetings-speaker-hint-input" type="number" min="1" max="32" step="1" value={speakerHint} aria-label="Speaker count hint" disabled={speakerBusy}
                     onChange={e => setSpeakerHint(e.target.value)} /></label>
-                  <button type="button" className="turn-clip-btn" data-testid="meetings-reseparate-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
+                  <button id="meetings-reseparate-btn" data-testid="meetings-reseparate-btn" type="button" className="turn-clip-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
                     onClick={() => { if (!confirmReseparate) { setConfirmReseparate(true); return; } setConfirmReseparate(false); void changeSpeakers("reseparate_meeting_speakers", { expectedSpeakers: speakerHint ? Number(speakerHint) : null, modelId, useGpu }); }}>
                     {speakerBusy ? "Working…" : confirmReseparate ? "Confirm re-separation" : "Re-separate speakers"}
                   </button>
-                  <button type="button" className="turn-clip-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
+                  <button id="meetings-reprocess-btn" data-testid="meetings-reprocess-btn" type="button" className="turn-clip-btn" disabled={speakerBusy || importBlocked || isRecording || !selectedMeeting.audio_path || selectedMeeting.audio_missing}
                     onClick={() => { if (!confirmPipeline) { setConfirmPipeline(true); return; } setConfirmPipeline(false); void changeSpeakers("reprocess_meeting", { expectedSpeakers: speakerHint ? Number(speakerHint) : null, modelId, useGpu }); }}>
                     {confirmPipeline ? "Confirm full reprocessing" : "Clean audio and rerun pipeline"}
                   </button>
-                  {confirmPipeline && <><span>Rebuilds the transcript from cleaned audio. Separate mic/caller tracks allow echo cleanup; mixed recordings get noise cleanup. Manual turn labels and merge undo are replaced after success. Original audio, notes and tags are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmPipeline(false)}>Cancel</button></>}
-                  {confirmReseparate && <><span>Rebuilds turns and transcript; manual labels and merge undo are replaced after success. Notes and original recording are kept.</span><button type="button" className="turn-clip-btn" onClick={() => setConfirmReseparate(false)}>Cancel</button></>}
+                  {confirmPipeline && <><span>Rebuilds the transcript from cleaned audio. Separate mic/caller tracks allow echo cleanup; mixed recordings get noise cleanup. Manual turn labels and merge undo are replaced after success. Original audio, notes and tags are kept.</span><button id="meetings-reprocess-cancel-btn" data-testid="meetings-reprocess-cancel-btn" type="button" className="turn-clip-btn" onClick={() => setConfirmPipeline(false)}>Cancel</button></>}
+                  {confirmReseparate && <><span>Rebuilds turns and transcript; manual labels and merge undo are replaced after success. Notes and original recording are kept.</span><button id="meetings-reseparate-cancel-btn" data-testid="meetings-reseparate-cancel-btn" type="button" className="turn-clip-btn" onClick={() => setConfirmReseparate(false)}>Cancel</button></>}
                 </div>
                 </div>
               {!!selectedMeeting.recording_sources?.length && (
                 <details className="meeting-import-sources" data-testid="meeting-recording-sources">
                   <summary>{selectedMeeting.recording_sources.length} imported recording{selectedMeeting.recording_sources.length === 1 ? "" : "s"} · original timeline</summary>
                   <ol>{selectedMeeting.recording_sources.map((source, index) => <li key={`${source.path}-${index}`}>
-                    <button type="button" disabled={!selectedMeeting.audio_path || selectedMeeting.audio_missing || audioFailed}
+                    <button id={`meetings-source-play-${index}`} data-testid={`meetings-source-play-${index}`} type="button" disabled={!selectedMeeting.audio_path || selectedMeeting.audio_missing || audioFailed}
                       onClick={() => { handleToggleFullAudio(source.offset_ms / 1000, true); }}>
                       {formatDurationMs(source.offset_ms)} · {source.name} · {recordingDate(source.recorded_start)}
                       {source.recorded_end ? ` → ${recordingDate(source.recorded_end)}` : ""}

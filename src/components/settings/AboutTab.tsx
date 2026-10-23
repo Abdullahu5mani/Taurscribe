@@ -234,14 +234,14 @@ export function AboutTab() {
                             )}
 
                             {gpu?.better_build_available && (
-                                <div className="about-row" role="note" data-testid="better-gpu-build">
+                                <div id="better-gpu-build" data-testid="better-gpu-build" className="about-row" role="note">
                                     <span className="about-row-label">Faster build</span>
                                     <span className="about-row-value about-row-value--highlight">
                                         {gpu.primary?.name ?? 'Your GPU'} runs faster with the {gpu.recommended_label} build.{' '}
-                                        <button
+                                        <button id="better-gpu-build-btn" data-testid="better-gpu-build-btn"
                                             type="button"
                                             className="about-open-btn"
-                                            data-testid="better-gpu-build-btn"
+
                                             onClick={() => { openUrl(RELEASES_URL).catch(() => {}); }}
                                         >Download ↗</button>
                                     </span>

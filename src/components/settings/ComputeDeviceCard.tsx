@@ -101,18 +101,18 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
             <div className="setting-card-header">
                 <span className="setting-card-label">Speech runs on</span>
             </div>
-            <div className="device-list" role="radiogroup" aria-label="Speech model device">
+            <div id="device-list" data-testid="device-list" className="device-list" role="radiogroup" aria-label="Speech model device">
                 {options.map((d) => {
                     const speed = speedFor(d.id);
                     const isBest = best?.device_id === d.id && (speeds?.results.length ?? 0) > 1;
                     return (
-                        <button
+                        <button id={`device-row-${d.kind === 'cpu' ? 'cpu' : d.id}`} data-testid={`device-row-${d.kind === 'cpu' ? 'cpu' : d.id}`}
                             key={d.id}
                             type="button"
                             role="radio"
                             aria-checked={d.id === selected}
                             className={`device-row${d.id === selected ? ' device-row--active' : ''}`}
-                            data-testid={`device-row-${d.kind === 'cpu' ? 'cpu' : d.id}`}
+
                             onClick={() => choose(d)}
                             disabled={blocked || measuring !== null}
                         >
@@ -151,7 +151,7 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
             {onSelectLlmDevice && (
                 <label className="device-cleanup-select">
                     <span>Word cleanup runs on</span>
-                    <select data-testid="flowscribe-compute-device" value={llmBackend === 'cpu' ? 'cpu' : llmComputeDevice === 'cpu' ? 'same' : llmComputeDevice} onChange={(e) => { onSelectLlmDevice(e.target.value); setSpeeds(null); }} disabled={blocked || measuring !== null}>
+                    <select id="flowscribe-compute-device" data-testid="flowscribe-compute-device" aria-label="Word cleanup runs on" value={llmBackend === 'cpu' ? 'cpu' : llmComputeDevice === 'cpu' ? 'same' : llmComputeDevice} onChange={(e) => { onSelectLlmDevice(e.target.value); setSpeeds(null); }} disabled={blocked || measuring !== null}>
                         <option value="same">Follow speech GPU</option>
                         {gpus.map((d) => <option key={d.id} value={d.id}>{deviceLabel(d)}{d.kind === 'igpu' ? ' · integrated' : ''}</option>)}
                         <option value="cpu">CPU</option>
@@ -161,11 +161,11 @@ export function ComputeDeviceCard({ asrBackend, computeDevice, onSelect, blocked
             )}
             <div className="storage-speed-block">
                 <label className="device-benchmark-toggle">
-                    <input type="checkbox" data-testid="benchmark-include-flowscribe" checked={includeFlowScribe} onChange={(e) => { setIncludeFlowScribe(e.target.checked); setSpeeds(null); }} disabled={blocked || measuring !== null || (!flowAvailable && !includeFlowScribe)} />
+                    <input id="benchmark-include-flowscribe" data-testid="benchmark-include-flowscribe" aria-label="Include FlowScribe V3 cleanup" type="checkbox" checked={includeFlowScribe} onChange={(e) => { setIncludeFlowScribe(e.target.checked); setSpeeds(null); }} disabled={blocked || measuring !== null || (!flowAvailable && !includeFlowScribe)} />
                     Include FlowScribe V3 cleanup
                 </label>
                 {!flowAvailable && <span className="storage-hint">Download FlowScribe V3 in Models to include cleanup.</span>}
-                <button type="button" className="ghost-btn" data-testid="device-measure-speed" onClick={measure} disabled={blocked || measuring !== null}>
+                <button id="device-measure-speed" data-testid="device-measure-speed" type="button" className="ghost-btn" onClick={measure} disabled={blocked || measuring !== null}>
                     {measuring !== null ? <><span className="storage-spinner" /> {measuring}</> : 'Measure speed'}
                 </button>
                 {speeds && measuring === null && (

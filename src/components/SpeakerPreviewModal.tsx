@@ -58,22 +58,22 @@ export function SpeakerPreviewModal({ meetingId, speakerId, speakerName, initial
         finally { generating.current = false; if (alive.current) setBusy(false); }
     };
     const content = <div className="speaker-vault-overlay" onClick={onClose}>
-        <section className="speaker-vault-modal" role="dialog" aria-modal="true" aria-label={`Voice previews for ${speakerName}`} onClick={e => e.stopPropagation()}>
-            <header className="vault-header"><h2 className="vault-title">{speakerName} · Voice previews</h2><button type="button" className="vault-action-btn" onClick={onClose} aria-label="Close voice previews">Close</button></header>
+        <section id="speaker-preview-dialog" data-testid="speaker-preview-dialog" className="speaker-vault-modal" role="dialog" aria-modal="true" aria-label={`Voice previews for ${speakerName}`} onClick={e => e.stopPropagation()}>
+            <header className="vault-header"><h2 className="vault-title">{speakerName} · Voice previews</h2><button id="speaker-preview-close-btn" data-testid="speaker-preview-close-btn" type="button" className="vault-action-btn" onClick={onClose} aria-label="Close voice previews">Close</button></header>
             <div className="vault-body speaker-preview-body">
                 <p>Compare another section of this speaker’s labelled audio. Overlapping voices or echo may still be audible. Samples are added to a person’s bank from the Speaker Vault.</p>
                 {paths.map((path, index) => <div className="speaker-preview-card" key={path}><strong>Sample {index + 1}</strong>
                     <audio controls src={convertFileSrc(path)} ref={node => { if (node) players.current.add(node); }}
                         onPlay={event => { claimAudioPlayback(event.currentTarget); for (const player of players.current) if (player !== event.currentTarget) player.pause(); }} />
-                    {separationReady && <button type="button" className="turn-clip-btn" disabled={busy} onClick={() => isolate(path)}>Isolate overlapping voices</button>}
+                    {separationReady && <button id={`speaker-preview-isolate-${index}`} data-testid={`speaker-preview-isolate-${index}`} type="button" className="turn-clip-btn" disabled={busy} onClick={() => isolate(path)}>Isolate overlapping voices</button>}
                 </div>)}
-                <button type="button" className="turn-clip-btn" onClick={generate} disabled={busy || paths.length >= 3}>{busy ? "Preparing sample…" : "Generate another sample"}</button>
-                {!separationReady && <button type="button" className="turn-clip-btn" disabled={busy} onClick={downloadSeparation}>{busy ? "Downloading/preparing…" : "Download optional voice separation · 29 MB"}</button>}
+                <button id="speaker-preview-generate-btn" data-testid="speaker-preview-generate-btn" type="button" className="turn-clip-btn" onClick={generate} disabled={busy || paths.length >= 3}>{busy ? "Preparing sample…" : "Generate another sample"}</button>
+                {!separationReady && <button id="speaker-preview-download-separation-btn" data-testid="speaker-preview-download-separation-btn" type="button" className="turn-clip-btn" disabled={busy} onClick={downloadSeparation}>{busy ? "Downloading/preparing…" : "Download optional voice separation · 29 MB"}</button>}
                 <small>Experimental two-voice separation. Listen to both results to identify the speaker; it may introduce artifacts. <a href="https://huggingface.co/dellusional/sepformer-wsj02mix-int8-onnx" target="_blank" rel="noreferrer">Model and credits (Apache 2.0)</a></small>
                 {separated.map((path, index) => <div className="speaker-preview-card" key={path}><strong>Isolated voice {index + 1}</strong>
                     <audio controls src={convertFileSrc(path)} ref={node => { if (node) players.current.add(node); }} onPlay={event => claimAudioPlayback(event.currentTarget)} />
                 </div>)}
-                {error && <p role="alert">{error}</p>}
+                {error && <p id="speaker-preview-error" data-testid="speaker-preview-error" role="alert">{error}</p>}
             </div>
         </section>
     </div>;

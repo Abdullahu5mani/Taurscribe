@@ -367,7 +367,7 @@ export function SettingsModal({
                             <div key={activeTab} className="settings-page-heading">
                                 <h2 id="settings-modal-title">{current.label}</h2>
                             </div>
-                            <span className="settings-hotkey-paused" role="status" title="The dictation hotkey is turned off while Settings is open, so changing the hotkey can't start a recording. It turns back on when you close Settings.">
+                            <span id="settings-hotkey-paused" data-testid="settings-hotkey-paused" className="settings-hotkey-paused" role="status" title="The dictation hotkey is turned off while Settings is open, so changing the hotkey can't start a recording. It turns back on when you close Settings.">
                                 <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1" width="2.4" height="8" rx="0.8" fill="currentColor" /><rect x="6.1" y="1" width="2.4" height="8" rx="0.8" fill="currentColor" /></svg>
                                 Hotkey off until you close Settings
                             </span>

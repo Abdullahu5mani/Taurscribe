@@ -1091,9 +1091,9 @@ function StepPermissions({
             </div>
           </div>
           <div className="perm-action">
-            {audioOk ? <span data-testid="wizard-perm-audio-ok" className="perm-badge perm-badge--ok" role="status">Granted</span>
-              : audioStatus === 'unsupported' ? <span className="perm-badge perm-badge--denied" role="status">Update macOS</span>
-              : <button type="button" data-testid="wizard-perm-audio-grant-btn" className="setup-btn setup-btn--primary perm-btn"
+            {audioOk ? <span id="wizard-perm-audio-ok" data-testid="wizard-perm-audio-ok" className="perm-badge perm-badge--ok" role="status">Granted</span>
+              : audioStatus === 'unsupported' ? <span id="wizard-perm-audio-denied" data-testid="wizard-perm-audio-denied" className="perm-badge perm-badge--denied" role="status">Update macOS</span>
+              : <button id="wizard-perm-audio-grant-btn" data-testid="wizard-perm-audio-grant-btn" type="button" className="setup-btn setup-btn--primary perm-btn"
                   onClick={requestAudio} disabled={audioRequesting}
                   aria-label={audioStatus === 'denied' ? 'Open System Audio Recording Settings' : 'Grant System Audio Recording Access'}>
                   {audioRequesting ? 'Requesting…' : audioStatus === 'denied' ? 'Open Settings' : 'Grant Access'}

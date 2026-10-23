@@ -25,10 +25,10 @@ export function MeetingTags({ meetingId, onChanged }: { meetingId: number; onCha
     };
     return <div className="meeting-tags">
         {tags.map(tag=><span key={tag} className="meeting-tag-chip">{tag}</span>)}
-        {!editing && <button type="button" className="turn-clip-btn" disabled={loading} onClick={()=>setEditing(true)}>{tags.length?"Edit tags":"Add tags"}</button>}
-        {editing && <><input aria-label="Meeting tags, separated by commas" placeholder="Project, Client, Planning" value={draft} disabled={busy} onChange={event=>setDraft(event.target.value)} />
-            <button type="button" className="turn-clip-btn" disabled={busy} onClick={save}>{busy?"Saving…":"Save tags"}</button>
-            <button type="button" className="turn-clip-btn" disabled={busy} onClick={()=>{setDraft(tags.join(", "));setEditing(false);}}>Cancel</button></>}
-        {error&&<p role="alert">{error}</p>}
+        {!editing && <button id="meeting-tags-edit-btn" data-testid="meeting-tags-edit-btn" type="button" className="turn-clip-btn" disabled={loading} onClick={()=>setEditing(true)}>{tags.length?"Edit tags":"Add tags"}</button>}
+        {editing && <><input id="meeting-tags-input" data-testid="meeting-tags-input" aria-label="Meeting tags, separated by commas" placeholder="Project, Client, Planning" value={draft} disabled={busy} onChange={event=>setDraft(event.target.value)} />
+            <button id="meeting-tags-save-btn" data-testid="meeting-tags-save-btn" type="button" className="turn-clip-btn" disabled={busy} onClick={save}>{busy?"Saving…":"Save tags"}</button>
+            <button id="meeting-tags-cancel-btn" data-testid="meeting-tags-cancel-btn" type="button" className="turn-clip-btn" disabled={busy} onClick={()=>{setDraft(tags.join(", "));setEditing(false);}}>Cancel</button></>}
+        {error&&<p id="meeting-tags-error" data-testid="meeting-tags-error" role="alert">{error}</p>}
     </div>;
 }

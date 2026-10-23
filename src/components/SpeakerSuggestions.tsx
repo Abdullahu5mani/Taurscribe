@@ -73,10 +73,10 @@ export function SpeakerSuggestions({ meetingId, onLabelled }: Props) {
 
     if (items.length === 0 && !error) return null;
     return (
-        <div className="speaker-suggestions" data-testid="speaker-suggestions" role="region" aria-label="Who might these speakers be">
+        <div id="speaker-suggestions" data-testid="speaker-suggestions" className="speaker-suggestions" role="region" aria-label="Who might these speakers be">
             {items.map((s) => (
                 <div key={s.speaker_id} className="speaker-suggestion" data-testid={`speaker-suggestion-${s.speaker_id}`}>
-                    <button
+                    <button id={`speaker-suggestion-play-${s.speaker_id}`} data-testid={`speaker-suggestion-play-${s.speaker_id}`}
                         type="button"
                         className="speaker-suggestion-play"
                         onClick={() => play(s)}
@@ -89,27 +89,27 @@ export function SpeakerSuggestions({ meetingId, onLabelled }: Props) {
                         <strong>{s.speaker_name}</strong> sounds like <strong>{s.person_name}</strong>
                         <span className="speaker-suggestion-pct"> · {Math.round(s.similarity * 100)}% match</span>
                     </span>
-                    <button
+                    <button id={`speaker-suggestion-yes-${s.speaker_id}`} data-testid={`speaker-suggestion-yes-${s.speaker_id}`}
                         type="button"
                         className="detail-tool-btn speaker-suggestion-yes"
                         onClick={() => answer(s, true)}
                         disabled={busy !== null}
-                        data-testid={`speaker-suggestion-yes-${s.speaker_id}`}
+
                     >
                         <IconCheck size={11} /><span>It's {s.person_name}</span>
                     </button>
-                    <button
+                    <button id={`speaker-suggestion-no-${s.speaker_id}`} data-testid={`speaker-suggestion-no-${s.speaker_id}`}
                         type="button"
                         className="detail-tool-btn"
                         onClick={() => answer(s, false)}
                         disabled={busy !== null}
-                        data-testid={`speaker-suggestion-no-${s.speaker_id}`}
+
                     >
                         <IconX size={11} /><span>Not {s.person_name}</span>
                     </button>
                 </div>
             ))}
-            {error && <p className="detail-toolbar-error" role="alert">{error}</p>}
+            {error && <p id="speaker-suggestions-error" data-testid="speaker-suggestions-error" className="detail-toolbar-error" role="alert">{error}</p>}
         </div>
     );
 }

@@ -54,16 +54,16 @@ export function MeetingAudioPermissions() {
     return <div className="setting-card" data-testid="meeting-audio-permissions" style={{ marginBottom: 12 }}>
         <div className="setting-card-header">
             <div className="setting-card-label"><span>Meeting audio permissions</span></div>
-            <span role="status">{audioOk && micOk ? 'Ready' : 'Needs attention'}</span>
+            <span id="meeting-audio-permissions-status" data-testid="meeting-audio-permissions-status" role="status">{audioOk && micOk ? 'Ready' : 'Needs attention'}</span>
         </div>
         <p className="setting-card-desc">Microphone: {label(permissions?.microphone)} · Call audio: {label(audio)}</p>
         {audio === 'unsupported' ? <p className="setting-card-desc">Meeting audio requires macOS 14.2 or later.</p> :
             !(audioOk && micOk) && <>
                 <p className="setting-card-desc">Allow Taurscribe in Privacy & Security → Microphone and Screen & System Audio Recording. After changing system audio access, quit and reopen Taurscribe.</p>
-                <button type="button" className="about-open-btn" disabled={requesting || !permissions}
+                <button id="meeting-audio-enable-btn" data-testid="meeting-audio-enable-btn" type="button" className="about-open-btn" disabled={requesting || !permissions}
                     onClick={request}>{requesting ? 'Requesting…' : 'Enable meeting audio'}</button>
             </>}
-        {error && <p role="alert" className="setting-card-desc">{error}</p>}
-        <button type="button" className="ghost-btn" onClick={() => void refresh()}>Check again</button>
+        {error && <p id="meeting-audio-permissions-error" data-testid="meeting-audio-permissions-error" role="alert" className="setting-card-desc">{error}</p>}
+        <button id="meeting-audio-check-again-btn" data-testid="meeting-audio-check-again-btn" type="button" className="ghost-btn" onClick={() => void refresh()}>Check again</button>
     </div>;
 }

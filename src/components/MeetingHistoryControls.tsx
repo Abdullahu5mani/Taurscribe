@@ -41,20 +41,20 @@ export function MeetingHistoryControls({ count, onSelect }: { count: number; onS
         <details className="meeting-history-settings">
         <summary>Manage history</summary>
         <div className="meeting-history-settings-body">
-        <label>Meeting limit <input type="number" min="1" step="1" placeholder="Unlimited" aria-label="Meeting history advisory limit"
+        <label>Meeting limit <input id="meeting-history-limit-input" data-testid="meeting-history-limit-input" type="number" min="1" step="1" placeholder="Unlimited" aria-label="Meeting history advisory limit"
             value={draft} disabled={!ready || busy} onChange={event => setDraft(event.target.value)} /></label>
-        <button type="button" className="turn-clip-btn" onClick={save} disabled={!ready || busy}>Save limit</button>
+        <button id="meeting-history-save-limit-btn" data-testid="meeting-history-save-limit-btn" type="button" className="turn-clip-btn" onClick={save} disabled={!ready || busy}>Save limit</button>
         
-        <button type="button" className="turn-clip-btn" onClick={check} disabled={busy}>{busy ? "Working…" : "Check duplicates"}</button>
+        <button id="meeting-history-check-duplicates-btn" data-testid="meeting-history-check-duplicates-btn" type="button" className="turn-clip-btn" onClick={check} disabled={busy}>{busy ? "Working…" : "Check duplicates"}</button>
         <small>The limit is a reminder. Every meeting is kept and new meetings can still be saved.</small>
 
-        {error && <p role="alert">{error}</p>}
-        {report && <div role="status"><p>{report.groups.length ? `${report.groups.length} duplicate candidates` : "No duplicate candidates found"} · {report.checked_meetings} meetings checked. {report.unavailable_audio > 0 ? `${report.unavailable_audio} recordings unavailable; transcripts were still checked.` : ""}</p>
+        {error && <p id="meeting-history-error" data-testid="meeting-history-error" role="alert">{error}</p>}
+        {report && <div id="meeting-history-duplicate-report" data-testid="meeting-history-duplicate-report" role="status"><p>{report.groups.length ? `${report.groups.length} duplicate candidates` : "No duplicate candidates found"} · {report.checked_meetings} meetings checked. {report.unavailable_audio > 0 ? `${report.unavailable_audio} recordings unavailable; transcripts were still checked.` : ""}</p>
             {report.groups.map((group, index) => <div key={index}><span>{group.kind === "identical_recording" ? "Identical recording" : "Matching transcript and duration — review to confirm"}: </span>
-                {group.meeting_ids.map(id => <button type="button" key={id} className="turn-clip-btn" aria-label={`Open meeting ${id}`} onClick={() => onSelect(id)}>Open meeting #{id}</button>)}
+                {group.meeting_ids.map(id => <button id={`meeting-history-open-${index}-${id}`} data-testid={`meeting-history-open-${index}-${id}`} type="button" key={id} className="turn-clip-btn" aria-label={`Open meeting ${id}`} onClick={() => onSelect(id)}>Open meeting #{id}</button>)}
             </div>)}
         </div>}
         </div></details>
-        {limit != null && count >= limit && <p role="status">You have reached your {limit}-meeting reminder.</p>}
+        {limit != null && count >= limit && <p id="meeting-history-limit-reached" data-testid="meeting-history-limit-reached" role="status">You have reached your {limit}-meeting reminder.</p>}
     </div>;
 }

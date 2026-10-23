@@ -240,7 +240,7 @@ function TranscriptFeedComponent({
             aria-label="Transcript feed"
             aria-live="polite"
         >
-            {copyError && <p className="file-card-error" role="alert">{copyError}</p>}
+            {copyError && <p id="feed-copy-error" data-testid="feed-copy-error" className="file-card-error" role="alert">{copyError}</p>}
             {showLive && (
                 // Expands into place (like new transcripts) instead of pushing
                 // the list down in one frame.

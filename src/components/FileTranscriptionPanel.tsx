@@ -521,8 +521,8 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
 
     return (
         <div className="file-panel">
-            {importError && <p className="file-card-error" role="alert">{importError}</p>}
-            {copyError && <p className="file-card-error" role="alert">{copyError}</p>}
+            {importError && <p id="file-import-error" data-testid="file-import-error" className="file-card-error" role="alert">{importError}</p>}
+            {copyError && <p id="file-copy-error" data-testid="file-copy-error" className="file-card-error" role="alert">{copyError}</p>}
             {/* Drop zone */}
             <div
                 className={dropZoneClass}
@@ -722,7 +722,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                             {item.status !== "queued" && (item.status === "processing" || item.historySaving || item.detailsExpanded) && (
                                 <div className="file-card-progress-wrap">
                                     {item.status === "processing" && <div className="file-card-progress-label">
-                                        <span role="status">{item.phase === "paused" ? "Paused for recording — resumes automatically" : item.phase === "loading model" ? "Loading model…" : item.phase === "waiting" ? "Waiting…" : item.phase === "done" || item.phase === "finalizing" ? "Finishing…" : item.phase === "cancelled" ? "Cancelling…" : item.phase === "decoding" || !item.phase ? "Decoding…" : item.phase === "resampling" ? "Converting audio to 16 kHz mono…" : item.phase === "detecting speech" ? "Finding speech…" : "Transcribing…"}</span>
+                                        <span id={`file-phase-${item.id}`} data-testid={`file-phase-${item.id}`} role="status">{item.phase === "paused" ? "Paused for recording — resumes automatically" : item.phase === "loading model" ? "Loading model…" : item.phase === "waiting" ? "Waiting…" : item.phase === "done" || item.phase === "finalizing" ? "Finishing…" : item.phase === "cancelled" ? "Cancelling…" : item.phase === "decoding" || !item.phase ? "Decoding…" : item.phase === "resampling" ? "Converting audio to 16 kHz mono…" : item.phase === "detecting speech" ? "Finding speech…" : "Transcribing…"}</span>
                                         <button type="button" id={`file-cancel-${item.id}`} data-testid={`file-cancel-${item.id}`} className="file-card-btn file-card-btn--error" onClick={() => cancelTranscription(item)} title="Stop transcription" aria-label={`Cancel transcription for ${item.name}`}>Cancel</button>
                                     </div>}
                                     <ol className="file-pipeline-checklist" aria-label={`Transcription steps for ${item.name}`}>
@@ -750,7 +750,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
                             )}
 
                             {item.status !== "queued" && item.status !== "processing" && !item.historySaving && (
-                                <button type="button" className="file-card-btn file-card-btn--secondary"
+                                <button id={`file-details-${item.id}`} data-testid={`file-details-${item.id}`} type="button" className="file-card-btn file-card-btn--secondary"
                                     aria-label={`Transcription details for ${item.name}`} aria-expanded={!!item.detailsExpanded}
                                     onClick={() => setFiles(prev => prev.map(f => f.id === item.id ? { ...f, detailsExpanded: !f.detailsExpanded } : f))}>
                                     {item.detailsExpanded ? "Hide details" : "Details"}
@@ -759,7 +759,7 @@ function FileTranscriptionPanelComponent({ activeEngine, currentModel, currentGr
 
                             {/* Error */}
                             {item.status === "processing" && item.cancelError && (
-                                <p className="file-card-error" role="alert">{item.cancelError}</p>
+                                <p id={`file-cancel-error-${item.id}`} data-testid={`file-cancel-error-${item.id}`} className="file-card-error" role="alert">{item.cancelError}</p>
                             )}
                             {item.status === "done" && item.historySaving && (
                                 <p id={`file-history-saving-${item.id}`} data-testid={`file-history-saving-${item.id}`} className="file-card-queued" role="status">Saving transcript to history…</p>

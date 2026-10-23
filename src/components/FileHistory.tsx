@@ -23,13 +23,13 @@ export function FileHistory({ refreshKey }: { refreshKey: number }) {
         <section className="file-history" aria-labelledby="file-history-title">
             <div className="file-history-heading">
                 <h2 id="file-history-title">File history</h2>
-                <button className="file-card-btn" type="button" onClick={() => void refresh()} disabled={loading}>Refresh</button>
+                <button id="file-history-refresh-btn" data-testid="file-history-refresh-btn" className="file-card-btn" type="button" onClick={() => void refresh()} disabled={loading}>Refresh</button>
             </div>
             <p className="file-history-note">Saved transcripts and source details. No audio copies are stored in history.</p>
-            {error && <p className="file-card-error" role="alert">Could not load file history: {error}</p>}
-            {copyError && <p className="file-card-error" role="alert">{copyError}</p>}
-            {copyNotice && <p className="file-card-queued" role="status">{copyNotice}</p>}
-            {loading && <p className="file-card-queued" role="status">Loading history…</p>}
+            {error && <p id="file-history-error" data-testid="file-history-error" className="file-card-error" role="alert">Could not load file history: {error}</p>}
+            {copyError && <p id="file-history-copy-error" data-testid="file-history-copy-error" className="file-card-error" role="alert">{copyError}</p>}
+            {copyNotice && <p id="file-history-copy-notice" data-testid="file-history-copy-notice" className="file-card-queued" role="status">{copyNotice}</p>}
+            {loading && <p id="file-history-loading" data-testid="file-history-loading" className="file-card-queued" role="status">Loading history…</p>}
             {!loading && !error && records.length === 0 && <p className="file-card-queued">Transcribed files will appear here, including after you restart the app.</p>}
             {records.map(record => (
                 <details key={record.id} className="file-history-entry" onToggle={event => {
@@ -54,12 +54,12 @@ export function FileHistory({ refreshKey }: { refreshKey: number }) {
                         {record.duration_ms != null && <><dt>Audio duration</dt><dd>{(record.duration_ms / 1000).toFixed(1)} seconds</dd></>}
                         {record.processing_time_ms != null && <><dt>Processing time</dt><dd>{(record.processing_time_ms / 1000).toFixed(1)} seconds</dd></>}
                     </dl>
-                    <button className="file-card-btn" type="button" onClick={() => void copy(record.transcript)}>Copy transcript</button>
+                    <button id={`file-history-copy-${record.id}`} data-testid={`file-history-copy-${record.id}`} className="file-card-btn" type="button" onClick={() => void copy(record.transcript)}>Copy transcript</button>
                     <div className="file-card-transcript file-history-transcript">{record.transcript}</div>
                     </>}
                 </details>
             ))}
-            {hasMore && <button className="file-card-btn file-history-load-more" type="button" disabled={loading} onClick={() => void loadMore()}>Load older transcripts</button>}
+            {hasMore && <button id="file-history-load-more-btn" data-testid="file-history-load-more-btn" className="file-card-btn file-history-load-more" type="button" disabled={loading} onClick={() => void loadMore()}>Load older transcripts</button>}
         </section>
     );
 }
