@@ -422,6 +422,20 @@ fn run_whisper_cycle(
         "whisper should be unloaded"
     );
 
+    // A single unload can miss a smaller leak that accumulates across calls.
+    for cycle in 1..=3 {
+        w.initialize(Some(whisper_model_id), force_cpu)?;
+        let text = w.transcribe_audio_data(pcm, None)?;
+        check_transcript("Whisper reload", &text)?;
+        w.unload();
+        snapshots.push(snapshot(format!("whisper after unload, reload {cycle}")));
+        assert!(w.get_current_model().is_none());
+    }
+    if std::env::var_os("TAURSCRIBE_MEMORY_INSPECT").is_some() {
+        eprintln!("[memory-test] inspect unloaded process {} for 45 seconds", std::process::id());
+        std::thread::sleep(std::time::Duration::from_secs(45));
+    }
+
     Ok(ScenarioReport {
         name: "whisper_cycle".to_string(),
         duration_ms: started.elapsed().as_millis(),
@@ -663,10 +677,10 @@ fn memory_engine_regression() {
             .first()
             .map(|s| s.working_set_bytes)
             .unwrap_or(0);
-        if let Some(unload_snap) = scenario
+        for unload_snap in scenario
             .snapshots
             .iter()
-            .find(|s| s.label.contains("after unload") || s.label.contains("after final unload"))
+            .filter(|s| s.label.contains("after unload") || s.label.contains("after final unload"))
         {
             let after_unload_ws = unload_snap.working_set_bytes;
             let retained = after_unload_ws.saturating_sub(baseline_ws);
