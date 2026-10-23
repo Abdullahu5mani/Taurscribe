@@ -40,6 +40,11 @@ ENGINES.md
 TAURSCRIBE_AUDIT_REPORT.md
 # Documentation is kept locally, not on GitHub.
 docs/
+scripts/harness/TESTING.md
+src-tauri/windows/README.md
+src-tauri/tests/fixtures/*.md
+tests/bughunt/README.md
+tests/flow-coverage/
 Taurscribe Pure.html
 
 # Test audio fixtures (large binary, not for the repo)
